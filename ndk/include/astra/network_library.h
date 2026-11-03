@@ -15,7 +15,7 @@
 /** Network Kit ELF ABI major version. */
 #define ASTRA_NETWORK_LIBRARY_ABI_MAJOR 1u
 /** Network Kit backward-compatible ABI revision. */
-#define ASTRA_NETWORK_LIBRARY_ABI_MINOR 2u
+#define ASTRA_NETWORK_LIBRARY_ABI_MINOR 3u
 
 /** Open network-service session. */
 typedef struct AstraNetworkSession {
@@ -156,6 +156,15 @@ AstraNetworkStatus astra_network_reverse_wait(AstraNetworkRequest *request, char
 AstraNetworkStatus astra_network_interfaces(AstraNetworkSession *session, AstraNetworkInterfaceAddress *addresses, uint32_t capacity, uint32_t *count);
 /** Format an IPv4 or IPv6 address into caller storage. IPv6 uses eight full hexadecimal groups. @param address Valid network address. @param text Destination. @param capacity Destination bytes including NUL. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_address_format(const AstraNetworkAddress *address, char *text, uint32_t capacity);
+/** Parse IPv4 or IPv6 text into a native address. Failed parse leaves destination unchanged. @param family ASTRA_NETWORK_FAMILY_IPV4 or ASTRA_NETWORK_FAMILY_IPV6. @param text Address text. @param address Receives address with zero port and scope. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_address_parse(uint16_t family, const char *text, AstraNetworkAddress *address);
+/** Validate one Ethernet IPv4 profile before requesting a change.
+ * DHCP permits optional DNS override; its address, prefix and gateway must
+ * be zero.
+ * @param configuration Candidate profile.
+ * @return ASTRA_NETWORK_OK or ASTRA_NETWORK_INVALID.
+ */
+AstraNetworkStatus astra_network_ethernet_ipv4_validate(const AstraNetworkEthernetIPv4 *configuration);
 /** Cancel resolution. @param request Request. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_request_cancel(AstraNetworkRequest *request);
 /** Borrow readiness handle. @param endpoint Endpoint. @return Wait handle. */

@@ -2,6 +2,17 @@
 
 Status: active continuation map, 2026-11-02
 
+Ethernet configuration work, 2026-11-03: native Network Kit ABI 1.3 now owns
+IPv4/IPv6 text parsing, replacing the POSIX copy, and validates a typed
+DHCP/manual IPv4 profile with interface, prefix, gateway, and optional DNS.
+Local Network Kit, POSIX address, and sanitizer tests pass. Beast MC68040
+Network Kit and POSIX builds and NDK distribution check pass. This is input
+contract work only:
+privileged host apply/rollback, Config Kit desired-state persistence, Settings
+edit/confirm UI, and physical DE25 configuration gates remain open. Haiku
+read-only reference: `src/preferences/network/InterfaceAddressView.cpp`
+separates mode selection from the entered address fields.
+
 Ethernet Settings status checkpoint, 2026-11-02: Network Kit now exports
 bounded IPv4/IPv6 address formatting. Settings adds a NETWORK > Ethernet page
 using shared Sidebar, List, Label, and Button controls; it enumerates live

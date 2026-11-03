@@ -40,3 +40,9 @@ ASTRA_NETWORK_1.2 {
         astra_network_reverse_try;
         astra_network_reverse_wait;
 } ASTRA_NETWORK_1.1;
+
+ASTRA_NETWORK_1.3 {
+    global:
+        astra_network_address_parse;
+        astra_network_ethernet_ipv4_validate;
+} ASTRA_NETWORK_1.2;

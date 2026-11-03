@@ -228,6 +228,37 @@ _Static_assert(sizeof(AstraNetworkAddress) == ASTRA_NETWORK_ADDRESS_SIZE,
 
 /** Longest interface name, matching Linux `IFNAMSIZ` and including the terminating NUL. */
 #define ASTRA_NETWORK_INTERFACE_NAME_SIZE 16u
+/** Maximum IPv4 DNS servers in one Ethernet profile. */
+#define ASTRA_NETWORK_ETHERNET_DNS_MAX 3u
+/** Obtain IPv4 address, route, and optional DNS from DHCP. */
+#define ASTRA_NETWORK_ETHERNET_IPV4_DHCP 1u
+/** Use supplied IPv4 address, prefix, gateway, and DNS. */
+#define ASTRA_NETWORK_ETHERNET_IPV4_MANUAL 2u
+
+/** Typed desired IPv4 configuration for one physical Ethernet interface. */
+typedef struct AstraNetworkEthernetIPv4 {
+    /** Must equal sizeof(AstraNetworkEthernetIPv4). */
+    uint32_t size;
+    /** NUL-terminated Linux interface name, at most 15 bytes. */
+    char name[ASTRA_NETWORK_INTERFACE_NAME_SIZE];
+    /** DHCP or manual method. */
+    uint32_t method;
+    /** Manual IPv4 address; zero for DHCP. */
+    uint8_t address[4];
+    /** Manual CIDR prefix, 1-32; zero for DHCP. */
+    uint32_t prefix;
+    /** Manual default gateway, or zero for none or DHCP. */
+    uint8_t gateway[4];
+    /** Number of explicit DNS servers; zero uses automatic DNS for DHCP. */
+    uint32_t dns_count;
+    /** Explicit IPv4 DNS servers, in network byte order. */
+    uint8_t dns[ASTRA_NETWORK_ETHERNET_DNS_MAX][4];
+} AstraNetworkEthernetIPv4;
+
+/** @cond ASTRA_INTERNAL */
+_Static_assert(sizeof(AstraNetworkEthernetIPv4) == 52u,
+               "Ethernet IPv4 ABI changed");
+/** @endcond */
 /** Wire size of ::AstraNetworkInterfaceAddress. */
 #define ASTRA_NETWORK_INTERFACE_ADDRESS_SIZE 44u
 

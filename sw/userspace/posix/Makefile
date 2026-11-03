@@ -317,10 +317,10 @@ $(SIGNAL_TEST): src/signal.c tests/test_signal.c
 		-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
 		$(COMMON_FLAGS) -O2 src/signal.c tests/test_signal.c -o $@
 
-$(SOCKET_ADDRESS_TEST): src/inet.c tests/test_socket_address.c
+$(SOCKET_ADDRESS_TEST): src/inet.c $(NETWORK)/src/network_core.c tests/test_socket_address.c
 	@mkdir -p $(@D)
 	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
-		-I$(VFS)/include -I$(NDK)/include $(COMMON_FLAGS) -O2 $^ -o $@
+		-I$(VFS)/include -I$(NETWORK)/include -I$(NDK)/include $(COMMON_FLAGS) -O2 $^ -o $@
 
 $(HOST_LOOKUP_TEST): src/netdb_compat.c src/socket_internal.h tests/test_host_lookup.c
 	@mkdir -p $(@D)

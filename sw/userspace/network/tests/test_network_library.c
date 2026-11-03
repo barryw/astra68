@@ -322,6 +322,64 @@ int main(void)
         formatted, sizeof(formatted)) == ASTRA_NETWORK_OK);
     assert(strcmp(formatted,
         "0000:0000:0000:0000:0000:0000:0000:0001") == 0);
+    AstraNetworkAddress parsed = {0};
+    parsed.port = 42u;
+    assert(astra_network_address_parse(ASTRA_NETWORK_FAMILY_IPV4,
+        "192.168.1.52", &parsed) == ASTRA_NETWORK_OK);
+    assert(parsed.size == sizeof(parsed) &&
+           parsed.family == ASTRA_NETWORK_FAMILY_IPV4 &&
+           parsed.port == 0u && parsed.address[0] == 192u &&
+           parsed.address[1] == 168u && parsed.address[2] == 1u &&
+           parsed.address[3] == 52u);
+    assert(astra_network_address_parse(ASTRA_NETWORK_FAMILY_IPV4,
+        "192.168.1.256", &parsed) == ASTRA_NETWORK_INVALID);
+    assert(astra_network_address_parse(ASTRA_NETWORK_FAMILY_IPV4,
+        "1", &parsed) == ASTRA_NETWORK_INVALID);
+    assert(parsed.address[3] == 52u);
+    assert(astra_network_address_parse(ASTRA_NETWORK_FAMILY_IPV6,
+        "2001:db8::ffff:192.0.2.1", &parsed) == ASTRA_NETWORK_OK);
+    assert(parsed.family == ASTRA_NETWORK_FAMILY_IPV6 &&
+           parsed.address[0] == 0x20u && parsed.address[1] == 0x01u &&
+           parsed.address[10] == 0xffu && parsed.address[11] == 0xffu &&
+           parsed.address[12] == 192u && parsed.address[15] == 1u);
+    assert(astra_network_address_parse(ASTRA_NETWORK_FAMILY_IPV6,
+        "2001:::1", &parsed) == ASTRA_NETWORK_INVALID);
+    assert(parsed.address[15] == 1u);
+    assert(astra_network_address_parse(ASTRA_NETWORK_FAMILY_UNSPEC,
+        "::1", &parsed) == ASTRA_NETWORK_UNSUPPORTED);
+    AstraNetworkEthernetIPv4 ethernet = {.size = sizeof(ethernet)};
+    memcpy(ethernet.name, "eth0", 5u);
+    ethernet.method = ASTRA_NETWORK_ETHERNET_IPV4_DHCP;
+    assert(astra_network_ethernet_ipv4_validate(&ethernet) ==
+           ASTRA_NETWORK_OK);
+    ethernet.dns_count = 1u;
+    ethernet.dns[0][0] = 192u;
+    ethernet.dns[0][1] = 168u;
+    ethernet.dns[0][2] = 1u;
+    ethernet.dns[0][3] = 3u;
+    assert(astra_network_ethernet_ipv4_validate(&ethernet) ==
+           ASTRA_NETWORK_OK);
+    ethernet.address[0] = 192u;
+    assert(astra_network_ethernet_ipv4_validate(&ethernet) ==
+           ASTRA_NETWORK_INVALID);
+    ethernet.method = ASTRA_NETWORK_ETHERNET_IPV4_MANUAL;
+    ethernet.address[1] = 168u;
+    ethernet.address[2] = 1u;
+    ethernet.address[3] = 52u;
+    ethernet.prefix = 24u;
+    assert(astra_network_ethernet_ipv4_validate(&ethernet) ==
+           ASTRA_NETWORK_OK);
+    ethernet.prefix = 33u;
+    assert(astra_network_ethernet_ipv4_validate(&ethernet) ==
+           ASTRA_NETWORK_INVALID);
+    ethernet.prefix = 24u;
+    ethernet.dns_count = 0u;
+    assert(astra_network_ethernet_ipv4_validate(&ethernet) ==
+           ASTRA_NETWORK_INVALID);
+    ethernet.dns_count = 1u;
+    ethernet.name[0] = '/';
+    assert(astra_network_ethernet_ipv4_validate(&ethernet) ==
+           ASTRA_NETWORK_INVALID);
     free(mapped_area);
     return 0;
 }

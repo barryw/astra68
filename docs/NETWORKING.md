@@ -35,6 +35,11 @@ receive `NETWORK` only. Apps never receive the device lease or IRQ.
 listen/accept, send/receive, shutdown, socket options, local/peer addresses,
 readiness events, asynchronous DNS, cancellation, and capability-only state
 export/import for atomic exec. `Network.kit` is the NDK-distributed bundle.
+ABI 1.3 adds native IPv4/IPv6 parsing and a bounded Ethernet IPv4 profile
+validator. The POSIX `inet_pton` adapter calls the native parser, so Settings
+and Unix ports share one address grammar. The profile names an interface and
+selects DHCP or manual address/prefix/gateway with up to three explicit DNS
+servers; it is a typed input contract, not a host configuration operation yet.
 
 The POSIX library maps the same owner implementation to:
 
@@ -64,6 +69,20 @@ privileged host control and timed NetworkManager rollback described in
 profiles directly. Haiku's read-only `src/preferences/network/InterfaceView.cpp`
 and `InterfaceAddressView.cpp` informed the separate live-status and editable
 configuration surfaces.
+
+The next control boundary is a dedicated versioned host network channel from
+the QEMU peer to a privileged Linux provider. Native Network Kit will admit
+configuration calls only from a separate `NETWORK_ADMIN` service grant.
+The provider will query NetworkManager through D-Bus, create a timed
+checkpoint before activation, stage a new in-memory profile, and either
+persist it after confirmation or let NetworkManager roll it back. An
+unconfirmed change must not alter Config Kit's last known good profile.
+The system Config Kit document remains the desired-state owner; the Linux
+profile is derived boot state. The UI must show the rollback countdown and
+allow explicit Keep or Revert. Ordinary `NETWORK` clients retain status and
+socket access only. This design follows NetworkManager 1.36's
+[checkpoint API](https://www.networkmanager.dev/docs/api/1.36/gdbus-org.freedesktop.NetworkManager.html)
+and [in-memory profile API](https://www.networkmanager.dev/docs/api/1.36.0/gdbus-org.freedesktop.NetworkManager.Settings.Connection.html).
 
 `ntpd` opens `config.library` and asks for its `pool` and `server` settings; it
 does not know a configuration path, file format, or storage API. The supervisor
