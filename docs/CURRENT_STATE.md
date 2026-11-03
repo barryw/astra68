@@ -2,6 +2,26 @@
 
 Status: active continuation map, 2026-11-02
 
+Config Kit transaction certification, 2026-11-02: DE25 production selects
+`b82bd24d3ac773770f89b3f44f7ed2274736419f0194252e19c6180878d944e3`
+from main commit `bbea853cdd6a9bdc4cc170b4b0d019cc91379074`.
+Conditional set/append and atomic one-to-64-edit batches now share the
+per-owner lock and synced rename path. Stale snapshots return conflict after
+refresh; failed batches leave committed settings intact. Open With retries
+conflicts so simultaneous dialogs do not duplicate a file-type preference.
+Host Config Kit tests, MC68040 library contract, Open With build, NDK
+distribution check, full release publisher, and disposable two-boot Beast
+Config Kit gate passed. Exact release passed a 90-second DE25 private trial
+at stage 8: sealed and public roundtrips, stale conflict/retry, mixed
+sensitive/plain atomic batch, failed-batch rollback, 40 concurrent appends,
+and unprivileged denial. Console and syslog were archived with matching
+checksums at `/mnt/Documents/astra68/configkit-complete-20261103/` on Beast;
+disposable board trial state was removed. Production cutover preserved the
+system image, reached stage 8, and left Astra, audio, and remote desktop
+services active, no panic log, and 8.1 GiB free. Haiku read-only reference:
+`src/kits/shared/SettingsMessage.cpp` locks each in-process settings object;
+Astra also serializes separate processes and detects stale snapshots.
+
 Config Kit concurrent-write production release, 2026-11-02: DE25 selects
 `bf239e2610bff08d9a5cfc15802e5f87cdc5c60eede4baad0d3cf90f893709b0`.
 Each owner document write now takes a native VFS exclusive lock on a stable

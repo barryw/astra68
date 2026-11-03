@@ -52,7 +52,10 @@ enum {
     ASTRA_CONFIG_CONFLICT = 12 /**< Document changed since this handle loaded it. */
 };
 
-/** Open configuration document owned by one caller. */
+/** Open configuration document owned by one caller.
+ * Use a separate handle per thread; operations on one handle are not
+ * synchronized with each other. Writes from separate handles are serialized.
+ */
 typedef struct AstraConfig {
     /** @cond ASTRA_INTERNAL */
     uint32_t _private_area;

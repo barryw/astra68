@@ -161,7 +161,12 @@ lock, commits through a synced temporary file and atomic rename, then closes
 the lock handle. The host releases the lock if a writer dies. Concurrent
 instances can write different keys or append without losing another write;
 contention lasting five seconds returns `ASTRA_CONFIG_BUSY`. Reads use the
-handle's last snapshot until `astra_config_reload` is called. Conditional set
+handle's last snapshot until `astra_config_reload` is called. Each thread must
+use its own Config Kit handle; operations sharing one handle are not
+synchronized. The per-owner lock serializes writes across those handles and
+across processes.
+
+Conditional set
 and append compare that snapshot with the current document under the same
 lock; a changed document refreshes the handle and returns
 `ASTRA_CONFIG_CONFLICT` without writing. Callers can recompute their choice
