@@ -7,12 +7,23 @@ Network mounting is not yet qualified. Private DE25 trials kept `/dh0`
 responsive during stalled NFS read, directory and destination-copy operations;
 read and directory traversal recovered, and a copied file committed after
 traffic returned. NFS file and nonempty folder copies persisted with matching
-hashes; a duplicate destination was refused. Evidence is on Beast in
+hashes; a duplicate destination was refused. A later DE25 trial found that
+`lsof` on a disconnected NFS volume held HostFS's single control pump; an
+independent Terminal stayed at `Opening`. The corrected candidate returned
+the exact held PID, inode, access and file path from `lsof` during the outage,
+then completed `ls /dh0` before traffic resumed. This candidate uses retained
+descriptor paths for network diagnostics without asking the server to
+revalidate metadata. It also recovered after TCP2049 was dropped mid-write at
+2 MiB and during a durable-save run when the pending file reached 65,536 bytes;
+both completed 20 durable saves with `failed:false` and matching server bytes.
+Exact in-flight `fsync` timing still needs an instrumented gate. Evidence is on Beast in
 `/mnt/Documents/astra68/network-nfs-root-admission-20261103/` and
 `/mnt/Documents/astra68/network-nfs-recovery-20261103/`, and
-`/mnt/Documents/astra68/network-nfs-copy-20261103/`. The copy candidate's
-600-second guard passed, production services recovered, and trial state was
-removed. Direct write/sync fault injection remains open.
+`/mnt/Documents/astra68/network-nfs-copy-20261103/`,
+`/mnt/Documents/astra68/network-nfs-lsof-stall-20261103/`, and
+`/mnt/Documents/astra68/network-nfs-lsof-write-sync-20261103/`. All five
+600-second guards passed, production services recovered, and trial state was
+removed.
 SMB3, mapping UI, and production release gates remain open.
 
 ## AstraZ story workflow

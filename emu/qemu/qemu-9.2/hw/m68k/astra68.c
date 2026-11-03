@@ -5505,6 +5505,43 @@ static const AstraStorageRecord *astra_host_usage_mount(const GArray *catalog,
     return NULL;
 }
 
+/* Diagnostic names only: proc fd links reflect retained dentries without
+ * asking a disconnected network server to revalidate metadata. Authority
+ * still comes from the held descriptors and the provider's mount identity. */
+static int astra_host_usage_network_path(int root, int fd, char *path,
+    uint32_t capacity, uint32_t *length)
+{
+    char proc[64], root_path[ASTRA_HOST_FS_PATH_MAX];
+    char node_path[ASTRA_HOST_FS_PATH_MAX];
+    ssize_t root_length, node_length;
+    size_t prefix, size;
+    const char *relative;
+
+    snprintf(proc, sizeof(proc), "/proc/self/fd/%d", root);
+    root_length = readlink(proc, root_path, sizeof(root_path) - 1u);
+    if (root_length < 0) return -errno;
+    snprintf(proc, sizeof(proc), "/proc/self/fd/%d", fd);
+    node_length = readlink(proc, node_path, sizeof(node_path) - 1u);
+    if (node_length < 0) return -errno;
+    if ((size_t)root_length == sizeof(root_path) - 1u ||
+        (size_t)node_length == sizeof(node_path) - 1u) return -ENAMETOOLONG;
+    root_path[root_length] = '\0';
+    node_path[node_length] = '\0';
+    if (g_str_has_suffix(root_path, " (deleted)") ||
+        g_str_has_suffix(node_path, " (deleted)")) return -ENOENT;
+    prefix = root_length == 1 && root_path[0] == '/' ? 0u :
+        (size_t)root_length;
+    if ((size_t)node_length < prefix ||
+        memcmp(root_path, node_path, prefix) != 0 ||
+        (node_path[prefix] != '\0' && node_path[prefix] != '/')) return -ENOENT;
+    relative = node_path[prefix] == '\0' ? "/" : node_path + prefix;
+    size = strlen(relative);
+    if (size > capacity) return -ERANGE;
+    memcpy(path, relative, size);
+    *length = size;
+    return 0;
+}
+
 /* Names derive from retained descriptors through the canonical privileged
  * resolver. No application pathname and no Linux descriptor escapes this port. */
 static void astra_host_usage_name(Astra68State *s, const GArray *catalog,
@@ -5533,7 +5570,11 @@ static void astra_host_usage_name(Astra68State *s, const GArray *catalog,
         char relative[ASTRA_HOST_FS_PATH_MAX];
         uint32_t length = 0u;
         AstraHostSession authority = {.mount = row->volume.id, .mount_generation = row->volume.generation};
-        int status = astra_host_descriptor_path(s, &authority, root, fd, relative, sizeof(relative), &length);
+        int status = mount->origin == ASTRA_VOLUME_ORIGIN_NETWORK ?
+            astra_host_usage_network_path(root, fd, relative,
+                sizeof(relative), &length) :
+            astra_host_descriptor_path(s, &authority, root, fd,
+                relative, sizeof(relative), &length);
         size_t prefix = strlen(mount->name);
         if (status == 0 && prefix != 0u && length != 0u && relative[0] == '/' &&
             prefix + length < sizeof(row->path)) {
@@ -5582,6 +5623,8 @@ static uint32_t astra_host_volume_usage(Astra68State *s, uint32_t owner,
     GArray *catalog = g_array_new(false, false, sizeof(AstraStorageRecord));
     GArray *objects = g_array_new(false, false, sizeof(AstraHostUsageObject));
     AstraVolumeUsagePage *page = g_new0(AstraVolumeUsagePage, 1);
+    guint name_indexes[ASTRA_VOLUME_USAGE_PAGE_RECORDS];
+    uint32_t name_count = 0u;
     uint32_t status = ASTRA_STATUS_OK;
     int output = -1, error = 0;
     uint64_t catalog_sequence = 0u;
@@ -5633,13 +5676,11 @@ static uint32_t astra_host_volume_usage(Astra68State *s, uint32_t owner,
     while (g_hash_table_iter_next(&iterator, &key, &value)) {
         AstraHostSession *session = value;
         if (session->root < 0) continue;
-        struct stat info;
         AstraHostUsageObject object = {.identity = {.mount = session->mount,
             .mount_generation = session->mount_generation,
             .flags = ASTRA_VFS_OPEN_READ | ((session->flags & ASTRA_HOST_FS_SESSION_READ_ONLY) == 0u ? ASTRA_VFS_OPEN_WRITE : 0u)},
             .handle = GPOINTER_TO_UINT(key), .process = session->requester,
             .kind = ASTRA_VOLUME_USAGE_ROOT, .fd = session->root};
-        if (fstat(session->root, &info) == 0) object.identity.inode = info.st_ino;
         g_array_append_val(objects, object);
     }
     for (AstraHostJob *job = s->host.jobs; job != NULL; job = job->next) {
@@ -5682,7 +5723,7 @@ static uint32_t astra_host_volume_usage(Astra68State *s, uint32_t owner,
     page->volume = (AstraVolumeReference){s->host.provider_epoch, query.volume.id, query.volume.generation};
     page->sequence = s->host.usage_sequence; page->catalog_sequence = catalog_sequence;
     for (guint at = 0u; at < objects->len; ++at) {
-        const AstraHostUsageObject *object = &g_array_index(objects, AstraHostUsageObject, at);
+        AstraHostUsageObject *object = &g_array_index(objects, AstraHostUsageObject, at);
         if (object->identity.mount == 0u || object->identity.mount_generation == 0u ||
             (query.volume.id != 0u && (object->identity.mount != query.volume.id ||
                 object->identity.mount_generation != query.volume.generation)) ||
@@ -5700,19 +5741,44 @@ static uint32_t astra_host_volume_usage(Astra68State *s, uint32_t owner,
         row->process = object->process; row->kind = object->kind; row->flags = object->flags;
         row->rights = ((object->identity.flags & ASTRA_VFS_OPEN_READ) != 0u ? ASTRA_RIGHT_READ : 0u) |
             ((object->identity.flags & ASTRA_VFS_OPEN_WRITE) != 0u ? ASTRA_RIGHT_WRITE : 0u);
-        astra_host_usage_name(s, catalog, object, row);
+        /* Keep only selected-page descriptors alive after releasing files_lock.
+         * Remote path lookup can wait indefinitely for a disconnected server. */
+        object->fd = object->fd < 0 ? -1 : fcntl(object->fd, F_DUPFD_CLOEXEC, 0);
+        name_indexes[name_count++] = at;
     }
 unlocked:
     qemu_mutex_unlock(&s->host.files_lock);
+out:
+    qemu_mutex_unlock(&s->host.namespace_lock);
+    if (error != 0) status = astra_host_status_from_errno(error);
+    for (uint32_t at = 0u; at < name_count; ++at) {
+        AstraHostUsageObject *object = &g_array_index(objects, AstraHostUsageObject,
+            name_indexes[at]);
+        if (status == ASTRA_STATUS_OK) {
+            AstraVolumeUsageRecord *row = &page->records[at];
+            const AstraStorageRecord *mount = astra_host_usage_mount(catalog,
+                row->volume.id, row->volume.generation);
+            if (object->kind == ASTRA_VOLUME_USAGE_ROOT && object->fd >= 0 &&
+                mount != NULL && mount->origin != ASTRA_VOLUME_ORIGIN_NETWORK) {
+                struct stat info;
+                if (fstat(object->fd, &info) == 0) row->inode = info.st_ino;
+            }
+            astra_host_usage_name(s, catalog, object, row);
+        }
+        if (object->fd >= 0) close(object->fd);
+    }
     if (status == ASTRA_STATUS_OK) {
         request.sequence = 0u; request.after = 0u;
         error = astra_host_storage_control(s, &request, -1, &response, &output);
         if (output >= 0) { close(output); output = -1; }
         if (error == 0 && response.sequence != catalog_sequence) error = EBUSY;
+        if (error != 0) status = astra_host_status_from_errno(error);
     }
-out:
-    qemu_mutex_unlock(&s->host.namespace_lock);
-    if (error != 0) status = astra_host_status_from_errno(error);
+    if (status == ASTRA_STATUS_OK) {
+        qemu_mutex_lock(&s->host.files_lock);
+        if (s->host.usage_sequence != page->sequence) status = ASTRA_STATUS_BUSY;
+        qemu_mutex_unlock(&s->host.files_lock);
+    }
     if (status == ASTRA_STATUS_OK) {
         memset(wire, 0, sizeof(*page));
 #define USAGE32(field) stl_be_p(wire + offsetof(AstraVolumeUsagePage, field), page->field)

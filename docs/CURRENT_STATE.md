@@ -40,8 +40,26 @@ restored the selected production release. Candidate release
 `7d49280cc090893fa77bc9c2d4d3abc605ce98387422070023c55fc95a65df37`;
 board/Beast evidence hashes match at
 `/mnt/Documents/astra68/network-nfs-copy-20261103/`. Board trial state was
-removed and production services remain active with 8.0 GiB free. Direct
-write/sync fault injection and a full production release gate remain open.
+removed and production services remain active with 8.0 GiB free. A fourth
+private trial exposed an `lsof /net0` control-plane stall during NFS loss:
+while it waited for remote metadata, another Terminal stayed at `Opening`.
+QEMU now snapshots retained descriptors, releases global locks before name
+resolution, and uses kernel-held descriptor paths for network diagnostic names
+without remote metadata I/O. A fifth DE25 private trial returned exact PID,
+inode, access and `/net0/fault-probe` path from `lsof` during TCP2049 loss;
+`ls /dh0` then completed in the same Terminal while traffic was still blocked.
+The same trial dropped NFS after 2 MiB of a 4 MiB direct write; the guest
+completed all 20 subsequent durable saves with `failed:false`, and server
+bytes matched. A second drop triggered when `save.tmp` reached 65,536 bytes;
+the durable-save workload recovered, completed 20 operations with
+`failed:false`, and left no temporary file. Exact in-flight `fsync` timing
+remains to be instrumented. Both 600-second guards passed, restored production,
+and left 8.0 GiB free with services active. Board/Beast evidence matches at
+`/mnt/Documents/astra68/network-nfs-lsof-stall-20261103/` and
+`/mnt/Documents/astra68/network-nfs-lsof-write-sync-20261103/`.
+The final resource-sequence recheck added after the fifth trial passed host
+build and provider bridge tests but has not yet had a DE25 trial. A full
+production release gate remains open.
 The native Trash path now reuses Filesystem Kit movement on volumes without
 no-replace rename and preserves origin metadata on partial cleanup; host tests
 passed, but DE25 Trash behavior is not yet qualified.
