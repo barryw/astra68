@@ -31,6 +31,7 @@ dropin=/run/systemd/system/astra.service.d/99-astra-private-trial.conf
 [ ! -e "$dropin" ] || { echo "private trial already configured" >&2; exit 2; }
 selected=$(readlink -f /var/lib/astra/current)
 python3 "$release/bin/astra-release.py" verify --installed "$release" >/dev/null
+chmod 0711 "$trial_root"
 runuser -u astra -- test -r "$release/bin/astra-input-hotplug.py" || {
     echo "candidate release is not readable by Astra helpers" >&2
     exit 1
@@ -44,7 +45,6 @@ for unit in astra.service astra-audio-host.service astra-remote-desktop.service;
 done
 install -d -m 0755 "$trial_root/hostfs/work" "$trial_root/hostfs/sound" \
     "$trial_root/state/system" "$trial_root/log"
-chmod 0711 "$trial_root"
 
 configured=0
 cleanup() {

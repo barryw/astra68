@@ -103,6 +103,10 @@ private trial seeded the interrupted state and recovered `astra-test0` to
 `198.18.0.2/30`, with no pending record or checkpoint afterward; a separate
 Settings Apply/Keep trial exercised the normal path. Neither test altered
 physical `eth0`, which carries remote access.
+The exact release `a2fe757c722a337e417d054327b0d8814228c98e78af4fa70361f46df020c1ae`
+passed a 120-second DE25 private boot and standard production activation on
+2026-11-03. Installed identity and runtime, audio, and remote desktop services
+verified after cutover. Physical `eth0` remained `192.168.1.52/24`.
 
 `ntpd` opens `config.library` and asks for its `pool` and `server` settings; it
 does not know a configuration path, file format, or storage API. The supervisor

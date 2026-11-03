@@ -56,12 +56,23 @@ production. Evidence hashes match at
 `/mnt/Documents/astra68/ethernet-recovery-20261103/` on Beast. A second
 private trial exercised Settings Apply/Keep on the same isolated adapter and
 confirmed the saved profile and zero checkpoints. The trial guard now rejects
-using a verified release image as writable trial state. Production cutover and
-final release qualification remain. Both trial logs and the saved profile are
+using a verified release image as writable trial state. Both trial logs and the saved profile are
 archived with matching hashes on Beast at
 `/mnt/Documents/astra68/ethernet-normal-keep-20261103/`; trial artifacts and
 test NetworkManager connection were removed from DE25, production services are
-active, and board free space is 8.1 GiB.
+active, and board free space is 8.1 GiB. The clean publisher used pinned
+`FLUIDSYNTH_ROOT=/home/barry/Git/fluidsynth` and produced release
+`a2fe757c722a337e417d054327b0d8814228c98e78af4fa70361f46df020c1ae`
+from source commit `028e49e7`. That exact release passed a 120-second DE25
+private boot at stage 8 with no panic; its `qemu-console.log` is archived at
+`/mnt/Documents/astra68/ethernet-final-trial-20261103/` on Beast with matching
+board/archive SHA256. The trial restored the previous selector and services;
+its disposable state was removed. Standard deployment then selected the exact
+release, confirmed running kernel identity, and passed runtime, audio, and
+remote desktop gates. Installed identity verifies, all three services are
+active, physical `eth0` remains `192.168.1.52/24`, and board free space is
+8.1 GiB. The private trial helper now makes its root traversable before its
+Astra-user readability preflight.
 
 Ethernet configuration work, 2026-11-03: native Network Kit ABI 1.3 now owns
 IPv4/IPv6 text parsing, replacing the POSIX copy, and validates a typed
