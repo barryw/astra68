@@ -1476,7 +1476,7 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
             if (entry->resident == 0u)
                 return ASTRA_STATUS_ACCESS;
             if (held == NULL)
-                continue;
+                return ASTRA_STATUS_NOT_FOUND;
             if ((held->rights & wanted->rights) != wanted->rights)
                 return ASTRA_STATUS_ACCESS;
             uint32_t config_status = private_config_root(entry, held->root,
@@ -1503,7 +1503,7 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                 (!publish && wanted->rights != ASTRA_RIGHT_READ))
                 return ASTRA_STATUS_ACCESS;
             if (held == NULL)
-                continue;
+                return ASTRA_STATUS_NOT_FOUND;
             uint32_t config_status = public_config_root(held->root,
                 publish ? private_store_root(entry) : NULL,
                 root, ASTRA_VFS_PATH_MAX);
@@ -1523,7 +1523,7 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
             char *root = astra_vfs_path_storage_at(&path_storage, 1u);
 
             if (held == NULL)
-                continue;
+                return ASTRA_STATUS_NOT_FOUND;
             if ((held->rights & wanted->rights) != wanted->rights)
                 return ASTRA_STATUS_ACCESS;
             uint32_t config_status = private_config_root(
@@ -1651,33 +1651,31 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                 supervisor_assigns(), ASTRA_CONFIG_CAPABILITY);
             char *root = astra_vfs_path_storage_at(&path_storage, 1u);
 
-            if (held != NULL) {
-                uint32_t config_status = private_config_root(entry,
-                    held->root, ASTRA_CONFIG_OWNER_APPLICATION, bundle_id,
-                    root, ASTRA_VFS_PATH_MAX);
-                if (config_status != ASTRA_CONFIG_OK)
-                    return config_launch_status(config_status);
-                status = add_namespace_grant(out, count, ASTRA_CONFIG_CAPABILITY, held,
-                    root, held->rights, 0);
-                if (status != ASTRA_STATUS_OK)
-                    return status;
-            }
+            if (held == NULL) return ASTRA_STATUS_NOT_FOUND;
+            uint32_t config_status = private_config_root(entry,
+                held->root, ASTRA_CONFIG_OWNER_APPLICATION, bundle_id,
+                root, ASTRA_VFS_PATH_MAX);
+            if (config_status != ASTRA_CONFIG_OK)
+                return config_launch_status(config_status);
+            status = add_namespace_grant(out, count, ASTRA_CONFIG_CAPABILITY, held,
+                root, held->rights, 0);
+            if (status != ASTRA_STATUS_OK)
+                return status;
         }
         if (!entry_grants(entry, ASTRA_CONFIG_PUBLIC_CAPABILITY)) {
             const AstraAssign *held = astra_assign_lookup(
                 supervisor_assigns(), ASTRA_CONFIG_CAPABILITY);
             char *root = astra_vfs_path_storage_at(&path_storage, 1u);
-            if (held != NULL) {
-                uint32_t config_status = public_config_root(held->root,
-                    NULL, root, ASTRA_VFS_PATH_MAX);
-                if (config_status != ASTRA_CONFIG_OK)
-                    return config_launch_status(config_status);
-                status = add_namespace_grant(out, count,
-                    ASTRA_CONFIG_PUBLIC_CAPABILITY, held, root,
-                    ASTRA_RIGHT_READ, 0);
-                if (status != ASTRA_STATUS_OK)
-                    return status;
-            }
+            if (held == NULL) return ASTRA_STATUS_NOT_FOUND;
+            uint32_t config_status = public_config_root(held->root,
+                NULL, root, ASTRA_VFS_PATH_MAX);
+            if (config_status != ASTRA_CONFIG_OK)
+                return config_launch_status(config_status);
+            status = add_namespace_grant(out, count,
+                ASTRA_CONFIG_PUBLIC_CAPABILITY, held, root,
+                ASTRA_RIGHT_READ, 0);
+            if (status != ASTRA_STATUS_OK)
+                return status;
         }
     }
     return ASTRA_STATUS_OK;

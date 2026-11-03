@@ -28,7 +28,9 @@ ordinary CLI files under `HOME:/.config/`, while native apps and services keep
 private Config Kit roots.
 
 Supervisor derives roots from verified service or bundle identity, creates owner
-directories, and grants only requested rights. Ordinary apps cannot request
+directories, and grants only requested rights. Missing Config Kit providers
+fail launch instead of silently omitting a requested or automatic grant.
+Ordinary apps cannot request
 `CONFIG_SYSTEM`; system services cannot delegate that grant. Config Kit opens
 the selected grant, checks read/write rights, validates the document's format
 and schema version, and writes a temporary file, syncs it, then renames it over

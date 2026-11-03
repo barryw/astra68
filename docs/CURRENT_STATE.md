@@ -2,7 +2,25 @@
 
 Status: active continuation map, 2026-11-02
 
-Config Kit 2.0 candidate, 2026-11-02 (not released): the root storage provider
+Config Kit 2.0 production release, 2026-11-02: DE25 now selects
+`b0ee6323b989b40818c281b8e0a68278c5d361f24433881130184712da44d50b`.
+Supervisor refuses launches when a requested Config Kit provider is absent;
+applications receive private and read-only public grants automatically, while
+resident services request exact scoped grants. Beast supervisor, Config Kit,
+and image-provider tests passed. A clean release passed a 90-second DE25
+private trial at stage 8 with Fonts, Display, and NTP launched, no guest panic,
+error, or degradation, and production services restored. Evidence and matching
+board/archive log hashes are at
+`/mnt/Documents/astra68/configkit-finish-20261102/` on Beast. Production
+cutover migrated and preserved the system image, verified release and kernel
+identities, and restarted runtime, audio, and remote desktop. Production
+reached stage 8; Settings launched through Atlas and wrote its private pane
+setting through Config Kit (`2` to `1` and back to `2`). Host Config state is
+root-owned mode 0700 and its secret key mode 0600; board has 8.1 GiB free.
+Concurrent writes from multiple instances of one application to the same
+settings document remain unsupported; see `docs/SETTINGS.md`.
+
+Config Kit 2.0 pre-release checkpoint, 2026-11-02: the root storage provider
 migrates the former system-image `/config` tree into root-owned host state;
 HostFS exposes it only through provider-rooted grants. Owner schemas now
 whitelist keys and mark protected values for transparent typed get/set using
@@ -26,7 +44,7 @@ reached stage 8 and passed. Board logs and encrypted test documents were
 archived with matching checksums at
 `/mnt/Documents/astra68/config-kit-v2-20261102/` on Beast. Disposable board
 state was removed; selected production services were active with 8.1 GiB free.
-Production DE25 still runs
+At this checkpoint, production DE25 still ran
 `01ee57e38814f4710ecb9af68c41af14a685f6593798b1666331e2d95521d985`.
 Barry's current settings rule: command-line tools use ordinary config files;
 applications and services use Config Kit. Command files live under
