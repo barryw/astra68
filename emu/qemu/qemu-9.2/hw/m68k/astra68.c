@@ -592,8 +592,17 @@ typedef struct AstraHostSession {
     uint64_t mount_generation;
     uint32_t references;
     uint16_t flags;         /* ASTRA_HOST_FS_SESSION_READ_ONLY */
+    bool network;
+    struct AstraHostNamespace *namespace;
     bool closing;
 } AstraHostSession;
+
+typedef struct AstraHostNamespace {
+    uint64_t mount;
+    uint64_t generation;
+    uint32_t references;
+    QemuMutex lock;
+} AstraHostNamespace;
 
 typedef struct AstraHostJob {
     Astra68State *machine;
@@ -674,6 +683,7 @@ typedef struct AstraHostState {
     QemuMutex files_lock;
     QemuMutex namespace_lock; /* namespace changes cannot race rooted walks */
     GHashTable *sessions;   /* id -> AstraHostSession, under files_lock */
+    GHashTable *namespaces; /* mount id -> namespace, under files_lock */
     uint32_t next_session;  /* never reset: an id is not reused */
     uint32_t fs_owner;      /* the claimed filesystem owner, 0 when free */
     uint32_t fs_lost_owner;
@@ -689,14 +699,18 @@ typedef struct AstraHostState {
     /* Private Linux provider authority. Native descriptions remain here. */
     int provider_control;
     int provider_path;
+    int provider_network_path;
     uint8_t secret_key[ASTRA_SECRET_KEY_BYTES];
     bool secret_key_loaded;
     bool provider_broken;
+    bool provider_network_path_broken;
     uint64_t provider_epoch;
     uint64_t provider_control_serial;
     uint64_t provider_path_serial;
+    uint64_t provider_network_path_serial;
     QemuMutex provider_control_lock;
     QemuMutex provider_path_lock;
+    QemuMutex provider_network_path_lock;
     uint32_t next_handle;
     uint32_t generation;
     uint32_t request_buffer;
@@ -3651,6 +3665,45 @@ static void astra_host_file_unlock(Astra68State *s, AstraHostFile *file)
     astra_host_file_release(s, file);
 }
 
+static AstraHostNamespace *astra_host_namespace_acquire(Astra68State *s,
+                                                         uint64_t mount,
+                                                         uint64_t generation)
+{
+    AstraHostNamespace *namespace;
+    qemu_mutex_lock(&s->host.files_lock);
+    namespace = g_hash_table_lookup(s->host.namespaces, &mount);
+    if (namespace != NULL && namespace->generation != generation) {
+        qemu_mutex_unlock(&s->host.files_lock);
+        return NULL;
+    }
+    if (namespace == NULL) {
+        namespace = g_new0(AstraHostNamespace, 1);
+        namespace->mount = mount;
+        namespace->generation = generation;
+        qemu_mutex_init(&namespace->lock);
+        g_hash_table_insert(s->host.namespaces, &namespace->mount, namespace);
+    }
+    ++namespace->references;
+    qemu_mutex_unlock(&s->host.files_lock);
+    return namespace;
+}
+
+static void astra_host_namespace_release(Astra68State *s,
+                                          AstraHostNamespace *namespace)
+{
+    bool last;
+    qemu_mutex_lock(&s->host.files_lock);
+    assert(namespace->references != 0u);
+    last = --namespace->references == 0u;
+    if (last)
+        g_hash_table_remove(s->host.namespaces, &namespace->mount);
+    qemu_mutex_unlock(&s->host.files_lock);
+    if (last) {
+        qemu_mutex_destroy(&namespace->lock);
+        g_free(namespace);
+    }
+}
+
 static AstraHostSession *astra_host_session_acquire(Astra68State *s,
                                                     uint32_t owner,
                                                     uint32_t id)
@@ -3686,6 +3739,7 @@ static void astra_host_session_release(Astra68State *s,
             --s->host.fs_descriptors;
             qemu_mutex_unlock(&s->host.files_lock);
         }
+        astra_host_namespace_release(s, session->namespace);
         g_free(session);
     }
 }
@@ -3960,26 +4014,37 @@ static int astra_host_provider_path(Astra68State *s, const AstraHostSession *ses
         .capacity = capacity};
     int fds[3] = {root, base, second};
     int error;
+    bool network = session->network;
+    QemuMutex *lock = network ? &s->host.provider_network_path_lock :
+                                &s->host.provider_path_lock;
+    uint64_t *serial = network ? &s->host.provider_network_path_serial :
+                                 &s->host.provider_path_serial;
+    int socket = network ? s->host.provider_network_path : s->host.provider_path;
     *result = -1;
     memset(reply, 0, sizeof(*reply));
     if (strlen(path) >= sizeof(request.path) || strlen(path2) >= sizeof(request.path2))
         return ENAMETOOLONG;
     strcpy(request.path, path);
     strcpy(request.path2, path2);
-    qemu_mutex_lock(&s->host.provider_path_lock);
-    if (qatomic_read(&s->host.provider_broken))
+    qemu_mutex_lock(lock);
+    if (qatomic_read(&s->host.provider_broken) ||
+        (network && qatomic_read(&s->host.provider_network_path_broken)))
         error = ENODEV;
-    else if (s->host.provider_path_serial == UINT64_MAX)
+    else if (*serial == UINT64_MAX)
         error = EOVERFLOW;
     else {
-        request.serial = ++s->host.provider_path_serial;
-        error = astra_storage_path_call(s->host.provider_path, &request, fds, reply, result);
-        if (error != 0)
-            qatomic_set(&s->host.provider_broken, true);
+        request.serial = ++*serial;
+        error = astra_storage_path_call(socket, &request, fds, reply, result);
+        if (error != 0) {
+            if (network)
+                qatomic_set(&s->host.provider_network_path_broken, true);
+            else
+                qatomic_set(&s->host.provider_broken, true);
+        }
         else
             error = reply->error;
     }
-    qemu_mutex_unlock(&s->host.provider_path_lock);
+    qemu_mutex_unlock(lock);
     return error;
 }
 
@@ -4074,23 +4139,27 @@ static void astra_host_provider_init(Astra68State *s)
 {
     const char *control = g_getenv("ASTRA_STORAGE_CONTROL_FD");
     const char *path = g_getenv("ASTRA_STORAGE_PATH_FD");
+    const char *network_path = g_getenv("ASTRA_STORAGE_NETWORK_PATH_FD");
     if (g_getenv("ASTRA_HOSTFS_ROOT") != NULL) {
         error_report("ASTRA_HOSTFS_ROOT was replaced by the confined storage provider");
         exit(EXIT_FAILURE);
     }
-    if (control == NULL && path == NULL)
+    if (control == NULL && path == NULL && network_path == NULL)
         return;
     int a = astra_host_provider_endpoint("ASTRA_STORAGE_CONTROL_FD");
     int b = astra_host_provider_endpoint("ASTRA_STORAGE_PATH_FD");
-    if (a < 0 || b < 0 || a == b || getuid() == 0 || geteuid() == 0) {
+    int c = astra_host_provider_endpoint("ASTRA_STORAGE_NETWORK_PATH_FD");
+    if (a < 0 || b < 0 || c < 0 || a == b || a == c || b == c ||
+        getuid() == 0 || geteuid() == 0) {
         error_report("Astra storage requires distinct inherited provider sockets and an unprivileged QEMU");
         exit(EXIT_FAILURE);
     }
     s->host.provider_control = a;
     s->host.provider_path = b;
+    s->host.provider_network_path = c;
     if (g_getenv("ASTRA_NETWORK_CONTROL_FD") != NULL) {
         int fd = astra_host_provider_endpoint("ASTRA_NETWORK_CONTROL_FD");
-        if (fd < 0 || fd == a || fd == b) {
+        if (fd < 0 || fd == a || fd == b || fd == c) {
             error_report("Astra network control requires a distinct inherited provider socket");
             exit(EXIT_FAILURE);
         }
@@ -5403,7 +5472,9 @@ static int astra_host_storage_control(Astra68State *s, AstraStorageControlReques
     return error;
 }
 
-static int astra_host_provider_root(Astra68State *s, uint64_t mount, uint64_t generation);
+static int astra_host_provider_root(Astra68State *s, uint64_t mount,
+                                    uint64_t generation, bool *network,
+                                    bool *read_only);
 
 typedef struct AstraHostUsageObject {
     AstraHostIdentity identity;
@@ -5456,7 +5527,8 @@ static void astra_host_usage_name(Astra68State *s, const GArray *catalog,
         fd = image_fd;
     }
     if (fd < 0) return;
-    int root = astra_host_provider_root(s, row->volume.id, row->volume.generation);
+    int root = astra_host_provider_root(s, row->volume.id, row->volume.generation,
+                                        NULL, NULL);
     if (root >= 0) {
         char relative[ASTRA_HOST_FS_PATH_MAX];
         uint32_t length = 0u;
@@ -6138,7 +6210,9 @@ static uint32_t astra_host_fs_claim(Astra68State *s, uint32_t owner,
  * through the provider before using its root. Ids are never reused (next_session is never reset), so a
  * scope or handle of a closed session never names a later one (review M2).
  */
-static int astra_host_provider_root(Astra68State *s, uint64_t mount, uint64_t generation)
+static int astra_host_provider_root(Astra68State *s, uint64_t mount,
+                                    uint64_t generation, bool *network,
+                                    bool *read_only)
 {
     AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
         .operation = ASTRA_STORAGE_CONTROL_ROOT, .epoch = s->host.provider_epoch,
@@ -6150,6 +6224,10 @@ static int astra_host_provider_root(Astra68State *s, uint64_t mount, uint64_t ge
         errno = error;
         return -1;
     }
+    if (network != NULL)
+        *network = reply.records[0].origin == ASTRA_VOLUME_ORIGIN_NETWORK;
+    if (read_only != NULL)
+        *read_only = (reply.records[0].flags & ASTRA_VOLUME_READ_ONLY) != 0u;
     return fd;
 }
 
@@ -6181,7 +6259,8 @@ static void astra_host_reconcile_mounts(Astra68State *s)
     qemu_mutex_unlock(&s->host.files_lock);
     for (guint at = 0u; at < references->len; ++at) {
         const AstraVolumeReference *reference = &g_array_index(references, AstraVolumeReference, at);
-        int root = astra_host_provider_root(s, reference->id, reference->generation);
+        int root = astra_host_provider_root(s, reference->id,
+                                            reference->generation, NULL, NULL);
         int error = errno;
         if (root >= 0) {
             close(root);
@@ -6259,8 +6338,17 @@ static uint32_t astra_host_volume_control(Astra68State *s, uint32_t owner,
     AstraStorageControlReply reply;
     AstraVolumeReference reference = {0};
     AstraHostDescription *description = NULL;
+    AstraHostNamespace *namespace = NULL;
     int output = -1, input = -1, error = EINVAL;
     if (requester == 0u || ldl_be_p(data + 60u) != 0u) return ASTRA_STATUS_INVALID;
+    if (operation == ASTRA_VOLUME_UNMOUNT && request.target != 0u &&
+        request.generation != 0u) {
+        namespace = astra_host_namespace_acquire(s, request.target,
+                                                 request.generation);
+        if (namespace == NULL)
+            return ASTRA_STATUS_LOST;
+        qemu_mutex_lock(&namespace->lock);
+    }
     qemu_mutex_lock(&s->host.namespace_lock);
     if (operation == ASTRA_VOLUME_IMAGE) {
         if (request.epoch || request.target || request.generation || request.flags ||
@@ -6338,6 +6426,10 @@ done:
     if (output >= 0) close(output);
     if (description != NULL) astra_host_description_release(description);
     qemu_mutex_unlock(&s->host.namespace_lock);
+    if (namespace != NULL) {
+        qemu_mutex_unlock(&namespace->lock);
+        astra_host_namespace_release(s, namespace);
+    }
     return astra_host_status_from_errno(error);
 }
 
@@ -6382,7 +6474,7 @@ static uint32_t astra_host_fs_session_open(Astra68State *s, uint32_t owner,
     AstraHostSession authority = {0};
     uint32_t id;
     int base = -1, root = -1, error = 0;
-    bool borrowed = false, lazy = false;
+    bool borrowed = false, lazy = false, read_only = false;
     AstraResolution resolved;
     const int directory_flags = O_PATH | O_DIRECTORY;
 
@@ -6408,22 +6500,17 @@ static uint32_t astra_host_fs_session_open(Astra68State *s, uint32_t owner,
         flags |= parent->flags & ASTRA_HOST_FS_SESSION_READ_ONLY;
         authority.mount = parent->mount;
         authority.mount_generation = parent->mount_generation;
+        authority.network = parent->network;
         base = parent->root;
         lazy = base < 0 && (path[0] == '\0' || strcmp(path, "/") == 0);
     }
     if (base < 0) {
-        base = astra_host_provider_root(s, authority.mount, authority.mount_generation);
+        base = astra_host_provider_root(s, authority.mount, authority.mount_generation,
+                                        &authority.network, &read_only);
         borrowed = true;
     }
     if (base >= 0) {
-        struct statvfs about;
-        if (fstatvfs(base, &about) != 0) {
-            error = errno;
-            if (borrowed) close(base);
-            if (parent != NULL) astra_host_session_release(s, parent);
-            return astra_host_status_from_errno(error);
-        }
-        if (about.f_flag & ST_RDONLY)
+        if (borrowed && read_only)
             flags |= ASTRA_HOST_FS_SESSION_READ_ONLY;
         if (!lazy)
             root = astra_host_open_resolved(s, &authority, base, -1,
@@ -6445,12 +6532,21 @@ static uint32_t astra_host_fs_session_open(Astra68State *s, uint32_t owner,
     session->mount = authority.mount;
     session->mount_generation = authority.mount_generation;
     session->flags = flags;
+    session->network = authority.network;
+    session->namespace = astra_host_namespace_acquire(s, authority.mount,
+                                                      authority.mount_generation);
+    if (session->namespace == NULL) {
+        if (root >= 0) close(root);
+        g_free(session);
+        return ASTRA_STATUS_LOST;
+    }
     session->references = 1u;
     qemu_mutex_lock(&s->host.files_lock);
     /* The claim may have gone since the command's check (review M2). */
     if (qatomic_read(&s->host.fs_owner) != owner) {
         qemu_mutex_unlock(&s->host.files_lock);
         if (root >= 0) close(root);
+        astra_host_namespace_release(s, session->namespace);
         g_free(session);
         return ASTRA_STATUS_ACCESS;
     }
@@ -6458,6 +6554,7 @@ static uint32_t astra_host_fs_session_open(Astra68State *s, uint32_t owner,
     if (s->host.next_session == UINT32_MAX) {
         qemu_mutex_unlock(&s->host.files_lock);
         if (root >= 0) close(root);
+        astra_host_namespace_release(s, session->namespace);
         g_free(session);
         return ASTRA_STATUS_LIMIT;
     }
@@ -6560,6 +6657,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     bool borrowed_root = false;
     int base;
     bool namespace_locked = false;
+    QemuMutex *namespace_mutex = NULL;
+    AstraHostNamespace *opening_namespace = NULL;
     bool descriptor_reserved = false;
     bool directory_reserved = false;
     AstraResolution resolved = { .parent = -1 };
@@ -6639,13 +6738,6 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         goto done;
     if (operation == ASTRA_HOST_FS_SESSION_OPEN) {
         status = ASTRA_STATUS_INVALID;
-        qemu_mutex_lock(&s->host.namespace_lock);
-        namespace_locked = true;
-        if (!astra_host_admit(s, owner, 0u, 0u, 1u, 0u)) {
-            status = ASTRA_STATUS_LIMIT;
-            goto done;
-        }
-        descriptor_reserved = true;
         uint32_t target_bytes = ldl_be_p(command + HOST_FIELD(data_length));
         const uint8_t *target = NULL;
         {
@@ -6656,6 +6748,36 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             if (target == NULL || ldl_be_p(target + 28u) != 0u)
                 goto done;
         }
+        uint64_t mount, generation;
+        uint32_t parent_id = ldl_be_p(command + HOST_FIELD(session));
+        if (parent_id == 0u) {
+            mount = ldq_be_p(target + 8u);
+            generation = ldq_be_p(target + 16u);
+        } else {
+            AstraHostSession *parent = astra_host_session_acquire(s, owner, parent_id);
+            if (parent == NULL) {
+                status = ASTRA_STATUS_BAD_HANDLE;
+                goto done;
+            }
+            mount = parent->mount;
+            generation = parent->mount_generation;
+            astra_host_session_release(s, parent);
+        }
+        if (mount == 0u || generation == 0u)
+            goto done;
+        opening_namespace = astra_host_namespace_acquire(s, mount, generation);
+        if (opening_namespace == NULL) {
+            status = ASTRA_STATUS_LOST;
+            goto done;
+        }
+        namespace_mutex = &opening_namespace->lock;
+        qemu_mutex_lock(namespace_mutex);
+        namespace_locked = true;
+        if (!astra_host_admit(s, owner, 0u, 0u, 1u, 0u)) {
+            status = ASTRA_STATUS_LIMIT;
+            goto done;
+        }
+        descriptor_reserved = true;
         status = astra_host_fs_session_open(s, owner, command, flags, path, target);
         descriptor_reserved = status != ASTRA_STATUS_OK;
         goto done;
@@ -6687,7 +6809,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
      * directory of this session; handles answer only in their session. */
     root = session->root;
     if (operation != ASTRA_HOST_FS_CLOSE) {
-        int admitted = astra_host_provider_root(s, session->mount, session->mount_generation);
+        int admitted = astra_host_provider_root(s, session->mount,
+                                                session->mount_generation, NULL, NULL);
         if (admitted < 0) {
             status = astra_host_status_from_errno(errno);
             goto done;
@@ -6702,7 +6825,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         operation != ASTRA_HOST_FS_SEEK && operation != ASTRA_HOST_FS_FILE_FLAGS) {
         /* Table locking cannot span these calls; publishing an open reenters it.
          * Acquire namespace before any per-file lock, including rename bases. */
-        qemu_mutex_lock(&s->host.namespace_lock);
+        namespace_mutex = &session->namespace->lock;
+        qemu_mutex_lock(namespace_mutex);
         namespace_locked = true;
     }
     status = ASTRA_STATUS_INVALID;
@@ -7384,7 +7508,9 @@ done:
         qemu_mutex_unlock(&s->host.files_lock);
     }
     if (namespace_locked)
-        qemu_mutex_unlock(&s->host.namespace_lock);
+        qemu_mutex_unlock(namespace_mutex);
+    if (opening_namespace != NULL)
+        astra_host_namespace_release(s, opening_namespace);
     if (session != NULL)
         astra_host_session_release(s, session);
     if (status == ASTRA_STATUS_ESCAPED) {
@@ -9922,8 +10048,10 @@ static void astra68_init(MachineState *machine)
     s->network.control_fd = -1;
     s->host.provider_control = -1;
     s->host.provider_path = -1;
+    s->host.provider_network_path = -1;
     qemu_mutex_init(&s->host.provider_control_lock);
     qemu_mutex_init(&s->host.provider_path_lock);
+    qemu_mutex_init(&s->host.provider_network_path_lock);
     qemu_mutex_init(&s->host.files_lock);
     qemu_mutex_init(&s->host.namespace_lock);
     qemu_mutex_init(&s->host.font_lock);
@@ -9937,6 +10065,7 @@ static void astra68_init(MachineState *machine)
     s->host.lost_handles = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, g_free);
     s->host.shares = g_hash_table_new(g_int64_hash, g_int64_equal);
     s->host.sessions = g_hash_table_new(g_direct_hash, g_direct_equal);
+    s->host.namespaces = g_hash_table_new(g_int64_hash, g_int64_equal);
     s->host.fs_epoch = 1u;
     struct rlimit descriptor_limit;
     if (getrlimit(RLIMIT_NOFILE, &descriptor_limit) != 0 || descriptor_limit.rlim_cur <= 256u) {

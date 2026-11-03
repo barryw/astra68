@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,6 +58,15 @@ static AstraStorageResource *resource(AstraStorageProvider *provider, uint64_t i
         if (entry->id == id)
             return entry;
     return NULL;
+}
+
+static bool worker_room(const AstraStorageProvider *provider,
+                        const AstraStorageRecord *record)
+{
+    return provider->workers < provider->worker_limit &&
+        (record->origin != ASTRA_VOLUME_ORIGIN_NETWORK ||
+         (provider->worker_limit >= 2u &&
+          provider->workers < provider->worker_limit - 1u));
 }
 
 static int under_device(const AstraStorageCatalog *catalog,
@@ -639,6 +649,8 @@ int astra_storage_provider_network_source(AstraStorageProvider *provider,
     if (provider == NULL || source == NULL || !astra_volume_network_source_valid(definition))
         return EINVAL;
     *source = 0u;
+    if (provider->worker_limit < 2u)
+        return ENOTSUP; /* One worker cannot reserve local I/O capacity. */
     error = astra_storage_network_source(&provider->catalog, definition->format,
         definition->label, source);
     if (error != 0) return error;
@@ -728,7 +740,7 @@ int astra_storage_provider_mount(AstraStorageProvider *provider, uint64_t source
     int error;
     if (record == NULL || record->generation != generation)
         return ESTALE;
-    if (provider->workers >= provider->worker_limit)
+    if (!worker_room(provider, record))
         return EAGAIN;
     if (record->class_id == ASTRA_VOLUME_RAM) {
         if (bytes > provider->ram_byte_limit - provider->ram_bytes ||
@@ -832,46 +844,53 @@ int astra_storage_provider_path(AstraStorageProvider *provider, int socket,
         else if (record->state != ASTRA_VOLUME_MOUNTED || entry == NULL || entry->mounted.root < 0)
             reply.error = EBUSY;
         else {
-            int confined = astra_storage_path_roots(entry->mounted.root, fds);
-            if (confined != 0)
-                reply.error = -confined;
-            if (reply.error == 0 && request.operation == ASTRA_STORAGE_PATH_OPEN &&
+            /* Worker repeats confinement before any path use. A remote statx
+             * here could block the provider's control and local-path loop. */
+            size_t protected_count = 0u;
+            int *protected = NULL;
+            if (request.operation == ASTRA_STORAGE_PATH_OPEN &&
                 (request.flags & (O_ACCMODE | O_TRUNC)) != 0u) {
-                AstraResolution resolved = {.parent = -1};
-                int target = astra_resolve_open_path(fds[0], fds[1] < 0 ? fds[0] : fds[1],
-                    request.path, O_PATH | O_CLOEXEC, 0u,
-                    request.resolve, request.links, &resolved);
-                if (target >= 0) {
-                    struct statx info;
-                    if (statx(target, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &info) != 0)
-                        reply.error = errno;
-                    else
+                for (AstraStorageResource *held = provider->resources;
+                     held != NULL; held = held->next) {
+                    const AstraStorageRecord *image = astra_storage_find(&provider->catalog,
+                                                                           held->id);
+                    if (image != NULL && image->kind == ASTRA_VOLUME_SOURCE &&
+                        image->origin == ASTRA_VOLUME_ORIGIN_IMAGE &&
+                        image->parent == request.mount &&
+                        image->parent_generation == request.generation && held->source >= 0)
+                        ++protected_count;
+                }
+                if (protected_count != 0u) {
+                    protected = calloc(protected_count, sizeof(*protected));
+                    if (protected == NULL) reply.error = ENOMEM;
+                    else {
+                        size_t at = 0u;
                         for (AstraStorageResource *held = provider->resources;
                              held != NULL; held = held->next) {
-                            const AstraStorageRecord *image = astra_storage_find(&provider->catalog, held->id);
-                            struct statx other;
-                            if (image->kind == ASTRA_VOLUME_SOURCE &&
-                                image->origin == ASTRA_VOLUME_ORIGIN_IMAGE && held->source >= 0 &&
-                                statx(held->source, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &other) == 0 &&
-                                other.stx_ino == info.stx_ino && other.stx_mnt_id == info.stx_mnt_id)
-                                reply.error = (request.flags & (O_CREAT | O_EXCL)) ==
-                                    (O_CREAT | O_EXCL) ? EEXIST : EBUSY;
+                            const AstraStorageRecord *image = astra_storage_find(&provider->catalog,
+                                                                                   held->id);
+                            if (image != NULL && image->kind == ASTRA_VOLUME_SOURCE &&
+                                image->origin == ASTRA_VOLUME_ORIGIN_IMAGE &&
+                                image->parent == request.mount &&
+                                image->parent_generation == request.generation && held->source >= 0)
+                                protected[at++] = held->source;
                         }
-                    close(target);
+                    }
                 }
             }
             if (reply.error == 0) {
-                if (entry->work.pid != 0 || provider->workers >= provider->worker_limit)
+                if (entry->work.pid != 0 || !worker_room(provider, record))
                     reply.error = EAGAIN;
                 else {
                     reply.error = astra_storage_work_path_start(&entry->work, record,
-                        entry->mounted.root, &request, fds);
+                        entry->mounted.root, &request, fds, protected, protected_count);
                     if (reply.error == 0) {
                         ++provider->workers;
                         entry->path_socket = socket;
                     }
                 }
             }
+            free(protected);
         }
     }
     error = reply.error == 0 ? 0 : astra_storage_path_reply(socket, &reply, result);
@@ -945,9 +964,14 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
             if (request.flags || request.byte_limit || request.inode_limit ||
                 request.sequence || request.after || request.backing_object)
                 error = EINVAL;
-            else
+            else {
                 error = astra_storage_provider_root(provider, request.target,
                                                      request.generation, &root);
+                if (error == 0) {
+                    reply.records[0] = *astra_storage_find(&provider->catalog, request.target);
+                    reply.count = 1u;
+                }
+            }
             break;
         case ASTRA_STORAGE_CONTROL_MOUNT:
             if (request.sequence || request.after || request.backing_object ||
@@ -1186,15 +1210,15 @@ int astra_storage_provider_wait(AstraStorageProvider *provider, int timeout_ms)
     return (event.revents & (POLLERR | POLLHUP | POLLNVAL)) ? EIO : 0;
 }
 
-int astra_storage_provider_serve(AstraStorageProvider *provider, int control, int path,
-                                  pid_t peer)
+int astra_storage_provider_serve(AstraStorageProvider *provider, int control,
+                                  int path, int remote_path, pid_t peer)
 {
     int enabled = 1;
-    int sockets[] = {control, path};
+    int sockets[] = {control, path, remote_path};
     if (provider == NULL || peer <= 0 || provider->lease_signal < 0 ||
         provider->domain.path[0] == '\0')
         return EINVAL;
-    for (unsigned at = 0u; at < 2u; ++at) {
+    for (unsigned at = 0u; at < 3u; ++at) {
         int type = 0;
         socklen_t bytes = sizeof(type);
         if (getsockopt(sockets[at], SOL_SOCKET, SO_TYPE, &type, &bytes) != 0)
@@ -1208,6 +1232,7 @@ int astra_storage_provider_serve(AstraStorageProvider *provider, int control, in
     if (process < 0)
         return errno;
     struct pollfd waits[] = {{control, POLLIN, 0}, {path, POLLIN, 0},
+                            {remote_path, POLLIN, 0},
                             {provider->lease_signal, POLLIN, 0}, {process, POLLIN, 0},
                             {provider->discovery == NULL ? -1 : provider->discovery->fd, POLLIN, 0}};
     int error = 0;
@@ -1250,13 +1275,13 @@ int astra_storage_provider_serve(AstraStorageProvider *provider, int control, in
             error = errno;
             break;
         }
-        if (waits[3].revents != 0)
+        if (waits[4].revents != 0)
             break;
-        if (waits[4].revents & POLLIN) {
+        if (waits[5].revents & POLLIN) {
             phase = "discovery event";
             error = astra_storage_discovery_receive(provider->discovery);
         }
-        if (error == 0 && (waits[4].revents & (POLLERR | POLLHUP | POLLNVAL)))
+        if (error == 0 && (waits[5].revents & (POLLERR | POLLHUP | POLLNVAL)))
             error = EIO;
         if (error == 0 && (waits[0].revents & POLLIN)) {
             phase = "control request";
@@ -1268,9 +1293,15 @@ int astra_storage_provider_serve(AstraStorageProvider *provider, int control, in
             error = astra_storage_provider_path(provider, path, peer,
                 provider->domain.uid, provider->domain.gid);
         }
-        if (error == 0 && ((waits[0].revents | waits[1].revents) & (POLLERR | POLLHUP | POLLNVAL)))
+        if (error == 0 && (waits[2].revents & POLLIN)) {
+            phase = "remote path request";
+            error = astra_storage_provider_path(provider, remote_path, peer,
+                provider->domain.uid, provider->domain.gid);
+        }
+        if (error == 0 && ((waits[0].revents | waits[1].revents |
+                            waits[2].revents) & (POLLERR | POLLHUP | POLLNVAL)))
             error = EPIPE;
-        if (error == 0 && (waits[2].revents & (POLLERR | POLLHUP | POLLNVAL)))
+        if (error == 0 && (waits[3].revents & (POLLERR | POLLHUP | POLLNVAL)))
             error = EIO;
     }
     if (error != 0)
@@ -1292,7 +1323,7 @@ int astra_storage_provider_unmount(AstraStorageProvider *provider, uint64_t moun
         return ESTALE;
     if (entry == NULL || (record->kind != ASTRA_VOLUME_MOUNT && record->kind != ASTRA_VOLUME_BINDING))
         return EINVAL;
-    if (entry->work.pid != 0 || provider->workers >= provider->worker_limit)
+    if (entry->work.pid != 0 || !worker_room(provider, record))
         return EAGAIN;
     if (record->kind == ASTRA_VOLUME_BINDING && record->state == ASTRA_VOLUME_MOUNTED)
         return EPERM;

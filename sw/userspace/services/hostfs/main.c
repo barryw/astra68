@@ -526,7 +526,10 @@ static uint32_t grant_add(HostfsVolume *owner, uint32_t session,
     uint32_t at = grant_count;
     grants[grant_count++] = grant;
     owner->pending_session = 0u;
-    status = grant_root_meta(session, &grant->root_meta);
+    /* Whole-volume authority is pinned by provider epoch, mount and generation.
+     * A live root stat can wait forever on a disconnected network mount. */
+    status = strcmp(root, "/") == 0 ? ASTRA_VFS_OK :
+             grant_root_meta(session, &grant->root_meta);
     if (status != ASTRA_VFS_OK) {
         (void)grant_retire(at);
         return status;
@@ -812,14 +815,12 @@ static void retire_orphans(void)
 static int grant_root_matches(const HostfsGrant *grant, const AstraVfsNodeMeta *meta)
 {
     uint32_t identity = ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_INODE;
-    /* The exact native mount incarnation owns an immutable whole-mount root.
-     * FAT/exFAT may not report birth time. Subdirectory authority instead needs
-     * its node generation: reopening its spelling must not select a replacement. */
-    int whole = strcmp(grant->root, "/") == 0;
-    if (!whole) identity |= ASTRA_VFS_META_GENERATION;
+    /* Subdirectory authority needs node generation: reopening its spelling
+     * must not select a replacement. Whole-volume grants use mount identity. */
+    identity |= ASTRA_VFS_META_GENERATION;
     return (meta->valid & grant->root_meta.valid & identity) == identity &&
         meta->volume == grant->root_meta.volume && meta->inode == grant->root_meta.inode &&
-        (whole || meta->generation == grant->root_meta.generation);
+        meta->generation == grant->root_meta.generation;
 }
 
 /* Control-plane recovery keeps grant ports; old files and scopes stay lost. */
@@ -873,8 +874,10 @@ static uint32_t hostfs_check_provider(void)
         grant->session = session;
         if (status == ASTRA_VFS_OK) {
             AstraVfsNodeMeta meta = {0};
-            status = grant_root_meta(session, &meta);
-            if (status == ASTRA_VFS_OK && !grant_root_matches(grant, &meta))
+            status = strcmp(grant->root, "/") == 0 ? ASTRA_VFS_OK :
+                     grant_root_meta(session, &meta);
+            if (status == ASTRA_VFS_OK && strcmp(grant->root, "/") != 0 &&
+                !grant_root_matches(grant, &meta))
                 status = ASTRA_VFS_ERR_LOST;
             if (status != ASTRA_VFS_OK) {
                 grant->port.lost = 1u;

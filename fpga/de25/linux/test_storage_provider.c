@@ -563,14 +563,18 @@ static void ram(AstraStorageProvider *provider)
 
 static void blocked_path(AstraStorageProvider *provider, int original)
 {
-    uint64_t binding;
-    int sockets[2], controls[2], enabled = 1, root;
+    uint64_t binding, fast_binding;
+    int sockets[2], fast_sockets[2], controls[2], enabled = 1, root, fast_root;
     assert(mkfifoat(original, "slow", 0600) == 0);
     assert(astra_storage_provider_export(provider, original, "/slow-test", 0u, &binding) == 0);
+    assert(astra_storage_provider_export(provider, original, "/fast-test", 0u, &fast_binding) == 0);
     assert(astra_storage_provider_root(provider, binding, 1u, &root) == 0);
+    assert(astra_storage_provider_root(provider, fast_binding, 1u, &fast_root) == 0);
     assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets) == 0);
+    assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, fast_sockets) == 0);
     assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, controls) == 0);
     assert(setsockopt(sockets[0], SOL_SOCKET, SO_PASSCRED, &enabled, sizeof(enabled)) == 0);
+    assert(setsockopt(fast_sockets[0], SOL_SOCKET, SO_PASSCRED, &enabled, sizeof(enabled)) == 0);
     assert(setsockopt(controls[0], SOL_SOCKET, SO_PASSCRED, &enabled, sizeof(enabled)) == 0);
     AstraStoragePathRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
         .operation = ASTRA_STORAGE_PATH_OPEN, .serial = 44u, .epoch = provider->epoch,
@@ -581,6 +585,27 @@ static void blocked_path(AstraStorageProvider *provider, int original)
     /* A synchronous broker never returns from this FIFO open. */
     assert(astra_storage_provider_path(provider, sockets[0], getpid(), 0u, 0u) == 0);
     assert(provider->workers == 1u);
+    request.serial = 46u;
+    request.mount = fast_binding;
+    strcpy(request.path, "/private");
+    assert(astra_storage_send_packet(fast_sockets[1], &request, sizeof(request),
+                                    &fast_root, 1u) == 0);
+    assert(astra_storage_provider_path(provider, fast_sockets[0], getpid(), 0u, 0u) == 0);
+    struct pollfd fast_ready = {.fd = fast_sockets[1], .events = POLLIN};
+    for (unsigned retry = 0u; retry < 10000u &&
+         poll(&fast_ready, 1u, 0) == 0; ++retry) {
+        assert(astra_storage_provider_poll(provider) >= 0);
+        usleep(1000);
+    }
+    assert(poll(&fast_ready, 1u, 0) == 1);
+    AstraStoragePathReply fast_reply;
+    int fast_fds[ASTRA_STORAGE_PROVIDER_FDS];
+    unsigned fast_count;
+    assert(astra_storage_receive_packet(fast_sockets[1], &fast_reply,
+        sizeof(fast_reply), fast_fds, &fast_count, NULL) == 0);
+    assert(fast_reply.error == 0 && fast_reply.serial == 46u &&
+           fast_count == 1u && fast_fds[0] >= 0 && provider->workers == 1u);
+    close(fast_fds[0]);
     AstraStorageControlRequest snapshot = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
         .operation = ASTRA_STORAGE_CONTROL_SNAPSHOT, .serial = 45u, .epoch = provider->epoch};
     assert(astra_storage_send_packet(controls[1], &snapshot, sizeof(snapshot), NULL, 0u) == 0);
@@ -596,8 +621,13 @@ static void blocked_path(AstraStorageProvider *provider, int original)
     assert(astra_storage_receive_packet(sockets[1], &reply, sizeof(reply), fds, &count, NULL) == 0);
     assert(reply.serial == 44u && reply.error == ESTALE && count == 0u);
     close(root);
+    close(fast_root);
     close(sockets[0]); close(sockets[1]);
+    close(fast_sockets[0]); close(fast_sockets[1]);
     close(controls[0]); close(controls[1]);
+    assert(astra_storage_provider_loss(provider, fast_binding, 1u) == 0);
+    assert(unmount_wait(provider, fast_binding, 2u) == 0);
+    assert(astra_storage_provider_release(provider, fast_binding) == 0);
     assert(unmount_wait(provider, binding, 2u) == 0);
     assert(astra_storage_provider_release(provider, binding) == 0);
     assert(unlinkat(original, "slow", 0) == 0);
@@ -875,9 +905,10 @@ static void image(AstraStorageProvider *provider, int export_root, uint64_t bind
 static void peer(AstraStorageProvider *provider, uid_t uid, gid_t gid, uint64_t binding,
                    int outside_root)
 {
-    int controls[2], paths[2], enabled = 1, status;
+    int controls[2], paths[2], remote_paths[2], enabled = 1, status;
     assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, controls) == 0);
     assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, paths) == 0);
+    assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, remote_paths) == 0);
     assert(setsockopt(controls[0], SOL_SOCKET, SO_PASSCRED, &enabled, sizeof(enabled)) == 0);
     assert(setsockopt(paths[0], SOL_SOCKET, SO_PASSCRED, &enabled, sizeof(enabled)) == 0);
     pid_t child = fork();
@@ -889,6 +920,7 @@ static void peer(AstraStorageProvider *provider, uid_t uid, gid_t gid, uint64_t 
         int root;
         close(controls[0]);
         close(paths[0]);
+        close(remote_paths[0]);
         assert(setgroups(0, NULL) == 0);
         assert(setresgid(gid, gid, gid) == 0 && setresuid(uid, uid, uid) == 0);
         assert(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0);
@@ -915,6 +947,8 @@ static void peer(AstraStorageProvider *provider, uid_t uid, gid_t gid, uint64_t 
         ++request.serial;
         assert(astra_storage_control_call(controls[1], &request, -1, &reply, &root) == 0);
         assert(reply.error == 0 && root >= 0);
+        assert(reply.count == 1u && reply.records[0].id == binding &&
+               reply.records[0].origin != ASTRA_VOLUME_ORIGIN_NETWORK);
         int unused_root;
         request = (AstraStorageControlRequest){.version = ASTRA_STORAGE_PROVIDER_VERSION,
             .operation = ASTRA_STORAGE_CONTROL_FORMAT, .serial = 6,
@@ -965,15 +999,19 @@ static void peer(AstraStorageProvider *provider, uid_t uid, gid_t gid, uint64_t 
         assert(answer.error == EXDEV && file == -1);
         close(root);
         close(paths[1]);
+        close(remote_paths[1]);
         close(controls[1]);
         _exit(0);
     }
     close(controls[1]);
     close(paths[1]);
-    int served = astra_storage_provider_serve(provider, controls[0], paths[0], child);
+    close(remote_paths[1]);
+    int served = astra_storage_provider_serve(provider, controls[0], paths[0],
+                                               remote_paths[0], child);
     assert(served == 0 || served == EPIPE);
     close(controls[0]);
     close(paths[0]);
+    close(remote_paths[0]);
     assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 

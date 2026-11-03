@@ -10,6 +10,11 @@ int astra_storage_path_reply(int socket, const AstraStoragePathReply *reply,
                               int result);
 int astra_storage_path_roots(int allowed_root,
                               const int fds[ASTRA_STORAGE_PROVIDER_FDS]);
+/* Worker-only image backing guard. Its checks may wait on remote storage. */
+int astra_storage_path_write_guard(int allowed_root,
+    const AstraStoragePathRequest *request,
+    const int fds[ASTRA_STORAGE_PROVIDER_FDS], const int *protected,
+    size_t protected_count);
 /* The provider selects a live private mount by ID/generation before calling
  * this. Exports must be private bind mounts: an arbitrary directory on the
  * host root filesystem is not sufficient authority for retained file FDs. */

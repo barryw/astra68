@@ -94,7 +94,8 @@ def main(argv=None):
         if args.scenario == "memory":
             command += ["-mem-prealloc"]
         environment = os.environ.copy()
-        for name in ("ASTRA_HOSTFS_ROOT", "ASTRA_STORAGE_CONTROL_FD", "ASTRA_STORAGE_PATH_FD"):
+        for name in ("ASTRA_HOSTFS_ROOT", "ASTRA_STORAGE_CONTROL_FD", "ASTRA_STORAGE_PATH_FD",
+                     "ASTRA_STORAGE_NETWORK_PATH_FD"):
             environment.pop(name, None)
         if args.scenario == "budgets":
             environment.update(ASTRA_HOSTFS_MAX_DESCRIPTORS="12", ASTRA_HOSTFS_MAX_DIRECTORIES="2")
@@ -130,24 +131,24 @@ def main(argv=None):
                     generation = qtest.read32(gate.HACC_GENERATION)
 
                     def catalog(epoch=0, sequence=0, after=0):
-                        query = struct.pack(">IIQQQ", 1, 32, epoch, sequence, after)
+                        query = struct.pack(">IIQQQ", 6, 32, epoch, sequence, after)
                         return gate.execute(qtest, [gate.Command(generation, 1,
-                            service=6, data=query, capacity=8104)], owner=0x2002)[0]
+                            service=6, data=query, capacity=gate.VOLUME_PAGE_SIZE)], owner=0x2002)[0]
 
                     visible = catalog()
                     assert gate.status(visible) == gate.STATUS_OK
                     page = gate.output(qtest, visible, gate.get32(visible.raw, 52))
                     version, size, epoch, sequence, next_id, count, reserved = struct.unpack_from(">IIQQQII", page)
-                    assert version == 1 and size == 8104 and epoch != 0 and sequence != 0 and reserved == 0
-                    assert next_id == 0 and count == 8
+                    assert version == 6 and size == gate.VOLUME_PAGE_SIZE and epoch != 0 and sequence != 0 and reserved == 0
+                    assert next_id == 0 and count >= 8, (next_id, count)
                     names = []
                     for at in range(count):
-                        row = page[40 + at * 504:40 + (at + 1) * 504]
+                        row = page[40 + at * gate.VOLUME_ROW_SIZE:40 + (at + 1) * gate.VOLUME_ROW_SIZE]
                         object_id, object_generation = struct.unpack_from(">QQ", row)
                         assert object_id != 0 and object_generation != 0
-                        assert struct.unpack_from(">I", row, 84)[0] == 0
-                        names.append(row[88:120].split(b"\0", 1)[0])
-                    assert set(names) == {b"", b"/dh0", b"/work", b"/sound", b"/ram0", b"/tmp"}
+                        assert struct.unpack_from(">I", row, 108)[0] == 0
+                        names.append(row[112:144].split(b"\0", 1)[0])
+                    assert set(names) == {b"", b"/dh0", b"/work", b"/sound", b"/config-store", b"/ram0", b"/tmp"}, names
                     assert gate.status(catalog(epoch ^ 1)) == gate.STATUS_LOST
                     assert gate.status(catalog(epoch, sequence + 1)) == gate.STATUS_BUSY
                     refused = gate.execute(qtest, [gate.Command(generation, gate.FS_SESSION_OPEN,
@@ -226,7 +227,7 @@ def main(argv=None):
                     first_page = gate.output(qtest, first, gate.get32(first.raw, 52))
                     epoch = struct.unpack_from(">Q", first_page, 8)[0]
                     for at in range(struct.unpack_from(">I", first_page, 32)[0]):
-                        row = first_page[40 + at * 504:40 + (at + 1) * 504]
+                        row = first_page[40 + at * gate.VOLUME_ROW_SIZE:40 + (at + 1) * gate.VOLUME_ROW_SIZE]
                         if struct.unpack_from(">Q", row)[0] == ram_id:
                             source_reference = struct.pack(">QQQ", epoch, *struct.unpack_from(">QQ", row, 16))
                     assert source_reference is not None
@@ -318,9 +319,9 @@ def main(argv=None):
                     while True:
                         visible = gate.volume_page(qtest, generation)
                         page = gate.output(qtest, visible, gate.get32(visible.raw, 52))
-                        rows = [page[40 + at * 504:40 + (at + 1) * 504]
+                        rows = [page[40 + at * gate.VOLUME_ROW_SIZE:40 + (at + 1) * gate.VOLUME_ROW_SIZE]
                             for at in range(struct.unpack_from(">I", page, 32)[0])]
-                        state = next((struct.unpack_from(">I", row, 64)[0] for row in rows
+                        state = next((struct.unpack_from(">I", row, 88)[0] for row in rows
                             if struct.unpack_from(">Q", row)[0] == ram_id), None)
                         if state is None or state == 3: break
                         assert time.monotonic() < deadline, state
@@ -342,7 +343,7 @@ def main(argv=None):
                             assert gate.status(answer) == gate.STATUS_OK
                             page = gate.output(qtest, answer, gate.get32(answer.raw, 52))
                             sequence, after, count = struct.unpack_from(">QQI", page, 16)
-                            rows.extend(page[40 + at * 504:40 + (at + 1) * 504] for at in range(count))
+                            rows.extend(page[40 + at * gate.VOLUME_ROW_SIZE:40 + (at + 1) * gate.VOLUME_ROW_SIZE] for at in range(count))
                             if not after: return rows
 
                     def wait_record(reference, state):
@@ -353,7 +354,7 @@ def main(argv=None):
                                 if struct.unpack_from(">Q", row)[0] == wanted_id), None)
                             if state is None and selected is None: return None
                             if selected is not None and struct.unpack_from(">Q", selected, 8)[0] == wanted_generation:
-                                current_state = struct.unpack_from(">I", selected, 64)[0]
+                                current_state = struct.unpack_from(">I", selected, 88)[0]
                                 if current_state == state: return selected
                                 assert current_state != 8, ("failed lifecycle", selected.hex())
                             assert time.monotonic() < deadline, (reference.hex(), state, selected)
@@ -449,8 +450,8 @@ def main(argv=None):
                     status, image_mount = administrator(1, image_source, flags=1)
                     assert status == gate.STATUS_OK
                     image_row = wait_record(image_mount, 5)
-                    assert image_row[248:504].split(b"\0", 1)[0] == b"ASTRA_DISC"
-                    assert image_row[88:120].split(b"\0", 1)[0] == b"/cd0"
+                    assert image_row[272:528].split(b"\0", 1)[0] == b"ASTRA_DISC"
+                    assert image_row[112:144].split(b"\0", 1)[0] == b"/cd0"
                     assert administrator(2, admitted)[0] == gate.STATUS_BUSY
                     assert administrator(5, image_source)[0] == gate.STATUS_BUSY
                     backing_holders = usage(admitted)
@@ -511,6 +512,7 @@ def main(argv=None):
                 assert process.wait(timeout=15) == 0
             except BaseException:
                 errors.seek(0)
+                print("QEMU provider bridge child status:", process.poll())
                 print(errors.read())
                 raise
             finally:

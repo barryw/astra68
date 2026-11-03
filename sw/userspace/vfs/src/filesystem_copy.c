@@ -331,6 +331,7 @@ uint32_t astra_filesystem_copy_tree_between(AstraFilesystem *source_filesystem,
     const char *destination)
 {
     char *staging;
+    const char *cleanup;
     uint32_t status = transfer_preflight(source_filesystem, source,
         destination_filesystem, destination);
     int created = 0;
@@ -339,6 +340,7 @@ uint32_t astra_filesystem_copy_tree_between(AstraFilesystem *source_filesystem,
     if (status != ASTRA_VFS_OK) return status;
     staging = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
     if (staging == NULL) return ASTRA_VFS_ERR_LIMIT;
+    cleanup = staging;
     nonce = astra_clock_monotonic();
     for (uint32_t attempt = 0u; attempt < 16u; ++attempt) {
         AstraString path;
@@ -357,9 +359,41 @@ uint32_t astra_filesystem_copy_tree_between(AstraFilesystem *source_filesystem,
     if (status == ASTRA_VFS_OK)
         status = astra_filesystem_rename_noreplace(destination_filesystem,
             staging, destination);
+    if (status == ASTRA_VFS_ERR_INVALID || status == ASTRA_VFS_ERR_UNSUPPORTED) {
+        AstraFileInfo staged = ASTRA_FILE_INFO_INIT;
+        uint32_t probed = astra_filesystem_lstat(destination_filesystem,
+            staging, &staged);
+        int direct = probed == ASTRA_VFS_OK &&
+            staged.kind == ASTRA_VFS_KIND_DIRECTORY;
+        if (probed == ASTRA_VFS_OK && staged.kind != ASTRA_VFS_KIND_DIRECTORY) {
+            status = astra_filesystem_link(destination_filesystem, staging,
+                destination);
+            if (status == ASTRA_VFS_OK) {
+                status = astra_filesystem_remove_tree_internal(
+                    destination_filesystem, staging);
+                created = 0;
+            } else if (status == ASTRA_VFS_ERR_INVALID ||
+                       status == ASTRA_VFS_ERR_UNSUPPORTED)
+                direct = 1;
+        }
+        /* shortcut: unsupported no-replace rename exposes a directory during
+         * exclusive direct copy; upgrade when the server offers atomic publish. */
+        if (direct) {
+            uint32_t removed = astra_filesystem_remove_tree_internal(
+                destination_filesystem, staging);
+            created = 0;
+            if (removed == ASTRA_VFS_OK) {
+                cleanup = destination;
+                status = copy_one(source_filesystem, source,
+                    destination_filesystem, destination, &created);
+            } else
+                status = removed;
+        } else if (probed != ASTRA_VFS_OK)
+            status = probed;
+    }
     if (status != ASTRA_VFS_OK && created)
         (void)astra_filesystem_remove_tree_internal(destination_filesystem,
-            staging);
+            cleanup);
     astra_runtime_deallocate(staging);
     return status;
 }
@@ -397,7 +431,9 @@ uint32_t astra_filesystem_move_tree_between(AstraFilesystem *source_filesystem,
         return ASTRA_VFS_OK;
     }
     if (status != ASTRA_VFS_ERR_CROSS_DEVICE &&
-        status != ASTRA_VFS_ERR_NOT_FOUND)
+        status != ASTRA_VFS_ERR_NOT_FOUND &&
+        status != ASTRA_VFS_ERR_INVALID &&
+        status != ASTRA_VFS_ERR_UNSUPPORTED)
         return status;
     status = astra_filesystem_copy_tree_between(source_filesystem, source,
         destination_filesystem, destination);

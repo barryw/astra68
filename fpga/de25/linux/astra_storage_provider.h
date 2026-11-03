@@ -109,8 +109,8 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
                                     pid_t peer, uid_t uid, gid_t gid);
 /* Serve the inherited peer endpoints, wake for actual child exit/lease breaks,
  * and enforce probe deadlines without polling a cancelled uninterruptible job. */
-int astra_storage_provider_serve(AstraStorageProvider *provider, int control, int path,
-                                  pid_t peer);
+int astra_storage_provider_serve(AstraStorageProvider *provider, int control,
+                                  int path, int remote_path, pid_t peer);
 /* Retire observation, cancel probes; cleanup retains failed mounts/loop charges. */
 int astra_storage_provider_loss(AstraStorageProvider *provider, uint64_t id,
                                  uint64_t generation);

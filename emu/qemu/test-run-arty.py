@@ -71,7 +71,7 @@ trap '' TERM
 while :; do sleep 1; done
 """)
     write_executable(root / "qemu/bin/qemu-system-m68k-astra", f"""#!/bin/sh
-test -n "$ASTRA_STORAGE_CONTROL_FD" && test -n "$ASTRA_STORAGE_PATH_FD" || exit 97
+test -n "$ASTRA_STORAGE_CONTROL_FD" && test -n "$ASTRA_STORAGE_PATH_FD" && test -n "$ASTRA_STORAGE_NETWORK_PATH_FD" || exit 97
 test -z "${{ASTRA_HOSTFS_ROOT+x}}" || exit 98
 stat -c %s "$ASTRA_DISPLAY_MAILBOX_PATH" >"{observed}/mailbox.size"
 printf '%s\n' "$ASTRA_DISPLAY_PAYLOAD_PATH" >"{observed}/payload.path"
@@ -108,6 +108,7 @@ if os.getenv('ASTRA_TEST_PROVIDER_CLEAN_STOP'):
     while True: signal.pause()
 os.environ['ASTRA_STORAGE_CONTROL_FD'] = '3'
 os.environ['ASTRA_STORAGE_PATH_FD'] = '4'
+os.environ['ASTRA_STORAGE_NETWORK_PATH_FD'] = '7'
 os.execvp('setpriv', ['setpriv', '--reuid', uid, '--regid', gid,
     '--clear-groups', '--no-new-privs', '--bounding-set=-all',
     '--inh-caps=-all', '--ambient-caps=-all', *args[args.index('--') + 1:]])

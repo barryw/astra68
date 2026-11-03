@@ -225,17 +225,20 @@ static int provision(AstraStorageProvider *provider, const StorageConfig *settin
 }
 
 static void child(AstraStorageProvider *provider, const StorageConfig *settings,
-                    int control, int path, int secret, int network, pid_t parent)
+                    int control, int path, int remote_path, int secret,
+                    int network, pid_t parent)
 {
     /* Reserve copies above inherited protocol slots before rearranging FDs. */
-    int a = fcntl(control, F_DUPFD_CLOEXEC, 7);
-    int b = fcntl(path, F_DUPFD_CLOEXEC, 7);
-    int c = secret >= 0 ? fcntl(secret, F_DUPFD_CLOEXEC, 7) : -1;
-    int d = network >= 0 ? fcntl(network, F_DUPFD_CLOEXEC, 7) : -1;
+    int a = fcntl(control, F_DUPFD_CLOEXEC, 8);
+    int b = fcntl(path, F_DUPFD_CLOEXEC, 8);
+    int c = secret >= 0 ? fcntl(secret, F_DUPFD_CLOEXEC, 8) : -1;
+    int d = network >= 0 ? fcntl(network, F_DUPFD_CLOEXEC, 8) : -1;
+    int e = fcntl(remote_path, F_DUPFD_CLOEXEC, 8);
     if (a < 0 || b < 0 || dup2(a, 3) < 0 || dup2(b, 4) < 0 ||
         (secret >= 0 && (c < 0 || dup2(c, 5) < 0)) ||
         (network >= 0 && (d < 0 || dup2(d, 6) < 0)) ||
-        syscall(SYS_close_range, 7u, UINT_MAX, 0u) != 0)
+        e < 0 || dup2(e, 7) < 0 ||
+        syscall(SYS_close_range, 8u, UINT_MAX, 0u) != 0)
         _exit(126);
     for (int cap = 0; ; ++cap) {
         int present = prctl(PR_CAPBSET_READ, cap, 0, 0, 0);
@@ -257,6 +260,7 @@ static void child(AstraStorageProvider *provider, const StorageConfig *settings,
         sigprocmask(SIG_SETMASK, &provider->previous_signals, NULL) != 0 ||
         setenv("ASTRA_STORAGE_CONTROL_FD", "3", 1) != 0 ||
         setenv("ASTRA_STORAGE_PATH_FD", "4", 1) != 0 ||
+        setenv("ASTRA_STORAGE_NETWORK_PATH_FD", "7", 1) != 0 ||
         (secret >= 0 && setenv("ASTRA_CONFIG_SECRET_FD", "5", 1) != 0) ||
         (network >= 0 && setenv("ASTRA_NETWORK_CONTROL_FD", "6", 1) != 0))
         _exit(126);
@@ -269,7 +273,8 @@ static int run_provider(const StorageConfig *configuration, AstraStorageDomain *
     StorageConfig settings = *configuration;
     AstraStorageProvider provider = ASTRA_STORAGE_PROVIDER_INIT;
     AstraStorageDiscovery discovery = ASTRA_STORAGE_DISCOVERY_INIT;
-    int control[2] = {-1, -1}, path[2] = {-1, -1}, network[2] = {-1, -1};
+    int control[2] = {-1, -1}, path[2] = {-1, -1};
+    int remote_path[2] = {-1, -1}, network[2] = {-1, -1};
     const char *secret_path = getenv("ASTRA_STORAGE_SECRET_KEY_PATH");
     const char *network_helper = getenv("ASTRA_NETWORK_MANAGER_HELPER");
     if (network_helper != NULL && network_helper[0] == '\0')
@@ -300,7 +305,8 @@ static int run_provider(const StorageConfig *configuration, AstraStorageDomain *
             provider.discovery = &discovery;
     }
     if (error == 0 && (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, control) != 0 ||
-        socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, path) != 0))
+        socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, path) != 0 ||
+        socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, remote_path) != 0))
         error = errno;
     if (error == 0 && network_helper != NULL &&
         (network_helper[0] != '/' ||
@@ -309,6 +315,8 @@ static int run_provider(const StorageConfig *configuration, AstraStorageDomain *
     int credentials = 1;
     if (error == 0 && (setsockopt(control[0], SOL_SOCKET, SO_PASSCRED, &credentials, sizeof(credentials)) != 0 ||
         setsockopt(path[0], SOL_SOCKET, SO_PASSCRED, &credentials, sizeof(credentials)) != 0 ||
+        setsockopt(remote_path[0], SOL_SOCKET, SO_PASSCRED, &credentials,
+                   sizeof(credentials)) != 0 ||
         (network[0] >= 0 && setsockopt(network[0], SOL_SOCKET, SO_PASSCRED,
             &credentials, sizeof(credentials)) != 0)))
         error = errno;
@@ -322,7 +330,7 @@ static int run_provider(const StorageConfig *configuration, AstraStorageDomain *
         pid_t parent = getpid();
         pid_t pid = fork();
         if (pid == 0)
-            child(&provider, &settings, control[1], path[1], secret,
+            child(&provider, &settings, control[1], path[1], remote_path[1], secret,
                   network[1], parent);
         if (pid < 0)
             error = errno;
@@ -332,6 +340,7 @@ static int run_provider(const StorageConfig *configuration, AstraStorageDomain *
             fflush(stdout);
             close(control[1]); control[1] = -1;
             close(path[1]); path[1] = -1;
+            close(remote_path[1]); remote_path[1] = -1;
             if (network[1] >= 0) { close(network[1]); network[1] = -1; }
             if (network[0] >= 0) {
                 helper = fork();
@@ -355,7 +364,8 @@ static int run_provider(const StorageConfig *configuration, AstraStorageDomain *
             if (interrupted)
                 (void)kill(pid, interrupted);
             if (error == 0)
-                error = astra_storage_provider_serve(&provider, control[0], path[0], pid);
+                error = astra_storage_provider_serve(&provider, control[0], path[0],
+                                                      remote_path[0], pid);
             if (error != 0)
                 (void)kill(pid, SIGTERM);
             while (waitpid(pid, &status, 0) < 0) {
@@ -381,6 +391,7 @@ static int run_provider(const StorageConfig *configuration, AstraStorageDomain *
     for (unsigned at = 0; at < 2u; ++at) {
         if (control[at] >= 0) close(control[at]);
         if (path[at] >= 0) close(path[at]);
+        if (remote_path[at] >= 0) close(remote_path[at]);
         if (network[at] >= 0) close(network[at]);
     }
     if (error != 0)

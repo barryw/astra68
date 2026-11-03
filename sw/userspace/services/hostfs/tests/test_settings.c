@@ -154,18 +154,18 @@ int main(void)
     session_close_failure = ASTRA_VFS_ERR_LOST;
     assert(grant_retire(0u) && grant_count == 0u && retiring_table[0] == NULL);
     grants = NULL; revoke_failure = session_close_failure = handle_close_failure = 0u;
-    HostfsGrant recovered = {.root = "/", .root_meta = {
-        .valid = ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_INODE, .volume = 55u, .inode = 1u}};
+    HostfsGrant recovered = {.root = "/folder", .root_meta = {
+        .valid = ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_INODE |
+                 ASTRA_VFS_META_GENERATION,
+        .volume = 55u, .inode = 1u, .generation = 123u}};
     AstraVfsNodeMeta same = recovered.root_meta;
     assert(grant_root_matches(&recovered, &same));
     ++same.inode;
     assert(!grant_root_matches(&recovered, &same));
     same = recovered.root_meta;
-    strcpy(recovered.root, "/folder");
+    same.valid &= ~ASTRA_VFS_META_GENERATION;
     assert(!grant_root_matches(&recovered, &same));
-    same.valid |= ASTRA_VFS_META_GENERATION;
-    recovered.root_meta.valid |= ASTRA_VFS_META_GENERATION;
-    same.generation = recovered.root_meta.generation = 123u;
+    same = recovered.root_meta;
     assert(grant_root_matches(&recovered, &same));
     ++same.generation;
     assert(!grant_root_matches(&recovered, &same));

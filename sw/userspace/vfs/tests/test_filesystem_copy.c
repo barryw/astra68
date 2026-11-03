@@ -21,6 +21,9 @@ static int fail_unlink;
 static uint32_t allocations;
 static uint32_t fail_alloc_at;
 static uint32_t inject_publish_collision;
+static int unsupported_publish;
+static int unsupported_link;
+static int fail_direct_write;
 static AstraFilesystem *expected_source;
 static AstraFilesystem *expected_destination;
 
@@ -182,11 +185,14 @@ uint32_t astra_filesystem_write(AstraFile *file, uint64_t max_end,
 {
     (void)max_end;
     *moved = 0u;
+    Entry *entry = &entries[file->_private_file - 1u];
+    if (fail_direct_write &&
+        strncmp(entry->path, "/net0/Stories-fail/", 19u) == 0)
+        return ASTRA_VFS_ERR_NO_SPACE;
     if (fail_write) {
         fail_write = 0;
         return ASTRA_VFS_ERR_NO_SPACE;
     }
-    Entry *entry = &entries[file->_private_file - 1u];
     assert(file->_private_offset + length <= sizeof(entry->bytes));
     memcpy(entry->bytes + file->_private_offset, buffer, length);
     file->_private_offset += length;
@@ -302,6 +308,16 @@ uint32_t astra_filesystem_rename(AstraFilesystem *filesystem,
 uint32_t astra_filesystem_rename_noreplace(AstraFilesystem *filesystem,
     const char *from, const char *to)
 {
+    if (unsupported_publish && strncmp(to, "/net0/", 6u) == 0)
+    {
+        if (inject_publish_collision) {
+            Entry *racer = add(to, ASTRA_VFS_KIND_FILE);
+            memcpy(racer->bytes, "RACER", 5u);
+            racer->length = 5u;
+            inject_publish_collision = 0u;
+        }
+        return ASTRA_VFS_ERR_INVALID;
+    }
     if (inject_publish_collision && strstr(from, ".astra-copying-") != NULL) {
         Entry *racer = add(to, ASTRA_VFS_KIND_FILE);
         memcpy(racer->bytes, "RACER", 5u);
@@ -309,6 +325,22 @@ uint32_t astra_filesystem_rename_noreplace(AstraFilesystem *filesystem,
         inject_publish_collision = 0u;
     }
     return astra_filesystem_rename(filesystem, from, to);
+}
+
+uint32_t astra_filesystem_link(AstraFilesystem *filesystem,
+    const char *from, const char *to)
+{
+    check_namespace(filesystem, to);
+    if (unsupported_link) return ASTRA_VFS_ERR_UNSUPPORTED;
+    Entry *source = find(from);
+    if (source == NULL) return ASTRA_VFS_ERR_NOT_FOUND;
+    if (source->kind == ASTRA_VFS_KIND_DIRECTORY)
+        return ASTRA_VFS_ERR_IS_DIR;
+    if (find(to) != NULL) return ASTRA_VFS_ERR_EXISTS;
+    Entry *destination = add(to, source->kind);
+    destination->length = source->length;
+    memcpy(destination->bytes, source->bytes, source->length);
+    return ASTRA_VFS_OK;
 }
 
 int main(void)
@@ -335,6 +367,55 @@ int main(void)
     Entry *copied = find("/usb0/Doom.app/Doom");
     assert(copied != NULL && copied->length == 4u &&
            memcmp(copied->bytes, "DOOM", 4u) == 0);
+
+    entry_count = 0u;
+    source = add("/net0/story", ASTRA_VFS_KIND_FILE);
+    memcpy(source->bytes, "ZORK", 4u);
+    source->length = 4u;
+    unsupported_publish = 1;
+    assert(astra_filesystem_copy_tree(&filesystem, "/net0/story",
+                                     "/net0/story-copy") == ASTRA_VFS_OK);
+    copied = find("/net0/story-copy");
+    assert(copied != NULL && copied->length == 4u &&
+           memcmp(copied->bytes, "ZORK", 4u) == 0);
+    for (uint32_t at = 0u; at < entry_count; ++at)
+        assert(strstr(entries[at].path, ".astra-copying-") == NULL);
+
+    entry_count = 0u;
+    add("/net0/Stories", ASTRA_VFS_KIND_DIRECTORY);
+    source = add("/net0/Stories/zork", ASTRA_VFS_KIND_FILE);
+    memcpy(source->bytes, "ZORK", 4u);
+    source->length = 4u;
+    assert(astra_filesystem_copy_tree(&filesystem, "/net0/Stories",
+                                     "/net0/Stories-copy") == ASTRA_VFS_OK);
+    copied = find("/net0/Stories-copy/zork");
+    assert(copied != NULL && copied->length == 4u &&
+           memcmp(copied->bytes, "ZORK", 4u) == 0);
+    unsupported_link = 1;
+    assert(astra_filesystem_copy_tree(&filesystem, "/net0/Stories/zork",
+                                     "/net0/direct-copy") == ASTRA_VFS_OK);
+    assert(find("/net0/direct-copy") != NULL);
+    uint32_t moved_published = 0u;
+    assert(astra_filesystem_move_tree_between(&filesystem,
+        "/net0/direct-copy", &filesystem, "/net0/moved-copy",
+        &moved_published) == ASTRA_VFS_OK);
+    assert(moved_published == 1u && find("/net0/direct-copy") == NULL &&
+           find("/net0/moved-copy") != NULL);
+    inject_publish_collision = 1u;
+    assert(astra_filesystem_copy_tree(&filesystem, "/net0/Stories/zork",
+                                     "/net0/raced") == ASTRA_VFS_ERR_EXISTS);
+    copied = find("/net0/raced");
+    assert(copied != NULL && copied->length == 5u &&
+           memcmp(copied->bytes, "RACER", 5u) == 0);
+    fail_direct_write = 1;
+    assert(astra_filesystem_copy_tree(&filesystem, "/net0/Stories",
+                                     "/net0/Stories-fail") == ASTRA_VFS_ERR_NO_SPACE);
+    assert(find("/net0/Stories-fail") == NULL);
+    assert(find("/net0/Stories-fail/zork") == NULL);
+    for (uint32_t at = 0u; at < entry_count; ++at)
+        assert(strstr(entries[at].path, ".astra-copying-") == NULL);
+    fail_direct_write = 0;
+    unsupported_link = unsupported_publish = 0;
 
     entry_count = 0u;
     add("/dh0/Doom.app", ASTRA_VFS_KIND_DIRECTORY);

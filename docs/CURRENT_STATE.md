@@ -11,9 +11,45 @@ port, host-backend tests and MC68040 HostFS build passed; DE25 QEMU cross build
 passed. Beast's disposable NFSv4 export passed provider mount, read, write,
 fsync, unmount and source retirement; `/var/tmp/astra-nfs-test-20261103/provider-rw`
 contains the persisted eight-byte proof. Native mount/unmount CLI now admits
-and retires NFS sources. Guest end-to-end mounting, remote-I/O isolation,
-SMB3, Settings, and hardware release gates remain open. Production image
-remains unchanged.
+and retires NFS sources. A DE25 private release trial mounted Beast's
+disposable NFSv4 export as `/net0`; the guest read and wrote files, Atlas
+opened the volume root, and Desktop published its icon. `lsof /net0`
+identified an open Terminal file handle; unmount refused with exact PID,
+inode, access, and path, then succeeded after the descriptor closed. Source
+retirement succeeded. A dropped NFS TCP connection exposed a correctness
+blocker: a concurrent `/dh0` listing remained pending. A private DE25
+candidate now gives QEMU/provider separate local and network paths and avoids
+live root metadata I/O while admitting whole-volume HostFS grants. In its
+600-second DE25 trial, `cat /net0/fault-probe` remained pending after Beast
+dropped NFS TCP traffic, while a second Terminal completed `ls /dh0` within
+three seconds. QMP host submissions and completions continued. Evidence is
+archived on Beast at
+`/mnt/Documents/astra68/network-nfs-root-admission-20261103/`; source identity
+`69f8e197f35d1f44602ec7eb0fe93d35215972b89d78470d9cb6be753c994b89`,
+release `871e38b6ed3981890dbf3581fea12edc90451214a4b09f322a29a50c2113ef25`.
+The first trial ended before the remote read recovered. A second private trial
+confirmed read and directory traversal recovery after traffic returned, while
+`/dh0` remained responsive during the directory stall. Evidence is on Beast at
+`/mnt/Documents/astra68/network-nfs-recovery-20261103/`. A third private
+candidate built Filesystem Kit's generic fallback when a filesystem rejects
+atomic no-replace rename: an NFS file copy and nonempty directory copy both
+persisted with matching hashes, a duplicate destination was refused, and a
+destination copy stalled during an NFS outage while `/dh0` stayed responsive;
+it completed after traffic returned. The 600-second trial exited healthy and
+restored the selected production release. Candidate release
+`7d49280cc090893fa77bc9c2d4d3abc605ce98387422070023c55fc95a65df37`;
+board/Beast evidence hashes match at
+`/mnt/Documents/astra68/network-nfs-copy-20261103/`. Board trial state was
+removed and production services remain active with 8.0 GiB free. Direct
+write/sync fault injection and a full production release gate remain open.
+The native Trash path now reuses Filesystem Kit movement on volumes without
+no-replace rename and preserves origin metadata on partial cleanup; host tests
+passed, but DE25 Trash behavior is not yet qualified.
+Haiku's read-only
+`src/system/kernel/fs/vfs_request_io.cpp` and NFSv4 `WorkQueue.cpp` retain
+each request until real completion; Astra likewise must not silently cancel
+hard-mount I/O. SMB3, Settings, and production release gates remain open.
+Production image remains unchanged.
 Haiku reference: read-only
 `src/add-ons/kernel/file_systems/nfs4/kernel_interface.cpp` publishes root
 only after mount succeeds and retires server on unmount; Astra adapts that

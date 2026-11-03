@@ -215,8 +215,13 @@ frame or exits. The application does nothing for it.
 ## 5. Copy, move, Trash, and dependencies
 
 Bundle tools operate on the directory as one object and validate it before a
-mutation. Same-volume movement and Trash use atomic rename. Cross-volume move
-is copy, validate the destination, then remove the source. Copy never rewrites
+mutation. Same-volume movement and Trash use atomic rename where the volume
+supports no-replace rename. On a volume without it, movement uses an exclusive
+copy then removes the source. Trash uses the same move path and retains origin
+metadata if source cleanup reports partial completion; this fallback still
+needs a DE25 gate.
+Cross-volume move likewise copies, validates the
+destination, then removes the source. Copy never rewrites
 the manifest or bundle contents.
 
 Before permanently deleting a Kit, the tool scans application and Kit

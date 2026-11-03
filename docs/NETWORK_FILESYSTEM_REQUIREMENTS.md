@@ -1,9 +1,19 @@
 # Network volumes after the local filesystem cutover
 
 Status: requirements and source-backed feasibility assessment, updated
-2026-11-03. Network mounting is not qualified. Network source catalog,
-provider admission, NFS mount worker, and native control path are in progress;
-no end-to-end NFS or SMB mount has passed yet.
+2026-11-03. NFSv4 passed a DE25 private trial for mount, guest read/write,
+Desktop and Atlas, exact open-file unmount refusal, and source retirement.
+Network mounting is not yet qualified. Private DE25 trials kept `/dh0`
+responsive during stalled NFS read, directory and destination-copy operations;
+read and directory traversal recovered, and a copied file committed after
+traffic returned. NFS file and nonempty folder copies persisted with matching
+hashes; a duplicate destination was refused. Evidence is on Beast in
+`/mnt/Documents/astra68/network-nfs-root-admission-20261103/` and
+`/mnt/Documents/astra68/network-nfs-recovery-20261103/`, and
+`/mnt/Documents/astra68/network-nfs-copy-20261103/`. The copy candidate's
+600-second guard passed, production services recovered, and trial state was
+removed. Direct write/sync fault injection remains open.
+SMB3, mapping UI, and production release gates remain open.
 
 ## AstraZ story workflow
 

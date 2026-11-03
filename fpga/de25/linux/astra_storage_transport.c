@@ -172,6 +172,12 @@ int astra_storage_control_call(int socket, const AstraStorageControlRequest *req
         for (unsigned at = 0u; at < count; ++at) close(fds[at]);
         return EPROTO;
     }
+    if (reply->error == 0 && request->operation == ASTRA_STORAGE_CONTROL_ROOT &&
+        (reply->count != 1u || reply->records[0].id != request->target ||
+         reply->records[0].generation != request->generation)) {
+        for (unsigned at = 0u; at < count; ++at) close(fds[at]);
+        return EPROTO;
+    }
     if (count != 0u)
         *root = fds[0];
     return 0;

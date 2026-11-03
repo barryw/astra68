@@ -64,9 +64,12 @@ initial resource directory are rooted at that bundle's actual volume path;
 shared Kit lookup remains in `LIBS:` after private bundle providers. Process
 identity records the full bundle path, including volume, so single-instance
 launch applies to a copied app independently of its installed source. A native
-`cp -R` command uses Filesystem Kit's tree copy and publishes the destination
-bundle only after copied files have been synced. A failed or interrupted copy
-attempts to remove its private `.astra-copying-HEX` sibling on failure.
+`cp -R` command uses Filesystem Kit's tree copy. Where no-replace rename is
+supported, it publishes the destination bundle only after copied files have
+been synced. On filesystems without that primitive, files publish through a
+hard link when supported; directories use exclusive creation and may be visible
+while copying. A failed or interrupted copy attempts to remove its partial
+destination or private `.astra-copying-HEX` sibling.
 If media disappears during cleanup, a later copy uses a fresh sibling and
 can still publish the destination; the orphan cannot launch as an app.
 

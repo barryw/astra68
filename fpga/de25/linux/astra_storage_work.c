@@ -126,7 +126,8 @@ int astra_storage_work_start(AstraStorageWork *work, const AstraStorageDomain *d
 
 int astra_storage_work_path_start(AstraStorageWork *work, const AstraStorageRecord *record,
                                    int allowed_root, const AstraStoragePathRequest *request,
-                                   const int fds[ASTRA_STORAGE_PROVIDER_FDS])
+                                   const int fds[ASTRA_STORAGE_PROVIDER_FDS],
+                                   const int *protected, size_t protected_count)
 {
     int sockets[2];
     if (work == NULL || record == NULL || request == NULL || fds == NULL ||
@@ -145,6 +146,15 @@ int astra_storage_work_path_start(AstraStorageWork *work, const AstraStorageReco
         return error;
     }
     if (pid == 0) {
+        int guarded = astra_storage_path_write_guard(allowed_root, request,
+                                                     fds, protected, protected_count);
+        if (guarded != 0) {
+            AstraStoragePathReply refused = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
+                .serial = request->serial, .epoch = request->epoch, .error = guarded};
+            if (astra_storage_path_reply(sockets[1], &refused, -1) != 0)
+                _exit(1);
+            _exit(0);
+        }
         int originals[] = {allowed_root, fds[0], fds[1], fds[2], sockets[1]};
         retain(originals, 5u, parent);
         int roots[3] = {4, fds[1] < 0 ? -1 : 5, fds[2] < 0 ? -1 : 6}, result;

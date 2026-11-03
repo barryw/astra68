@@ -162,12 +162,15 @@ uint32_t astra_trash_move(AstraFilesystem *filesystem,
             TRASH_RECORD_HEADER + relative_length);
         if (status == ASTRA_VFS_ERR_EXISTS) continue;
         if (status != ASTRA_VFS_OK) break;
-        status = astra_filesystem_rename_noreplace(filesystem, source,
-            payload);
-        if (status == ASTRA_VFS_OK) {
+        uint32_t published = 0u;
+        status = astra_filesystem_move_tree_between(filesystem, source,
+            filesystem, payload, &published);
+        if (published != 0u)
             memcpy(trashed, payload, strlen(payload) + 1u);
+        if (status == ASTRA_VFS_OK)
             break;
-        }
+        /* A published copy with an unremoved source still needs its origin. */
+        if (published != 0u) break;
         uint32_t cleanup = astra_filesystem_unlink(filesystem, metadata, 0u);
         if (cleanup != ASTRA_VFS_OK) {
             status = cleanup;
@@ -296,10 +299,9 @@ uint32_t astra_trash_restore(AstraFilesystem *filesystem,
         status = astra_document_path_join(origins, astra_path_leaf(trashed),
             metadata, ASTRA_VFS_PATH_MAX);
     if (status == ASTRA_VFS_OK)
-        status = astra_filesystem_rename_noreplace(filesystem, trashed,
-            origin);
+        status = astra_filesystem_move_tree_between(filesystem, trashed,
+            filesystem, origin, moved);
     if (status == ASTRA_VFS_OK) {
-        *moved = 1u;
         status = astra_filesystem_unlink(filesystem, metadata, 0u);
     }
     astra_runtime_deallocate(paths);

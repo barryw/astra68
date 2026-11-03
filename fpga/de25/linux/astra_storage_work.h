@@ -46,7 +46,8 @@ int astra_storage_work_start(AstraStorageWork *work, const AstraStorageDomain *d
                               const AstraStorageMounted *mounted, uint32_t operation);
 int astra_storage_work_path_start(AstraStorageWork *work, const AstraStorageRecord *record,
                                    int allowed_root, const AstraStoragePathRequest *request,
-                                   const int fds[ASTRA_STORAGE_PROVIDER_FDS]);
+                                   const int fds[ASTRA_STORAGE_PROVIDER_FDS],
+                                   const int *protected, size_t protected_count);
 /* Formatter executable and exact exclusive block FD are opened by provider.
  * Child drops to provider user before exec and receives no device path. */
 int astra_storage_work_format_start(AstraStorageWork *work,

@@ -18,6 +18,7 @@ static Node nodes[48];
 static uint32_t node_count;
 static uint32_t fail_rename;
 static uint32_t fail_sync;
+static uint32_t fail_move_after_publish;
 static const char *fail_remove;
 
 static Node *find(const char *path)
@@ -178,6 +179,29 @@ uint32_t astra_filesystem_rename_noreplace(AstraFilesystem *fs,
     return ASTRA_VFS_OK;
 }
 
+uint32_t astra_filesystem_move_tree_between(AstraFilesystem *source_filesystem,
+    const char *source, AstraFilesystem *destination_filesystem,
+    const char *destination, uint32_t *published)
+{
+    assert(source_filesystem == &filesystem &&
+           destination_filesystem == &filesystem && published != NULL);
+    *published = 0u;
+    if (fail_move_after_publish) {
+        Node *original = find(source);
+        assert(original != NULL && find(destination) == NULL);
+        Node *copy = add(destination, original->kind);
+        copy->length = original->length;
+        memcpy(copy->bytes, original->bytes, original->length);
+        fail_move_after_publish = 0u;
+        *published = 1u;
+        return ASTRA_VFS_ERR_IO;
+    }
+    uint32_t status = astra_filesystem_rename_noreplace(&filesystem,
+        source, destination);
+    if (status == ASTRA_VFS_OK) *published = 1u;
+    return status;
+}
+
 uint32_t astra_filesystem_directory_open(AstraFilesystem *fs,
     const char *path, AstraDirectory *directory)
 {
@@ -295,6 +319,18 @@ int main(void)
     assert(find("/usb3/Fail") != NULL &&
         find("/usb3/.Trash/.origins/Fail-1") == NULL);
     fail_rename = 0u;
+    add("/usb3/Partial", ASTRA_VFS_KIND_FILE);
+    fail_move_after_publish = 1u;
+    assert(astra_trash_move(&filesystem, "/usb3", "/usb3/Partial",
+        moved, sizeof(moved)) == ASTRA_VFS_ERR_IO);
+    assert(strcmp(moved, "/usb3/.Trash/Partial-1") == 0 &&
+        find("/usb3/Partial") != NULL && find(moved) != NULL &&
+        find("/usb3/.Trash/.origins/Partial-1") != NULL);
+    assert(astra_filesystem_unlink(&filesystem, moved, 0u) == ASTRA_VFS_OK);
+    assert(astra_filesystem_unlink(&filesystem,
+        "/usb3/.Trash/.origins/Partial-1", 0u) == ASTRA_VFS_OK);
+    assert(astra_filesystem_unlink(&filesystem, "/usb3/Partial", 0u) ==
+        ASTRA_VFS_OK);
     fail_sync = 1u;
     assert(astra_trash_move(&filesystem, "/usb3", "/usb3/Fail",
         moved, sizeof(moved)) == ASTRA_VFS_ERR_IO);
@@ -321,6 +357,15 @@ int main(void)
         "/usb3/.Trash/Fail-1", origin, sizeof(origin), &restored) ==
         ASTRA_VFS_ERR_EXISTS && restored == 0u);
     assert(find("/usb3/.Trash/Fail-1") != NULL &&
+        find("/usb3/.Trash/.origins/Fail-1") != NULL);
+    assert(astra_filesystem_unlink(&filesystem, "/usb3/Fail", 0u) ==
+        ASTRA_VFS_OK);
+    fail_move_after_publish = 1u;
+    assert(astra_trash_restore(&filesystem, "/usb3",
+        "/usb3/.Trash/Fail-1", origin, sizeof(origin), &restored) ==
+        ASTRA_VFS_ERR_IO && restored == 1u);
+    assert(find("/usb3/Fail") != NULL &&
+        find("/usb3/.Trash/Fail-1") != NULL &&
         find("/usb3/.Trash/.origins/Fail-1") != NULL);
     assert(astra_filesystem_unlink(&filesystem, "/usb3/Fail", 0u) ==
         ASTRA_VFS_OK);

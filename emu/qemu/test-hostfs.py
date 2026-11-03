@@ -49,7 +49,7 @@ SUBMISSION = 0x0200F000
 CHANNEL_CONFIG = 0x0200F040
 CHANNEL_APERTURE = 0xFFD00000
 COMMAND_SIZE = 512
-COMMAND_VERSION = 5
+COMMAND_VERSION = 6
 SUBMISSION_SIZE = 64
 CHANNEL_HEADER_SIZE = 64
 SESSION_FIELD = 60
@@ -100,7 +100,7 @@ METRICS_SNAPSHOT = 1
 SERVICE_ENTROPY = 4
 ENTROPY_FILL = 1
 ENTROPY_MAX = 256
-METRICS_CAPACITY = 16 + 8 * (12 + 2 * 25)
+METRICS_CAPACITY = 16 + 8 * (12 + 2 * 26)
 METRIC_HOST_COMMANDS = 8
 
 OPEN_READ = 1 << 0
@@ -149,6 +149,12 @@ CAP_FS_DESCRIPTIONS = 1 << 13
 CAP_FS_DIRECTORY_BATCH = 1 << 14
 CAP_FS_PATHS = 1 << 15
 CAP_VOLUME_CATALOG = 1 << 16
+VOLUME_PAGE_SIZE = 9512
+VOLUME_ROW_SIZE = 592
+CAP_FONT_CONVERT = 1 << 17
+CAP_CODEC = 1 << 18
+CAP_CONFIG_SECRETS = 1 << 19
+CAP_AUDIO_STREAM = 1 << 9
 CURSOR_CURRENT = (1 << 64) - 1
 NODE_INODE_BIT = 1 << 11
 NODE_DEVICE_BIT = 1 << 12
@@ -377,9 +383,9 @@ def executed_claim(qtest, generation, owner=PROVIDER):
 
 
 def volume_page(qtest, generation, epoch=0, sequence=0, after=0):
-    query = struct.pack(">IIQQQ", 1, 32, epoch, sequence, after)
+    query = struct.pack(">IIQQQ", 6, 32, epoch, sequence, after)
     return execute(qtest, [Command(generation, 1, service=6,
-        data=query, capacity=8104)], owner=0x2002)[0]
+        data=query, capacity=VOLUME_PAGE_SIZE)], owner=0x2002)[0]
 
 
 def volume_reference(qtest, generation, name):
@@ -391,13 +397,13 @@ def volume_reference(qtest, generation, name):
         assert status(answer) == STATUS_OK, status(answer)
         page = output(qtest, answer, get32(answer.raw, 52))
         version, size, epoch, sequence, after, count, reserved = struct.unpack_from(">IIQQQII", page)
-        assert version == 1 and size == 8104 and len(page) == size
+        assert version == 6 and size == VOLUME_PAGE_SIZE and len(page) == size
         assert epoch and sequence and reserved == 0 and count <= 16
         for index in range(count):
-            row = page[40 + index * 504:40 + (index + 1) * 504]
-            kind, _, state = struct.unpack_from(">III", row, 56)
+            row = page[40 + index * VOLUME_ROW_SIZE:40 + (index + 1) * VOLUME_ROW_SIZE]
+            kind, _, state = struct.unpack_from(">III", row, 80)
             if kind in (4, 5) and state == 5 and \
-                    row[88:120].split(b"\0", 1)[0].decode() == name:
+                    row[112:144].split(b"\0", 1)[0].decode() == name:
                 assert found is None, ("duplicate mounted name", name)
                 found = struct.pack(">QQQ", epoch, *struct.unpack_from(">QQ", row))
         if after == 0:
@@ -1044,9 +1050,11 @@ def claims_and_sessions(qtest, root):
 def run(qtest, root, outside):
     qtest.detect_endian()
     assert qtest.read32(HACC_VERSION) == 0x00030000
-    assert qtest.read32(HACC_CAPS) == (511 | CAP_FS_SCOPE | CAP_FS_SESSIONS |
+    caps = qtest.read32(HACC_CAPS)
+    optional = CAP_FONT_CONVERT | CAP_CODEC | CAP_CONFIG_SECRETS | CAP_AUDIO_STREAM
+    assert caps & ~optional == (511 | CAP_FS_SCOPE | CAP_FS_SESSIONS |
                                     CAP_FS_RESOLVES | CAP_FS_DESCRIPTIONS |
-                                    CAP_FS_DIRECTORY_BATCH | CAP_FS_PATHS | CAP_VOLUME_CATALOG)
+                                    CAP_FS_DIRECTORY_BATCH | CAP_FS_PATHS | CAP_VOLUME_CATALOG), hex(caps)
     assert qtest.read32(HACC_STATE) == 1
     assert qtest.read32(HACC_MAX_TRANSFER) == 2 * 1024 * 1024
     assert qtest.read32(HACC_MAX_COMMANDS) == 4096
@@ -1056,7 +1064,7 @@ def run(qtest, root, outside):
     metrics = execute(qtest, [Command(
         generation, METRICS_SNAPSHOT, capacity=METRICS_CAPACITY,
         service=SERVICE_METRICS)])[0]
-    assert status(metrics) == STATUS_OK
+    assert status(metrics) == STATUS_OK, (status(metrics), get32(metrics.raw, 52))
     metrics_size = get32(metrics.raw, 52)
     assert 16 < metrics_size <= METRICS_CAPACITY
     snapshot = output(qtest, metrics, metrics_size)

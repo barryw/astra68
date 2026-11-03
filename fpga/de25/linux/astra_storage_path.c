@@ -187,6 +187,38 @@ int astra_storage_path_roots(int allowed_root,
     return astra_resolve_rooted(allowed_root, fds[0]);
 }
 
+int astra_storage_path_write_guard(int allowed_root,
+    const AstraStoragePathRequest *request,
+    const int fds[ASTRA_STORAGE_PROVIDER_FDS], const int *protected,
+    size_t protected_count)
+{
+    if (protected_count == 0u || request->operation != ASTRA_STORAGE_PATH_OPEN ||
+        (request->flags & (O_ACCMODE | O_TRUNC)) == 0u)
+        return 0;
+    int error = astra_storage_path_roots(allowed_root, fds);
+    if (error != 0) return -error;
+    AstraResolution resolved = {.parent = -1};
+    int target = astra_resolve_open_path(fds[0], fds[1] < 0 ? fds[0] : fds[1],
+        request->path, O_PATH | O_CLOEXEC, 0u,
+        request->resolve, request->links, &resolved);
+    if (target < 0) return 0; /* No existing backing can be overwritten. */
+    struct statx info;
+    error = statx(target, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &info) != 0 ?
+        errno : 0;
+    for (size_t at = 0u; error == 0 && at < protected_count; ++at) {
+        struct statx other;
+        if (statx(protected[at], "", AT_EMPTY_PATH,
+                  STATX_INO | STATX_MNT_ID, &other) != 0)
+            error = errno;
+        else if (other.stx_ino == info.stx_ino &&
+                 other.stx_mnt_id == info.stx_mnt_id)
+            error = (request->flags & (O_CREAT | O_EXCL)) ==
+                (O_CREAT | O_EXCL) ? EEXIST : EBUSY;
+    }
+    close(target);
+    return error;
+}
+
 void astra_storage_path_execute(int allowed_root, int readonly,
                                  const AstraStoragePathRequest *request,
                                  const int fds[ASTRA_STORAGE_PROVIDER_FDS],

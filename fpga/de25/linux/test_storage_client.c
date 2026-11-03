@@ -49,7 +49,7 @@ int main(int argc, char **argv)
     }
     int death;
     assert(prctl(PR_GET_PDEATHSIG, &death, 0, 0, 0) == 0 && death == SIGKILL);
-    /* Root passes only the two provider sockets and one read-only key FD. */
+    /* Root passes two path sockets, control, and one read-only key FD. */
     assert(strcmp(getenv("ASTRA_CONFIG_SECRET_FD"), "5") == 0);
     struct stat key_info;
     unsigned char key[32];
@@ -58,10 +58,14 @@ int main(int argc, char **argv)
            key_info.st_size == sizeof(key));
     assert(pread(5, key, sizeof(key), 0) == sizeof(key));
     memset(key, 0, sizeof(key));
-    for (int fd = 6; fd < 1024; ++fd)
+    assert(fcntl(6, F_GETFD) < 0 && errno == EBADF);
+    for (int fd = 8; fd < 1024; ++fd)
         assert(fcntl(fd, F_GETFD) < 0 && errno == EBADF);
     assert(strcmp(getenv("ASTRA_STORAGE_CONTROL_FD"), "3") == 0);
     assert(strcmp(getenv("ASTRA_STORAGE_PATH_FD"), "4") == 0);
+    assert(strcmp(getenv("ASTRA_STORAGE_NETWORK_PATH_FD"), "7") == 0);
+    struct stat remote_path;
+    assert(fstat(7, &remote_path) == 0 && S_ISSOCK(remote_path.st_mode));
     AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
         .operation = ASTRA_STORAGE_CONTROL_SNAPSHOT, .serial = 1u};
     AstraStorageControlReply reply;
@@ -93,6 +97,9 @@ int main(int argc, char **argv)
         .operation = ASTRA_STORAGE_CONTROL_ROOT, .serial = 2u,
         .epoch = reply.epoch, .target = system, .generation = generation};
     assert(astra_storage_control_call(3, &request, -1, &reply, &root) == 0 && reply.error == 0 && root >= 0);
+    assert(reply.count == 1u && reply.records[0].id == system &&
+           reply.records[0].generation == generation &&
+           reply.records[0].origin == ASTRA_VOLUME_ORIGIN_SYSTEM_IMAGE);
     /* No uid/mode workaround: direct path access still refuses root-owned 0600. */
     assert(openat(root, "home/private", O_RDWR | O_CLOEXEC) < 0 && errno == EACCES);
     AstraStoragePathRequest path = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
