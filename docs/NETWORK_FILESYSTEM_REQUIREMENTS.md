@@ -129,8 +129,13 @@ release gates remain open. Package path:
 `/home/barry/astra68/build/de25-kernel-smb3/package`.
 Shared native source validation now admits a single SMB share name and rejects
 nested paths and option delimiters; Beast Volume client and provider admission
-tests pass. SMB attachment remains disabled until credential and mount policy
-are implemented.
+tests and `make -C ndk dist-check` pass. Anonymous SMB3.1.1 attachment uses
+the existing provider worker and `mount --smb-guest`; a disposable Samba
+server constrained to SMB3.1.1 passed mount/write/fsync/read/unmount with
+persisted bytes. The NFS provider regression passed with a temporary localhost
+export; it and the Samba container were removed afterward. Evidence is on Beast
+at `/mnt/Documents/astra68/network-smb-guest-provider-20261103/`. Credentialed
+SMB, saved mappings and DE25 runtime qualification remain open.
 
 The pinned Jammy AArch64 sysroot currently contains neither `mount.cifs` nor
 `mount.nfs` in `/sbin` or `/usr/sbin`. The local mount owner deliberately

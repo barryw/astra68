@@ -12,9 +12,17 @@ dialects, Kerberos/DFS upcalls and CIFS debug are disabled. The package includes
 been installed or booted on DE25. Selected `storage2` kernel and production
 image remain unchanged. Shared native source validation now admits only one
 SMB share name after `/` and rejects option delimiters and nested paths. Beast
-Volume client and provider admission tests pass. Provider attachment still
-returns `ENOTSUP` for SMB; credential admission, mount policy, service/UI,
-and physical gates remain open.
+Volume client and provider admission tests plus `make -C ndk dist-check` pass
+on Beast. Provider now mounts explicitly anonymous SMB3.1.1 shares through its
+existing bounded worker with hard retry, no helper, and no credential storage.
+`mount --smb-guest` uses the same native source/mount and cleanup lifecycle.
+A disposable Samba 4.23 server constrained to SMB3.1.1 passed provider
+mount/write/fsync/read/unmount; server bytes persisted. NFS provider regression
+also passed after a temporary localhost export was added; that export and the
+test Samba container were removed. Evidence:
+`/mnt/Documents/astra68/network-smb-guest-provider-20261103/` on Beast.
+Credentialed SMB, Settings/CLI saved mappings, and DE25 boot/runtime gates
+remain open. The `storage3` package is still off board.
 
 Network filesystem work, 2026-11-03: branch `network-volumes` adds native
 network source class/origin, `/netN` catalog names, typed NFS source admission,

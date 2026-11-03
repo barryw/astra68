@@ -600,6 +600,9 @@ storage-provider-test: $(OUT)/test-storage-provider
 storage-provider-nfs-test: $(OUT)/test-storage-provider
 	python3 test_storage_mount.py $< --provider --nfs-server 127.0.0.1
 
+storage-provider-smb-test: $(OUT)/test-storage-provider
+	python3 test_storage_mount.py $< --provider --smb-server 127.0.0.1
+
 EXFAT_MKFS ?= /usr/sbin/mkfs.exfat
 .PHONY: storage-provider-exfat-test
 storage-provider-exfat-test: $(OUT)/test-storage-provider

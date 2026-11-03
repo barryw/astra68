@@ -1015,11 +1015,13 @@ static void peer(AstraStorageProvider *provider, uid_t uid, gid_t gid, uint64_t 
     assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
-static void nfs_mount(AstraStorageProvider *provider, const char *server)
+static void network_mount(AstraStorageProvider *provider, const char *server,
+    uint32_t format, const char *share, const char *proof)
 {
-    AstraVolumeNetworkSource definition = {.format = ASTRA_VOLUME_NFS,
-        .share = "/", .label = "Provider NFS"};
+    AstraVolumeNetworkSource definition = {.format = format,
+        .label = "Provider Network"};
     assert(snprintf(definition.server, sizeof(definition.server), "%s", server) > 0);
+    assert(snprintf(definition.share, sizeof(definition.share), "%s", share) > 0);
     uint64_t source = 0u, mount = 0u;
     assert(astra_storage_provider_network_source(provider, &definition, &source) == 0);
     assert(mount_wait(provider, source, 1u, 0u, 0u, 0u, &mount) == 0);
@@ -1029,12 +1031,13 @@ static void nfs_mount(AstraStorageProvider *provider, const char *server)
         strcmp(record->name, "/net0") == 0);
     int root = -1;
     assert(astra_storage_provider_root(provider, mount, 1u, &root) == 0);
-    int file = openat(root, "provider-rw", O_CREAT | O_TRUNC | O_RDWR | O_CLOEXEC, 0600);
+    int file = openat(root, proof, O_CREAT | O_TRUNC | O_RDWR | O_CLOEXEC, 0600);
     assert(file >= 0);
-    assert(write(file, "nfs-pass", 8u) == 8 && fsync(file) == 0);
+    const char *expected = format == ASTRA_VOLUME_NFS ? "nfs-pass" : "smb-pass";
+    assert(write(file, expected, 8u) == 8 && fsync(file) == 0);
     char observed[8] = {0};
     assert(pread(file, observed, sizeof(observed), 0) == sizeof(observed) &&
-        memcmp(observed, "nfs-pass", sizeof(observed)) == 0);
+        memcmp(observed, expected, sizeof(observed)) == 0);
     close(file);
     close(root);
     assert(unmount_wait(provider, mount, 1u) == 0);
@@ -1104,8 +1107,13 @@ int main(int argc, char **argv)
     processed_inventory(&provider);
     const char *nfs_server = getenv("ASTRA_TEST_NFS_SERVER");
     if (nfs_server != NULL) {
-        nfs_mount(&provider, nfs_server);
+        network_mount(&provider, nfs_server, ASTRA_VOLUME_NFS, "/", "provider-rw");
         puts("storage provider: NFSv4 mount/read/write/fsync/unmount PASS");
+    }
+    const char *smb_server = getenv("ASTRA_TEST_SMB_SERVER");
+    if (smb_server != NULL) {
+        network_mount(&provider, smb_server, ASTRA_VOLUME_SMB, "/astra", "provider-smb-rw");
+        puts("storage provider: SMB3 guest mount/read/write/fsync/unmount PASS");
     }
     assert(mkdtemp(path) != NULL);
     int root = open(path, O_PATH | O_DIRECTORY | O_CLOEXEC);

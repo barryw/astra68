@@ -496,8 +496,8 @@ int astra_storage_linux_attach(AstraStorageDomain *domain,
         return EINVAL;
     readonly = (record->flags & ASTRA_VOLUME_READ_ONLY) != 0u;
     if (record->origin == ASTRA_VOLUME_ORIGIN_NETWORK) {
-        if (record->format != ASTRA_VOLUME_NFS ||
-            mounted->network.format != ASTRA_VOLUME_NFS)
+        if ((record->format != ASTRA_VOLUME_NFS && record->format != ASTRA_VOLUME_SMB) ||
+            mounted->network.format != record->format)
             return ENOTSUP;
         struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM};
         struct addrinfo *addresses = NULL;
@@ -514,12 +514,23 @@ int astra_storage_linux_attach(AstraStorageDomain *domain,
         }
         freeaddrinfo(addresses);
         if (address[0] == '\0') return EHOSTUNREACH;
-        int printed = snprintf(source_name, sizeof(source_name),
-            strchr(mounted->network.server, ':') != NULL ? "[%s]:%s" : "%s:%s",
-            mounted->network.server, mounted->network.share);
+        int printed;
+        if (record->format == ASTRA_VOLUME_NFS)
+            printed = snprintf(source_name, sizeof(source_name),
+                strchr(mounted->network.server, ':') != NULL ? "[%s]:%s" : "%s:%s",
+                mounted->network.server, mounted->network.share);
+        else
+            printed = snprintf(source_name, sizeof(source_name), "//%s%s",
+                mounted->network.server, mounted->network.share);
         if (printed < 0 || (size_t)printed >= sizeof(source_name)) return ENAMETOOLONG;
-        printed = snprintf(options, sizeof(options),
-            "vers=4,proto=tcp,sec=sys,addr=%s", address);
+        if (record->format == ASTRA_VOLUME_NFS)
+            printed = snprintf(options, sizeof(options),
+                "vers=4,proto=tcp,sec=sys,addr=%s", address);
+        else
+            /* Anonymous shares have no credential material to retain or leak. */
+            printed = snprintf(options, sizeof(options),
+                "vers=3.1.1,sec=none,hard,ip=%s,uid=%u,gid=%u", address,
+                (unsigned)domain->uid, (unsigned)domain->gid);
         if (printed < 0 || (size_t)printed >= sizeof(options)) return ENAMETOOLONG;
     } else if (record->format == ASTRA_VOLUME_TMPFS)
         (void)snprintf(options, sizeof(options),

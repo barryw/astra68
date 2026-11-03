@@ -15,6 +15,7 @@ def main():
     parser.add_argument("--provider", action="store_true")
     parser.add_argument("--exfat-tool")
     parser.add_argument("--nfs-server")
+    parser.add_argument("--smb-server")
     parser.add_argument("--formatter-fat")
     parser.add_argument("--formatter-exfat")
     args = parser.parse_args()
@@ -22,6 +23,8 @@ def main():
         parser.error("--exfat-tool requires --provider")
     if args.nfs_server and not args.provider:
         parser.error("--nfs-server requires --provider")
+    if args.smb_server and not args.provider:
+        parser.error("--smb-server requires --provider")
     if bool(args.formatter_fat) != bool(args.formatter_exfat) or (
             args.formatter_fat and not args.provider):
         parser.error("both formatters require --provider")
@@ -85,6 +88,8 @@ def main():
             sudo = ["sudo", "-n"]
             if args.nfs_server:
                 sudo.append("ASTRA_TEST_NFS_SERVER=" + args.nfs_server)
+            if args.smb_server:
+                sudo.append("ASTRA_TEST_SMB_SERVER=" + args.smb_server)
             subprocess.run(sudo + [binary, images["rock-ridge.iso"],
                             str(os.getuid()), str(os.getgid()),
                             images["fat12.img"], images["fat16.img"],
