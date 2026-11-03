@@ -307,6 +307,21 @@ int main(void)
            interface_address.address.address[3] == 1u);
     assert(astra_network_interfaces(&session, NULL, 1u, &count) ==
            ASTRA_NETWORK_INVALID);
+    char formatted[40];
+    assert(astra_network_address_format(&interface_address.address,
+        formatted, sizeof(formatted)) == ASTRA_NETWORK_OK);
+    assert(strcmp(formatted, "127.0.0.1") == 0);
+    assert(astra_network_address_format(&interface_address.address,
+        formatted, 4u) == ASTRA_NETWORK_BUFFER_TOO_SMALL);
+    assert(formatted[0] == '\0');
+    interface_address.address.family = ASTRA_NETWORK_FAMILY_IPV6;
+    memset(interface_address.address.address, 0,
+        sizeof(interface_address.address.address));
+    interface_address.address.address[15] = 1u;
+    assert(astra_network_address_format(&interface_address.address,
+        formatted, sizeof(formatted)) == ASTRA_NETWORK_OK);
+    assert(strcmp(formatted,
+        "0000:0000:0000:0000:0000:0000:0000:0001") == 0);
     free(mapped_area);
     return 0;
 }

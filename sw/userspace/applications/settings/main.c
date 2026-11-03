@@ -4,10 +4,12 @@
 #include <astra/fonts.h>
 #include <astra/graphics_kit.h>
 #include <astra/interface_library.h>
+#include <astra/network_library.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
 #include <astra/status.h>
+#include <astra/string.h>
 #include <astra/scroll.h>
 #include <astra/surface.h>
 #include <astra/text_model.h>
@@ -43,10 +45,16 @@ enum {
     SETTINGS_ABOUT,
     SETTINGS_STATUS,
     SETTINGS_EMPTY,
-    SETTINGS_CONTROL_COUNT = SETTINGS_EMPTY
+    SETTINGS_ETHERNET_SCROLL,
+    SETTINGS_ETHERNET_LIST,
+    SETTINGS_ETHERNET_IPV4,
+    SETTINGS_ETHERNET_IPV6,
+    SETTINGS_ETHERNET_REFRESH,
+    SETTINGS_ETHERNET_EMPTY,
+    SETTINGS_CONTROL_COUNT = SETTINGS_ETHERNET_EMPTY
 };
 
-enum { SETTINGS_DOCK = 1u, SETTINGS_FONTS, SETTINGS_INFO };
+enum { SETTINGS_DOCK = 1u, SETTINGS_FONTS, SETTINGS_INFO, SETTINGS_ETHERNET };
 
 _Static_assert(SETTINGS_SIDEBAR_LIST == SETTINGS_SIDEBAR +
     ASTRA_SETTINGS_SIDEBAR_LIST &&
@@ -62,11 +70,13 @@ static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
 static AstraSharedSurface surface;
 static AstraWindow window = ASTRA_WINDOW_INIT;
 static AstraConfig config = ASTRA_CONFIG_INIT;
+static AstraNetworkSession network = ASTRA_NETWORK_SESSION_INIT;
 static const AstraConfigField config_fields[] = {{"pane", 0u}};
 static const AstraConfigSchema config_schema = {1u, config_fields, 1u};
 static AstraHandle gui;
 static AstraHandle launcher;
 static uint32_t config_ready;
+static uint32_t network_ready;
 static uint32_t page = SETTINGS_DOCK;
 static uint32_t selected_pin;
 static char status_text[128];
@@ -78,13 +88,23 @@ static AstraScrollModel sidebar_scroll = ASTRA_SCROLL_MODEL_INIT;
 static AstraScrollModel pins_scroll = ASTRA_SCROLL_MODEL_INIT;
 static AstraCollectionModel navigation = ASTRA_COLLECTION_MODEL_INIT;
 static AstraCollectionModel pin_list = ASTRA_COLLECTION_MODEL_INIT;
-static AstraCollectionItem navigation_storage[2][5];
+static AstraCollectionItem navigation_storage[2][7];
 static uint32_t navigation_active;
 static AstraCollectionItem pin_items[ASTRA_DOCK_PIN_LIMIT];
 static AstraDockPinInfo pins[ASTRA_DOCK_PIN_LIMIT];
 static AstraDockPinInfo pin_scratch[ASTRA_DOCK_PIN_LIMIT];
 static uint32_t pin_count;
 static uint32_t pin_generation;
+static AstraScrollModel ethernet_scroll = ASTRA_SCROLL_MODEL_INIT;
+static AstraCollectionModel ethernet_list = ASTRA_COLLECTION_MODEL_INIT;
+static AstraCollectionItem ethernet_items[16];
+static AstraNetworkInterfaceAddress ethernet_addresses[32];
+static char ethernet_names[16][ASTRA_NETWORK_INTERFACE_NAME_SIZE];
+static char ethernet_ipv4[80] = "IPv4: No address";
+static char ethernet_ipv6[110] = "IPv6: No address";
+static uint32_t ethernet_address_count;
+static uint32_t ethernet_count;
+static uint32_t ethernet_selected;
 
 #define CONTROL(id) (&controls[(id) - 1u])
 
@@ -108,10 +128,13 @@ static int contains_folded(const char *haystack, const char *needle,
 
 static AstraResult refresh_navigation(uint32_t live)
 {
-    static const char *const names[] = {"Dock", "Fonts", "About"};
+    static const char *const names[] = {"Dock", "Fonts", "Ethernet", "About"};
+    static const uint32_t ids[] = {
+        SETTINGS_DOCK, SETTINGS_FONTS, SETTINGS_ETHERNET, SETTINGS_INFO};
     static const uint32_t icons[] = {
         ASTRA_TOOLBAR_ICON_GRID, ASTRA_TOOLBAR_ICON_LIST,
-        ASTRA_TOOLBAR_ICON_HOME};
+        ASTRA_TOOLBAR_ICON_HOME, ASTRA_TOOLBAR_ICON_HOME};
+    static const char *const headings[] = {"LOOK & FEEL", "NETWORK", "SYSTEM"};
     AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
     char query[SETTINGS_SEARCH_BYTES];
     uint32_t bytes = 0u, count = 0u;
@@ -123,20 +146,20 @@ static AstraResult refresh_navigation(uint32_t live)
             query, sizeof(query) - 1u, &bytes) != ASTRA_OK)
         return ASTRA_ERROR_IO;
     query[bytes] = '\0';
-    for (uint32_t group = 0u; group < 2u; ++group) {
-        uint32_t first = group == 0u ? 0u : 2u;
-        uint32_t last = group == 0u ? 2u : 3u;
+    for (uint32_t group = 0u; group < 3u; ++group) {
+        uint32_t first = group == 0u ? 0u : group + 1u;
+        uint32_t last = group == 0u ? 2u : group + 2u;
         uint32_t heading = count;
         for (uint32_t at = first; at < last; ++at) {
             if (!contains_folded(names[at], query, bytes)) continue;
             if (count == heading) {
-                const char *text = group == 0u ? "LOOK & FEEL" : "SYSTEM";
+                const char *text = headings[group];
                 items[count++] = (AstraCollectionItem){
                     100u + group, text, (uint32_t)strlen(text),
                     {ASTRA_COLLECTION_HEADING, ASTRA_TOOLBAR_ICON_NONE}};
             }
             items[count++] = (AstraCollectionItem){
-                at + 1u, names[at], (uint32_t)strlen(names[at]),
+                ids[at], names[at], (uint32_t)strlen(names[at]),
                 {0u, icons[at]}};
         }
     }
@@ -194,6 +217,71 @@ static AstraResult refresh_pins(void)
     return ASTRA_ERROR_BUSY;
 }
 
+static void ethernet_detail(void)
+{
+    AstraString text;
+    char address[40];
+    (void)astra_string_copy(ethernet_ipv4, sizeof(ethernet_ipv4),
+        "IPv4: No address");
+    (void)astra_string_copy(ethernet_ipv6, sizeof(ethernet_ipv6),
+        "IPv6: No address");
+    if (ethernet_selected == 0u || ethernet_selected > ethernet_count)
+        return;
+    for (uint32_t at = 0u; at < ethernet_address_count; ++at) {
+        const AstraNetworkInterfaceAddress *record = &ethernet_addresses[at];
+        if (strcmp(record->name,
+                ethernet_names[ethernet_selected - 1u]) != 0 ||
+            astra_network_address_format(&record->address, address,
+                sizeof(address)) != ASTRA_NETWORK_OK)
+            continue;
+        if (record->address.family == ASTRA_NETWORK_FAMILY_IPV4) {
+            astra_string_init(&text, ethernet_ipv4, sizeof(ethernet_ipv4));
+            (void)astra_string_append(&text, "IPv4: ");
+            (void)astra_string_append(&text, address);
+        } else if (record->address.family == ASTRA_NETWORK_FAMILY_IPV6) {
+            astra_string_init(&text, ethernet_ipv6, sizeof(ethernet_ipv6));
+            (void)astra_string_append(&text, "IPv6: ");
+            (void)astra_string_append(&text, address);
+        }
+    }
+}
+
+static void refresh_ethernet(void)
+{
+    uint32_t count = 0u;
+    ethernet_count = 0u;
+    ethernet_address_count = 0u;
+    if (network_ready != 0u &&
+        astra_network_interfaces(&network, ethernet_addresses,
+            sizeof(ethernet_addresses) / sizeof(ethernet_addresses[0]),
+            &count) == ASTRA_NETWORK_OK)
+        ethernet_address_count = count;
+    for (uint32_t at = 0u; at < ethernet_address_count; ++at) {
+        const char *name = ethernet_addresses[at].name;
+        uint32_t found = 0u;
+        if (memchr(name, '\0', ASTRA_NETWORK_INTERFACE_NAME_SIZE) == NULL)
+            continue;
+        if (strcmp(name, "lo") == 0) continue;
+        for (uint32_t prior = 0u; prior < ethernet_count; ++prior)
+            if (strcmp(ethernet_names[prior], name) == 0) found = 1u;
+        if (found != 0u || ethernet_count == 16u) continue;
+        (void)astra_string_copy(ethernet_names[ethernet_count],
+            sizeof(ethernet_names[ethernet_count]), name);
+        ethernet_items[ethernet_count] = (AstraCollectionItem){
+            ethernet_count + 1u, ethernet_names[ethernet_count],
+            (uint32_t)strlen(ethernet_names[ethernet_count]),
+            {0u, ASTRA_TOOLBAR_ICON_HOME}};
+        ++ethernet_count;
+    }
+    if (ethernet_count == 0u) ethernet_selected = 0u;
+    else if (ethernet_selected == 0u || ethernet_selected > ethernet_count)
+        ethernet_selected = 1u;
+    ethernet_list.items = ethernet_items;
+    ethernet_list.item_count = ethernet_count;
+    ethernet_list.selected_id = ethernet_selected;
+    ethernet_detail();
+}
+
 static AstraResult init_controls(void)
 {
     static const AstraToolbarAction actions[] = {
@@ -201,12 +289,13 @@ static AstraResult init_controls(void)
         {"Remove from Dock", 16u, 0u}
     };
     static const char *const titles[] = {
-        "", "Dock", "Fonts", "About Astra"
+        "", "Dock", "Fonts", "About Astra", "Ethernet"
     };
     static const char *const descriptions[] = {
         "", "Arrange apps pinned to Dock. Running apps appear automatically.",
         "Installed fonts and system face are managed in Fonts.",
-        "System information and project details."
+        "System information and project details.",
+        "Network interfaces and currently assigned addresses."
     };
     AstraContainerInfo root = ASTRA_CONTAINER_INFO_INIT;
     AstraSettingsSidebarInfo sidebar = ASTRA_SETTINGS_SIDEBAR_INFO_INIT;
@@ -317,6 +406,85 @@ static AstraResult init_controls(void)
     item.minimum_width = 500u;
     result = astra_interface_control_set_flex(CONTROL(SETTINGS_PINS_LIST),
                                                &item);
+    if (result != ASTRA_OK) return result;
+
+    scroll = (AstraScrollViewInfo)ASTRA_SCROLL_VIEW_INFO_INIT;
+    scroll.id = SETTINGS_ETHERNET_SCROLL;
+    scroll.model = &ethernet_scroll;
+    scroll.preferred_width = 500u;
+    scroll.preferred_height = 180u;
+    scroll.state = page == SETTINGS_ETHERNET ? 0u : ASTRA_CONTROL_COLLAPSED;
+    result = astra_interface_scroll_view_init(
+        CONTROL(SETTINGS_ETHERNET_SCROLL), &scroll);
+    if (result != ASTRA_OK) return result;
+    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = SETTINGS_BODY;
+    item.minimum_width = 500u;
+    item.minimum_height = 180u;
+    result = astra_interface_control_set_flex(
+        CONTROL(SETTINGS_ETHERNET_SCROLL), &item);
+    if (result != ASTRA_OK) return result;
+    list = (AstraListInfo)ASTRA_LIST_INFO_INIT;
+    list.id = SETTINGS_ETHERNET_LIST;
+    list.model = &ethernet_list;
+    result = astra_interface_list_init(CONTROL(SETTINGS_ETHERNET_LIST), &list);
+    if (result != ASTRA_OK) return result;
+    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = SETTINGS_ETHERNET_SCROLL;
+    item.minimum_width = 500u;
+    result = astra_interface_control_set_flex(CONTROL(SETTINGS_ETHERNET_LIST),
+                                               &item);
+    if (result != ASTRA_OK) return result;
+
+    label = (AstraLabelInfo)ASTRA_LABEL_INFO_INIT;
+    label.id = SETTINGS_ETHERNET_IPV4;
+    label.text = ethernet_ipv4;
+    label.text_length = (uint32_t)strlen(ethernet_ipv4);
+    label.state = page == SETTINGS_ETHERNET ? 0u : ASTRA_CONTROL_COLLAPSED;
+    result = astra_interface_label_init(CONTROL(SETTINGS_ETHERNET_IPV4), &label);
+    if (result != ASTRA_OK) return result;
+    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = SETTINGS_BODY;
+    result = astra_interface_control_set_flex(
+        CONTROL(SETTINGS_ETHERNET_IPV4), &item);
+    if (result != ASTRA_OK) return result;
+    label.id = SETTINGS_ETHERNET_IPV6;
+    label.text = ethernet_ipv6;
+    label.text_length = (uint32_t)strlen(ethernet_ipv6);
+    result = astra_interface_label_init(CONTROL(SETTINGS_ETHERNET_IPV6), &label);
+    if (result != ASTRA_OK) return result;
+    result = astra_interface_control_set_flex(
+        CONTROL(SETTINGS_ETHERNET_IPV6), &item);
+    if (result != ASTRA_OK) return result;
+
+    button.id = SETTINGS_ETHERNET_REFRESH;
+    button.text = "Refresh";
+    button.text_length = 7u;
+    button.variant = ASTRA_BUTTON_STANDARD;
+    button.state = page == SETTINGS_ETHERNET ? 0u : ASTRA_CONTROL_COLLAPSED;
+    result = astra_interface_button_init(CONTROL(SETTINGS_ETHERNET_REFRESH),
+                                         &button);
+    if (result != ASTRA_OK) return result;
+    item.parent_id = SETTINGS_ACTIONS;
+    result = astra_interface_control_set_flex(
+        CONTROL(SETTINGS_ETHERNET_REFRESH), &item);
+    if (result != ASTRA_OK) return result;
+
+    label = (AstraLabelInfo)ASTRA_LABEL_INFO_INIT;
+    label.id = SETTINGS_ETHERNET_EMPTY;
+    label.text = network_ready != 0u ?
+        "No network interface addresses available." :
+        "Network service unavailable.";
+    label.text_length = (uint32_t)strlen(label.text);
+    label.text_role = ASTRA_TEXT_CLIENT_SECONDARY;
+    label.state = page == SETTINGS_ETHERNET && ethernet_count == 0u ?
+        0u : ASTRA_CONTROL_COLLAPSED;
+    result = astra_interface_label_init(CONTROL(SETTINGS_ETHERNET_EMPTY),
+                                        &label);
+    if (result != ASTRA_OK) return result;
+    item.parent_id = SETTINGS_BODY;
+    result = astra_interface_control_set_flex(
+        CONTROL(SETTINGS_ETHERNET_EMPTY), &item);
     if (result != ASTRA_OK) return result;
 
     toolbar.first_id = SETTINGS_TOOLS;
@@ -449,6 +617,13 @@ static AstraResult run(void)
                 return ASTRA_ERROR_IO;
             continue;
         }
+        if (event.type == ASTRA_WINDOW_EVENT_STATE &&
+            (event.data.state.flags & ASTRA_WINDOW_ACTIVE) != 0u &&
+            page == SETTINGS_ETHERNET) {
+            refresh_ethernet();
+            if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+            continue;
+        }
         if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED &&
             astra_fonts_use_system(gui, &event) != ASTRA_OK)
             return ASTRA_ERROR_IO;
@@ -469,10 +644,11 @@ static AstraResult run(void)
         if (action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
             action.control_id == SETTINGS_SIDEBAR_LIST &&
             navigation.selected_id >= SETTINGS_DOCK &&
-            navigation.selected_id <= SETTINGS_INFO) {
+            navigation.selected_id <= SETTINGS_ETHERNET) {
             page = (uint32_t)navigation.selected_id;
             if (page == SETTINGS_DOCK && refresh_pins() != ASTRA_OK)
                 return ASTRA_ERROR_IO;
+            if (page == SETTINGS_ETHERNET) refresh_ethernet();
             if (config_ready && astra_config_set_u64(&config, "pane", 0u,
                     page) != ASTRA_CONFIG_OK)
                 (void)strcpy(status_text, "Could not save Settings view.");
@@ -482,6 +658,20 @@ static AstraResult run(void)
         if (action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
             action.control_id == SETTINGS_PINS_LIST && pin_list.selected_id != 0u)
             selected_pin = (uint32_t)pin_list.selected_id - 1u;
+        if (action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+            action.control_id == SETTINGS_ETHERNET_LIST &&
+            ethernet_list.selected_id != 0u) {
+            ethernet_selected = (uint32_t)ethernet_list.selected_id;
+            ethernet_detail();
+            if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+            continue;
+        }
+        if (action.type == ASTRA_UI_ACTION_ACTIVATE &&
+            action.control_id == SETTINGS_ETHERNET_REFRESH) {
+            refresh_ethernet();
+            if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+            continue;
+        }
         if (action.type == ASTRA_UI_ACTION_ACTIVATE &&
             action.control_id == SETTINGS_FONTS_BUTTON) {
             uint32_t pid = 0u;
@@ -529,7 +719,7 @@ static AstraResult run(void)
 
 int astra_main(const AstraStartupInfo *startup)
 {
-    const AstraStartupCapability *gui_cap, *launch_cap, *ready;
+    const AstraStartupCapability *gui_cap, *launch_cap, *network_cap, *ready;
     uint32_t status = ASTRA_STATUS_OK;
     uint64_t stored = 0u;
     if (!astra_startup_validate(startup) || startup->argc != 1u)
@@ -537,6 +727,7 @@ int astra_main(const AstraStartupInfo *startup)
     gui_cap = astra_startup_capability(startup, ASTRA_CAPABILITY_GUI);
     launch_cap = astra_startup_capability(startup,
         ASTRA_CAPABILITY_APPLICATION_LAUNCH);
+    network_cap = astra_startup_capability(startup, ASTRA_CAPABILITY_NETWORK);
     ready = astra_startup_capability(startup, ASTRA_CAPABILITY_SERVICE_READY);
     if (gui_cap == NULL || launch_cap == NULL || ready == NULL)
         return ASTRA_STATUS_ACCESS;
@@ -545,10 +736,14 @@ int astra_main(const AstraStartupInfo *startup)
     config_ready = astra_config_open(startup, &config_schema,
         ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE,
         &config, NULL) == ASTRA_CONFIG_OK;
+    network_ready = network_cap != NULL &&
+        astra_network_session_open(network_cap->handle, &network) ==
+            ASTRA_NETWORK_OK;
     if (config_ready && astra_config_get_u64(&config, "pane", 0u,
             &stored) == ASTRA_CONFIG_OK &&
-        stored >= SETTINGS_DOCK && stored <= SETTINGS_INFO)
+        stored >= SETTINGS_DOCK && stored <= SETTINGS_ETHERNET)
         page = (uint32_t)stored;
+    if (page == SETTINGS_ETHERNET) refresh_ethernet();
     AstraTextModelInfo search = ASTRA_TEXT_MODEL_INFO_INIT;
     AstraScrollModelInfo scroll = ASTRA_SCROLL_MODEL_INFO_INIT;
     search.content_arena = search_content;
@@ -563,6 +758,8 @@ int astra_main(const AstraStartupInfo *startup)
         failed = "Settings sidebar scroll";
     else if (astra_scroll_init(&pins_scroll, &scroll) != ASTRA_OK)
         failed = "Settings pins scroll";
+    else if (astra_scroll_init(&ethernet_scroll, &scroll) != ASTRA_OK)
+        failed = "Settings Ethernet scroll";
     else if (astra_fonts_use_system(gui, NULL) != ASTRA_OK)
         failed = "Settings font";
     else if (refresh_pins() != ASTRA_OK)
@@ -618,6 +815,7 @@ int astra_main(const AstraStartupInfo *startup)
     if (surface.area != ASTRA_INVALID_HANDLE)
         (void)astra_shared_surface_close(&surface);
     astra_text_model_dispose(&search_model);
+    if (network_ready) (void)astra_network_session_close(&network);
     if (config_ready) astra_config_close(&config);
     return (int)status;
 }

@@ -209,7 +209,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG\n"
     "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r\n"
     "trusted /apps/Inspector.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ RAM_READ DH0:r HOME:r APPS:r LIBS:r WORK:r\n"
-    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw LIBS:r\n"
+    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw NETWORK LIBS:r\n"
     "trusted /apps/AstraZ.app grants GUI PCM VOLUMES VOLUME_READ DH0:r HOME:rw STORE:rw WORK:r LIBS:r\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("hostfs", "posixd", "entropy", "network", "ntpd", "events",

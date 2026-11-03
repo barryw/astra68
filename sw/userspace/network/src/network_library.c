@@ -887,6 +887,47 @@ AstraNetworkStatus astra_network_interfaces(
     return status;
 }
 
+static uint32_t append_decimal(char *text, uint32_t at, uint8_t value)
+{
+    if (value >= 100u) text[at++] = (char)('0' + value / 100u);
+    if (value >= 10u) text[at++] = (char)('0' + value / 10u % 10u);
+    text[at++] = (char)('0' + value % 10u);
+    return at;
+}
+
+AstraNetworkStatus astra_network_address_format(
+    const AstraNetworkAddress *address, char *text, uint32_t capacity)
+{
+    static const char digits[] = "0123456789abcdef";
+    char formatted[40];
+    uint32_t at = 0u;
+
+    if (!astra_network_address_valid(address, 0) || text == NULL ||
+        capacity == 0u)
+        return ASTRA_NETWORK_INVALID;
+    if (address->family == ASTRA_NETWORK_FAMILY_IPV4) {
+        for (uint32_t part = 0u; part < 4u; ++part) {
+            if (part != 0u) formatted[at++] = '.';
+            at = append_decimal(formatted, at, address->address[part]);
+        }
+    } else {
+        for (uint32_t part = 0u; part < 16u; part += 2u) {
+            if (part != 0u) formatted[at++] = ':';
+            formatted[at++] = digits[address->address[part] >> 4u];
+            formatted[at++] = digits[address->address[part] & 15u];
+            formatted[at++] = digits[address->address[part + 1u] >> 4u];
+            formatted[at++] = digits[address->address[part + 1u] & 15u];
+        }
+    }
+    if (at + 1u > capacity) {
+        text[0] = '\0';
+        return ASTRA_NETWORK_BUFFER_TOO_SMALL;
+    }
+    (void)memcpy(text, formatted, at);
+    text[at] = '\0';
+    return ASTRA_NETWORK_OK;
+}
+
 AstraNetworkStatus astra_network_request_wait(
     AstraNetworkRequest *pending, AstraNetworkAddress *addresses,
     uint32_t capacity, uint32_t *count, uint64_t deadline)

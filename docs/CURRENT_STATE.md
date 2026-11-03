@@ -2,6 +2,26 @@
 
 Status: active continuation map, 2026-11-02
 
+Ethernet Settings status checkpoint, 2026-11-02: Network Kit now exports
+bounded IPv4/IPv6 address formatting. Settings adds a NETWORK > Ethernet page
+using shared Sidebar, List, Label, and Button controls; it enumerates live
+non-loopback interfaces and shows assigned IPv4/IPv6 addresses. The Settings
+bundle declares `NETWORK` and `network.library` so the supervisor grants an
+actual session. Host formatter tests, MC68040 builds, NDK distribution check,
+and a DE25 private trial passed. In the corrected disposable trial, Settings
+showed `eth0` and its live `192.168.1.52` address; Refresh worked without
+guest errors. Production release
+`3fa24d1607d7cf7be3e95519d98c98f3726a58847d5127be2f2185fcf2d3e42f`
+also reached stage 8, left Astra/audio/remote desktop active with no panic
+log and 8.1 GiB free, and rendered the same live Ethernet page. Board trial
+and production screenshot evidence is archived with matching hashes at
+`/mnt/Documents/astra68/ethernet-settings-20261103/` on Beast. Disposable
+board trial state was removed. This page is status only: DHCP/manual IP, route,
+DNS, and link controls remain open.
+Haiku read-only references: `src/preferences/network/InterfaceView.cpp` and
+`InterfaceAddressView.cpp`; Astra follows their separation of live status and
+editable address mode. See `docs/NETWORKING.md`.
+
 Config Kit transaction certification, 2026-11-02: DE25 production selects
 `b82bd24d3ac773770f89b3f44f7ed2274736419f0194252e19c6180878d944e3`
 from main commit `bbea853cdd6a9bdc4cc170b4b0d019cc91379074`.

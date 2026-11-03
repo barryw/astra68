@@ -52,6 +52,19 @@ transition.
 
 ## Configuration and clock synchronization
 
+Settings now has a Network > Ethernet page built from the shared Settings
+Sidebar, List, Label, and Button controls. Network Kit enumerates live host
+interface addresses; Settings shows each non-loopback interface and its IPv4
+and IPv6 addresses, and refreshes on demand or window activation. Network Kit
+also exports `astra_network_address_format` so other native clients can render
+these addresses without their own byte-formatting code. This page is currently
+status only. DHCP/manual address, gateway, DNS, and link details need the typed
+privileged host control and timed NetworkManager rollback described in
+`docs/NETWORK_FILESYSTEM_REQUIREMENTS.md`; Settings must not modify host
+profiles directly. Haiku's read-only `src/preferences/network/InterfaceView.cpp`
+and `InterfaceAddressView.cpp` informed the separate live-status and editable
+configuration surfaces.
+
 `ntpd` opens `config.library` and asks for its `pool` and `server` settings; it
 does not know a configuration path, file format, or storage API. The supervisor
 scopes its `CONFIG:r` capability to the service's private configuration root,
@@ -60,8 +73,9 @@ and the image currently supplies one repeated-key list entry for
 the Astra clock, then releases the required-service boot dependency. Periodic
 and manual synchronization reload the settings through the same library.
 
-All persistent system, service, command, and application settings live under
-the corresponding `CONFIG:` scope. The on-disk text is deliberately forgiving
+Persistent system, service, and application settings use owner-scoped Config
+Kit documents; command-line tools use ordinary files under
+`HOME:/.config/<command>/`. The on-disk text is deliberately forgiving
 for administrators: whitespace, comments, optional `=`, quoted escapes, and
 repeated keys are accepted. Scalars are one value; repeated keys are ordered
 lists. Library getters expose strings, signed and unsigned 64-bit integers, and

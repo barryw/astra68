@@ -154,6 +154,8 @@ AstraNetworkStatus astra_network_reverse_try(AstraNetworkRequest *request, char 
 AstraNetworkStatus astra_network_reverse_wait(AstraNetworkRequest *request, char *name, uint32_t capacity, uint32_t *required, uint64_t deadline);
 /** Enumerate current host-backed interface addresses. Pass capacity zero to query count. @param session Session. @param addresses Destination records. @param capacity Record capacity. @param count Receives total record count. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_interfaces(AstraNetworkSession *session, AstraNetworkInterfaceAddress *addresses, uint32_t capacity, uint32_t *count);
+/** Format an IPv4 or IPv6 address into caller storage. IPv6 uses eight full hexadecimal groups. @param address Valid network address. @param text Destination. @param capacity Destination bytes including NUL. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_address_format(const AstraNetworkAddress *address, char *text, uint32_t capacity);
 /** Cancel resolution. @param request Request. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_request_cancel(AstraNetworkRequest *request);
 /** Borrow readiness handle. @param endpoint Endpoint. @return Wait handle. */
