@@ -8,9 +8,10 @@ the pinned clean Linux source `d7d192a9ddd955fe206aa350afed8f82e368a74c`.
 `CONFIG_CIFS=m`, extended statistics and xattrs are enabled; insecure legacy
 dialects, Kerberos/DFS upcalls and CIFS debug are disabled. The package includes
 `cifs.ko` with exact release vermagic; its manifest SHA256 checks pass at
-`/home/barry/astra68/build/de25-kernel-smb3/package` on Beast. It has not
-been installed or booted on DE25. Selected `storage2` kernel and production
-image remain unchanged. Shared native source validation now admits only one
+`/home/barry/astra68/build/de25-kernel-smb3/package` on Beast. DE25 staged,
+armed, and booted `storage3`; `cifs.ko` vermagic matches. Selected runtime
+image remains `a2fe757c722a337e417d054327b0d8814228c98e78af4fa70361f46df020c1ae`.
+Shared native source validation now admits only one
 SMB share name after `/` and rejects option delimiters and nested paths. Beast
 Volume client and provider admission tests plus `make -C ndk dist-check` pass
 on Beast. Provider now mounts explicitly anonymous SMB3.1.1 shares through its
@@ -21,10 +22,10 @@ mount/write/fsync/read/unmount; server bytes persisted. NFS provider regression
 also passed after a temporary localhost export was added; that export and the
 test Samba container were removed. Evidence:
 `/mnt/Documents/astra68/network-smb-guest-provider-20261103/` on Beast.
-Credentialed SMB, Settings/CLI saved mappings, and DE25 boot/runtime gates
-remain open. The `storage3` package is still off board. The kernel installer
-now requires `cifs.ko` whenever the package's config enables it; that check
-has not yet run through a DE25 stage.
+Settings/CLI saved mappings, fault/recovery gates, and full production release
+remain open. The kernel installer now requires `cifs.ko` whenever the package's
+config enables it. Beast's real-package FIT/full stage test passed with 1,349
+modules; physical DE25 stage and boot passed. Kernel rollback remains untested.
 
 Network filesystem work, 2026-11-03: branch `network-volumes` adds native
 network source class/origin, `/netN` catalog names, typed NFS source admission,
@@ -91,6 +92,34 @@ Haiku's read-only
 `src/system/kernel/fs/vfs_request_io.cpp` and NFSv4 `WorkQueue.cpp` retain
 each request until real completion; Astra likewise must not silently cancel
 hard-mount I/O. SMB3, Settings, and production release gates remain open.
+SMB credential candidate on `network-volumes`: the existing storage provider
+now accepts a sealed one-use secret descriptor for a selected SMB mount worker,
+with account and domain separate from the password. A disposable SMB3.1.1
+Samba server on Beast refused an incorrect password and passed authenticated
+write, fsync, readback, and unmount with a password containing `,` and `=`;
+the existing provider regression,
+AArch64 cross build, native VFS tests, HostFS build, and DE25 QEMU cross build
+passed. Native Volume-to-HostFS-to-QEMU handoff then ran on DE25 under a
+600-second private release guard: `mount --smb-user` prompted without echo,
+mounted an authenticated SMB3.1.1 share writable as `/net0`, guest `cp` wrote
+`guest-proof` with the same hash as server source, and guest `cat` read it back.
+Desktop published `SMBTest`; Atlas opened the root and enumerated two files.
+`unmount /net0` succeeded after enumeration; the icon/sidebar disappeared and
+the still-open Atlas window reported the volume unavailable. Guard exited
+healthy and restored selected runtime; board has 7.5 GiB free, all three
+services active. Evidence and SHA256 manifest:
+`/mnt/Documents/astra68/network-smb-auth-de25-20261103/` on Beast.
+The production DE25 runtime release remains unchanged. Haiku's read-only
+`src/add-ons/kernel/file_systems/netfs/client/ShareVolume.cpp` obtains share
+credentials from its authentication service; Astra adapts that ownership to
+Config Kit and a one-use provider worker descriptor. Saved mappings, Settings,
+CLI saved-mapping parity, production runtime release, and fault gates remain.
+`mount --smb-user SERVER /SHARE LABEL ACCOUNT [DOMAIN]` now uses the native
+authenticated Volume operation and a reusable libc terminal prompt that
+disables echo, drains oversized input, and wipes failure buffers. Beast POSIX
+tests, libc export contract, filesystem library export, and MC68040 `mount`
+link passed; the DE25 guest CLI mount succeeded. Saved mapping CLI parity is
+still open.
 Production image remains unchanged.
 Haiku reference: read-only
 `src/add-ons/kernel/file_systems/nfs4/kernel_interface.cpp` publishes root

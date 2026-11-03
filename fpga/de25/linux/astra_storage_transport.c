@@ -166,6 +166,7 @@ int astra_storage_control_call(int socket, const AstraStorageControlRequest *req
         return EPROTO;
     }
     if (reply->error == 0 && (request->operation == ASTRA_STORAGE_CONTROL_MOUNT ||
+        request->operation == ASTRA_STORAGE_CONTROL_MOUNT_AUTH ||
         request->operation == ASTRA_STORAGE_CONTROL_IMAGE) && (reply->count != 1u ||
             reply->object == 0u || reply->records[0].id != reply->object ||
             reply->records[0].generation == 0u)) {

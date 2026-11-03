@@ -1,6 +1,7 @@
 #include <astra/vfs_host_transport.h>
 
 #include <astra/runtime.h>
+#include <astra/secret_memory.h>
 
 #include <stddef.h>
 #include <string.h>
@@ -591,6 +592,47 @@ uint32_t astra_vfs_host_transport_submit(
     if (output_capacity != 0u && command->result_length != 0u)
         memcpy(output, lane->bytes + data_offset, command->result_length);
     return command->status;
+}
+
+uint32_t astra_vfs_host_transport_submit_sensitive(
+    void *context, AstraVfsHostRequest *request, const void *input,
+    uint32_t input_size, void *output, uint32_t output_capacity)
+{
+    uint32_t status = astra_vfs_host_transport_submit(context, request, input,
+        input_size, output, output_capacity);
+    AstraVfsHostTransport *transport = context;
+    if (transport == NULL || request == NULL || request->command == NULL ||
+        request->private_lane < (uintptr_t)&transport->lanes[0] ||
+        request->private_lane >
+            (uintptr_t)&transport->lanes[ASTRA_PROCESS_THREAD_SLOT_COUNT - 1u])
+        return status;
+    AstraVfsHostLane *lane = (AstraVfsHostLane *)request->private_lane;
+    AstraHostCommand *command = request->command;
+    uint32_t offset = command->data_offset;
+    if (input_size == 0u || command->data_length != input_size ||
+        offset == 0u || offset > lane->byte_size ||
+        input_size > lane->byte_size - offset)
+        return status;
+    volatile AstraHostChannelHeader *header =
+        (volatile AstraHostChannelHeader *)(void *)lane->bytes;
+    if (channel_pending(header, request->private_producer)) {
+        (void)astra_host_channel_wait(lane->channel_address,
+            request->private_producer, UINT64_C(0x7fffffffffffffff));
+        if (channel_pending(header, request->private_producer)) {
+            uint32_t scope = lane->scope_count != 0u ? lane->scopes[0] :
+                transport->device;
+            /* Closing the channel drains its host job before DMA is reused. */
+            (void)astra_host_channel_close(scope, lane->channel_address);
+            lane_cache.transport = NULL;
+            lane_cache.lane = NULL;
+            astra_secret_wipe(lane->bytes + offset, input_size);
+            (void)astra_close(lane->dma);
+            memset(lane, 0, sizeof(*lane));
+            return status;
+        }
+    }
+    astra_secret_wipe(lane->bytes + offset, input_size);
+    return status;
 }
 
 uint32_t astra_vfs_host_metrics(AstraVfsHostTransport *transport,

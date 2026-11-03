@@ -34,6 +34,7 @@ astra_posix_process_import
 astra_posix_file_prepare
 astra_posix_process_service
 astra_posix_signal_generation
+astra_posix_read_secret
 astra_posix_socket_after_fork_child
 astra_posix_socket_bind
 astra_posix_socket_prepare

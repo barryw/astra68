@@ -1108,6 +1108,17 @@ static uint32_t hostfs_volume_network_source(void *context, uint32_t requester,
         requester, source, reference);
 }
 
+static uint32_t hostfs_volume_mount_auth(void *context, uint32_t requester,
+    const AstraVolumeMountAuth *auth, AstraVolumeReference *reference)
+{
+    (void)context;
+    uint32_t status = hostfs_check_provider();
+    if (status != ASTRA_STATUS_OK) return status;
+    retire_orphans();
+    return astra_vfs_host_volume_mount_auth(&transport, transport.generation,
+        requester, auth, reference);
+}
+
 static uint32_t hostfs_volume_format(void *context, uint32_t requester,
     const AstraVolumeFormatRequest *request, uint32_t *outcome)
 {
@@ -1378,6 +1389,7 @@ int astra_main(const AstraStartupInfo *startup)
     volume_port.root = hostfs_volume_root;
     volume_port.control = hostfs_volume_control;
     volume_port.network_source = hostfs_volume_network_source;
+    volume_port.mount_auth = hostfs_volume_mount_auth;
     volume_port.format = hostfs_volume_format;
     volume_port.partition = hostfs_volume_partition;
     volume_port.usage = hostfs_volume_usage;

@@ -73,6 +73,11 @@ uint32_t astra_vfs_host_transport_submit(
     void *context, AstraVfsHostRequest *request, const void *input,
     uint32_t input_size, void *output, uint32_t output_capacity)
     __attribute__((noinline));
+/* One-use input: clear its shared DMA span after QEMU finishes or the channel
+ * fails. Callers still wipe their own source buffer. */
+uint32_t astra_vfs_host_transport_submit_sensitive(
+    void *context, AstraVfsHostRequest *request, const void *input,
+    uint32_t input_size, void *output, uint32_t output_capacity);
 uint32_t astra_vfs_host_transport_execute_batch(
     AstraVfsHostTransport *transport, AstraVfsHostTransfer *transfers,
     uint32_t count);

@@ -69,6 +69,9 @@ uint32_t astra_vfs_host_volume_control(AstraVfsHostTransport *transport,
 uint32_t astra_vfs_host_volume_network_source(AstraVfsHostTransport *transport,
     uint32_t generation, uint32_t requester, const AstraVolumeNetworkSource *source,
     AstraVolumeReference *reference);
+uint32_t astra_vfs_host_volume_mount_auth(AstraVfsHostTransport *transport,
+    uint32_t generation, uint32_t requester, const AstraVolumeMountAuth *auth,
+    AstraVolumeReference *reference);
 uint32_t astra_vfs_host_volume_format(AstraVfsHostTransport *transport,
     uint32_t generation, uint32_t requester, const AstraVolumeFormatRequest *format,
     uint32_t *outcome);

@@ -287,17 +287,34 @@ int volume_cli_apply(VolumeCli *cli, const AstraVolumeControl *control,
     return 1;
 }
 
+static int mount_completed(VolumeCli *cli, const AstraVolumeReference *mounted)
+{
+    AstraVolumeRecord record = {0};
+    if (!volume_cli_wait(cli, mounted, ASTRA_VOLUME_MOUNTED, 0, &record)) return 0;
+    return printf("mounted %s (%llu:%llu:%llu)%s\n", record.name,
+        (unsigned long long)mounted->epoch, (unsigned long long)mounted->id,
+        (unsigned long long)mounted->generation,
+        (record.flags & ASTRA_VOLUME_READ_ONLY) != 0u ? " read-only" : " writable") >= 0;
+}
+
 int volume_cli_mount(VolumeCli *cli, const AstraVolumeReference *source,
     uint32_t flags, uint64_t bytes, uint64_t inodes)
 {
     AstraVolumeControl control = {.reference = *source, .operation = ASTRA_VOLUME_MOUNT_SOURCE,
         .flags = flags, .byte_limit = bytes, .inode_limit = inodes};
     AstraVolumeReference mounted;
-    AstraVolumeRecord record = {0};
-    if (!volume_cli_apply(cli, &control, &mounted) ||
-        !volume_cli_wait(cli, &mounted, ASTRA_VOLUME_MOUNTED, 0, &record)) return 0;
-    return printf("mounted %s (%llu:%llu:%llu)%s\n", record.name,
-        (unsigned long long)mounted.epoch, (unsigned long long)mounted.id,
-        (unsigned long long)mounted.generation,
-        (record.flags & ASTRA_VOLUME_READ_ONLY) != 0u ? " read-only" : " writable") >= 0;
+    return volume_cli_apply(cli, &control, &mounted) &&
+        mount_completed(cli, &mounted);
+}
+
+int volume_cli_mount_auth(VolumeCli *cli, const AstraVolumeMountAuth *auth)
+{
+    AstraVolumeReference mounted;
+    AstraResult result = astra_volume_mount_auth(cli->administrator, auth,
+        &mounted);
+    if (result != ASTRA_OK) {
+        fprintf(stderr, "mount: authenticated mount failed (%ld)\n", (long)result);
+        return 0;
+    }
+    return mount_completed(cli, &mounted);
 }

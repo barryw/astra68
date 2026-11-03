@@ -3,6 +3,7 @@
 #include <astra/endian.h>
 #include <astra/vfs_host_transport.h>
 #include <astra/utf8.h>
+#include <astra/secret_memory.h>
 
 #include <stddef.h>
 #include <string.h>
@@ -1135,6 +1136,45 @@ uint32_t astra_vfs_host_volume_network_source(AstraVfsHostTransport *transport,
     command->generation = generation;
     status = astra_vfs_host_transport_submit(transport, &request, input, sizeof(input),
         output, sizeof(output));
+    if (status != ASTRA_VFS_OK) return status;
+    if (command->result_length != sizeof(output)) return ASTRA_VFS_ERR_PROTOCOL;
+    *reference = (AstraVolumeReference){astra_load_be64(output),
+        astra_load_be64(output + 8u), astra_load_be64(output + 16u)};
+    if (reference->epoch == 0u || reference->id == 0u ||
+        reference->generation == 0u) return ASTRA_VFS_ERR_PROTOCOL;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_vfs_host_volume_mount_auth(AstraVfsHostTransport *transport,
+    uint32_t generation, uint32_t requester, const AstraVolumeMountAuth *auth,
+    AstraVolumeReference *reference)
+{
+    uint8_t input[sizeof(AstraHostVolumeMountAuth)] = {0};
+    uint8_t output[sizeof(AstraVolumeReference)] = {0};
+    AstraVfsHostRequest request;
+    if (transport == NULL || requester == 0u || reference == NULL ||
+        !astra_volume_mount_auth_valid(auth)) return ASTRA_VFS_ERR_INVALID;
+    memset(reference, 0, sizeof(*reference));
+    uint32_t status = astra_vfs_host_transport_begin(transport, 0u,
+        sizeof(input), &request);
+    if (status != ASTRA_VFS_OK) return status;
+    astra_store_be64(input, auth->source.epoch);
+    astra_store_be64(input + 8u, auth->source.id);
+    astra_store_be64(input + 16u, auth->source.generation);
+    astra_store_be32(input + 24u, auth->flags);
+    memcpy(input + 32u, auth->account, sizeof(auth->account));
+    memcpy(input + 288u, auth->domain, sizeof(auth->domain));
+    memcpy(input + 544u, auth->password, sizeof(auth->password));
+    astra_store_be32(input + 800u, requester);
+    AstraHostCommand *command = request.command;
+    memset(command, 0, sizeof(*command));
+    command->size = sizeof(*command); command->version = ASTRA_HOST_COMMAND_VERSION;
+    command->service = ASTRA_HOST_SERVICE_VOLUMES;
+    command->operation = ASTRA_HOST_VOLUME_MOUNT_AUTH;
+    command->generation = generation;
+    status = astra_vfs_host_transport_submit_sensitive(transport, &request,
+        input, sizeof(input), output, sizeof(output));
+    astra_secret_wipe(input, sizeof(input));
     if (status != ASTRA_VFS_OK) return status;
     if (command->result_length != sizeof(output)) return ASTRA_VFS_ERR_PROTOCOL;
     *reference = (AstraVolumeReference){astra_load_be64(output),

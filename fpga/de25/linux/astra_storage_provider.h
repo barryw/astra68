@@ -71,6 +71,9 @@ int astra_storage_provider_wait(AstraStorageProvider *provider, int timeout_ms);
 int astra_storage_provider_mount(AstraStorageProvider *provider, uint64_t source,
                                   uint64_t generation, uint32_t flags,
                                   uint64_t bytes, uint64_t inodes, uint64_t *mount);
+int astra_storage_provider_mount_auth(AstraStorageProvider *provider, uint64_t source,
+    uint64_t generation, uint32_t flags, int secret,
+    const AstraStorageMountAuth *auth, uint64_t *mount);
 /* Mount/unmount return admission status; poll commits their real outcome to
  * the catalog. MOUNTING/QUIESCING remain inspectable while Linux is working. */
 /* Caller has quiesced canonical QEMU references. Linux still refuses a real

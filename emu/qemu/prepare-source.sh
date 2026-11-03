@@ -44,6 +44,7 @@ PUBLIC_PCM_FORMAT="$REPOSITORY/sw/include/astra/pcm_format.h"
 PUBLIC_AUDIO_STREAM="$REPOSITORY/sw/include/astra/audio_stream.h"
 PUBLIC_AUDIO_MAILBOX="$REPOSITORY/sw/include/astra/audio_mailbox.h"
 PUBLIC_STATUS="$REPOSITORY/sw/include/astra/status.h"
+PUBLIC_SECRET_MEMORY="$REPOSITORY/sw/include/astra/secret_memory.h"
 PUBLIC_VFS_SERVICE="$REPOSITORY/sw/include/astra/vfs_service.h"
 PUBLIC_COMPILER="$REPOSITORY/sw/include/astra/compiler.h"
 PUBLIC_OBJECT_ABI="$REPOSITORY/sw/include/astra/object_abi.h"
@@ -141,6 +142,8 @@ overlay_identity()
             "sw/include/astra/audio_mailbox.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_STATUS")" \
             "sw/include/astra/status.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_SECRET_MEMORY")" \
+            "sw/include/astra/secret_memory.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_VFS_SERVICE")" \
             "sw/include/astra/vfs_service.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_COMPILER")" \
@@ -258,6 +261,7 @@ cp "$PUBLIC_PCM_FORMAT" "$STAGED_SOURCE/include/astra/pcm_format.h"
 cp "$PUBLIC_AUDIO_STREAM" "$STAGED_SOURCE/include/astra/audio_stream.h"
 cp "$PUBLIC_AUDIO_MAILBOX" "$STAGED_SOURCE/include/astra/audio_mailbox.h"
 cp "$PUBLIC_STATUS" "$STAGED_SOURCE/include/astra/status.h"
+cp "$PUBLIC_SECRET_MEMORY" "$STAGED_SOURCE/include/astra/secret_memory.h"
 cp "$PUBLIC_VFS_SERVICE" "$STAGED_SOURCE/include/astra/vfs_service.h"
 cp "$PUBLIC_COMPILER" "$STAGED_SOURCE/include/astra/compiler.h"
 cp "$PUBLIC_OBJECT_ABI" "$STAGED_SOURCE/include/astra/object_abi.h"

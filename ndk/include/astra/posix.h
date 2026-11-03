@@ -51,6 +51,16 @@ uint32_t astra_posix_signal_generation(void);
  */
 int astra_posix_write_all(int descriptor, const void *bytes, size_t length);
 
+/** Read one password from controlling terminal with echo disabled. The
+ * complete line must fit; overflow is drained and returns ERANGE. Caller
+ * owns and must wipe the result after use.
+ * @param prompt Text displayed before input.
+ * @param buffer Receives NUL-terminated password, wiped on failure.
+ * @param capacity Buffer bytes including terminator.
+ * @return Zero on success; otherwise -1 with errno set.
+ */
+int astra_posix_read_secret(const char *prompt, char *buffer, size_t capacity);
+
 /**
  * Enter a standard C program through Astra's shared POSIX initialization.
  *

@@ -28,6 +28,7 @@ def fixture(root, edition="1"):
         "boot/Image": b"new Image",
         "boot/dtbs/" + installer.DTB: b"new board DTB",
         "metadata/kernel.release": (release + "\n").encode(),
+        "metadata/kernel.config": b"# CONFIG_CIFS is not set\n",
         "lib/modules/%s/modules.dep" % release: b"complete depmod output\n",
     }
     for name in ("kernel/drivers/scsi/sr_mod.ko", "kernel/drivers/cdrom/cdrom.ko",

@@ -63,6 +63,25 @@ uint32_t astra_vfs_host_transport_submit(
     assert(command->size == ASTRA_HOST_COMMAND_SIZE);
     assert(command->version == ASTRA_HOST_COMMAND_VERSION);
     if (command->service == ASTRA_HOST_SERVICE_VOLUMES) {
+        if (command->operation == ASTRA_HOST_VOLUME_MOUNT_AUTH) {
+            const uint8_t *wire = input;
+            assert(command->generation == 9u && input_size == sizeof(AstraHostVolumeMountAuth) &&
+                output_capacity == sizeof(AstraVolumeReference) &&
+                astra_load_be64(wire) == 7u && astra_load_be64(wire + 8u) == 12u &&
+                astra_load_be64(wire + 16u) == 1u &&
+                astra_load_be32(wire + 24u) == ASTRA_VOLUME_READ_ONLY &&
+                strcmp((const char *)wire + 32u, "astratest") == 0 &&
+                strcmp((const char *)wire + 288u, "WORKGROUP") == 0 &&
+                strcmp((const char *)wire + 544u, "p,a=s") == 0 &&
+                astra_load_be32(wire + 800u) == 17u &&
+                astra_load_be32(wire + 804u) == 0u);
+            if (host->failure != 0u) return host->failure;
+            astra_store_be64(output, 7u);
+            astra_store_be64((uint8_t *)output + 8u, 13u);
+            astra_store_be64((uint8_t *)output + 16u, 1u);
+            command->result_length = sizeof(AstraVolumeReference);
+            return ASTRA_VFS_OK;
+        }
         if (command->operation == ASTRA_HOST_VOLUME_NETWORK_SOURCE) {
             const uint8_t *wire = input;
             assert(command->generation == 9u && command->session == 0u &&
@@ -465,6 +484,14 @@ uint32_t astra_vfs_host_transport_submit(
     return ASTRA_VFS_OK;
 }
 
+uint32_t astra_vfs_host_transport_submit_sensitive(
+    void *context, AstraVfsHostRequest *request, const void *input,
+    uint32_t input_size, void *output, uint32_t output_capacity)
+{
+    return astra_vfs_host_transport_submit(context, request, input,
+        input_size, output, output_capacity);
+}
+
 int main(void)
 {
     FakeHost catalog_host = {0};
@@ -474,6 +501,13 @@ int main(void)
     assert(astra_vfs_host_volume_network_source((AstraVfsHostTransport *)&catalog_host,
         9u, 17u, &network, &network_reference) == ASTRA_VFS_OK &&
         network_reference.epoch == 7u && network_reference.id == 12u);
+    AstraVolumeMountAuth auth = {.source = {7u, 12u, 1u},
+        .flags = ASTRA_VOLUME_READ_ONLY, .account = "astratest",
+        .domain = "WORKGROUP", .password = "p,a=s"};
+    AstraVolumeReference auth_reference = {0};
+    assert(astra_vfs_host_volume_mount_auth((AstraVfsHostTransport *)&catalog_host,
+        9u, 17u, &auth, &auth_reference) == ASTRA_VFS_OK &&
+        auth_reference.epoch == 7u && auth_reference.id == 13u);
     AstraVolumeFormatRequest format = {0};
     format.source = (AstraVolumeReference){7u, 8u, 9u};
     format.header.operation = ASTRA_VOLUME_FORMAT;

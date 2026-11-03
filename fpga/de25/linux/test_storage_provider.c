@@ -9,6 +9,7 @@
 #include <grp.h>
 #include <linux/fs.h>
 #include <linux/loop.h>
+#include <linux/memfd.h>
 #include <libudev.h>
 #include <poll.h>
 #include <signal.h>
@@ -19,6 +20,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/sysmacros.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -783,7 +785,8 @@ static void lost_worker_reply(AstraStorageProvider *provider)
     const AstraStorageRecord *record = astra_storage_find(&provider->catalog, mount);
     assert(astra_storage_linux_prepare(&provider->domain, record, -1, 0u, 0u, &mounted) == 0);
     assert(astra_storage_work_start(&work, &provider->domain, record, -1,
-                                      &mounted, ASTRA_STORAGE_WORK_ATTACH) == 0);
+                                      &mounted, ASTRA_STORAGE_WORK_ATTACH,
+                                      -1, NULL) == 0);
     for (unsigned at = 0u; !mounted.attached && at < 5000u; ++at) {
         assert(astra_storage_linux_reconcile(&provider->domain, &mounted) == 0);
         usleep(1000);
@@ -1046,6 +1049,60 @@ static void network_mount(AstraStorageProvider *provider, const char *server,
     assert(astra_storage_provider_release(provider, source) == 0);
 }
 
+static int test_secret(const char *password, int sealed)
+{
+    int fd = memfd_create("astra-smb-test-secret", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+    assert(fd >= 0);
+    assert(write(fd, password, strlen(password) + 1u) == (ssize_t)strlen(password) + 1);
+    if (sealed)
+        assert(fcntl(fd, F_ADD_SEALS,
+            F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL) == 0);
+    return fd;
+}
+
+static void network_mount_auth(AstraStorageProvider *provider, const char *server)
+{
+    AstraVolumeNetworkSource definition = {.format = ASTRA_VOLUME_SMB,
+        .label = "Authenticated SMB"};
+    AstraStorageMountAuth auth = {.account = "astratest"};
+    uint64_t source = 0u, mount = 0u;
+    assert(snprintf(definition.server, sizeof(definition.server), "%s", server) > 0);
+    strcpy(definition.share, "/astra-auth");
+    assert(astra_storage_provider_network_source(provider, &definition, &source) == 0);
+    int secret = test_secret("p,a=s", 0);
+    assert(astra_storage_provider_mount_auth(provider, source, 1u, 0u,
+        secret, &auth, &mount) == EINVAL && mount == 0u);
+    close(secret);
+    secret = test_secret("wrong-password", 1);
+    assert(astra_storage_provider_mount_auth(provider, source, 1u, 0u,
+        secret, &auth, &mount) == 0);
+    close(secret);
+    wait_work(provider);
+    const AstraStorageRecord *failed = astra_storage_find(&provider->catalog, mount);
+    assert(failed != NULL && failed->state == ASTRA_VOLUME_FAILED &&
+        (failed->error == EACCES || failed->error == EPERM));
+    secret = test_secret("p,a=s", 1);
+    assert(astra_storage_provider_mount_auth(provider, source, 1u, 0u,
+        secret, &auth, &mount) == 0);
+    close(secret);
+    wait_work(provider);
+    assert(astra_storage_find(&provider->catalog, mount)->state == ASTRA_VOLUME_MOUNTED);
+    int root = -1;
+    assert(astra_storage_provider_root(provider, mount, 1u, &root) == 0);
+    int file = openat(root, "authenticated-proof", O_CREAT | O_TRUNC | O_RDWR, 0600);
+    assert(file >= 0);
+    assert(write(file, "auth-pass", 9u) == 9 && fsync(file) == 0);
+    char observed[9];
+    assert(pread(file, observed, sizeof(observed), 0) == sizeof(observed) &&
+        memcmp(observed, "auth-pass", sizeof(observed)) == 0);
+    close(file);
+    close(root);
+    assert(unmount_wait(provider, mount, 1u) == 0);
+    assert(astra_storage_provider_release(provider, mount) == 0);
+    assert(astra_storage_provider_release_network_source(provider, source, 1u) == 0);
+    assert(astra_storage_provider_release(provider, source) == 0);
+}
+
 int main(int argc, char **argv)
 {
     AstraStorageProvider provider = ASTRA_STORAGE_PROVIDER_INIT;
@@ -1114,6 +1171,11 @@ int main(int argc, char **argv)
     if (smb_server != NULL) {
         network_mount(&provider, smb_server, ASTRA_VOLUME_SMB, "/astra", "provider-smb-rw");
         puts("storage provider: SMB3 guest mount/read/write/fsync/unmount PASS");
+    }
+    const char *smb_auth_server = getenv("ASTRA_TEST_SMB_AUTH_SERVER");
+    if (smb_auth_server != NULL) {
+        network_mount_auth(&provider, smb_auth_server);
+        puts("storage provider: SMB3 authenticated mount/refusal/read/write/fsync/unmount PASS");
     }
     assert(mkdtemp(path) != NULL);
     int root = open(path, O_PATH | O_DIRECTORY | O_CLOEXEC);

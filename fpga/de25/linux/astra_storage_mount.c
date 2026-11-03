@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "astra_storage_mount.h"
+#include <astra/secret_memory.h>
 
 #include <errno.h>
 #include <arpa/inet.h>
@@ -10,6 +11,7 @@
 #include <libmount/libmount.h>
 #include <linux/fs.h>
 #include <linux/loop.h>
+#include <linux/mount.h>
 #include <sched.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -18,6 +20,7 @@
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <unistd.h>
 
@@ -477,14 +480,70 @@ failed:
     return error;
 }
 
+static int authenticated_smb_mount(const char *source, const char *target,
+    const char *address, uid_t uid, gid_t gid, int readonly,
+    int secret, const AstraStorageMountAuth *auth)
+{
+    char password[256] = {0};
+    char uid_text[24], gid_text[24];
+    int fs = -1, tree = -1, error = 0;
+    ssize_t length = pread(secret, password, sizeof(password), 0);
+    if (length < 1 || password[length - 1] != '\0' ||
+        memchr(password, '\0', (size_t)length - 1u) != NULL) {
+        error = EINVAL;
+        goto done;
+    }
+    if (snprintf(uid_text, sizeof(uid_text), "%u", (unsigned)uid) < 0 ||
+        snprintf(gid_text, sizeof(gid_text), "%u", (unsigned)gid) < 0) {
+        error = EINVAL;
+        goto done;
+    }
+    fs = (int)syscall(SYS_fsopen, "cifs", FSOPEN_CLOEXEC);
+    if (fs < 0) { error = errno; goto done; }
+#define SET_STRING(key, value) do { \
+    if (syscall(SYS_fsconfig, fs, FSCONFIG_SET_STRING, key, value, 0) != 0) { \
+        error = errno; goto done; \
+    } \
+} while (0)
+    SET_STRING("source", source);
+    SET_STRING("vers", "3.1.1");
+    SET_STRING("sec", "ntlmssp");
+    SET_STRING("ip", address);
+    SET_STRING("uid", uid_text);
+    SET_STRING("gid", gid_text);
+    SET_STRING("username", auth->account);
+    if (auth->domain[0] != '\0') SET_STRING("domain", auth->domain);
+    SET_STRING("password", password);
+#undef SET_STRING
+    astra_secret_wipe(password, sizeof(password));
+    if (syscall(SYS_fsconfig, fs, FSCONFIG_SET_FLAG, "hard", NULL, 0) != 0 ||
+        syscall(SYS_fsconfig, fs, FSCONFIG_CMD_CREATE, NULL, NULL, 0) != 0) {
+        error = errno;
+        goto done;
+    }
+    tree = (int)syscall(SYS_fsmount, fs, FSMOUNT_CLOEXEC,
+        MOUNT_ATTR_NODEV | MOUNT_ATTR_NOSUID | MOUNT_ATTR_NOEXEC |
+        (readonly ? MOUNT_ATTR_RDONLY : 0u));
+    if (tree < 0 || syscall(SYS_move_mount, tree, "", AT_FDCWD, target,
+                            MOVE_MOUNT_F_EMPTY_PATH) != 0)
+        error = errno;
+done:
+    astra_secret_wipe(password, sizeof(password));
+    if (fs >= 0) close(fs);
+    if (tree >= 0) close(tree);
+    return error;
+}
+
 int astra_storage_linux_attach(AstraStorageDomain *domain,
                                const AstraStorageRecord *record, int source,
-                               AstraStorageMounted *mounted)
+                               AstraStorageMounted *mounted, int secret,
+                               const AstraStorageMountAuth *auth)
 {
     struct libmnt_context *ctx = NULL;
     char source_name[sizeof(mounted->network.server) +
                      sizeof(mounted->network.share) + 4u] = "tmpfs";
     char options[256] = "";
+    char address[INET6_ADDRSTRLEN] = {0};
     const char *type;
     uint64_t domain_mount = 0u;
     bool readonly;
@@ -492,7 +551,10 @@ int astra_storage_linux_attach(AstraStorageDomain *domain,
     int status;
     if (domain == NULL || record == NULL || mounted == NULL || geteuid() != 0 ||
         (type = fstype(record->format)) == NULL || mounted->id != record->id ||
-        !mounted->directory || mounted->attached)
+        !mounted->directory || mounted->attached ||
+        (secret >= 0) != (auth != NULL) ||
+        (auth != NULL && (record->origin != ASTRA_VOLUME_ORIGIN_NETWORK ||
+                          record->format != ASTRA_VOLUME_SMB)))
         return EINVAL;
     readonly = (record->flags & ASTRA_VOLUME_READ_ONLY) != 0u;
     if (record->origin == ASTRA_VOLUME_ORIGIN_NETWORK) {
@@ -503,7 +565,6 @@ int astra_storage_linux_attach(AstraStorageDomain *domain,
         struct addrinfo *addresses = NULL;
         int resolved = getaddrinfo(mounted->network.server, NULL, &hints, &addresses);
         if (resolved != 0) return resolved == EAI_MEMORY ? ENOMEM : EHOSTUNREACH;
-        char address[INET6_ADDRSTRLEN] = {0};
         for (const struct addrinfo *at = addresses; at != NULL; at = at->ai_next) {
             const void *bytes = at->ai_family == AF_INET ?
                 (const void *)&((const struct sockaddr_in *)at->ai_addr)->sin_addr :
@@ -526,7 +587,7 @@ int astra_storage_linux_attach(AstraStorageDomain *domain,
         if (record->format == ASTRA_VOLUME_NFS)
             printed = snprintf(options, sizeof(options),
                 "vers=4,proto=tcp,sec=sys,addr=%s", address);
-        else
+        else if (auth == NULL)
             /* Anonymous shares have no credential material to retain or leak. */
             printed = snprintf(options, sizeof(options),
                 "vers=3.1.1,sec=none,hard,ip=%s,uid=%u,gid=%u", address,
@@ -554,6 +615,13 @@ int astra_storage_linux_attach(AstraStorageDomain *domain,
     error = mount_id(domain->directory, "", &domain_mount);
     if (error != 0)
         goto failed;
+    if (auth != NULL) {
+        error = authenticated_smb_mount(source_name, mounted->target, address,
+            domain->uid, domain->gid, readonly, secret, auth);
+        mounted->attached = error == 0;
+        if (error != 0) goto failed;
+        goto verify;
+    }
     error = context(&ctx);
     if (error != 0)
         goto failed;
@@ -576,6 +644,7 @@ int astra_storage_linux_attach(AstraStorageDomain *domain,
     ctx = NULL;
     if (!mounted->attached)
         goto failed;
+verify:
     /* Query by the protected target without allocating an fd first. Root-open
      * exhaustion must not erase evidence of a successful Linux mount. */
     status = mount_id(AT_FDCWD, mounted->target, &mounted->linux_mount_id);
@@ -601,7 +670,7 @@ int astra_storage_linux_mount(AstraStorageDomain *domain,
 {
     int error = astra_storage_linux_prepare(domain, record, source, offset, length, mounted);
     if (error == 0)
-        error = astra_storage_linux_attach(domain, record, source, mounted);
+        error = astra_storage_linux_attach(domain, record, source, mounted, -1, NULL);
     if (error != 0 && mounted != NULL && !mounted->attached &&
         (mounted->loop >= 0 || mounted->backing >= 0 || mounted->directory))
         (void)astra_storage_linux_cleanup(mounted);

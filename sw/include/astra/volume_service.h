@@ -23,8 +23,14 @@ enum {
     ASTRA_VOLUME_FORMAT_STATUS,
     ASTRA_VOLUME_PARTITION,
     ASTRA_VOLUME_PARTITION_STATUS,
-    ASTRA_VOLUME_NETWORK_SOURCE
+    ASTRA_VOLUME_NETWORK_SOURCE,
+    ASTRA_VOLUME_MOUNT_AUTH
 };
+typedef struct AstraVolumeAuthRequest {
+    AstraMessageHeader header;
+    uint32_t size;
+    uint32_t reserved;
+} AstraVolumeAuthRequest;
 typedef struct AstraVolumeNetworkRequest {
     AstraMessageHeader header;
     uint32_t size;
@@ -106,4 +112,5 @@ _Static_assert(sizeof(AstraVolumeFormatReply) == 48u, "volume format reply ABI")
 _Static_assert(sizeof(AstraVolumePartitionRequest) == 80u, "volume partition request ABI");
 _Static_assert(sizeof(AstraVolumePartitionReply) == 48u, "volume partition reply ABI");
 _Static_assert(sizeof(AstraVolumeNetworkRequest) == 32u, "volume network request ABI");
+_Static_assert(sizeof(AstraVolumeAuthRequest) == 32u, "volume auth request ABI");
 #endif

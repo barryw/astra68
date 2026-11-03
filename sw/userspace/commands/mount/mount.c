@@ -2,6 +2,7 @@
 #include <astra/posix.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
+#include <astra/secret_memory.h>
 #include <astra/status.h>
 #include <astra/vfs_process.h>
 #include <stdio.h>
@@ -14,19 +15,25 @@ int main(int argc, char **argv)
     int image = argc == 3 && strcmp(argv[1], "--image") == 0;
     int ram = argc == 5 && strcmp(argv[1], "--ram") == 0;
     int readonly = argc == 3 && strcmp(argv[1], "--read-only") == 0;
-    int nfs = argc >= 5 && strcmp(argv[1], "--nfs") == 0;
-    int smb_guest = argc >= 5 && strcmp(argv[1], "--smb-guest") == 0;
-    int network = nfs || smb_guest;
-    int network_readonly = network && argc == 6 && strcmp(argv[5], "--read-only") == 0;
+    int nfs = argc >= 2 && strcmp(argv[1], "--nfs") == 0;
+    int smb_guest = argc >= 2 && strcmp(argv[1], "--smb-guest") == 0;
+    int smb_user = argc >= 2 && strcmp(argv[1], "--smb-user") == 0;
+    int network = nfs || smb_guest || smb_user;
+    int network_readonly = network && argc >= 6 &&
+        strcmp(argv[argc - 1], "--read-only") == 0;
+    int network_fields = argc - network_readonly;
     uint64_t bytes = 0u, inodes = 0u;
     if ((!image && !ram && !readonly && !network && argc != 2) ||
-        (network && argc != 5 && !network_readonly) ||
+        (network && (smb_user ?
+            (network_fields != 6 && network_fields != 7) :
+            network_fields != 5)) ||
         (ram && (!volume_cli_number(argv[3], &bytes) || !volume_cli_number(argv[4], &inodes)))) {
         fputs("usage: mount [--read-only] SOURCE_ID\n"
               "       mount --image NATIVE_FILE\n"
               "       mount --ram SOURCE_ID BYTES INODES\n"
               "       mount --nfs SERVER EXPORT LABEL [--read-only]\n"
-              "       mount --smb-guest SERVER /SHARE LABEL [--read-only]\n", stderr);
+              "       mount --smb-guest SERVER /SHARE LABEL [--read-only]\n"
+              "       mount --smb-user SERVER /SHARE LABEL ACCOUNT [DOMAIN] [--read-only]\n", stderr);
         return 2;
     }
     VolumeCli cli;
@@ -49,9 +56,29 @@ int main(int argc, char **argv)
                 &definition, &source);
             if (result != ASTRA_OK)
                 fprintf(stderr, "mount: network source admission failed (%ld)\n", (long)result);
-            else if (volume_cli_wait(&cli, &source, ASTRA_VOLUME_UNMOUNTED, 0, &record))
-                success = volume_cli_mount(&cli, &source,
-                    network_readonly ? ASTRA_VOLUME_READ_ONLY : 0u, 0u, 0u);
+            else if (volume_cli_wait(&cli, &source, ASTRA_VOLUME_UNMOUNTED, 0, &record)) {
+                if (!smb_user) {
+                    success = volume_cli_mount(&cli, &source,
+                        network_readonly ? ASTRA_VOLUME_READ_ONLY : 0u, 0u, 0u);
+                } else {
+                    AstraVolumeMountAuth auth = {.source = source,
+                        .flags = network_readonly ? ASTRA_VOLUME_READ_ONLY : 0u};
+                    const char *domain = network_fields == 7 ? argv[6] : "";
+                    if (strlen(argv[5]) >= sizeof(auth.account) ||
+                        strlen(domain) >= sizeof(auth.domain)) {
+                        fputs("mount: SMB account or domain too long\n", stderr);
+                    } else {
+                        strcpy(auth.account, argv[5]);
+                        strcpy(auth.domain, domain);
+                        if (astra_posix_read_secret("SMB password: ",
+                                auth.password, sizeof(auth.password)) != 0)
+                            fputs("mount: cannot read password from terminal\n", stderr);
+                        else
+                            success = volume_cli_mount_auth(&cli, &auth);
+                    }
+                    astra_secret_wipe(&auth, sizeof(auth));
+                }
+            }
         }
         if (!success && source.id != 0u) {
             AstraVolumeControl release = {.reference = source,

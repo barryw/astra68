@@ -108,6 +108,16 @@ typedef struct AstraVolumeNetworkSource {
     char label[256]; /**< Display name, not authority. */
 } AstraVolumeNetworkSource;
 
+/** One-use authenticated SMB mount. Never persisted in volume metadata. */
+typedef struct AstraVolumeMountAuth {
+    AstraVolumeReference source; /**< Exact SMB source identity. */
+    uint32_t flags; /**< ASTRA_VOLUME_READ_ONLY or zero. */
+    uint32_t reserved; /**< Zero. */
+    char account[256]; /**< NUL-terminated SMB account. */
+    char domain[256]; /**< Optional NUL-terminated SMB domain. */
+    char password[256]; /**< One-use NUL-terminated password. */
+} AstraVolumeMountAuth;
+
 /** Partition map reported for a physical device or its partition source. */
 enum AstraVolumePartitionMap {
     ASTRA_VOLUME_PARTITION_MAP_NONE = 0,

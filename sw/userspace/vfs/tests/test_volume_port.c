@@ -11,6 +11,7 @@ static AstraVolumePort port;
 static union { AstraVolumeRequest metadata; AstraVolumeRootRequest root;
     AstraVolumeControlRequest control; AstraVolumeFormatRequest format;
     AstraVolumeNetworkRequest network;
+    AstraVolumeAuthRequest auth;
     AstraVolumePartitionRequest partition;
     AstraVolumeUsageRequest usage; } incoming_request;
 #define request incoming_request.metadata
@@ -28,6 +29,7 @@ static uint32_t area_bytes = sizeof(output), area_rights = 1u;
 static uint32_t root_calls, root_sent, root_send_failure;
 static uint32_t control_calls;
 static uint32_t network_calls;
+static uint32_t auth_calls;
 static uint32_t format_calls, partition_calls, format_outcome;
 static AstraVolumeReference admitted;
 static AstraVolumeBrokerInfo broker_info;
@@ -203,6 +205,27 @@ static void network_request(void)
         .server = "127.0.0.1", .share = "/export", .label = "Test"};
     area_bytes = ASTRA_MEMORY_PAGE_SIZE;
 }
+static uint32_t apply_auth(void *context, uint32_t owner,
+    const AstraVolumeMountAuth *auth, AstraVolumeReference *reference)
+{
+    assert(context == &epoch && owner == sender &&
+        astra_volume_mount_auth_valid(auth) &&
+        strcmp(auth->password, "p,a=s") == 0);
+    ++auth_calls;
+    *reference = (AstraVolumeReference){epoch, 10u, 1u};
+    return ASTRA_STATUS_OK;
+}
+static void auth_request(void)
+{
+    enqueue(ASTRA_VOLUME_MOUNT_AUTH, 3u);
+    incoming_size = sizeof(AstraVolumeAuthRequest);
+    request.header.total_size = incoming_size;
+    incoming_request.auth.size = sizeof(AstraVolumeMountAuth);
+    AstraVolumeMountAuth *auth = (void *)&output_storage;
+    *auth = (AstraVolumeMountAuth){.source = {epoch, 9u, 1u},
+        .account = "astratest", .password = "p,a=s"};
+    area_bytes = ASTRA_MEMORY_PAGE_SIZE;
+}
 static void control_request(void)
 {
     enqueue(ASTRA_VOLUME_CONTROL, 0u);
@@ -365,6 +388,7 @@ int main(void)
     port.root = root_grant;
     port.control = apply_control;
     port.network_source = apply_network;
+    port.mount_auth = apply_auth;
     port.format = apply_format;
     port.partition = apply_partition;
     port.usage = usage;
@@ -398,6 +422,12 @@ int main(void)
     network_request(); ((AstraVolumeNetworkSource *)&output_storage)->share[0] = 'x';
     assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u &&
         reply.status == ASTRA_STATUS_INVALID && network_calls == 1u);
+    auth_request();
+    assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_OK && admitted.id == 10u && auth_calls == 1u);
+    auth_request(); ((AstraVolumeMountAuth *)&output_storage)->account[0] = '\0';
+    assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_INVALID && auth_calls == 1u);
     area_bytes = sizeof(output);
     format_request(ASTRA_VOLUME_FORMAT);
     assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u &&

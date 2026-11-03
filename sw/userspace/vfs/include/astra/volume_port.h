@@ -22,6 +22,8 @@ typedef uint32_t (*AstraVolumeApplyControl)(void *context, uint32_t owner,
     const AstraVolumeControl *control, AstraVolumeReference *reference);
 typedef uint32_t (*AstraVolumeApplyNetworkSource)(void *context, uint32_t owner,
     const AstraVolumeNetworkSource *source, AstraVolumeReference *reference);
+typedef uint32_t (*AstraVolumeApplyMountAuth)(void *context, uint32_t owner,
+    const AstraVolumeMountAuth *auth, AstraVolumeReference *reference);
 typedef uint32_t (*AstraVolumeApplyFormat)(void *context, uint32_t owner,
     const AstraVolumeFormatRequest *request, uint32_t *outcome);
 typedef uint32_t (*AstraVolumeApplyPartition)(void *context, uint32_t owner,
@@ -37,6 +39,7 @@ typedef struct AstraVolumePort {
     AstraVolumeGrantRoot root;
     AstraVolumeApplyControl control;
     AstraVolumeApplyNetworkSource network_source;
+    AstraVolumeApplyMountAuth mount_auth;
     AstraVolumeApplyFormat format;
     AstraVolumeApplyPartition partition;
     AstraVolumeReadUsage usage;

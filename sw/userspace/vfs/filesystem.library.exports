@@ -13,6 +13,7 @@ ASTRA_FILESYSTEM_15.0 {
         astra_volume_root;
         astra_volume_control;
         astra_volume_network_source;
+        astra_volume_mount_auth;
         astra_volume_image;
         astra_volume_watch_open;
         astra_volume_watch_receive;

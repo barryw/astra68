@@ -27,5 +27,6 @@ int volume_cli_apply(VolumeCli *cli, const AstraVolumeControl *control,
     AstraVolumeReference *reference);
 int volume_cli_mount(VolumeCli *cli, const AstraVolumeReference *source,
     uint32_t flags, uint64_t bytes, uint64_t inodes);
+int volume_cli_mount_auth(VolumeCli *cli, const AstraVolumeMountAuth *auth);
 
 #endif

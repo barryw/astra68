@@ -12,6 +12,7 @@ static unsigned owned[512], next_handle = 1u;
 static AstraVolumeCatalogPage shared;
 static AstraVolumeUsagePage shared_usage;
 static AstraVolumeNetworkSource shared_network;
+static AstraVolumeMountAuth shared_auth;
 static uint32_t shared_size;
 static AstraVolumeNotification notification;
 static AstraResult transport_failure, map_failure;
@@ -62,10 +63,12 @@ AstraResult astra_handle_duplicate(AstraHandle source, uint32_t rights, AstraHan
 AstraResult astra_area_create(uint32_t size, uint32_t rights, AstraArea *area)
 {
     assert((size == sizeof(shared) || size == sizeof(shared_usage) ||
-        size == sizeof(shared_network)) && (rights & ASTRA_RIGHT_WRITE) != 0u);
+        size == sizeof(shared_network) || size == sizeof(shared_auth)) &&
+        (rights & ASTRA_RIGHT_WRITE) != 0u);
     shared_size = size;
     area->handle = acquire(); memset(&shared, 0, sizeof(shared));
     memset(&shared_usage, 0, sizeof(shared_usage)); memset(&shared_network, 0, sizeof(shared_network));
+    memset(&shared_auth, 0, sizeof(shared_auth));
     return ASTRA_OK;
 }
 AstraResult astra_area_map(AstraArea *area, uint32_t flags)
@@ -75,7 +78,8 @@ AstraResult astra_area_map(AstraArea *area, uint32_t flags)
          flags == (ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE))); ++maps;
     if (map_failure != 0) return map_failure;
     area->address = shared_size == sizeof(shared) ? (void *)&shared :
-        shared_size == sizeof(shared_usage) ? (void *)&shared_usage : (void *)&shared_network;
+        shared_size == sizeof(shared_usage) ? (void *)&shared_usage :
+        shared_size == sizeof(shared_network) ? (void *)&shared_network : (void *)&shared_auth;
     area->size = shared_size; area->map_flags = flags;
     return ASTRA_OK;
 }
@@ -105,7 +109,8 @@ AstraResult astra_port_call(AstraHandle endpoint, AstraCall *call, AstraMonotoni
     assert(endpoint == 77u && deadline == ASTRA_DEADLINE_INFINITE);
     const AstraVolumeRequest *request = call->request;
     int control = request->header.operation == ASTRA_VOLUME_CONTROL ||
-        request->header.operation == ASTRA_VOLUME_NETWORK_SOURCE;
+        request->header.operation == ASTRA_VOLUME_NETWORK_SOURCE ||
+        request->header.operation == ASTRA_VOLUME_MOUNT_AUTH;
     int format = request->header.operation == ASTRA_VOLUME_FORMAT ||
         request->header.operation == ASTRA_VOLUME_FORMAT_STATUS;
     int partition = request->header.operation == ASTRA_VOLUME_PARTITION ||
@@ -116,7 +121,9 @@ AstraResult astra_port_call(AstraHandle endpoint, AstraCall *call, AstraMonotoni
         sizeof(AstraVolumeBrokerInfoReply) : partition ?
         sizeof(AstraVolumePartitionReply) : sizeof(AstraVolumeReply);
     assert(call->request_size == (request->header.operation == ASTRA_VOLUME_NETWORK_SOURCE ?
-        sizeof(AstraVolumeNetworkRequest) : control ? sizeof(AstraVolumeControlRequest) :
+        sizeof(AstraVolumeNetworkRequest) :
+        request->header.operation == ASTRA_VOLUME_MOUNT_AUTH ? sizeof(AstraVolumeAuthRequest) :
+        control ? sizeof(AstraVolumeControlRequest) :
         format ? sizeof(AstraVolumeFormatRequest) :
         partition ? sizeof(AstraVolumePartitionRequest) :
         request->header.operation == ASTRA_VOLUME_ROOT ? sizeof(AstraVolumeRootRequest) :
@@ -158,6 +165,12 @@ AstraResult astra_port_call(AstraHandle endpoint, AstraCall *call, AstraMonotoni
             call->handle_count == 1u &&
             astra_volume_network_source_valid(&shared_network));
         ((AstraVolumeControlReply *)reply)->reference = (AstraVolumeReference){25u, 8u, 1u};
+    } else if (request->header.operation == ASTRA_VOLUME_MOUNT_AUTH && reply->status == 0u) {
+        const AstraVolumeAuthRequest *wanted = call->request;
+        assert(wanted->size == sizeof(shared_auth) && wanted->reserved == 0u &&
+            call->handle_count == 1u && astra_volume_mount_auth_valid(&shared_auth) &&
+            strcmp(shared_auth.password, "p,a=s") == 0);
+        ((AstraVolumeControlReply *)reply)->reference = (AstraVolumeReference){25u, 9u, 1u};
     } else if (control && reply->status == 0u) {
         const AstraVolumeControlRequest *wanted = call->request;
         assert(astra_volume_control_valid(&wanted->control) && call->handle_count == 0u);
@@ -410,6 +423,13 @@ int main(void)
         ASTRA_ERROR_INVALID_ARGUMENT && admitted.id == 0u);
     strcpy(network.share, "/");
     assert(astra_volume_network_source(77u, &network, &admitted) ==
+        ASTRA_ERROR_INVALID_ARGUMENT && admitted.id == 0u);
+    AstraVolumeMountAuth auth = {.source = {25u, 8u, 1u},
+        .account = "astratest", .password = "p,a=s"};
+    assert(astra_volume_mount_auth(77u, &auth, &admitted) == ASTRA_OK &&
+        admitted.id == 9u && shared_auth.password[0] == '\0');
+    auth.account[0] = '\0';
+    assert(astra_volume_mount_auth(77u, &auth, &admitted) ==
         ASTRA_ERROR_INVALID_ARGUMENT && admitted.id == 0u);
     const AstraVolumeReference format_source = {25u, 5u, 1u};
     AstraResult format_outcome = ASTRA_OK;

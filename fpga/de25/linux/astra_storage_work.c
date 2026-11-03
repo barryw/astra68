@@ -49,10 +49,10 @@ static void retain(const int *originals, unsigned count, pid_t parent)
 
 static void child(AstraStorageDomain domain, AstraStorageRecord record,
                     AstraStorageMounted mounted, int source, int output, uint32_t operation,
-                    pid_t parent)
+                    int secret, const AstraStorageMountAuth *auth, pid_t parent)
 {
-    int originals[] = {domain.directory, source, mounted.loop, output};
-    retain(originals, 4u, parent);
+    int originals[] = {domain.directory, source, mounted.loop, secret, output};
+    retain(originals, 5u, parent);
     domain.directory = 3;
     mounted.loop = originals[2] < 0 ? -1 : 5;
     mounted.backing = -1; /* Parent retains backing and performs final cleanup. */
@@ -66,7 +66,8 @@ static void child(AstraStorageDomain domain, AstraStorageRecord record,
             error = ioctl(4, CDROMEJECT, 0) == 0 ? 0 : errno;
     }
     else if (operation == ASTRA_STORAGE_WORK_ATTACH)
-        error = astra_storage_linux_attach(&domain, &record, originals[1] < 0 ? -1 : 4, &mounted);
+        error = astra_storage_linux_attach(&domain, &record, originals[1] < 0 ? -1 : 4,
+            &mounted, originals[3] < 0 ? -1 : 6, auth);
     else
         error = astra_storage_linux_detach(&mounted, (record.flags & ASTRA_VOLUME_READ_ONLY) == 0u &&
             record.state != ASTRA_VOLUME_LOST && record.error != ENODEV);
@@ -74,7 +75,7 @@ static void child(AstraStorageDomain domain, AstraStorageRecord record,
         .linux_mount_id = mounted.linux_mount_id, .operation = operation,
         .error = error, .attached = (uint32_t)mounted.attached,
         .root = mounted.root >= 0 ? 1u : 0u};
-    if (astra_storage_send_packet(6, &reply, sizeof(reply), &mounted.root, reply.root) != 0)
+    if (astra_storage_send_packet(7, &reply, sizeof(reply), &mounted.root, reply.root) != 0)
         _exit(1);
     _exit(0);
 }
@@ -95,11 +96,15 @@ static int endpoints(int sockets[2])
 
 int astra_storage_work_start(AstraStorageWork *work, const AstraStorageDomain *domain,
                               const AstraStorageRecord *record, int source,
-                              const AstraStorageMounted *mounted, uint32_t operation)
+                              const AstraStorageMounted *mounted, uint32_t operation,
+                              int secret, const AstraStorageMountAuth *auth)
 {
     int sockets[2];
     if (work == NULL || domain == NULL || record == NULL || mounted == NULL ||
-        work->pid != 0 ||
+        work->pid != 0 || (secret >= 0) != (auth != NULL) ||
+        (auth != NULL && (operation != ASTRA_STORAGE_WORK_ATTACH ||
+            record->origin != ASTRA_VOLUME_ORIGIN_NETWORK ||
+            record->format != ASTRA_VOLUME_SMB)) ||
         (operation == ASTRA_STORAGE_WORK_EJECT ? source < 0 || record->kind != ASTRA_VOLUME_SOURCE ||
             record->class_id != ASTRA_VOLUME_OPTICAL || record->origin != ASTRA_VOLUME_ORIGIN_DEVICE :
             record->id != mounted->id || !mounted->directory ||
@@ -117,7 +122,8 @@ int astra_storage_work_start(AstraStorageWork *work, const AstraStorageDomain *d
         return error;
     }
     if (pid == 0)
-        child(*domain, *record, *mounted, source, sockets[1], operation, parent);
+        child(*domain, *record, *mounted, source, sockets[1], operation,
+            secret, auth, parent);
     close(sockets[1]);
     *work = (AstraStorageWork){.pid = pid, .result = sockets[0], .id = record->id,
         .generation = record->generation, .operation = operation};

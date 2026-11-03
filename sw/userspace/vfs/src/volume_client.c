@@ -5,6 +5,7 @@
 #include <astra/runtime.h>
 #include <astra/filesystem_library.h>
 #include <astra/vfs_file_lifetime.h>
+#include <astra/secret_memory.h>
 #include <string.h>
 
 /* Both complete snapshot collectors use one bounded owned-array admission
@@ -305,6 +306,53 @@ AstraResult astra_volume_network_source(AstraHandle administrator,
             ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &sent);
     if (result == ASTRA_OK) result = exchange(administrator, &request,
         sizeof(request), &sent, &reply.reply, sizeof(reply), NULL);
+    if (sent != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_handle_close(&sent);
+        if (result == ASTRA_OK) result = closed;
+    }
+    if (area.handle != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_area_close(&area);
+        if (result == ASTRA_OK) result = closed;
+    }
+    if (result == ASTRA_OK) {
+        if (reply.reference.epoch == 0u || reply.reference.id == 0u ||
+            reply.reference.generation == 0u) result = ASTRA_ERROR_IO;
+        else *reference = reply.reference;
+    }
+    return result;
+}
+
+AstraResult astra_volume_mount_auth(AstraHandle administrator,
+    const AstraVolumeMountAuth *auth, AstraVolumeReference *reference)
+{
+    AstraVolumeAuthRequest request = {0};
+    AstraVolumeControlReply reply = {0};
+    AstraArea area = ASTRA_AREA_INIT;
+    AstraHandle sent = ASTRA_INVALID_HANDLE;
+    if (reference == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    memset(reference, 0, sizeof(*reference));
+    if (administrator == ASTRA_INVALID_HANDLE ||
+        !astra_volume_mount_auth_valid(auth)) return ASTRA_ERROR_INVALID_ARGUMENT;
+    astra_message_header_set(&request.header, sizeof(request), ASTRA_VOLUME_PROTOCOL,
+        ASTRA_VOLUME_PROTOCOL_VERSION, ASTRA_VOLUME_MOUNT_AUTH, 1u);
+    request.size = sizeof(*auth);
+    AstraResult result = astra_area_create(sizeof(*auth), ASTRA_RIGHT_READ |
+        ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &area);
+    if (result == ASTRA_OK)
+        result = astra_area_map(&area, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE);
+    if (result == ASTRA_OK) {
+        memcpy(area.address, auth, sizeof(*auth));
+        result = astra_handle_duplicate(area.handle, ASTRA_RIGHT_READ |
+            ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &sent);
+    }
+    if (result == ASTRA_OK)
+        result = exchange(administrator, &request, sizeof(request), &sent,
+            &reply.reply, sizeof(reply), NULL);
+    if (area.address != NULL) {
+        astra_secret_wipe(area.address, sizeof(*auth));
+        AstraResult unmapped = astra_area_unmap(&area);
+        if (result == ASTRA_OK) result = unmapped;
+    }
     if (sent != ASTRA_INVALID_HANDLE) {
         AstraResult closed = astra_handle_close(&sent);
         if (result == ASTRA_OK) result = closed;

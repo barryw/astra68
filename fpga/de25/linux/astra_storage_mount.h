@@ -55,7 +55,8 @@ int astra_storage_linux_prepare(AstraStorageDomain *domain,
                                 AstraStorageMounted *mounted);
 int astra_storage_linux_attach(AstraStorageDomain *domain,
                                const AstraStorageRecord *record, int source,
-                               AstraStorageMounted *mounted);
+                               AstraStorageMounted *mounted, int secret,
+                               const AstraStorageMountAuth *auth);
 int astra_storage_linux_bind(AstraStorageDomain *domain,
                              const AstraStorageRecord *record, int root,
                              AstraStorageMounted *mounted);

@@ -37,7 +37,7 @@ LIBRARY_FLAGS := $(filter-out -flto,$(TARGET_FLAGS)) \
 CXX_TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -flto \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 
-SOURCES := src/startup.c src/console.c src/poll.c src/socket.c src/socket_interface.c src/inet.c src/netdb_compat.c src/terminal.c src/file.c src/heap.c src/alloc.c src/time.c src/pthread.c src/semaphore.c \
+SOURCES := src/startup.c src/console.c src/poll.c src/socket.c src/socket_interface.c src/inet.c src/netdb_compat.c src/terminal.c src/secret_prompt.c src/file.c src/heap.c src/alloc.c src/time.c src/pthread.c src/semaphore.c \
 	src/system.c src/scheduling.c src/signal.c \
 	src/identity.c src/process.c src/proc_control.c src/resource.c src/strftime_format.c src/path.c \
 	src/unistd_compat.c src/exec_compat.c src/dirent_compat.c \
@@ -102,6 +102,7 @@ EXEC_COMPAT_TEST := build/host/test_exec_compat
 DIRENT_COMPAT_TEST := build/host/test_dirent_compat
 TIME_COMPAT_TEST := build/host/test_time_compat
 TEMP_COMPAT_TEST := build/host/test_temp_compat
+SECRET_PROMPT_TEST := build/host/test_secret_prompt
 LIMITS_CONTRACT := build/m68k/limits-contract.o
 SYSMACROS_CONTRACT := build/m68k/sysmacros-contract.o
 CXX_HEADERS_CONTRACT := build/m68k/cxx-headers-contract.o
@@ -418,6 +419,12 @@ $(TEMP_COMPAT_TEST): src/temp_compat.c tests/test_temp_compat.c
 		-Wno-nonnull-compare -O2 -fno-builtin \
 		$^ -o $@
 
+$(SECRET_PROMPT_TEST): src/secret_prompt.c tests/test_secret_prompt.c
+	@mkdir -p $(@D)
+	$(HOST_CC) -I$(NDK)/include -I../../include $(COMMON_FLAGS) -O2 \
+		$^ -o $@ -Wl,--wrap=open -Wl,--wrap=read \
+		-Wl,--wrap=close -Wl,--wrap=tcgetattr -Wl,--wrap=tcsetattr
+
 $(LIMITS_CONTRACT): tests/limits_contract.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -c $< -o $@
@@ -495,7 +502,7 @@ $(LINK_CONTRACT): tests/link_standard_main.c kit/program.c $(LIBC_LIBRARY) \
 		--needed compiler.library.2 $@
 	@echo "astra posix dynamic standard main link: PASS"
 
-test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) $(IDENTITY_TEST) $(PROCESS_TEST) $(SIGNAL_TEST) $(SOCKET_ADDRESS_TEST) $(HOST_LOOKUP_TEST) $(INTERFACE_TEST) $(PTHREAD_TEST) $(SEMAPHORE_TEST) $(RESOURCE_TEST) $(SCHEDULING_TEST) $(HEAP_TEST) $(ALLOC_TEST) $(UNISTD_COMPAT_TEST) $(ENTROPY_TEST) $(EXEC_COMPAT_TEST) $(DIRENT_COMPAT_TEST) $(TIME_COMPAT_TEST) $(TEMP_COMPAT_TEST) $(LIMITS_CONTRACT) $(SYSMACROS_CONTRACT) $(CXX_HEADERS_CONTRACT) $(LINK_CONTRACT) $(CXX_LINK_CONTRACT)
+test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) $(IDENTITY_TEST) $(PROCESS_TEST) $(SIGNAL_TEST) $(SOCKET_ADDRESS_TEST) $(HOST_LOOKUP_TEST) $(INTERFACE_TEST) $(PTHREAD_TEST) $(SEMAPHORE_TEST) $(RESOURCE_TEST) $(SCHEDULING_TEST) $(HEAP_TEST) $(ALLOC_TEST) $(UNISTD_COMPAT_TEST) $(ENTROPY_TEST) $(EXEC_COMPAT_TEST) $(DIRENT_COMPAT_TEST) $(TIME_COMPAT_TEST) $(TEMP_COMPAT_TEST) $(SECRET_PROMPT_TEST) $(LIMITS_CONTRACT) $(SYSMACROS_CONTRACT) $(CXX_HEADERS_CONTRACT) $(LINK_CONTRACT) $(CXX_LINK_CONTRACT)
 	./$(HOST_TEST)
 	./$(PATH_TEST)
 	./$(DESCRIPTOR_TEST)
@@ -519,6 +526,7 @@ test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) 
 	./$(DIRENT_COMPAT_TEST)
 	./$(TIME_COMPAT_TEST)
 	./$(TEMP_COMPAT_TEST)
+	./$(SECRET_PROMPT_TEST)
 
 sanitize:
 	@mkdir -p build/host

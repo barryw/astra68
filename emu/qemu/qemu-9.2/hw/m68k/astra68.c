@@ -23,6 +23,7 @@
 #ifdef CONFIG_LINUX
 #include <sys/syscall.h>
 #include <linux/input.h>
+#include <linux/memfd.h>
 #endif
 #include "qemu/bswap.h"
 #include "qemu/datadir.h"
@@ -63,6 +64,7 @@
 #include "astra/copy_engine.h"
 #include "astra/display.h"
 #include "astra/host.h"
+#include "astra/secret_memory.h"
 #include "astra/font_worker.h"
 #include "astra/codec_worker.h"
 #include "astra/font_encoding.h"
@@ -5451,6 +5453,8 @@ static uint32_t astra_host_volume_control(Astra68State *s, uint32_t owner,
     AstraHostChannel *channel, uint8_t *data);
 static uint32_t astra_host_volume_network_source(Astra68State *s, uint32_t owner,
     AstraHostChannel *channel, uint8_t *data);
+static uint32_t astra_host_volume_mount_auth(Astra68State *s, uint32_t owner,
+    AstraHostChannel *channel, uint8_t *data);
 
 static int astra_host_storage_control(Astra68State *s, AstraStorageControlRequest *request,
     int input, AstraStorageControlReply *reply, int *output)
@@ -5822,6 +5826,7 @@ static void astra_host_execute_volumes(Astra68State *s, uint32_t owner,
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_FORMAT &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_PARTITION &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_NETWORK_SOURCE &&
+         lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_MOUNT_AUTH &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_USAGE &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_HOLDERS_CHANGED) ||
         lduw_be_p(command + HOST_FIELD(flags)) != 0u ||
@@ -5865,6 +5870,17 @@ static void astra_host_execute_volumes(Astra68State *s, uint32_t owner,
             command, sizeof(AstraHostVolumeControl));
         if (data == NULL) goto done;
         status = astra_host_volume_control(s, owner, channel, data);
+        if (status == ASTRA_STATUS_OK)
+            stl_be_p(command + HOST_FIELD(result_length), sizeof(AstraVolumeReference));
+        goto done;
+    }
+    if (lduw_be_p(command + HOST_FIELD(operation)) == ASTRA_HOST_VOLUME_MOUNT_AUTH) {
+        if (ldl_be_p(command + HOST_FIELD(data_length)) != sizeof(AstraHostVolumeMountAuth) ||
+            ldl_be_p(command + HOST_FIELD(data_capacity)) < sizeof(AstraVolumeReference)) goto done;
+        uint8_t *data = astra_host_command_data(s, physical, bytes, command_bytes,
+            command, sizeof(AstraHostVolumeMountAuth));
+        if (data == NULL) goto done;
+        status = astra_host_volume_mount_auth(s, owner, channel, data);
         if (status == ASTRA_STATUS_OK)
             stl_be_p(command + HOST_FIELD(result_length), sizeof(AstraVolumeReference));
         goto done;
@@ -6528,6 +6544,75 @@ static uint32_t astra_host_volume_network_source(Astra68State *s, uint32_t owner
     if (output >= 0) close(output);
     qemu_mutex_unlock(&s->host.namespace_lock);
     return astra_host_status_from_errno(error);
+}
+
+static uint32_t astra_host_volume_mount_auth(Astra68State *s, uint32_t owner,
+    AstraHostChannel *channel, uint8_t *data)
+{
+    uint32_t status = ASTRA_STATUS_INVALID;
+    int secret = -1, output = -1;
+#ifndef CONFIG_LINUX
+    (void)s; (void)owner; (void)channel;
+    status = ASTRA_STATUS_UNSUPPORTED;
+#else
+    if (channel == NULL || !channel->provider || channel->bound || owner == 0u ||
+        owner != qatomic_read(&s->host.fs_owner)) {
+        status = ASTRA_STATUS_ACCESS;
+        goto done;
+    }
+    if (ldq_be_p(data) == 0u || ldq_be_p(data + 8u) == 0u ||
+        ldq_be_p(data + 16u) == 0u ||
+        (ldl_be_p(data + 24u) & ~ASTRA_VOLUME_READ_ONLY) != 0u ||
+        ldl_be_p(data + 28u) != 0u || ldl_be_p(data + 800u) == 0u ||
+        ldl_be_p(data + 804u) != 0u ||
+        memchr(data + 544u, '\0', 256u) == NULL)
+        goto done;
+    size_t length = strnlen((char *)data + 544u, 256u) + 1u;
+    secret = memfd_create("astra-smb-mount", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+    if (secret < 0) {
+        status = astra_host_status_from_errno(errno);
+        goto done;
+    }
+    ssize_t written = write(secret, data + 544u, length);
+    if (written != (ssize_t)length) {
+        status = astra_host_status_from_errno(written < 0 ? errno : EIO);
+        goto done;
+    }
+    if (fcntl(secret, F_ADD_SEALS, F_SEAL_WRITE | F_SEAL_GROW |
+              F_SEAL_SHRINK | F_SEAL_SEAL) != 0) {
+        status = astra_host_status_from_errno(errno);
+        goto done;
+    }
+    AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
+        .operation = ASTRA_STORAGE_CONTROL_MOUNT_AUTH,
+        .epoch = ldq_be_p(data), .target = ldq_be_p(data + 8u),
+        .generation = ldq_be_p(data + 16u), .flags = ldl_be_p(data + 24u)};
+    memcpy(request.auth.account, data + 32u, sizeof(request.auth.account));
+    memcpy(request.auth.domain, data + 288u, sizeof(request.auth.domain));
+    astra_secret_wipe(data + 544u, 256u);
+    AstraStorageControlReply reply;
+    qemu_mutex_lock(&s->host.namespace_lock);
+    int error = astra_host_storage_control(s, &request, secret, &reply, &output);
+    qemu_mutex_unlock(&s->host.namespace_lock);
+    if (error != 0) {
+        status = astra_host_status_from_errno(error);
+        goto done;
+    }
+    if (reply.count != 1u || reply.records[0].id != reply.object ||
+        reply.records[0].generation == 0u || reply.epoch != s->host.provider_epoch) {
+        status = ASTRA_STATUS_PROTOCOL;
+        goto done;
+    }
+    stq_be_p(data, reply.epoch);
+    stq_be_p(data + 8u, reply.object);
+    stq_be_p(data + 16u, reply.records[0].generation);
+    status = ASTRA_STATUS_OK;
+#endif
+done:
+    astra_secret_wipe(data + 544u, 256u);
+    if (secret >= 0) close(secret);
+    if (output >= 0) close(output);
+    return status;
 }
 
 static uint32_t astra_host_fs_session_open(Astra68State *s, uint32_t owner,

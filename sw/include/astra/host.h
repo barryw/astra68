@@ -167,6 +167,8 @@ enum {
 #define ASTRA_HOST_VOLUME_PARTITION_STATUS UINT32_C(2)
 /** Register a configured remote source through the claimed provider. */
 #define ASTRA_HOST_VOLUME_NETWORK_SOURCE UINT16_C(7)
+/** One-use authenticated SMB mount through the claimed provider. */
+#define ASTRA_HOST_VOLUME_MOUNT_AUTH UINT16_C(8)
 /** Provider-only lifecycle request. requester is kernel-stamped by HostFS's
  * receive endpoint, never accepted from an application payload. */
 typedef struct AstraHostVolumeControl {
@@ -182,6 +184,12 @@ typedef struct AstraHostVolumeNetworkSource {
     uint32_t reserved;
 } AstraHostVolumeNetworkSource;
 _Static_assert(sizeof(AstraHostVolumeNetworkSource) == 1552u, "host network source ABI");
+typedef struct AstraHostVolumeMountAuth {
+    AstraVolumeMountAuth auth;
+    uint32_t requester;
+    uint32_t reserved;
+} AstraHostVolumeMountAuth;
+_Static_assert(sizeof(AstraHostVolumeMountAuth) == 808u, "host mount auth ABI");
 typedef struct AstraHostVolumeFormat {
     AstraVolumeReference source;
     uint32_t operation;

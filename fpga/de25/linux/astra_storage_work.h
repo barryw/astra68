@@ -43,7 +43,8 @@ typedef struct AstraStorageWorkReply {
  * therefore leaves identifiable resources, reconciled after actual reap. */
 int astra_storage_work_start(AstraStorageWork *work, const AstraStorageDomain *domain,
                               const AstraStorageRecord *record, int source,
-                              const AstraStorageMounted *mounted, uint32_t operation);
+                              const AstraStorageMounted *mounted, uint32_t operation,
+                              int secret, const AstraStorageMountAuth *auth);
 int astra_storage_work_path_start(AstraStorageWork *work, const AstraStorageRecord *record,
                                    int allowed_root, const AstraStoragePathRequest *request,
                                    const int fds[ASTRA_STORAGE_PROVIDER_FDS],

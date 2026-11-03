@@ -42,4 +42,29 @@ static inline int astra_volume_network_source_valid(const AstraVolumeNetworkSour
     return 1;
 }
 
+static inline int astra_volume_auth_field_valid(const char *text,
+    size_t capacity, int required, int reject_controls)
+{
+    size_t length = 0u;
+    while (length < capacity && text[length] != '\0') ++length;
+    if (length == capacity || (required && length == 0u) ||
+        !astra_utf8_validate(text, (uint32_t)length, 0u)) return 0;
+    for (size_t at = 0u; at < capacity; ++at) {
+        unsigned char c = (unsigned char)text[at];
+        if (at >= length) { if (c != 0u) return 0; }
+        else if (reject_controls && (c < 0x20u || c == 0x7fu)) return 0;
+    }
+    return 1;
+}
+
+static inline int astra_volume_mount_auth_valid(const AstraVolumeMountAuth *auth)
+{
+    return auth != NULL && auth->source.epoch != 0u && auth->source.id != 0u &&
+        auth->source.generation != 0u &&
+        (auth->flags & ~ASTRA_VOLUME_READ_ONLY) == 0u && auth->reserved == 0u &&
+        astra_volume_auth_field_valid(auth->account, sizeof(auth->account), 1, 1) &&
+        astra_volume_auth_field_valid(auth->domain, sizeof(auth->domain), 0, 1) &&
+        astra_volume_auth_field_valid(auth->password, sizeof(auth->password), 0, 0);
+}
+
 #endif

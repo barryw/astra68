@@ -24,7 +24,23 @@ Exact in-flight `fsync` timing still needs an instrumented gate. Evidence is on 
 `/mnt/Documents/astra68/network-nfs-lsof-write-sync-20261103/`. All five
 600-second guards passed, production services recovered, and trial state was
 removed.
-SMB3, mapping UI, and production release gates remain open.
+SMB fault/recovery, mapping UI, and production runtime release gates remain open. A
+credentialed SMB candidate passed a Beast provider test: bad password refused;
+good account wrote, synced, and read back the same bytes over SMB3.1.1 with a
+password containing `,` and `=`.
+Native Volume, HostFS, QEMU, and provider handoff builds pass. DE25 booted the
+matching `storage3` kernel; a 600-second private runtime trial mounted the
+authenticated share writable as `/net0`, wrote and read back matching server
+bytes, showed the icon on Desktop and root in Atlas, then unmounted and removed
+the icon. The trial restored selected production runtime. Evidence:
+`/mnt/Documents/astra68/network-smb-auth-de25-20261103/` on Beast. It uses one sealed password descriptor for
+the selected mount worker and keeps public source records secret-free. Haiku's
+read-only `src/add-ons/kernel/file_systems/netfs/client/ShareVolume.cpp`
+informed separation of share authentication from volume publication.
+The native `mount --smb-user` command now prompts through libc's reusable
+terminal secret reader and passes credentials through Volume authority without
+placing the password in argv or environment; MC68040 link and prompt tests
+pass. Saved mapping management remains separate work.
 
 ## AstraZ story workflow
 
@@ -124,8 +140,9 @@ matching modules, distinct release identity, rollback and hardware acceptance.
 Do not add a CIFS module built against a different Image.
 Beast built the distinct `storage3` package with `CONFIG_CIFS=m`, xattrs,
 extended statistics, and legacy SMB dialects disabled. Its complete manifest
-and `cifs.ko` vermagic pass, but DE25 still runs `storage2`; mount and physical
-release gates remain open. Package path:
+and `cifs.ko` vermagic pass; DE25 staged, armed, booted `storage3`, and loaded
+`cifs.ko` during the authenticated mount trial. Kernel rollback and full
+runtime release gates remain open. Package path:
 `/home/barry/astra68/build/de25-kernel-smb3/package`.
 Shared native source validation now admits a single SMB share name and rejects
 nested paths and option delimiters; Beast Volume client and provider admission
@@ -135,7 +152,8 @@ server constrained to SMB3.1.1 passed mount/write/fsync/read/unmount with
 persisted bytes. The NFS provider regression passed with a temporary localhost
 export; it and the Samba container were removed afterward. Evidence is on Beast
 at `/mnt/Documents/astra68/network-smb-guest-provider-20261103/`. Credentialed
-SMB, saved mappings and DE25 runtime qualification remain open.
+SMB mount/write/read and DE25 private runtime qualification now pass; saved
+mappings, network fault gates, and production runtime cutover remain open.
 
 The pinned Jammy AArch64 sysroot currently contains neither `mount.cifs` nor
 `mount.nfs` in `/sbin` or `/usr/sbin`. The local mount owner deliberately

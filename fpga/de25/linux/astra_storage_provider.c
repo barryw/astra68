@@ -730,14 +730,19 @@ failed:
     return error;
 }
 
-int astra_storage_provider_mount(AstraStorageProvider *provider, uint64_t source,
-                                  uint64_t generation, uint32_t flags,
-                                  uint64_t bytes, uint64_t inodes, uint64_t *mount)
+static int mount_start(AstraStorageProvider *provider, uint64_t source,
+                       uint64_t generation, uint32_t flags,
+                       uint64_t bytes, uint64_t inodes, int secret,
+                       const AstraStorageMountAuth *auth, uint64_t *mount)
 {
     const AstraStorageRecord *record = astra_storage_find(&provider->catalog, source);
     AstraStorageResource *backing = resource(provider, source);
     AstraStorageResource *entry;
     int error;
+    if ((secret >= 0) != (auth != NULL) ||
+        (auth != NULL && (record == NULL || record->origin != ASTRA_VOLUME_ORIGIN_NETWORK ||
+                          record->format != ASTRA_VOLUME_SMB || bytes != 0u || inodes != 0u)))
+        return EINVAL;
     if (record == NULL || record->generation != generation)
         return ESTALE;
     if (!worker_room(provider, record))
@@ -792,7 +797,8 @@ int astra_storage_provider_mount(AstraStorageProvider *provider, uint64_t source
         entry->mounted.network = backing->network;
     if (error == 0)
         error = astra_storage_work_start(&entry->work, &provider->domain, record,
-            backing == NULL ? -1 : backing->source, &entry->mounted, ASTRA_STORAGE_WORK_ATTACH);
+            backing == NULL ? -1 : backing->source, &entry->mounted,
+            ASTRA_STORAGE_WORK_ATTACH, secret, auth);
     if (error != 0) {
         int admitted = astra_storage_mount_result(&provider->catalog, *mount, 1u,
             entry->mounted.linux_mount_id, error);
@@ -802,6 +808,35 @@ int astra_storage_provider_mount(AstraStorageProvider *provider, uint64_t source
     }
     ++provider->workers;
     return 0;
+}
+
+int astra_storage_provider_mount(AstraStorageProvider *provider, uint64_t source,
+                                  uint64_t generation, uint32_t flags,
+                                  uint64_t bytes, uint64_t inodes, uint64_t *mount)
+{
+    return mount_start(provider, source, generation, flags, bytes, inodes, -1,
+                       NULL, mount);
+}
+
+int astra_storage_provider_mount_auth(AstraStorageProvider *provider, uint64_t source,
+    uint64_t generation, uint32_t flags, int secret,
+    const AstraStorageMountAuth *auth, uint64_t *mount)
+{
+    struct stat info;
+    int seals;
+    if (secret < 0 || auth == NULL ||
+        !astra_volume_auth_field_valid(auth->account, sizeof(auth->account), 1, 1) ||
+        !astra_volume_auth_field_valid(auth->domain, sizeof(auth->domain), 0, 1) ||
+        fstat(secret, &info) != 0 || !S_ISREG(info.st_mode) ||
+        info.st_size < 1 || info.st_size > 256)
+        return EINVAL;
+    seals = fcntl(secret, F_GET_SEALS);
+    if (seals < 0 ||
+        (seals & (F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK)) !=
+            (F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK))
+        return EINVAL;
+    return mount_start(provider, source, generation, flags, 0u, 0u, secret,
+                       auth, mount);
 }
 
 int astra_storage_provider_root(AstraStorageProvider *provider, uint64_t id,
@@ -926,7 +961,8 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
         else if ((request.epoch != provider->epoch &&
                   !(request.operation == ASTRA_STORAGE_CONTROL_SNAPSHOT && request.epoch == 0u)))
             error = ESTALE;
-        else if (count != (unsigned)(request.operation == ASTRA_STORAGE_CONTROL_IMAGE) ||
+        else if (count != (unsigned)(request.operation == ASTRA_STORAGE_CONTROL_IMAGE ||
+                 request.operation == ASTRA_STORAGE_CONTROL_MOUNT_AUTH) ||
                  request.version != ASTRA_STORAGE_PROVIDER_VERSION ||
                  request.serial == 0u || request.reserved != 0u)
             error = EPROTO;
@@ -942,6 +978,10 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
         else if (request.operation != ASTRA_STORAGE_CONTROL_NETWORK_SOURCE &&
                  memcmp(&request.network, (AstraVolumeNetworkSource[1]){{0}},
                         sizeof(request.network)) != 0)
+            error = EPROTO;
+        else if (request.operation != ASTRA_STORAGE_CONTROL_MOUNT_AUTH &&
+                 memcmp(&request.auth, (AstraStorageMountAuth[1]){{{0}, {0}}},
+                        sizeof(request.auth)) != 0)
             error = EPROTO;
     }
     if (error == 0) {
@@ -981,6 +1021,15 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
                 error = astra_storage_provider_mount(provider, request.target,
                     request.generation, request.flags, request.byte_limit,
                     request.inode_limit, &reply.object);
+            break;
+        case ASTRA_STORAGE_CONTROL_MOUNT_AUTH:
+            if (request.sequence || request.after || request.backing_object ||
+                request.byte_limit || request.inode_limit ||
+                (request.flags & ~ASTRA_VOLUME_READ_ONLY))
+                error = EINVAL;
+            else
+                error = astra_storage_provider_mount_auth(provider, request.target,
+                    request.generation, request.flags, fds[0], &request.auth, &reply.object);
             break;
         case ASTRA_STORAGE_CONTROL_QUIESCE:
         case ASTRA_STORAGE_CONTROL_RESUME:
@@ -1103,6 +1152,7 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
         if (fds[at] >= 0)
             close(fds[at]);
     if (error == 0 && (request.operation == ASTRA_STORAGE_CONTROL_MOUNT ||
+        request.operation == ASTRA_STORAGE_CONTROL_MOUNT_AUTH ||
         request.operation == ASTRA_STORAGE_CONTROL_IMAGE ||
         request.operation == ASTRA_STORAGE_CONTROL_NETWORK_SOURCE)) {
         const AstraStorageRecord *admitted = astra_storage_find(&provider->catalog, reply.object);
@@ -1353,7 +1403,8 @@ int astra_storage_provider_unmount(AstraStorageProvider *provider, uint64_t moun
         entry->mounted.root = -1;
     }
     error = astra_storage_work_start(&entry->work, &provider->domain, record, -1,
-                                      &entry->mounted, ASTRA_STORAGE_WORK_DETACH);
+                                      &entry->mounted, ASTRA_STORAGE_WORK_DETACH,
+                                      -1, NULL);
     if (error != 0) {
         int actual = astra_storage_linux_reconcile(&provider->domain, &entry->mounted);
         (void)astra_storage_unmount_result(&provider->catalog, mount, generation,
@@ -1397,7 +1448,7 @@ int astra_storage_provider_eject(AstraStorageProvider *provider, uint64_t source
     int error = astra_storage_eject_begin(&provider->catalog, source, generation);
     if (error != 0) return error;
     error = astra_storage_work_start(&entry->work, &provider->domain, record,
-        entry->source, &entry->mounted, ASTRA_STORAGE_WORK_EJECT);
+        entry->source, &entry->mounted, ASTRA_STORAGE_WORK_EJECT, -1, NULL);
     if (error != 0) {
         (void)astra_storage_eject_result(&provider->catalog, source, generation, error);
         return error;
