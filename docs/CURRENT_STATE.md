@@ -28,7 +28,18 @@ Both calls now honor the Config Kit contract; a focused DE25 trial launched
 Settings, loaded the saved Manual `192.0.2.10/24` profile, and completed
 Apply/Keep against the existing profile without disturbing `eth0`. The
 superseded candidate stayed isolated and restored production after each trial.
-Corrected exact release publication and production deployment remain open.
+Production release `6f39fa46ee6ccd379f19ddd7db9159e790e2ba4abb46550b19022c70679aace4`
+from main `7a5a05a359024eaa0d7aed1b8b1aff55a01d1587` is now selected on
+DE25. Its pristine private image reached stage 8 for 180 seconds, reopened
+the saved Manual profile, and passed Apply/Keep on isolated `astra-test0`.
+Production reboot reached stage 8, Settings and Atlas opened, and Astra,
+audio, and remote desktop services remained active with no panic. The test
+NetworkManager profile and veth pair were removed; disposable trial state was
+archived to `/mnt/Documents/astra68/ethernet-config-20261103/` on Beast and
+removed from board. Board has 8.0 GiB free. Physical `eth0` configuration was
+not changed because it carries the remote control path. Crash recovery across
+the brief Config Kit write to NetworkManager checkpoint-confirm boundary still
+needs a durable reconciliation rule.
 
 Ethernet configuration work, 2026-11-03: native Network Kit ABI 1.3 now owns
 IPv4/IPv6 text parsing, replacing the POSIX copy, and validates a typed

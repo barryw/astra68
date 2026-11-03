@@ -82,6 +82,21 @@ configuration surfaces. NetworkManager's documented
 and [in-memory profile API](https://www.networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.Settings.html)
 provide host rollback and persistence.
 
+DE25 Ethernet configuration gate, 2026-11-03: release
+`6f39fa46ee6ccd379f19ddd7db9159e790e2ba4abb46550b19022c70679aace4`
+from main `7a5a05a359024eaa0d7aed1b8b1aff55a01d1587` passed a pristine
+private boot and production activation. Settings listed `eth0` and isolated
+`astra-test0`, loaded a saved Manual `192.0.2.10/24` profile, and completed
+Apply/Keep. Earlier private trials also passed Revert and automatic checkpoint
+timeout. The production desktop reopened Settings and Atlas after deployment;
+all three Astra services remained active with no panic. Test veths and host
+profile were removed, with 8.0 GiB board space free. Evidence is archived at
+`/mnt/Documents/astra68/ethernet-config-20261103/` on Beast. Physical `eth0`
+was not reconfigured because it carries remote board access.
+The Config Kit write and host checkpoint confirmation are separate durable
+steps; a crash between them can leave the saved desired profile ahead of the
+restored host connection. Reconciliation after such a crash remains open.
+
 `ntpd` opens `config.library` and asks for its `pool` and `server` settings; it
 does not know a configuration path, file format, or storage API. The supervisor
 scopes its `CONFIG:r` capability to the service's private configuration root,
