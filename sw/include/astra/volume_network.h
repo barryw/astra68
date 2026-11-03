@@ -7,7 +7,8 @@
 
 static inline int astra_volume_network_source_valid(const AstraVolumeNetworkSource *source)
 {
-    if (source == NULL || source->format != ASTRA_VOLUME_NFS || source->reserved != 0u)
+    if (source == NULL || (source->format != ASTRA_VOLUME_NFS &&
+        source->format != ASTRA_VOLUME_SMB) || source->reserved != 0u)
         return 0;
     size_t server = 0u, share = 0u, label = 0u;
     while (server < sizeof(source->server) && source->server[server] != 0) ++server;
@@ -16,6 +17,7 @@ static inline int astra_volume_network_source_valid(const AstraVolumeNetworkSour
     if (server == 0u || server == sizeof(source->server) ||
         share == 0u || share == sizeof(source->share) ||
         label == sizeof(source->label) || source->share[0] != '/' ||
+        (source->format == ASTRA_VOLUME_SMB && share < 2u) ||
         !astra_utf8_validate(source->share, (uint32_t)share, 0u) ||
         !astra_utf8_validate(source->label, (uint32_t)label, 0u)) return 0;
     for (size_t at = 0u; at < sizeof(source->server); ++at) {
@@ -27,7 +29,10 @@ static inline int astra_volume_network_source_valid(const AstraVolumeNetworkSour
     for (size_t at = 0u; at < sizeof(source->share); ++at) {
         unsigned char c = (unsigned char)source->share[at];
         if (at >= share) { if (c != 0u) return 0; }
-        else if (c < 0x20u || c == 0x7fu || c == ':') return 0;
+        else if (c < 0x20u || c == 0x7fu || c == ':' ||
+                 (source->format == ASTRA_VOLUME_SMB &&
+                  (c == '\\' || c == ',' || c == '=' ||
+                   (at != 0u && c == '/')))) return 0;
     }
     for (size_t at = 0u; at < sizeof(source->label); ++at) {
         unsigned char c = (unsigned char)source->label[at];

@@ -10,7 +10,10 @@ dialects, Kerberos/DFS upcalls and CIFS debug are disabled. The package includes
 `cifs.ko` with exact release vermagic; its manifest SHA256 checks pass at
 `/home/barry/astra68/build/de25-kernel-smb3/package` on Beast. It has not
 been installed or booted on DE25. Selected `storage2` kernel and production
-image remain unchanged. SMB credential admission, mount policy, service/UI,
+image remain unchanged. Shared native source validation now admits only one
+SMB share name after `/` and rejects option delimiters and nested paths. Beast
+Volume client and provider admission tests pass. Provider attachment still
+returns `ENOTSUP` for SMB; credential admission, mount policy, service/UI,
 and physical gates remain open.
 
 Network filesystem work, 2026-11-03: branch `network-volumes` adds native

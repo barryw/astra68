@@ -398,6 +398,19 @@ int main(void)
     network.share[0] = 'x';
     assert(astra_volume_network_source(77u, &network, &admitted) ==
         ASTRA_ERROR_INVALID_ARGUMENT && admitted.id == 0u);
+    network.format = ASTRA_VOLUME_SMB;
+    strcpy(network.share, "/Public Files");
+    assert(astra_volume_network_source(77u, &network, &admitted) == ASTRA_OK &&
+        admitted.id == 8u);
+    strcpy(network.share, "/Public/Files");
+    assert(astra_volume_network_source(77u, &network, &admitted) ==
+        ASTRA_ERROR_INVALID_ARGUMENT && admitted.id == 0u);
+    strcpy(network.share, "/Public,vers=1.0");
+    assert(astra_volume_network_source(77u, &network, &admitted) ==
+        ASTRA_ERROR_INVALID_ARGUMENT && admitted.id == 0u);
+    strcpy(network.share, "/");
+    assert(astra_volume_network_source(77u, &network, &admitted) ==
+        ASTRA_ERROR_INVALID_ARGUMENT && admitted.id == 0u);
     const AstraVolumeReference format_source = {25u, 5u, 1u};
     AstraResult format_outcome = ASTRA_OK;
     assert(astra_volume_format(77u, &format_source, ASTRA_VOLUME_FAT32, "TEST") == ASTRA_OK);

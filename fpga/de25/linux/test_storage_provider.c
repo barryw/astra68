@@ -1085,11 +1085,20 @@ int main(int argc, char **argv)
         network_source, network_record->generation + 1u) == ESTALE);
     assert(astra_storage_provider_release_network_source(&provider,
         network_source, network_record->generation) == 0);
+    assert(astra_storage_provider_release(&provider, network_source) == 0);
     network.share[0] = 'x';
     assert(astra_storage_provider_network_source(&provider, &network,
         &network_source) == EINVAL);
     network.share[0] = '/';
     network.format = ASTRA_VOLUME_SMB;
+    assert(astra_storage_provider_network_source(&provider, &network,
+        &network_source) == 0);
+    network_record = astra_storage_find(&provider.catalog, network_source);
+    assert(network_record != NULL && network_record->format == ASTRA_VOLUME_SMB);
+    assert(astra_storage_provider_release_network_source(&provider,
+        network_source, network_record->generation) == 0);
+    assert(astra_storage_provider_release(&provider, network_source) == 0);
+    strcpy(network.share, "/nested/share");
     assert(astra_storage_provider_network_source(&provider, &network,
         &network_source) == EINVAL);
     processed_inventory(&provider);

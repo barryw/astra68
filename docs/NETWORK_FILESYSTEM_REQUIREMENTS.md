@@ -127,6 +127,10 @@ extended statistics, and legacy SMB dialects disabled. Its complete manifest
 and `cifs.ko` vermagic pass, but DE25 still runs `storage2`; mount and physical
 release gates remain open. Package path:
 `/home/barry/astra68/build/de25-kernel-smb3/package`.
+Shared native source validation now admits a single SMB share name and rejects
+nested paths and option delimiters; Beast Volume client and provider admission
+tests pass. SMB attachment remains disabled until credential and mount policy
+are implemented.
 
 The pinned Jammy AArch64 sysroot currently contains neither `mount.cifs` nor
 `mount.nfs` in `/sbin` or `/usr/sbin`. The local mount owner deliberately
