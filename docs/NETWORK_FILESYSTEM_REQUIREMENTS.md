@@ -122,6 +122,11 @@ The built DE25 package `build/de25-kernel-storage/kernel-2/.config` currently ha
 `# CONFIG_CIFS is not set`. SMB therefore needs a new full kernel Image and
 matching modules, distinct release identity, rollback and hardware acceptance.
 Do not add a CIFS module built against a different Image.
+Beast built the distinct `storage3` package with `CONFIG_CIFS=m`, xattrs,
+extended statistics, and legacy SMB dialects disabled. Its complete manifest
+and `cifs.ko` vermagic pass, but DE25 still runs `storage2`; mount and physical
+release gates remain open. Package path:
+`/home/barry/astra68/build/de25-kernel-smb3/package`.
 
 The pinned Jammy AArch64 sysroot currently contains neither `mount.cifs` nor
 `mount.nfs` in `/sbin` or `/usr/sbin`. The local mount owner deliberately

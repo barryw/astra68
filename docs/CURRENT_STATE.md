@@ -2,6 +2,17 @@
 
 Status: active continuation map, 2026-11-03
 
+SMB3 kernel prerequisite, 2026-11-03: Beast built a complete, distinct
+`6.12.11-astra-storage3-gd7d192a9ddd9` Image and matching module set from
+the pinned clean Linux source `d7d192a9ddd955fe206aa350afed8f82e368a74c`.
+`CONFIG_CIFS=m`, extended statistics and xattrs are enabled; insecure legacy
+dialects, Kerberos/DFS upcalls and CIFS debug are disabled. The package includes
+`cifs.ko` with exact release vermagic; its manifest SHA256 checks pass at
+`/home/barry/astra68/build/de25-kernel-smb3/package` on Beast. It has not
+been installed or booted on DE25. Selected `storage2` kernel and production
+image remain unchanged. SMB credential admission, mount policy, service/UI,
+and physical gates remain open.
+
 Network filesystem work, 2026-11-03: branch `network-volumes` adds native
 network source class/origin, `/netN` catalog names, typed NFS source admission,
 provider mount worker and source retirement. Native control uses a bounded

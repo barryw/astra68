@@ -10,7 +10,7 @@ KERNEL_OUTPUT=${KERNEL_OUTPUT:-$ROOT/build/de25-kernel-storage/kernel}
 PACKAGE=${PACKAGE:-$ROOT/build/de25-kernel-storage/package}
 JOBS=${JOBS:-$(nproc)}
 SOURCE_COMMIT=d7d192a9ddd955fe206aa350afed8f82e368a74c
-RELEASE=6.12.11-astra-storage2-gd7d192a9ddd9
+RELEASE=6.12.11-astra-storage3-gd7d192a9ddd9
 BASELINE=$HERE/de25-6.12.11-gd7d192a9ddd9.config
 
 die() { echo "build-production-storage: $*" >&2; exit 1; }
@@ -76,6 +76,7 @@ while IFS= read -r -d '' module; do
 done < <(find "$module_dir" -type f -name '*.ko' -print0)
 test -f "$module_dir/kernel/drivers/scsi/sr_mod.ko" || die "sr_mod missing"
 test -f "$module_dir/kernel/drivers/cdrom/cdrom.ko" || die "cdrom missing"
+test -f "$module_dir/kernel/fs/smb/client/cifs.ko" || die "SMB3 client missing"
 for filesystem in isofs/isofs udf/udf exfat/exfat ntfs3/ntfs3; do
     test -f "$module_dir/kernel/fs/$filesystem.ko" ||
         die "filesystem module missing: $filesystem"
