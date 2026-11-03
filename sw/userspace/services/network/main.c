@@ -637,8 +637,9 @@ static AstraNetworkStatus dispatch_ethernet(
                 ASTRA_CONFIG_OK) return ASTRA_NETWORK_IO;
         for (uint32_t at = 0u; at < count; ++at) {
             AstraNetworkEthernetIPv4 saved;
+            uint32_t text_length = 0u;
             if (astra_config_get_string(&ethernet_config, "profile", at,
-                    text, sizeof(text), NULL) != ASTRA_CONFIG_OK ||
+                    text, sizeof(text), &text_length) != ASTRA_CONFIG_OK ||
                 !astra_network_ethernet_profile_decode(text, &saved))
                 return ASTRA_NETWORK_IO;
             if (strcmp(saved.name, query.name) == 0) {
@@ -687,7 +688,7 @@ static AstraNetworkStatus dispatch_ethernet(
     if (command.operation == ASTRA_NETWORK_HOST_ETHERNET_CONFIRM) {
         char next[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX];
         char previous[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX] = {0};
-        uint32_t count = 0u, index = 0u;
+        uint32_t count = 0u, index = 0u, previous_length = 0u;
         int existing = 0;
         if (!astra_network_ethernet_profile_encode(&ethernet_pending, next) ||
             astra_config_count(&ethernet_config, "profile", &count) !=
@@ -695,7 +696,7 @@ static AstraNetworkStatus dispatch_ethernet(
         for (index = 0u; index < count; ++index) {
             AstraNetworkEthernetIPv4 saved;
             if (astra_config_get_string(&ethernet_config, "profile", index,
-                    previous, sizeof(previous), NULL) != ASTRA_CONFIG_OK ||
+                    previous, sizeof(previous), &previous_length) != ASTRA_CONFIG_OK ||
                 !astra_network_ethernet_profile_decode(previous, &saved))
                 return ASTRA_NETWORK_IO;
             if (strcmp(saved.name, ethernet_pending.name) == 0) {

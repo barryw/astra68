@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-11-02
+Status: active continuation map, 2026-11-03
 
 Ethernet configuration candidate, 2026-11-03: Network Kit ABI 1.4 adds
 `NETWORK_ADMIN`, device enumeration, and typed DHCP/manual IPv4 profile calls.
@@ -22,8 +22,13 @@ The corrected DE25 private trial selected `astra-test0`, entered
 `192.0.2.10/24`, showed Apply/Keep/Revert, reverted cleanly, then kept a
 second staged profile in the trial Config Kit and NetworkManager. `eth0`
 remained `192.168.1.52`; the 300-second gate reached stage 8 without panic and
-restored production. Exact release publication and production deployment remain
-open.
+restored production. Exact release trial exposed a saved-profile startup error:
+network service passed a null output-length pointer to two Config Kit reads.
+Both calls now honor the Config Kit contract; a focused DE25 trial launched
+Settings, loaded the saved Manual `192.0.2.10/24` profile, and completed
+Apply/Keep against the existing profile without disturbing `eth0`. The
+superseded candidate stayed isolated and restored production after each trial.
+Corrected exact release publication and production deployment remain open.
 
 Ethernet configuration work, 2026-11-03: native Network Kit ABI 1.3 now owns
 IPv4/IPv6 text parsing, replacing the POSIX copy, and validates a typed

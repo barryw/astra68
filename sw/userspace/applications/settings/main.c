@@ -426,8 +426,10 @@ static AstraResult ethernet_load_editor(void)
         network_admin_ready == 0u) return ASTRA_OK;
     status = astra_network_ethernet_saved(&network_admin,
         ethernet_names[ethernet_selected - 1u], &saved);
-    if (status != ASTRA_NETWORK_OK && status != ASTRA_NETWORK_NAME_NOT_FOUND)
+    if (status != ASTRA_NETWORK_OK && status != ASTRA_NETWORK_NAME_NOT_FOUND) {
+        (void)astra_log_failure("Settings saved Ethernet query", status);
         return ASTRA_ERROR_IO;
+    }
     ethernet_method = status == ASTRA_NETWORK_OK ? saved.method :
         ASTRA_NETWORK_ETHERNET_IPV4_DHCP;
     if (status != ASTRA_NETWORK_OK || ethernet_method ==

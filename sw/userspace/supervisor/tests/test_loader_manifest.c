@@ -89,12 +89,15 @@ static void valid_manifest(void)
         assert(supervisor_manifest_parse(network, sizeof(network) - 1u,
                                          &manifest));
         assert(manifest.count == 1u);
-        assert(manifest.entries[0].serves_count == 2u);
+        assert(manifest.entries[0].serves_count == 3u);
         assert(strcmp(manifest.entries[0].serves[0].name, "NETWORK") == 0);
         assert(manifest.entries[0].serves[0].rights == 0u);
         assert(strcmp(manifest.entries[0].serves[1].name,
                       "NETWORK_LISTEN") == 0);
         assert(manifest.entries[0].serves[1].rights == 0u);
+        assert(strcmp(manifest.entries[0].serves[2].name,
+                      "NETWORK_ADMIN") == 0);
+        assert(manifest.entries[0].serves[2].rights == 0u);
     }
     supervisor_manifest_destroy(&manifest);
 }
