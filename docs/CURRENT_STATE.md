@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-11-02
 
+Config Kit concurrent-write production release, 2026-11-02: DE25 selects
+`bf239e2610bff08d9a5cfc15802e5f87cdc5c60eede4baad0d3cf90f893709b0`.
+Each owner document write now takes a native VFS exclusive lock on a stable
+lock file, reloads latest contents, commits through the existing synced
+temporary file and atomic rename, and closes the lock. HostFS uses nonblocking
+advisory locks released on close or process death; Config Kit bounds contention
+at five seconds. Concurrent set and append host test, full VFS and Config Kit
+tests, NDK distribution check, host QEMU build, and disposable two-boot Beast
+Config Kit gate pass. Two 90-second DE25 private trials passed stage 8; the
+second proved sealed write/roundtrip, public settings, and unprivileged denial.
+Archived board console/syslog hashes match Beast copies at
+`/mnt/Documents/astra68/configkit-write-lock-20261103/`. Production cutover
+preserved the system image and confirmed kernel identity; Astra, audio, and
+remote desktop services are active, no panic log, with 8.1 GiB free.
+Per-call writes are serialized; multi-call read-modify-write is not one
+transaction. Haiku read-only reference: `src/system/kernel/fs/vfs.cpp` for
+descriptor-owned advisory lock lifetime.
+
 Config Kit 2.0 production release, 2026-11-02: DE25 now selects
 `b0ee6323b989b40818c281b8e0a68278c5d361f24433881130184712da44d50b`.
 Supervisor refuses launches when a requested Config Kit provider is absent;
@@ -17,8 +35,8 @@ identities, and restarted runtime, audio, and remote desktop. Production
 reached stage 8; Settings launched through Atlas and wrote its private pane
 setting through Config Kit (`2` to `1` and back to `2`). Host Config state is
 root-owned mode 0700 and its secret key mode 0600; board has 8.1 GiB free.
-Concurrent writes from multiple instances of one application to the same
-settings document remain unsupported; see `docs/SETTINGS.md`.
+That release still lacked concurrent writer serialization; see the newer
+checkpoint above and `docs/SETTINGS.md`.
 
 Config Kit 2.0 pre-release checkpoint, 2026-11-02: the root storage provider
 migrates the former system-image `/config` tree into root-owned host state;
