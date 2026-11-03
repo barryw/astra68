@@ -15,7 +15,7 @@
 /** Network Kit ELF ABI major version. */
 #define ASTRA_NETWORK_LIBRARY_ABI_MAJOR 1u
 /** Network Kit backward-compatible ABI revision. */
-#define ASTRA_NETWORK_LIBRARY_ABI_MINOR 3u
+#define ASTRA_NETWORK_LIBRARY_ABI_MINOR 4u
 
 /** Open network-service session. */
 typedef struct AstraNetworkSession {
@@ -154,6 +154,8 @@ AstraNetworkStatus astra_network_reverse_try(AstraNetworkRequest *request, char 
 AstraNetworkStatus astra_network_reverse_wait(AstraNetworkRequest *request, char *name, uint32_t capacity, uint32_t *required, uint64_t deadline);
 /** Enumerate current host-backed interface addresses. Pass capacity zero to query count. @param session Session. @param addresses Destination records. @param capacity Record capacity. @param count Receives total record count. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_interfaces(AstraNetworkSession *session, AstraNetworkInterfaceAddress *addresses, uint32_t capacity, uint32_t *count);
+/** Enumerate host network devices, including disconnected devices. @param session Session. @param devices Destination records. @param capacity Record capacity. @param count Receives total record count. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_devices(AstraNetworkSession *session, AstraNetworkInterfaceInfo *devices, uint32_t capacity, uint32_t *count);
 /** Format an IPv4 or IPv6 address into caller storage. IPv6 uses eight full hexadecimal groups. @param address Valid network address. @param text Destination. @param capacity Destination bytes including NUL. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_address_format(const AstraNetworkAddress *address, char *text, uint32_t capacity);
 /** Parse IPv4 or IPv6 text into a native address. Failed parse leaves destination unchanged. @param family ASTRA_NETWORK_FAMILY_IPV4 or ASTRA_NETWORK_FAMILY_IPV6. @param text Address text. @param address Receives address with zero port and scope. @return ASTRA_NETWORK_* status. */
@@ -165,6 +167,16 @@ AstraNetworkStatus astra_network_address_parse(uint16_t family, const char *text
  * @return ASTRA_NETWORK_OK or ASTRA_NETWORK_INVALID.
  */
 AstraNetworkStatus astra_network_ethernet_ipv4_validate(const AstraNetworkEthernetIPv4 *configuration);
+/** Check that a named physical Ethernet interface is managed. Requires NETWORK_ADMIN. @param session Admin session. @param configuration Valid profile identifying interface. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_ethernet_probe(AstraNetworkSession *session, const AstraNetworkEthernetIPv4 *configuration);
+/** Stage configuration with timed automatic rollback, 30-300 seconds. Requires NETWORK_ADMIN. @param session Admin session. @param configuration Candidate profile. @param rollback_seconds Automatic rollback timeout. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_ethernet_stage(AstraNetworkSession *session, const AstraNetworkEthernetIPv4 *configuration, uint32_t rollback_seconds);
+/** Persist staged configuration and stop rollback. Requires same admin session. @param session Owning admin session. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_ethernet_confirm(AstraNetworkSession *session);
+/** Restore previous configuration. Requires same admin session. @param session Owning admin session. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_ethernet_revert(AstraNetworkSession *session);
+/** Read saved IPv4 profile for an interface; returns NAME_NOT_FOUND if absent. Requires NETWORK_ADMIN. @param session Admin session. @param name Interface name. @param configuration Receives confirmed profile. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_ethernet_saved(AstraNetworkSession *session, const char *name, AstraNetworkEthernetIPv4 *configuration);
 /** Cancel resolution. @param request Request. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_request_cancel(AstraNetworkRequest *request);
 /** Borrow readiness handle. @param endpoint Endpoint. @return Wait handle. */

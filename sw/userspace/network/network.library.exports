@@ -46,3 +46,13 @@ ASTRA_NETWORK_1.3 {
         astra_network_address_parse;
         astra_network_ethernet_ipv4_validate;
 } ASTRA_NETWORK_1.2;
+
+ASTRA_NETWORK_1.4 {
+    global:
+        astra_network_ethernet_probe;
+        astra_network_ethernet_stage;
+        astra_network_ethernet_confirm;
+        astra_network_ethernet_revert;
+        astra_network_ethernet_saved;
+        astra_network_devices;
+} ASTRA_NETWORK_1.3;

@@ -99,7 +99,7 @@ assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
     "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG",
     "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
     "trusted /apps/Inspector.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ RAM_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
-    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw LIBS:r",
+    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw NETWORK NETWORK_ADMIN LIBS:r",
     "trusted /apps/AstraZ.app grants GUI PCM VOLUMES VOLUME_READ DH0:r HOME:rw STORE:rw WORK:r LIBS:r"]
 assert "CRED_READ" not in astra_image.DISPLAY_STARTUP_MANIFEST
 assert "CRED_WRITE" not in astra_image.DISPLAY_STARTUP_MANIFEST

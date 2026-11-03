@@ -35,11 +35,12 @@ receive `NETWORK` only. Apps never receive the device lease or IRQ.
 listen/accept, send/receive, shutdown, socket options, local/peer addresses,
 readiness events, asynchronous DNS, cancellation, and capability-only state
 export/import for atomic exec. `Network.kit` is the NDK-distributed bundle.
-ABI 1.3 adds native IPv4/IPv6 parsing and a bounded Ethernet IPv4 profile
-validator. The POSIX `inet_pton` adapter calls the native parser, so Settings
-and Unix ports share one address grammar. The profile names an interface and
-selects DHCP or manual address/prefix/gateway with up to three explicit DNS
-servers; it is a typed input contract, not a host configuration operation yet.
+ABI 1.4 adds native IPv4/IPv6 parsing, interface enumeration, and a bounded
+Ethernet IPv4 profile. The POSIX `inet_pton` adapter calls the native parser,
+so Settings and Unix ports share one address grammar. The profile names an
+interface and selects DHCP or manual address/prefix/gateway with up to three
+explicit DNS servers. Ethernet admin calls require a separate `NETWORK_ADMIN`
+capability; socket clients cannot apply host settings.
 
 The POSIX library maps the same owner implementation to:
 
@@ -57,32 +58,29 @@ transition.
 
 ## Configuration and clock synchronization
 
-Settings now has a Network > Ethernet page built from the shared Settings
-Sidebar, List, Label, and Button controls. Network Kit enumerates live host
-interface addresses; Settings shows each non-loopback interface and its IPv4
-and IPv6 addresses, and refreshes on demand or window activation. Network Kit
-also exports `astra_network_address_format` so other native clients can render
-these addresses without their own byte-formatting code. This page is currently
-status only. DHCP/manual address, gateway, DNS, and link details need the typed
-privileged host control and timed NetworkManager rollback described in
-`docs/NETWORK_FILESYSTEM_REQUIREMENTS.md`; Settings must not modify host
-profiles directly. Haiku's read-only `src/preferences/network/InterfaceView.cpp`
-and `InterfaceAddressView.cpp` informed the separate live-status and editable
-configuration surfaces.
+Settings has a Network > Ethernet page built from shared Sidebar, List, Label,
+Segmented, Form Row, Field, and Button controls. Network Kit enumerates
+non-loopback devices including those without an address, then reports assigned
+IPv4/IPv6 addresses. Users select DHCP or manual IPv4, enter address/prefix,
+optional gateway, and up to three DNS servers, then Apply. Settings shows a
+120-second Keep/Revert countdown; closing the session reverts an unconfirmed
+change. The network service stores confirmed profiles in its scoped system
+Config Kit document, and native Network Kit hides that storage format from
+clients. Link enable/disable and IPv6 editing are separate future work.
 
-The next control boundary is a dedicated versioned host network channel from
-the QEMU peer to a privileged Linux provider. Native Network Kit will admit
-configuration calls only from a separate `NETWORK_ADMIN` service grant.
-The provider will query NetworkManager through D-Bus, create a timed
-checkpoint before activation, stage a new in-memory profile, and either
-persist it after confirmation or let NetworkManager roll it back. An
-unconfirmed change must not alter Config Kit's last known good profile.
-The system Config Kit document remains the desired-state owner; the Linux
-profile is derived boot state. The UI must show the rollback countdown and
-allow explicit Keep or Revert. Ordinary `NETWORK` clients retain status and
-socket access only. This design follows NetworkManager 1.36's
-[checkpoint API](https://www.networkmanager.dev/docs/api/1.36/gdbus-org.freedesktop.NetworkManager.html)
-and [in-memory profile API](https://www.networkmanager.dev/docs/api/1.36.0/gdbus-org.freedesktop.NetworkManager.Settings.Connection.html).
+Network service owns the guest admin session; QEMU forwards typed commands on
+a versioned private socket to a root NetworkManager helper. The helper accepts
+only the expected QEMU process credentials, checks the device type, creates a
+timed NetworkManager checkpoint, stages an in-memory connection, waits for
+activation, and persists it only after Keep. Revert, session death, or timeout
+uses the checkpoint to restore the previous connection. Unconfirmed changes
+do not alter Config Kit. Ordinary `NETWORK` clients retain status and socket
+access only. Haiku's read-only `src/preferences/network/InterfaceView.cpp`
+and `InterfaceAddressView.cpp` informed the separate live-status and editable
+configuration surfaces. NetworkManager's documented
+[checkpoint API](https://networkmanager.pages.freedesktop.org/NetworkManager/NetworkManager/gdbus-org.freedesktop.NetworkManager.html)
+and [in-memory profile API](https://www.networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.Settings.html)
+provide host rollback and persistence.
 
 `ntpd` opens `config.library` and asks for its `pool` and `server` settings; it
 does not know a configuration path, file format, or storage API. The supervisor

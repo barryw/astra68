@@ -7,6 +7,14 @@
 
 int astra_network_address_valid(const AstraNetworkAddress *address,
                                 int allow_unspecified);
+AstraNetworkStatus astra_network_ethernet_ipv4_validate(
+    const AstraNetworkEthernetIPv4 *configuration);
+#define ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX 112u
+int astra_network_ethernet_profile_encode(
+    const AstraNetworkEthernetIPv4 *profile,
+    char text[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX]);
+int astra_network_ethernet_profile_decode(
+    const char *text, AstraNetworkEthernetIPv4 *profile);
 AstraNetworkStatus astra_network_status_from_syscall(uint32_t status);
 int astra_network_shared_initialize(void *memory, uint32_t byte_size,
                                     uint32_t generation);

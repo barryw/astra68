@@ -39,6 +39,8 @@
 #define ASTRA_CAPABILITY_NETWORK        "NETWORK"
 /** Capability name granting a network session that may bind and listen. */
 #define ASTRA_CAPABILITY_NETWORK_LISTEN "NETWORK_LISTEN"
+/** Capability for Ethernet configuration; never granted to socket clients. */
+#define ASTRA_CAPABILITY_NETWORK_ADMIN  "NETWORK_ADMIN"
 
 /** Message-port protocol identifier (the ASCII characters "NETW") for the network service. */
 #define ASTRA_NETWORK_PROTOCOL UINT32_C(0x4e455457) /* NETW */
@@ -270,6 +272,24 @@ typedef struct AstraNetworkInterfaceAddress {
     char name[ASTRA_NETWORK_INTERFACE_NAME_SIZE];
 } AstraNetworkInterfaceAddress;
 
+/** One host network device, including devices without an assigned IP address. */
+typedef struct AstraNetworkInterfaceInfo {
+    /** NUL-terminated host interface name. */
+    char name[ASTRA_NETWORK_INTERFACE_NAME_SIZE];
+    /** `ASTRA_NETWORK_INTERFACE_*` link flags. */
+    uint32_t flags;
+    /** Reserved; zero. */
+    uint32_t reserved;
+} AstraNetworkInterfaceInfo;
+/** Interface is administratively up. */
+#define ASTRA_NETWORK_INTERFACE_UP      (1u << 0)
+/** Interface carrier is active. */
+#define ASTRA_NETWORK_INTERFACE_RUNNING (1u << 1)
+/** @cond ASTRA_INTERNAL */
+_Static_assert(sizeof(AstraNetworkInterfaceInfo) == 24u,
+               "network interface info ABI changed");
+/** @endcond */
+
 /** @cond ASTRA_INTERNAL */
 _Static_assert(sizeof(AstraNetworkInterfaceAddress) ==
                    ASTRA_NETWORK_INTERFACE_ADDRESS_SIZE,
@@ -354,7 +374,17 @@ enum {
      * ::AstraNetworkInterfaceAddress at `data_offset`, returning their
      * count in `result_value`.
      */
-    ASTRA_NETWORK_HOST_INTERFACES = 18u
+    ASTRA_NETWORK_HOST_INTERFACES = 18u,
+    /** Check that an Ethernet interface is managed by the host. */
+    ASTRA_NETWORK_HOST_ETHERNET_PROBE = 19u,
+    /** Stage an Ethernet profile with a timed host rollback checkpoint. */
+    ASTRA_NETWORK_HOST_ETHERNET_STAGE = 20u,
+    /** Persist the staged profile and dismiss its checkpoint. */
+    ASTRA_NETWORK_HOST_ETHERNET_CONFIRM = 21u,
+    /** Roll back the staged profile. */
+    ASTRA_NETWORK_HOST_ETHERNET_REVERT = 22u,
+    /** List host interfaces including those without an IP address. */
+    ASTRA_NETWORK_HOST_DEVICE_LIST = 23u
 };
 
 /** Wire-format version of ::AstraNetworkHostCommand. */
@@ -568,7 +598,19 @@ enum {
     /** Begin or poll a reverse name lookup of the address in `address`; a session-level operation, staged like `ASTRA_NETWORK_RESOLVE`. */
     ASTRA_NETWORK_REVERSE_RESOLVE = 19u,
     /** List the host's network interfaces into a shared receive slot; a session-level operation. */
-    ASTRA_NETWORK_INTERFACES = 20u
+    ASTRA_NETWORK_INTERFACES = 20u,
+    /** Check whether a named Ethernet device supports configuration. */
+    ASTRA_NETWORK_ETHERNET_PROBE = 21u,
+    /** Stage a bounded Ethernet configuration change. */
+    ASTRA_NETWORK_ETHERNET_STAGE = 22u,
+    /** Persist a staged Ethernet configuration. */
+    ASTRA_NETWORK_ETHERNET_CONFIRM = 23u,
+    /** Restore the Ethernet configuration from before staging. */
+    ASTRA_NETWORK_ETHERNET_REVERT = 24u,
+    /** Read the confirmed Config Kit profile for an interface. */
+    ASTRA_NETWORK_ETHERNET_SAVED = 25u,
+    /** Enumerate host interfaces, including unaddressed devices. */
+    ASTRA_NETWORK_DEVICES = 26u
 };
 
 /** Byte size of one shared transfer slot: the complete 16-bit IP packet length. */

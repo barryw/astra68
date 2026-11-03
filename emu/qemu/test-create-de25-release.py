@@ -27,7 +27,9 @@ for required in (
     "bin/astra-audio-host=",
     "bin/astra-font-worker=",
     "bin/astra-codec-worker=",
+    "bin/astra-network-manager=",
     "font-worker-target",
+    "network-manager-target",
     "bin/fs-baseline.py=",
     "systemd/astra-remote-desktop.service=",
     "systemd/astra-audio-host.service=",
@@ -137,6 +139,8 @@ elif "font-worker-target" in args:
     products = [out / "astra-font-worker-aarch64"]
 elif "codec-worker-target" in args:
     products = [out / "astra-codec-worker-aarch64"]
+elif "network-manager-target" in args:
+    products = [out / "astra-network-manager-aarch64"]
 elif "remote-desktop" in args:
     products = [out / "astra-remote-desktop"]
 else:
@@ -154,7 +158,9 @@ for product in products:
         libraries.mkdir(parents=True)
         for name in ("libpixman-1.so.0", "libpcre.so.3", "libglib-2.0.so.0",
                      "libblkid.so.1", "libmount.so.1", "libudev.so.1",
-                     "libselinux.so.1", "libpcre2-8.so.0"):
+                     "libselinux.so.1", "libpcre2-8.so.0",
+                     "libgio-2.0.so.0", "libgobject-2.0.so.0",
+                     "libffi.so.8"):
             (libraries / name).write_text("fixture " + name)
         font_libraries = sysroot / "lib/aarch64-linux-gnu"
         font_libraries.mkdir(parents=True)
@@ -208,6 +214,8 @@ for product in products:
                 b"fresh astra-font-worker-aarch64\n"
             assert (output / "bin/astra-codec-worker").read_bytes() == \
                 b"fresh astra-codec-worker-aarch64\n"
+            assert (output / "bin/astra-network-manager").read_bytes() == \
+                b"fresh astra-network-manager-aarch64\n"
             subprocess.run(["python3", str(tree / "tools/astra_release.py"),
                             "verify", str(output)], check=True, stdout=subprocess.DEVNULL)
         finally:

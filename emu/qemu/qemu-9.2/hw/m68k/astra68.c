@@ -14,6 +14,7 @@
 #include <sys/un.h>
 #ifdef CONFIG_POSIX
 #include <ifaddrs.h>
+#include <net/if.h>
 #include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/statvfs.h>
@@ -67,6 +68,7 @@
 #include "astra/font_encoding.h"
 #include "astra/process.h"
 #include "astra/network.h"
+#include "astra/network_control_host.h"
 #include "astra/status.h"
 #include "astra/vfs_service.h"
 #include "block/thread-pool.h"
@@ -524,6 +526,7 @@ typedef struct AstraNetworkResolveJob {
 } AstraNetworkResolveJob;
 
 typedef struct AstraNetworkState {
+    int control_fd;
     GHashTable *endpoints;
     GHashTable *resolvers;
     uint32_t next_endpoint;
@@ -3020,6 +3023,81 @@ static void astra_network_execute_interfaces(Astra68State *s,
 #endif
 }
 
+static void astra_network_execute_devices(Astra68State *s,
+                                          uint8_t *command,
+                                          uint32_t physical,
+                                          uint32_t bytes)
+{
+#ifdef CONFIG_POSIX
+    struct ifaddrs *head = NULL, *current;
+    uint32_t count = 0u;
+    uint32_t offset = ldl_be_p(command + 56);
+    uint32_t capacity = ldl_be_p(command + 64);
+    uint8_t *data;
+    if (getifaddrs(&head) != 0) {
+        stl_be_p(command + 68, astra_network_status_from_errno(errno));
+        return;
+    }
+    for (current = head; current != NULL; current = current->ifa_next) {
+        struct ifaddrs *prior;
+        if (current->ifa_name == NULL ||
+            (current->ifa_flags & IFF_LOOPBACK) != 0u) continue;
+        for (prior = head; prior != current; prior = prior->ifa_next)
+            if (prior->ifa_name != NULL &&
+                strcmp(prior->ifa_name, current->ifa_name) == 0) break;
+        if (prior != current) continue;
+        if (strlen(current->ifa_name) >= ASTRA_NETWORK_INTERFACE_NAME_SIZE ||
+            count == UINT32_MAX / sizeof(AstraNetworkInterfaceInfo)) {
+            stl_be_p(command + 68, ASTRA_NETWORK_RESOURCE_LIMIT);
+            freeifaddrs(head);
+            return;
+        }
+        ++count;
+    }
+    stl_be_p(command + 80, count);
+    if (count * sizeof(AstraNetworkInterfaceInfo) > capacity) {
+        stl_be_p(command + 68, ASTRA_NETWORK_BUFFER_TOO_SMALL);
+        freeifaddrs(head);
+        return;
+    }
+    if (count == 0u) {
+        stl_be_p(command + 68, ASTRA_NETWORK_OK);
+        freeifaddrs(head);
+        return;
+    }
+    data = astra_dma_data(s, physical, bytes, offset,
+                          count * sizeof(AstraNetworkInterfaceInfo));
+    if (data == NULL) {
+        stl_be_p(command + 68, ASTRA_NETWORK_INVALID);
+        freeifaddrs(head);
+        return;
+    }
+    for (current = head; current != NULL; current = current->ifa_next) {
+        struct ifaddrs *prior;
+        if (current->ifa_name == NULL ||
+            (current->ifa_flags & IFF_LOOPBACK) != 0u) continue;
+        for (prior = head; prior != current; prior = prior->ifa_next)
+            if (prior->ifa_name != NULL &&
+                strcmp(prior->ifa_name, current->ifa_name) == 0) break;
+        if (prior != current) continue;
+        memset(data, 0, sizeof(AstraNetworkInterfaceInfo));
+        memcpy(data, current->ifa_name, strlen(current->ifa_name) + 1u);
+        stl_be_p(data + 16,
+            ((current->ifa_flags & IFF_UP) ? ASTRA_NETWORK_INTERFACE_UP : 0u) |
+            ((current->ifa_flags & IFF_RUNNING) ?
+                ASTRA_NETWORK_INTERFACE_RUNNING : 0u));
+        data += sizeof(AstraNetworkInterfaceInfo);
+    }
+    stl_be_p(command + 68, ASTRA_NETWORK_OK);
+    freeifaddrs(head);
+#else
+    (void)s;
+    (void)physical;
+    (void)bytes;
+    stl_be_p(command + 68, ASTRA_NETWORK_UNSUPPORTED);
+#endif
+}
+
 static void astra_network_execute_command(Astra68State *s, uint8_t *command,
                                           uint32_t physical, uint32_t bytes)
 {
@@ -3046,6 +3124,56 @@ static void astra_network_execute_command(Astra68State *s, uint8_t *command,
     }
     if (operation == ASTRA_NETWORK_HOST_INTERFACES) {
         astra_network_execute_interfaces(s, command, physical, bytes);
+        return;
+    }
+    if (operation == ASTRA_NETWORK_HOST_DEVICE_LIST) {
+        astra_network_execute_devices(s, command, physical, bytes);
+        return;
+    }
+    if (operation == ASTRA_NETWORK_HOST_ETHERNET_PROBE ||
+        operation == ASTRA_NETWORK_HOST_ETHERNET_STAGE ||
+        operation == ASTRA_NETWORK_HOST_ETHERNET_CONFIRM ||
+        operation == ASTRA_NETWORK_HOST_ETHERNET_REVERT) {
+        AstraNetworkControlMessage message = {0};
+        uint32_t offset = ldl_be_p(command + 56);
+        uint32_t length = ldl_be_p(command + 60);
+        uint8_t *data = NULL;
+        if (s->network.control_fd < 0) {
+            stl_be_p(command + 68, ASTRA_NETWORK_UNSUPPORTED);
+            return;
+        }
+        if (operation == ASTRA_NETWORK_HOST_ETHERNET_PROBE ||
+            operation == ASTRA_NETWORK_HOST_ETHERNET_STAGE) {
+            if (length != sizeof(message.profile) ||
+                offset < NETWORK_COMMAND_BYTES || offset > bytes - length)
+                return;
+            data = astra_dma_data(s, physical, bytes, offset, length);
+            if (data == NULL) return;
+            message.profile.size = ldl_be_p(data);
+            memcpy(message.profile.name, data + 4, sizeof(message.profile.name));
+            message.profile.method = ldl_be_p(data + 20);
+            memcpy(message.profile.address, data + 24, 4);
+            message.profile.prefix = ldl_be_p(data + 28);
+            memcpy(message.profile.gateway, data + 32, 4);
+            message.profile.dns_count = ldl_be_p(data + 36);
+            memcpy(message.profile.dns, data + 40, sizeof(message.profile.dns));
+        } else if (length != 0) {
+            return;
+        }
+        message.version = ASTRA_NETWORK_CONTROL_VERSION;
+        message.operation = operation - ASTRA_NETWORK_HOST_ETHERNET_PROBE +
+                            ASTRA_NETWORK_CONTROL_PROBE;
+        message.rollback_seconds = ldl_be_p(command + 24);
+        if (send(s->network.control_fd, &message, sizeof(message), MSG_NOSIGNAL) !=
+                sizeof(message) ||
+            recv(s->network.control_fd, &message, sizeof(message), 0) !=
+                sizeof(message) ||
+            message.version != ASTRA_NETWORK_CONTROL_VERSION) {
+            stl_be_p(command + 68, ASTRA_NETWORK_PEER_DEAD);
+            return;
+        }
+        stl_be_p(command + 68, message.error == 0 ? ASTRA_NETWORK_OK :
+                 astra_network_status_from_errno((int)message.error));
         return;
     }
     if (operation == ASTRA_NETWORK_HOST_CANCEL) {
@@ -3960,6 +4088,14 @@ static void astra_host_provider_init(Astra68State *s)
     }
     s->host.provider_control = a;
     s->host.provider_path = b;
+    if (g_getenv("ASTRA_NETWORK_CONTROL_FD") != NULL) {
+        int fd = astra_host_provider_endpoint("ASTRA_NETWORK_CONTROL_FD");
+        if (fd < 0 || fd == a || fd == b) {
+            error_report("Astra network control requires a distinct inherited provider socket");
+            exit(EXIT_FAILURE);
+        }
+        s->network.control_fd = fd;
+    }
     AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
         .operation = ASTRA_STORAGE_CONTROL_SNAPSHOT, .serial = ++s->host.provider_control_serial};
     AstraStorageControlReply reply;
@@ -9733,6 +9869,7 @@ static void astra68_init(MachineState *machine)
         g_direct_hash, g_direct_equal, NULL, astra_network_endpoint_free);
     s->network.resolvers = g_hash_table_new_full(
         g_direct_hash, g_direct_equal, NULL, astra_network_resolver_free);
+    s->network.control_fd = -1;
     s->host.provider_control = -1;
     s->host.provider_path = -1;
     qemu_mutex_init(&s->host.provider_control_lock);

@@ -20,7 +20,7 @@
 #include <string.h>
 
 #define SETTINGS_WIDTH 960u
-#define SETTINGS_HEIGHT 640u
+#define SETTINGS_HEIGHT 760u
 #define SETTINGS_SIDEBAR_WIDTH 236u
 #define SETTINGS_SEARCH_BYTES 96u
 
@@ -51,7 +51,15 @@ enum {
     SETTINGS_ETHERNET_IPV6,
     SETTINGS_ETHERNET_REFRESH,
     SETTINGS_ETHERNET_EMPTY,
-    SETTINGS_CONTROL_COUNT = SETTINGS_ETHERNET_EMPTY
+    SETTINGS_ETHERNET_METHOD,
+    SETTINGS_ETHERNET_FORM_FIRST,
+    SETTINGS_ETHERNET_FORM_LAST = SETTINGS_ETHERNET_FORM_FIRST + 4u *
+        (ASTRA_FORM_ROW_CONTROL_COUNT + 1u) - 1u,
+    SETTINGS_ETHERNET_APPLY,
+    SETTINGS_ETHERNET_KEEP,
+    SETTINGS_ETHERNET_REVERT,
+    SETTINGS_ETHERNET_PENDING,
+    SETTINGS_CONTROL_COUNT = SETTINGS_ETHERNET_PENDING
 };
 
 enum { SETTINGS_DOCK = 1u, SETTINGS_FONTS, SETTINGS_INFO, SETTINGS_ETHERNET };
@@ -71,12 +79,15 @@ static AstraSharedSurface surface;
 static AstraWindow window = ASTRA_WINDOW_INIT;
 static AstraConfig config = ASTRA_CONFIG_INIT;
 static AstraNetworkSession network = ASTRA_NETWORK_SESSION_INIT;
+static AstraNetworkSession network_admin = ASTRA_NETWORK_SESSION_INIT;
 static const AstraConfigField config_fields[] = {{"pane", 0u}};
 static const AstraConfigSchema config_schema = {1u, config_fields, 1u};
 static AstraHandle gui;
 static AstraHandle launcher;
 static uint32_t config_ready;
 static uint32_t network_ready;
+static uint32_t network_admin_ready;
+static uint32_t window_active;
 static uint32_t page = SETTINGS_DOCK;
 static uint32_t selected_pin;
 static char status_text[128];
@@ -99,12 +110,19 @@ static AstraScrollModel ethernet_scroll = ASTRA_SCROLL_MODEL_INIT;
 static AstraCollectionModel ethernet_list = ASTRA_COLLECTION_MODEL_INIT;
 static AstraCollectionItem ethernet_items[16];
 static AstraNetworkInterfaceAddress ethernet_addresses[32];
+static AstraNetworkInterfaceInfo ethernet_devices[32];
 static char ethernet_names[16][ASTRA_NETWORK_INTERFACE_NAME_SIZE];
 static char ethernet_ipv4[80] = "IPv4: No address";
 static char ethernet_ipv6[110] = "IPv6: No address";
 static uint32_t ethernet_address_count;
 static uint32_t ethernet_count;
 static uint32_t ethernet_selected;
+static uint32_t ethernet_method = ASTRA_NETWORK_ETHERNET_IPV4_DHCP;
+static AstraTextModel ethernet_models[4];
+static char ethernet_content[4][80];
+static uint32_t ethernet_metadata[4][128];
+static uint64_t ethernet_rollback_at;
+static char ethernet_pending[96];
 
 #define CONTROL(id) (&controls[(id) - 1u])
 
@@ -248,7 +266,11 @@ static void ethernet_detail(void)
 
 static void refresh_ethernet(void)
 {
-    uint32_t count = 0u;
+    uint32_t count = 0u, device_count = 0u;
+    char selected_name[ASTRA_NETWORK_INTERFACE_NAME_SIZE] = {0};
+    if (ethernet_selected != 0u && ethernet_selected <= ethernet_count)
+        (void)astra_string_copy(selected_name, sizeof(selected_name),
+                                ethernet_names[ethernet_selected - 1u]);
     ethernet_count = 0u;
     ethernet_address_count = 0u;
     if (network_ready != 0u &&
@@ -256,15 +278,16 @@ static void refresh_ethernet(void)
             sizeof(ethernet_addresses) / sizeof(ethernet_addresses[0]),
             &count) == ASTRA_NETWORK_OK)
         ethernet_address_count = count;
-    for (uint32_t at = 0u; at < ethernet_address_count; ++at) {
-        const char *name = ethernet_addresses[at].name;
-        uint32_t found = 0u;
+    if (network_ready != 0u &&
+        astra_network_devices(&network, ethernet_devices,
+            sizeof(ethernet_devices) / sizeof(ethernet_devices[0]),
+            &device_count) != ASTRA_NETWORK_OK)
+        device_count = 0u;
+    for (uint32_t at = 0u; at < device_count; ++at) {
+        const char *name = ethernet_devices[at].name;
         if (memchr(name, '\0', ASTRA_NETWORK_INTERFACE_NAME_SIZE) == NULL)
             continue;
-        if (strcmp(name, "lo") == 0) continue;
-        for (uint32_t prior = 0u; prior < ethernet_count; ++prior)
-            if (strcmp(ethernet_names[prior], name) == 0) found = 1u;
-        if (found != 0u || ethernet_count == 16u) continue;
+        if (ethernet_count == 16u) break;
         (void)astra_string_copy(ethernet_names[ethernet_count],
             sizeof(ethernet_names[ethernet_count]), name);
         ethernet_items[ethernet_count] = (AstraCollectionItem){
@@ -273,13 +296,171 @@ static void refresh_ethernet(void)
             {0u, ASTRA_TOOLBAR_ICON_HOME}};
         ++ethernet_count;
     }
-    if (ethernet_count == 0u) ethernet_selected = 0u;
-    else if (ethernet_selected == 0u || ethernet_selected > ethernet_count)
-        ethernet_selected = 1u;
+    ethernet_selected = ethernet_count == 0u ? 0u : 1u;
+    for (uint32_t at = 0u; at < ethernet_count; ++at)
+        if (strcmp(ethernet_names[at], selected_name) == 0)
+            ethernet_selected = at + 1u;
     ethernet_list.items = ethernet_items;
     ethernet_list.item_count = ethernet_count;
     ethernet_list.selected_id = ethernet_selected;
     ethernet_detail();
+}
+
+static uint32_t ethernet_form_id(uint32_t index)
+{
+    return SETTINGS_ETHERNET_FORM_FIRST + index *
+        (ASTRA_FORM_ROW_CONTROL_COUNT + 1u);
+}
+
+static AstraResult ethernet_text(uint32_t index, char *text, uint32_t capacity)
+{
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    uint32_t copied = 0u;
+    if (astra_text_model_get_state(&ethernet_models[index], &state) != ASTRA_OK ||
+        state.text_bytes >= capacity ||
+        astra_text_model_copy(&ethernet_models[index], 0u, state.text_bytes,
+            text, capacity - 1u, &copied) != ASTRA_OK ||
+        copied != state.text_bytes)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    text[copied] = '\0';
+    return ASTRA_OK;
+}
+
+static int parse_ethernet_ipv4(const char *text, uint8_t output[4])
+{
+    AstraNetworkAddress address;
+    if (astra_network_address_parse(ASTRA_NETWORK_FAMILY_IPV4, text,
+            &address) != ASTRA_NETWORK_OK)
+        return 0;
+    (void)memcpy(output, address.address, 4u);
+    return 1;
+}
+
+static int ethernet_candidate(AstraNetworkEthernetIPv4 *candidate)
+{
+    char text[80];
+    uint32_t number = 0u;
+    (void)memset(candidate, 0, sizeof(*candidate));
+    candidate->size = sizeof(*candidate);
+    if (ethernet_selected == 0u || ethernet_selected > ethernet_count)
+        return 0;
+    (void)astra_string_copy(candidate->name, sizeof(candidate->name),
+                            ethernet_names[ethernet_selected - 1u]);
+    candidate->method = ethernet_method;
+    if (ethernet_method == ASTRA_NETWORK_ETHERNET_IPV4_MANUAL) {
+        if (ethernet_text(0u, text, sizeof(text)) != ASTRA_OK ||
+            !parse_ethernet_ipv4(text, candidate->address) ||
+            ethernet_text(1u, text, sizeof(text)) != ASTRA_OK ||
+            text[0] == '\0') return 0;
+        for (uint32_t at = 0u; text[at] != '\0'; ++at) {
+            if (text[at] < '0' || text[at] > '9' || number > 32u)
+                return 0;
+            number = number * 10u + (uint32_t)(text[at] - '0');
+        }
+        candidate->prefix = number;
+        if (ethernet_text(2u, text, sizeof(text)) != ASTRA_OK)
+            return 0;
+        if (text[0] != '\0' && !parse_ethernet_ipv4(text, candidate->gateway))
+            return 0;
+    }
+    if (ethernet_text(3u, text, sizeof(text)) != ASTRA_OK)
+        return 0;
+    char *part = text;
+    for (char *at = text; ; ++at) {
+        if (*at != ',' && *at != '\0') continue;
+        char separator = *at;
+        *at = '\0';
+        while (*part == ' ') ++part;
+        if (*part != '\0') {
+            if (candidate->dns_count == ASTRA_NETWORK_ETHERNET_DNS_MAX ||
+                !parse_ethernet_ipv4(part, candidate->dns[candidate->dns_count]))
+                return 0;
+            ++candidate->dns_count;
+        }
+        if (separator == '\0') break;
+        part = at + 1;
+    }
+    return astra_network_ethernet_ipv4_validate(candidate) ==
+        ASTRA_NETWORK_OK;
+}
+
+static void ethernet_countdown(void)
+{
+    AstraString line;
+    uint64_t now = astra_clock_monotonic();
+    uint64_t left = ethernet_rollback_at > now ?
+        (ethernet_rollback_at - now + UINT64_C(999999999)) /
+            UINT64_C(1000000000) : 0u;
+    astra_string_init(&line, ethernet_pending, sizeof(ethernet_pending));
+    (void)astra_string_append(&line, "Keep new Ethernet settings? Reverts in ");
+    (void)astra_string_append_u64(&line, left);
+    (void)astra_string_append(&line, " seconds.");
+}
+
+static AstraResult ethernet_set_text(uint32_t index, const char *text)
+{
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    if (astra_text_model_get_state(&ethernet_models[index], &state) != ASTRA_OK)
+        return ASTRA_ERROR_IO;
+    return astra_text_model_replace(&ethernet_models[index], 0u,
+        state.text_bytes, text, (uint32_t)strlen(text));
+}
+
+static int ethernet_address_text(const uint8_t bytes[4], char *text,
+                                 uint32_t capacity)
+{
+    AstraNetworkAddress address = {.size = sizeof(address),
+        .family = ASTRA_NETWORK_FAMILY_IPV4};
+    (void)memcpy(address.address, bytes, 4u);
+    return astra_network_address_format(&address, text, capacity) ==
+        ASTRA_NETWORK_OK;
+}
+
+static AstraResult ethernet_load_editor(void)
+{
+    AstraNetworkEthernetIPv4 saved;
+    AstraNetworkStatus status;
+    char text[80];
+    AstraString line;
+    if (ethernet_selected == 0u || ethernet_selected > ethernet_count ||
+        network_admin_ready == 0u) return ASTRA_OK;
+    status = astra_network_ethernet_saved(&network_admin,
+        ethernet_names[ethernet_selected - 1u], &saved);
+    if (status != ASTRA_NETWORK_OK && status != ASTRA_NETWORK_NAME_NOT_FOUND)
+        return ASTRA_ERROR_IO;
+    ethernet_method = status == ASTRA_NETWORK_OK ? saved.method :
+        ASTRA_NETWORK_ETHERNET_IPV4_DHCP;
+    if (status != ASTRA_NETWORK_OK || ethernet_method ==
+            ASTRA_NETWORK_ETHERNET_IPV4_DHCP) {
+        for (uint32_t at = 0u; at < 3u; ++at)
+            if (ethernet_set_text(at, "") != ASTRA_OK)
+                return ASTRA_ERROR_IO;
+    } else {
+        if (!ethernet_address_text(saved.address, text, sizeof(text)) ||
+            ethernet_set_text(0u, text) != ASTRA_OK)
+            return ASTRA_ERROR_IO;
+        astra_string_init(&line, text, sizeof(text));
+        (void)astra_string_append_u64(&line, saved.prefix);
+        if (ethernet_set_text(1u, text) != ASTRA_OK)
+            return ASTRA_ERROR_IO;
+        if (memcmp(saved.gateway, (uint8_t[4]){0}, 4u) == 0)
+            text[0] = '\0';
+        else if (!ethernet_address_text(saved.gateway, text, sizeof(text)))
+            return ASTRA_ERROR_IO;
+        if (ethernet_set_text(2u, text) != ASTRA_OK)
+            return ASTRA_ERROR_IO;
+    }
+    astra_string_init(&line, text, sizeof(text));
+    if (status == ASTRA_NETWORK_OK)
+        for (uint32_t at = 0u; at < saved.dns_count; ++at) {
+            char address[20];
+            if (!ethernet_address_text(saved.dns[at], address,
+                                       sizeof(address)))
+                return ASTRA_ERROR_IO;
+            if (at != 0u) (void)astra_string_append(&line, ", ");
+            (void)astra_string_append(&line, address);
+        }
+    return ethernet_set_text(3u, text);
 }
 
 static AstraResult init_controls(void)
@@ -304,6 +485,9 @@ static AstraResult init_controls(void)
     AstraListInfo list = ASTRA_LIST_INFO_INIT;
     AstraToolbarInfo toolbar = ASTRA_TOOLBAR_INFO_INIT;
     AstraButtonInfo button = ASTRA_BUTTON_INFO_INIT;
+    AstraChoiceInfo choice = ASTRA_CHOICE_INFO_INIT;
+    AstraFieldInfo field = ASTRA_FIELD_INFO_INIT;
+    AstraFormRowInfo form = ASTRA_FORM_ROW_INFO_INIT;
     AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
@@ -412,7 +596,7 @@ static AstraResult init_controls(void)
     scroll.id = SETTINGS_ETHERNET_SCROLL;
     scroll.model = &ethernet_scroll;
     scroll.preferred_width = 500u;
-    scroll.preferred_height = 180u;
+    scroll.preferred_height = 112u;
     scroll.state = page == SETTINGS_ETHERNET ? 0u : ASTRA_CONTROL_COLLAPSED;
     result = astra_interface_scroll_view_init(
         CONTROL(SETTINGS_ETHERNET_SCROLL), &scroll);
@@ -420,7 +604,7 @@ static AstraResult init_controls(void)
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
     item.parent_id = SETTINGS_BODY;
     item.minimum_width = 500u;
-    item.minimum_height = 180u;
+    item.minimum_height = 112u;
     result = astra_interface_control_set_flex(
         CONTROL(SETTINGS_ETHERNET_SCROLL), &item);
     if (result != ASTRA_OK) return result;
@@ -456,6 +640,94 @@ static AstraResult init_controls(void)
     result = astra_interface_control_set_flex(
         CONTROL(SETTINGS_ETHERNET_IPV6), &item);
     if (result != ASTRA_OK) return result;
+
+    static const AstraChoiceItem modes[] = {
+        {"Automatic (DHCP)", 16u, {0u, 0u}},
+        {"Manual", 6u, {0u, 0u}}
+    };
+    choice.id = SETTINGS_ETHERNET_METHOD;
+    choice.items = modes;
+    choice.item_count = 2u;
+    choice.selected = ethernet_method - 1u;
+    choice.state = page == SETTINGS_ETHERNET && network_admin_ready != 0u ?
+        (ethernet_rollback_at != 0u ? ASTRA_CONTROL_DISABLED : 0u) :
+        ASTRA_CONTROL_COLLAPSED;
+    result = astra_interface_segmented_init(CONTROL(SETTINGS_ETHERNET_METHOD),
+                                            &choice);
+    if (result != ASTRA_OK) return result;
+    item.parent_id = SETTINGS_BODY;
+    result = astra_interface_control_set_flex(
+        CONTROL(SETTINGS_ETHERNET_METHOD), &item);
+    if (result != ASTRA_OK) return result;
+
+    static const char *const fields[] = {
+        "IP address", "Prefix length", "Gateway", "DNS servers"
+    };
+    for (uint32_t at = 0u; at < 4u; ++at) {
+        uint32_t root_id = ethernet_form_id(at);
+        form.first_id = root_id;
+        form.label = fields[at];
+        form.label_length = (uint32_t)strlen(fields[at]);
+        form.message = at == 3u ? "Comma-separated; up to three IPv4 servers" : NULL;
+        form.message_length = at == 3u ? 41u : 0u;
+        result = astra_interface_form_row_init(CONTROL(root_id), &form);
+        if (result != ASTRA_OK) return result;
+        item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+        item.parent_id = SETTINGS_BODY;
+        result = astra_interface_control_set_flex(CONTROL(root_id), &item);
+        if (result != ASTRA_OK) return result;
+        field = (AstraFieldInfo)ASTRA_FIELD_INFO_INIT;
+        field.id = root_id + ASTRA_FORM_ROW_CONTROL_COUNT;
+        field.model = &ethernet_models[at];
+        field.preferred_columns = at == 3u ? 38u : 18u;
+        field.state = ethernet_rollback_at != 0u ? ASTRA_CONTROL_DISABLED : 0u;
+        result = astra_interface_field_init(CONTROL(field.id), &field);
+        if (result != ASTRA_OK) return result;
+        item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+        item.parent_id = root_id + ASTRA_FORM_ROW_VALUE;
+        item.grow = 1u;
+        result = astra_interface_control_set_flex(CONTROL(field.id), &item);
+        if (result != ASTRA_OK) return result;
+    }
+
+    label = (AstraLabelInfo)ASTRA_LABEL_INFO_INIT;
+    label.id = SETTINGS_ETHERNET_PENDING;
+    label.text = ethernet_pending[0] != '\0' ? ethernet_pending : " ";
+    label.text_length = ethernet_pending[0] != '\0' ?
+        (uint32_t)strlen(ethernet_pending) : 1u;
+    label.text_role = ASTRA_TEXT_CLIENT_SECONDARY;
+    label.state = page == SETTINGS_ETHERNET &&
+        ethernet_rollback_at != 0u ? 0u : ASTRA_CONTROL_COLLAPSED;
+    result = astra_interface_label_init(CONTROL(SETTINGS_ETHERNET_PENDING),
+                                        &label);
+    if (result != ASTRA_OK) return result;
+    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = SETTINGS_ACTIONS;
+    result = astra_interface_control_set_flex(
+        CONTROL(SETTINGS_ETHERNET_PENDING), &item);
+    if (result != ASTRA_OK) return result;
+
+    static const uint32_t ids[] = {
+        SETTINGS_ETHERNET_APPLY, SETTINGS_ETHERNET_KEEP,
+        SETTINGS_ETHERNET_REVERT};
+    static const char *const texts[] = {
+        "Apply", "Keep", "Revert"};
+    for (uint32_t at = 0u; at < 3u; ++at) {
+        button = (AstraButtonInfo)ASTRA_BUTTON_INFO_INIT;
+        button.id = ids[at];
+        button.text = texts[at];
+        button.text_length = (uint32_t)strlen(texts[at]);
+        button.variant = at == 1u ? ASTRA_BUTTON_PRIMARY : ASTRA_BUTTON_STANDARD;
+        button.state = page == SETTINGS_ETHERNET &&
+            network_admin_ready != 0u &&
+            ((at == 0u) == (ethernet_rollback_at == 0u)) ?
+                0u : ASTRA_CONTROL_COLLAPSED;
+        result = astra_interface_button_init(CONTROL(ids[at]), &button);
+        if (result != ASTRA_OK) return result;
+        item.parent_id = SETTINGS_ACTIONS;
+        result = astra_interface_control_set_flex(CONTROL(ids[at]), &item);
+        if (result != ASTRA_OK) return result;
+    }
 
     button.id = SETTINGS_ETHERNET_REFRESH;
     button.text = "Refresh";
@@ -562,6 +834,13 @@ static AstraResult init_controls(void)
         (void)astra_log_failure("Settings UI state", ASTRA_STATUS_IO);
         return ASTRA_ERROR_IO;
     }
+    for (uint32_t at = 0u; at < 4u; ++at)
+        if (astra_interface_ui_set_state(&ui, CONTROL(ethernet_form_id(at)),
+                page == SETTINGS_ETHERNET && network_admin_ready != 0u &&
+                (at == 3u || ethernet_method ==
+                    ASTRA_NETWORK_ETHERNET_IPV4_MANUAL) ?
+                    0u : ASTRA_CONTROL_COLLAPSED) != ASTRA_OK)
+            return ASTRA_ERROR_IO;
     layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
     result = astra_interface_ui_layout(&ui, &layout);
     if (result != ASTRA_OK)
@@ -598,8 +877,23 @@ static AstraResult run(void)
     for (;;) {
         uint32_t handle = astra_window_event_wait_handle(&window);
         uint32_t selected = 0u;
-        if (astra_wait_multiple(&handle, 1u, ASTRA_DEADLINE_FOREVER,
-                &selected, NULL) != ASTRA_SYSCALL_OK)
+        uint64_t deadline = ethernet_rollback_at != 0u ?
+            astra_clock_monotonic() + UINT64_C(1000000000) :
+            ASTRA_DEADLINE_FOREVER;
+        uint32_t waited = astra_wait_multiple(&handle, 1u, deadline,
+                                               &selected, NULL);
+        if (waited == ASTRA_SYSCALL_TIMED_OUT &&
+            ethernet_rollback_at != 0u) {
+            if (astra_clock_monotonic() >= ethernet_rollback_at) {
+                (void)astra_network_ethernet_revert(&network_admin);
+                ethernet_rollback_at = 0u;
+                ethernet_pending[0] = '\0';
+                (void)strcpy(status_text, "Ethernet change expired; previous settings restored.");
+            } else ethernet_countdown();
+            if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+            continue;
+        }
+        if (waited != ASTRA_SYSCALL_OK)
             return ASTRA_ERROR_IO;
         AstraWindowEvent event = {0};
         AstraUIAction action = ASTRA_UI_ACTION_INIT;
@@ -607,22 +901,24 @@ static AstraResult run(void)
         if (result == ASTRA_ERROR_WOULD_BLOCK) continue;
         if (result != ASTRA_OK) return result;
         if (event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST) return ASTRA_OK;
-        if (event.type == ASTRA_WINDOW_EVENT_STATE &&
-            (event.data.state.flags & ASTRA_WINDOW_ACTIVE) != 0u &&
-            page == SETTINGS_DOCK) {
-            uint32_t previous_generation = pin_generation;
-            if (refresh_pins() != ASTRA_OK ||
-                (pin_generation != previous_generation &&
-                 rebuild() != ASTRA_OK))
-                return ASTRA_ERROR_IO;
-            continue;
-        }
-        if (event.type == ASTRA_WINDOW_EVENT_STATE &&
-            (event.data.state.flags & ASTRA_WINDOW_ACTIVE) != 0u &&
-            page == SETTINGS_ETHERNET) {
-            refresh_ethernet();
-            if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
-            continue;
+        if (event.type == ASTRA_WINDOW_EVENT_STATE) {
+            uint32_t active = (event.data.state.flags &
+                ASTRA_WINDOW_ACTIVE) != 0u;
+            uint32_t activated = active && !window_active;
+            window_active = active;
+            if (activated && page == SETTINGS_DOCK) {
+                uint32_t previous_generation = pin_generation;
+                if (refresh_pins() != ASTRA_OK ||
+                    (pin_generation != previous_generation &&
+                     rebuild() != ASTRA_OK))
+                    return ASTRA_ERROR_IO;
+                continue;
+            }
+            if (activated && page == SETTINGS_ETHERNET) {
+                refresh_ethernet();
+                if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+                continue;
+            }
         }
         if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED &&
             astra_fonts_use_system(gui, &event) != ASTRA_OK)
@@ -648,7 +944,12 @@ static AstraResult run(void)
             page = (uint32_t)navigation.selected_id;
             if (page == SETTINGS_DOCK && refresh_pins() != ASTRA_OK)
                 return ASTRA_ERROR_IO;
-            if (page == SETTINGS_ETHERNET) refresh_ethernet();
+            if (page == SETTINGS_ETHERNET) {
+                refresh_ethernet();
+                if (ethernet_load_editor() != ASTRA_OK)
+                    (void)strcpy(status_text,
+                        "Could not load saved Ethernet settings.");
+            }
             if (config_ready && astra_config_set_u64(&config, "pane", 0u,
                     page) != ASTRA_CONFIG_OK)
                 (void)strcpy(status_text, "Could not save Settings view.");
@@ -663,12 +964,74 @@ static AstraResult run(void)
             ethernet_list.selected_id != 0u) {
             ethernet_selected = (uint32_t)ethernet_list.selected_id;
             ethernet_detail();
+            if (ethernet_load_editor() != ASTRA_OK)
+                (void)strcpy(status_text, "Could not load saved Ethernet settings.");
+            if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+            continue;
+        }
+        if (action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+            action.control_id == SETTINGS_ETHERNET_METHOD &&
+            ethernet_rollback_at == 0u) {
+            int64_t chosen = 0;
+            if (astra_interface_control_get_value(
+                    CONTROL(SETTINGS_ETHERNET_METHOD), &chosen, NULL) != ASTRA_OK ||
+                chosen < 0 || chosen > 1) return ASTRA_ERROR_IO;
+            ethernet_method = (uint32_t)chosen + 1u;
             if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
             continue;
         }
         if (action.type == ASTRA_UI_ACTION_ACTIVATE &&
             action.control_id == SETTINGS_ETHERNET_REFRESH) {
             refresh_ethernet();
+            if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+            continue;
+        }
+        if (action.type == ASTRA_UI_ACTION_ACTIVATE &&
+            action.control_id == SETTINGS_ETHERNET_APPLY &&
+            ethernet_rollback_at == 0u) {
+            AstraNetworkEthernetIPv4 candidate;
+            if (!ethernet_candidate(&candidate))
+                (void)strcpy(status_text,
+                    "Check IP address, prefix (1-32), gateway, and DNS.");
+            else {
+                uint64_t staged_at = astra_clock_monotonic();
+                AstraNetworkStatus changed = astra_network_ethernet_stage(
+                    &network_admin, &candidate, 120u);
+                if (changed == ASTRA_NETWORK_OK) {
+                    ethernet_rollback_at = staged_at +
+                        UINT64_C(120000000000);
+                    ethernet_countdown();
+                    status_text[0] = '\0';
+                } else (void)strcpy(status_text,
+                    "Ethernet apply failed. Check current connection.");
+            }
+            if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+            continue;
+        }
+        if (action.type == ASTRA_UI_ACTION_ACTIVATE &&
+            ethernet_rollback_at != 0u &&
+            (action.control_id == SETTINGS_ETHERNET_KEEP ||
+             action.control_id == SETTINGS_ETHERNET_REVERT)) {
+            AstraNetworkStatus changed = action.control_id ==
+                SETTINGS_ETHERNET_KEEP ?
+                astra_network_ethernet_confirm(&network_admin) :
+                astra_network_ethernet_revert(&network_admin);
+            if (changed == ASTRA_NETWORK_OK) {
+                ethernet_rollback_at = 0u;
+                ethernet_pending[0] = '\0';
+                status_text[0] = '\0';
+                refresh_ethernet();
+                if (ethernet_load_editor() != ASTRA_OK)
+                    (void)strcpy(status_text,
+                        "Could not load saved Ethernet settings.");
+            } else if (changed == ASTRA_NETWORK_TIMED_OUT) {
+                ethernet_rollback_at = 0u;
+                ethernet_pending[0] = '\0';
+                refresh_ethernet();
+                (void)strcpy(status_text,
+                    "Ethernet change expired; previous connection restored.");
+            } else (void)strcpy(status_text,
+                "Ethernet change failed. Check current connection.");
             if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
             continue;
         }
@@ -719,7 +1082,8 @@ static AstraResult run(void)
 
 int astra_main(const AstraStartupInfo *startup)
 {
-    const AstraStartupCapability *gui_cap, *launch_cap, *network_cap, *ready;
+    const AstraStartupCapability *gui_cap, *launch_cap, *network_cap,
+        *admin_cap, *ready;
     uint32_t status = ASTRA_STATUS_OK;
     uint64_t stored = 0u;
     if (!astra_startup_validate(startup) || startup->argc != 1u)
@@ -728,6 +1092,7 @@ int astra_main(const AstraStartupInfo *startup)
     launch_cap = astra_startup_capability(startup,
         ASTRA_CAPABILITY_APPLICATION_LAUNCH);
     network_cap = astra_startup_capability(startup, ASTRA_CAPABILITY_NETWORK);
+    admin_cap = astra_startup_capability(startup, ASTRA_CAPABILITY_NETWORK_ADMIN);
     ready = astra_startup_capability(startup, ASTRA_CAPABILITY_SERVICE_READY);
     if (gui_cap == NULL || launch_cap == NULL || ready == NULL)
         return ASTRA_STATUS_ACCESS;
@@ -738,6 +1103,9 @@ int astra_main(const AstraStartupInfo *startup)
         &config, NULL) == ASTRA_CONFIG_OK;
     network_ready = network_cap != NULL &&
         astra_network_session_open(network_cap->handle, &network) ==
+            ASTRA_NETWORK_OK;
+    network_admin_ready = admin_cap != NULL &&
+        astra_network_session_open(admin_cap->handle, &network_admin) ==
             ASTRA_NETWORK_OK;
     if (config_ready && astra_config_get_u64(&config, "pane", 0u,
             &stored) == ASTRA_CONFIG_OK &&
@@ -750,6 +1118,16 @@ int astra_main(const AstraStartupInfo *startup)
     search.content_arena_bytes = sizeof(search_content);
     search.metadata_arena = search_metadata;
     search.metadata_arena_bytes = sizeof(search_metadata);
+    for (uint32_t at = 0u; at < 4u; ++at) {
+        AstraTextModelInfo field = ASTRA_TEXT_MODEL_INFO_INIT;
+        ethernet_models[at] = (AstraTextModel)ASTRA_TEXT_MODEL_INIT;
+        field.content_arena = ethernet_content[at];
+        field.content_arena_bytes = sizeof(ethernet_content[at]);
+        field.metadata_arena = ethernet_metadata[at];
+        field.metadata_arena_bytes = sizeof(ethernet_metadata[at]);
+        if (astra_text_model_init(&ethernet_models[at], &field) != ASTRA_OK)
+            return ASTRA_STATUS_IO;
+    }
     scroll.line_height = 28u;
     const char *failed = NULL;
     if (astra_text_model_init(&search_model, &search) != ASTRA_OK)
@@ -760,6 +1138,8 @@ int astra_main(const AstraStartupInfo *startup)
         failed = "Settings pins scroll";
     else if (astra_scroll_init(&ethernet_scroll, &scroll) != ASTRA_OK)
         failed = "Settings Ethernet scroll";
+    else if (ethernet_load_editor() != ASTRA_OK)
+        failed = "Settings Ethernet profile";
     else if (astra_fonts_use_system(gui, NULL) != ASTRA_OK)
         failed = "Settings font";
     else if (refresh_pins() != ASTRA_OK)
@@ -815,6 +1195,12 @@ int astra_main(const AstraStartupInfo *startup)
     if (surface.area != ASTRA_INVALID_HANDLE)
         (void)astra_shared_surface_close(&surface);
     astra_text_model_dispose(&search_model);
+    for (uint32_t at = 0u; at < 4u; ++at)
+        astra_text_model_dispose(&ethernet_models[at]);
+    if (ethernet_rollback_at != 0u)
+        (void)astra_network_ethernet_revert(&network_admin);
+    if (network_admin_ready)
+        (void)astra_network_session_close(&network_admin);
     if (network_ready) (void)astra_network_session_close(&network);
     if (config_ready) astra_config_close(&config);
     return (int)status;

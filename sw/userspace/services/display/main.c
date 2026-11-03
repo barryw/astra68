@@ -8145,6 +8145,27 @@ static void frame_present(DisplayState *state, uint32_t window_index,
         state->compose_deferred = 1u;
 }
 
+static int window_command_notifies_state(uint32_t action)
+{
+    switch (action) {
+    case ASTRA_GUI_WINDOW_PRESENT:
+    case ASTRA_GUI_WINDOW_SET_APPLICATION_NAME:
+    case ASTRA_GUI_WINDOW_MENU_OPEN:
+    case ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT:
+    case ASTRA_GUI_WINDOW_MENU_CLOSE:
+    case ASTRA_GUI_WINDOW_TOOLTIP_SHOW:
+    case ASTRA_GUI_WINDOW_NOTIFICATION_SHOW:
+    case ASTRA_GUI_WINDOW_OVERLAY_HIDE:
+    case ASTRA_GUI_WINDOW_DRAG_BEGIN:
+    case ASTRA_GUI_WINDOW_DRAG_FEEDBACK:
+    case ASTRA_GUI_WINDOW_DRAG_CANCEL:
+    case ASTRA_GUI_WINDOW_DRAG_COMPLETE:
+        return 0;
+    default:
+        return 1;
+    }
+}
+
 static void receive_command(uint32_t device, uint32_t irq,
                             AstraDmaBufferInfo *framebuffer,
                             AstraDmaBufferInfo *pointer_buffer,
@@ -8363,17 +8384,7 @@ static void receive_command(uint32_t device, uint32_t irq,
             render_failure("display window-command render failed", status);
     }
     if (status == ASTRA_STATUS_OK && changed && closed.id == 0u &&
-        command.action != ASTRA_GUI_WINDOW_SET_APPLICATION_NAME &&
-        command.action != ASTRA_GUI_WINDOW_MENU_OPEN &&
-        command.action != ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT &&
-        command.action != ASTRA_GUI_WINDOW_MENU_CLOSE &&
-        command.action != ASTRA_GUI_WINDOW_TOOLTIP_SHOW &&
-        command.action != ASTRA_GUI_WINDOW_NOTIFICATION_SHOW &&
-        command.action != ASTRA_GUI_WINDOW_OVERLAY_HIDE &&
-        command.action != ASTRA_GUI_WINDOW_DRAG_BEGIN &&
-        command.action != ASTRA_GUI_WINDOW_DRAG_FEEDBACK &&
-        command.action != ASTRA_GUI_WINDOW_DRAG_CANCEL &&
-        command.action != ASTRA_GUI_WINDOW_DRAG_COMPLETE) {
+        window_command_notifies_state(command.action)) {
         uint32_t current = find_id(state, id);
 
         if (current != state->count)

@@ -83,8 +83,8 @@ static void valid_manifest(void)
     }
     {
         char network[] =
-            "service /services/network grants NETWORK_DEVICE NETWORK_IRQ "
-            "serves NETWORK NETWORK_LISTEN required\n";
+            "service /services/network grants NETWORK_DEVICE NETWORK_IRQ CONFIG_SYSTEM:rw LIBS:r "
+            "serves NETWORK NETWORK_LISTEN NETWORK_ADMIN required\n";
 
         assert(supervisor_manifest_parse(network, sizeof(network) - 1u,
                                          &manifest));

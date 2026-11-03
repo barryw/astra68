@@ -92,7 +92,7 @@ library-contract: $(NETWORK_LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(NETWORK_LIBRARY_MAP) $(NETWORK_LIBRARY)
 	@python3 ../../../tools/library_info.py $(NETWORK_LIBRARY) | \
-		grep -q '^network.library.1 1.0.0 ABI 1.3$$'
+		grep -q '^network.library.1 1.0.0 ABI 1.4$$'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [network.library.1]'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.2]')" = 1
@@ -100,7 +100,7 @@ library-contract: $(NETWORK_LIBRARY)
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'
 	@$(READELF) -lW $< | grep -q ' GNU_RELRO '
-	@$(READELF) -VW $< | grep -q 'ASTRA_NETWORK_1.3'
+	@$(READELF) -VW $< | grep -q 'ASTRA_NETWORK_1.4'
 	@echo "astra network shared library: PASS"
 
 $(HOST_TEST): $(CORE) tests/test_network_core.c

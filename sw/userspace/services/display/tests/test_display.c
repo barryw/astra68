@@ -3681,6 +3681,10 @@ int main(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
 
+    /* Content presents cannot feed an active-state redraw loop. */
+    assert(!window_command_notifies_state(ASTRA_GUI_WINDOW_PRESENT));
+    assert(window_command_notifies_state(ASTRA_GUI_WINDOW_RESIZE));
+
     {
         /* A request the device answers with a failure is that request's:
            a client's batch in flight is dropped and the display goes on;

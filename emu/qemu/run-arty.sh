@@ -29,6 +29,8 @@ fi
 QEMU=${QEMU:-$ASTRA_ROOT/qemu/bin/qemu-system-m68k-astra}
 FONT_WORKER=$ASTRA_ROOT/bin/astra-font-worker
 CODEC_WORKER=$ASTRA_ROOT/bin/astra-codec-worker
+NETWORK_HELPER=$ASTRA_ROOT/bin/astra-network-manager
+[ -x "$NETWORK_HELPER" ] || NETWORK_HELPER=
 if [ ! -x "$FONT_WORKER" ]; then
     echo "Astra font worker is missing: $FONT_WORKER" >&2; exit 1
 fi
@@ -225,6 +227,7 @@ fi
 exec env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     ASTRA_STORAGE_NAME_STATE="$STATE_ROOT" \
     ASTRA_STORAGE_SECRET_KEY_PATH="$STATE_ROOT/config-secret.key" \
+    ASTRA_NETWORK_MANAGER_HELPER="$NETWORK_HELPER" \
     ASTRA_FONT_WORKER_PATH="$FONT_WORKER" \
     ASTRA_CODEC_WORKER_PATH="$CODEC_WORKER" \
     ASTRA_DISPLAY_MAILBOX_PATH="$DISPLAY_MAILBOX" \

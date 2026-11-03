@@ -70,6 +70,8 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 	storage-catalog-sanitize storage-catalog-target-test storage-probe-test \
 	storage-probe-target-test storage-mount-test storage-path-test storage-provider-test
 .PHONY: storage-provider-sanitize
+.PHONY: network-nm-test
+.PHONY: network-manager-target
 .PHONY: storage-provider-format-test
 .PHONY: font-convert-test font-convert-sanitize
 .PHONY: font-amiga-test font-amiga-sanitize font-amiga-convert-test
@@ -83,6 +85,54 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 .PHONY: codec-provider-test
 
 CODEC_VORBIS_HEADER := $(ROOT)/sw/userspace/sdl2/build/vendor/SDL2_mixer/src/codecs/stb_vorbis/stb_vorbis.h
+NETWORK_NM_FLAGS := $(shell pkg-config --cflags gio-2.0)
+NETWORK_NM_LIBS := $(shell pkg-config --libs gio-2.0)
+NETWORK_NM_CORE := $(ROOT)/sw/userspace/network/src/network_core.c
+NETWORK_NM_TARGET_PC := PKG_CONFIG_SYSROOT_DIR=$(DE25_SYSROOT) \
+	PKG_CONFIG_LIBDIR=$(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu/pkgconfig:$(DE25_SYSROOT)/usr/share/pkgconfig pkg-config
+NETWORK_NM_TARGET_FLAGS = $(CFLAGS) -I$(ROOT)/ndk/include \
+	-I$(ROOT)/sw/userspace/network/include --sysroot=$(DE25_SYSROOT) \
+	-nostdinc -I$(FONT_AARCH64_INCLUDE) \
+	-isystem $(DE25_SYSROOT)/usr/include/aarch64-linux-gnu \
+	-isystem $(DE25_SYSROOT)/usr/include \
+	$(shell $(NETWORK_NM_TARGET_PC) --cflags gio-2.0)
+NETWORK_NM_TARGET_LIBS = -Wl,-rpath-link,$(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu \
+	$(shell $(NETWORK_NM_TARGET_PC) --libs gio-2.0)
+
+$(OUT)/test-network-nm: astra_network_nm.c test_network_nm.c astra_network_nm.h \
+		$(NETWORK_NM_CORE) $(ROOT)/sw/include/astra/network.h Makefile
+	@mkdir -p $(OUT)
+	$(HOST_CC) $(CFLAGS) -I$(ROOT)/ndk/include \
+		-I$(ROOT)/sw/userspace/network/include $(NETWORK_NM_FLAGS) \
+		astra_network_nm.c $(NETWORK_NM_CORE) test_network_nm.c \
+		$(NETWORK_NM_LIBS) -o $@
+
+network-nm-test: $(OUT)/test-network-nm
+	$(OUT)/test-network-nm
+
+$(OUT)/test-network-nm-aarch64: astra_network_nm.c test_network_nm.c \
+		astra_network_nm.h $(NETWORK_NM_CORE) Makefile
+	@mkdir -p $(OUT)
+	$(FONT_AARCH64_CC) $(NETWORK_NM_TARGET_FLAGS) \
+		astra_network_nm.c $(NETWORK_NM_CORE) test_network_nm.c \
+		$(NETWORK_NM_TARGET_LIBS) -o $@
+
+$(OUT)/astra-network-nm-probe-aarch64: astra_network_nm.c \
+		test_network_nm_board.c astra_network_nm.h $(NETWORK_NM_CORE) Makefile
+	@mkdir -p $(OUT)
+	$(FONT_AARCH64_CC) $(NETWORK_NM_TARGET_FLAGS) \
+		astra_network_nm.c $(NETWORK_NM_CORE) test_network_nm_board.c \
+		$(NETWORK_NM_TARGET_LIBS) -o $@
+
+$(OUT)/astra-network-manager-aarch64: astra_network_manager_main.c \
+		astra_network_nm.c astra_network_nm.h $(ROOT)/sw/include/astra/network_control_host.h \
+		$(NETWORK_NM_CORE) Makefile
+	@mkdir -p $(OUT)
+	$(FONT_AARCH64_CC) $(NETWORK_NM_TARGET_FLAGS) \
+		astra_network_manager_main.c astra_network_nm.c $(NETWORK_NM_CORE) \
+		$(NETWORK_NM_TARGET_LIBS) -o $@
+
+network-manager-target: $(OUT)/astra-network-manager-aarch64
 CODEC_VORBIS_INCLUDE := -I$(dir $(CODEC_VORBIS_HEADER))
 CODEC_XMP_ROOT ?= $(ROOT)/../SDL2_mixer/external/libxmp
 CODEC_XMP_REVISION := 1e4b00d677c217ba303ffaa4f5d4a0e6a0cbf22c

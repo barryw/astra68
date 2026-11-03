@@ -178,8 +178,8 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/posixd grants serves POSIX_PROCESS required priority=20\n"
     "service /services/entropy grants HOST_DEVICE "
     "serves ENTROPY required priority=20\n"
-    "service /services/network grants NETWORK_DEVICE NETWORK_IRQ "
-    "serves NETWORK NETWORK_LISTEN required priority=20\n"
+    "service /services/network grants NETWORK_DEVICE NETWORK_IRQ CONFIG_SYSTEM:rw LIBS:r "
+    "serves NETWORK NETWORK_LISTEN NETWORK_ADMIN required priority=20\n"
     "service /services/ntpd grants CLOCK CONFIG:r LIBS:r NETWORK "
     "serves NTP required priority=20\n"
     # The log service drains only in time nobody else wants: below
@@ -209,7 +209,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG\n"
     "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r\n"
     "trusted /apps/Inspector.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ RAM_READ DH0:r HOME:r APPS:r LIBS:r WORK:r\n"
-    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw NETWORK LIBS:r\n"
+    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw NETWORK NETWORK_ADMIN LIBS:r\n"
     "trusted /apps/AstraZ.app grants GUI PCM VOLUMES VOLUME_READ DH0:r HOME:rw STORE:rw WORK:r LIBS:r\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("hostfs", "posixd", "entropy", "network", "ntpd", "events",

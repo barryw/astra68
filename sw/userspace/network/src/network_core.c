@@ -156,6 +156,54 @@ AstraNetworkStatus astra_network_ethernet_ipv4_validate(
     return ASTRA_NETWORK_OK;
 }
 
+int astra_network_ethernet_profile_encode(
+    const AstraNetworkEthernetIPv4 *profile,
+    char text[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX])
+{
+    static const char digits[] = "0123456789abcdef";
+    static const char prefix[] = "ipv4-1:";
+    const uint8_t *bytes = (const uint8_t *)(const void *)profile;
+    if (text == NULL || astra_network_ethernet_ipv4_validate(profile) !=
+            ASTRA_NETWORK_OK)
+        return 0;
+    (void)memcpy(text, prefix, sizeof(prefix) - 1u);
+    for (uint32_t at = 0u; at < sizeof(*profile); ++at) {
+        text[sizeof(prefix) - 1u + at * 2u] = digits[bytes[at] >> 4];
+        text[sizeof(prefix) + at * 2u] = digits[bytes[at] & 15u];
+    }
+    text[sizeof(prefix) - 1u + sizeof(*profile) * 2u] = '\0';
+    return 1;
+}
+
+static int hex_nibble(char value)
+{
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+    return -1;
+}
+
+int astra_network_ethernet_profile_decode(
+    const char *text, AstraNetworkEthernetIPv4 *profile)
+{
+    static const char prefix[] = "ipv4-1:";
+    AstraNetworkEthernetIPv4 parsed;
+    uint8_t *bytes = (uint8_t *)(void *)&parsed;
+    if (text == NULL || profile == NULL ||
+        strlen(text) != sizeof(prefix) - 1u + sizeof(parsed) * 2u ||
+        memcmp(text, prefix, sizeof(prefix) - 1u) != 0)
+        return 0;
+    for (uint32_t at = 0u; at < sizeof(parsed); ++at) {
+        int high = hex_nibble(text[sizeof(prefix) - 1u + at * 2u]);
+        int low = hex_nibble(text[sizeof(prefix) + at * 2u]);
+        if (high < 0 || low < 0) return 0;
+        bytes[at] = (uint8_t)(high * 16 + low);
+    }
+    if (astra_network_ethernet_ipv4_validate(&parsed) != ASTRA_NETWORK_OK)
+        return 0;
+    *profile = parsed;
+    return 1;
+}
+
 int astra_network_address_valid(const AstraNetworkAddress *address,
                                 int allow_unspecified)
 {

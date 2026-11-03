@@ -2,6 +2,29 @@
 
 Status: active continuation map, 2026-11-02
 
+Ethernet configuration candidate, 2026-11-03: Network Kit ABI 1.4 adds
+`NETWORK_ADMIN`, device enumeration, and typed DHCP/manual IPv4 profile calls.
+Network service owns a separate admin port and scoped system Config Kit
+profile; Settings uses shared controls for mode, address, prefix, gateway,
+DNS, Apply, Keep, Revert, and rollback countdown. QEMU forwards admin calls to
+a credential-checked root helper using NetworkManager D-Bus checkpoints and
+in-memory profiles. Beast host tests and MC68040 library/service/Settings
+builds pass. DE25 isolated `astra-test0` veth passed confirm, 30-second timeout,
+automatic rollback, and repeat stage; `eth0` remained at `192.168.1.52` and
+only its original profile remained. Guest Settings trials then found a missing
+TextModel initializer and a display-service loop: `WINDOW_PRESENT` emitted a
+STATE event, which Settings answered with another full redraw. The shared
+display service no longer emits STATE for content presents; Settings refreshes
+live data only on an inactive-to-active transition. Haiku reference:
+`src/kits/interface/Window.cpp` handles `_UPDATE_` separately from window
+move/resize notifications; Astra adapts that split to its native event stream.
+The corrected DE25 private trial selected `astra-test0`, entered
+`192.0.2.10/24`, showed Apply/Keep/Revert, reverted cleanly, then kept a
+second staged profile in the trial Config Kit and NetworkManager. `eth0`
+remained `192.168.1.52`; the 300-second gate reached stage 8 without panic and
+restored production. Exact release publication and production deployment remain
+open.
+
 Ethernet configuration work, 2026-11-03: native Network Kit ABI 1.3 now owns
 IPv4/IPv6 text parsing, replacing the POSIX copy, and validates a typed
 DHCP/manual IPv4 profile with interface, prefix, gateway, and optional DNS.

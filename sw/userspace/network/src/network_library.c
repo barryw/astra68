@@ -835,9 +835,10 @@ AstraNetworkStatus astra_network_reverse_wait(
     }
 }
 
-AstraNetworkStatus astra_network_interfaces(
-    AstraNetworkSession *session, AstraNetworkInterfaceAddress *addresses,
-    uint32_t capacity, uint32_t *count)
+static AstraNetworkStatus network_records(
+    AstraNetworkSession *session, void *records,
+    uint32_t capacity, uint32_t *count, uint32_t operation,
+    uint32_t record_size)
 {
     AstraNetworkRequestMessage request;
     AstraNetworkReplyMessage reply;
@@ -848,7 +849,7 @@ AstraNetworkStatus astra_network_interfaces(
     uint8_t *bytes;
 
     if (session == NULL || session->_private_id == 0u || count == NULL ||
-        (capacity != 0u && addresses == NULL))
+        (capacity != 0u && records == NULL))
         return ASTRA_NETWORK_INVALID;
     *count = 0u;
     status = session_lock(session);
@@ -858,14 +859,12 @@ AstraNetworkStatus astra_network_interfaces(
     slots = astra_network_shared_slots(header);
     slot = header->tx_slot_count;
     bytes = astra_network_shared_slot_bytes(header, slot);
-    maximum = ASTRA_NETWORK_SLOT_BYTES /
-              sizeof(AstraNetworkInterfaceAddress);
+    maximum = ASTRA_NETWORK_SLOT_BYTES / record_size;
     bounded_capacity = capacity < maximum ? capacity : maximum;
     slots[slot].generation = session->_private_generation;
     slots[slot].state = ASTRA_NETWORK_SLOT_RX_READING;
-    slots[slot].length = bounded_capacity *
-                         sizeof(AstraNetworkInterfaceAddress);
-    request_init(session, &request, ASTRA_NETWORK_INTERFACES);
+    slots[slot].length = bounded_capacity * record_size;
+    request_init(session, &request, operation);
     request.slot = slot;
     request.length = slots[slot].length;
     status = exchange_locked(session, session->_private_control, &request,
@@ -876,8 +875,8 @@ AstraNetworkStatus astra_network_interfaces(
         } else {
             *count = reply.transferred;
             if (reply.transferred != 0u)
-                (void)memcpy(addresses, bytes,
-                             reply.transferred * sizeof(*addresses));
+                (void)memcpy(records, bytes,
+                             reply.transferred * record_size);
         }
     } else if (status == ASTRA_NETWORK_BUFFER_TOO_SMALL) {
         *count = reply.transferred;
@@ -885,6 +884,125 @@ AstraNetworkStatus astra_network_interfaces(
     clear_bytes(&slots[slot], sizeof(slots[slot]));
     session_unlock(session);
     return status;
+}
+
+AstraNetworkStatus astra_network_interfaces(
+    AstraNetworkSession *session, AstraNetworkInterfaceAddress *addresses,
+    uint32_t capacity, uint32_t *count)
+{
+    return network_records(session, addresses, capacity, count,
+                           ASTRA_NETWORK_INTERFACES, sizeof(*addresses));
+}
+
+AstraNetworkStatus astra_network_devices(
+    AstraNetworkSession *session, AstraNetworkInterfaceInfo *devices,
+    uint32_t capacity, uint32_t *count)
+{
+    return network_records(session, devices, capacity, count,
+                           ASTRA_NETWORK_DEVICES, sizeof(*devices));
+}
+
+static AstraNetworkStatus ethernet_change(
+    AstraNetworkSession *session, uint32_t operation,
+    const AstraNetworkEthernetIPv4 *configuration, uint32_t rollback_seconds,
+    AstraNetworkEthernetIPv4 *saved)
+{
+    AstraNetworkRequestMessage request;
+    AstraNetworkReplyMessage reply;
+    AstraNetworkSharedHeader *header;
+    AstraNetworkSharedSlot *slots = NULL;
+    AstraNetworkStatus status;
+    uint8_t *bytes = NULL;
+
+    if (session == NULL || session->_private_id == 0u ||
+        ((operation == ASTRA_NETWORK_ETHERNET_PROBE ||
+          operation == ASTRA_NETWORK_ETHERNET_STAGE ||
+          operation == ASTRA_NETWORK_ETHERNET_SAVED) &&
+         astra_network_ethernet_ipv4_validate(configuration) !=
+             ASTRA_NETWORK_OK) ||
+        (operation == ASTRA_NETWORK_ETHERNET_STAGE &&
+         (rollback_seconds < 30u || rollback_seconds > 300u)))
+        return ASTRA_NETWORK_INVALID;
+    status = session_lock(session);
+    if (status != ASTRA_NETWORK_OK) return status;
+    request_init(session, &request, operation);
+    request.value = rollback_seconds;
+    if (configuration != NULL) {
+        header = session->_private_shared;
+        slots = astra_network_shared_slots(header);
+        bytes = astra_network_shared_slot_bytes(header, 0u);
+        if (bytes == NULL) {
+            session_unlock(session);
+            return ASTRA_NETWORK_INVALID;
+        }
+        (void)memcpy(bytes, configuration, sizeof(*configuration));
+        slots[0].generation = session->_private_generation;
+        slots[0].state = ASTRA_NETWORK_SLOT_TX_READY;
+        slots[0].length = sizeof(*configuration);
+        request.slot = 0u;
+        request.length = sizeof(*configuration);
+    }
+    status = exchange_locked(session, session->_private_control,
+                             &request, &reply, NULL, 0u, NULL);
+    if (status == ASTRA_NETWORK_OK && saved != NULL) {
+        AstraNetworkEthernetIPv4 received;
+        (void)memcpy(&received, bytes, sizeof(received));
+        if (astra_network_ethernet_ipv4_validate(&received) !=
+                ASTRA_NETWORK_OK ||
+            strcmp(received.name, configuration->name) != 0)
+            status = ASTRA_NETWORK_IO;
+        else *saved = received;
+    }
+    if (configuration != NULL) {
+        (void)memset(bytes, 0, sizeof(*configuration));
+        clear_bytes(&slots[0], sizeof(slots[0]));
+    }
+    session_unlock(session);
+    return status;
+}
+
+AstraNetworkStatus astra_network_ethernet_probe(
+    AstraNetworkSession *session, const AstraNetworkEthernetIPv4 *configuration)
+{
+    return ethernet_change(session, ASTRA_NETWORK_ETHERNET_PROBE,
+                           configuration, 0u, NULL);
+}
+
+AstraNetworkStatus astra_network_ethernet_stage(
+    AstraNetworkSession *session, const AstraNetworkEthernetIPv4 *configuration,
+    uint32_t rollback_seconds)
+{
+    return ethernet_change(session, ASTRA_NETWORK_ETHERNET_STAGE,
+                           configuration, rollback_seconds, NULL);
+}
+
+AstraNetworkStatus astra_network_ethernet_confirm(AstraNetworkSession *session)
+{
+    return ethernet_change(session, ASTRA_NETWORK_ETHERNET_CONFIRM, NULL, 0u,
+                           NULL);
+}
+
+AstraNetworkStatus astra_network_ethernet_revert(AstraNetworkSession *session)
+{
+    return ethernet_change(session, ASTRA_NETWORK_ETHERNET_REVERT, NULL, 0u,
+                           NULL);
+}
+
+AstraNetworkStatus astra_network_ethernet_saved(
+    AstraNetworkSession *session, const char *name,
+    AstraNetworkEthernetIPv4 *configuration)
+{
+    AstraNetworkEthernetIPv4 query = {.size = sizeof(query),
+        .method = ASTRA_NETWORK_ETHERNET_IPV4_DHCP};
+    size_t length;
+    if (name == NULL || configuration == NULL)
+        return ASTRA_NETWORK_INVALID;
+    length = strlen(name);
+    if (length == 0u || length >= sizeof(query.name))
+        return ASTRA_NETWORK_INVALID;
+    (void)memcpy(query.name, name, length + 1u);
+    return ethernet_change(session, ASTRA_NETWORK_ETHERNET_SAVED, &query,
+                           0u, configuration);
 }
 
 static uint32_t append_decimal(char *text, uint32_t at, uint8_t value)

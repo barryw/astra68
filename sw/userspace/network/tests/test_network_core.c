@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <astra/network_core.h>
 
@@ -79,10 +80,27 @@ static void status_contract(void)
            ASTRA_NETWORK_IO);
 }
 
+static void ethernet_profile_contract(void)
+{
+    AstraNetworkEthernetIPv4 before = {.size = sizeof(before),
+        .name = "eth0", .method = ASTRA_NETWORK_ETHERNET_IPV4_MANUAL,
+        .address = {192u, 168u, 1u, 52u}, .prefix = 24u,
+        .gateway = {192u, 168u, 1u, 1u}, .dns_count = 1u,
+        .dns = {{1u, 1u, 1u, 1u}}};
+    AstraNetworkEthernetIPv4 after = {0};
+    char text[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX];
+    assert(astra_network_ethernet_profile_encode(&before, text));
+    assert(astra_network_ethernet_profile_decode(text, &after));
+    assert(memcmp(&before, &after, sizeof(before)) == 0);
+    text[sizeof(text) - 2u] = 'z';
+    assert(!astra_network_ethernet_profile_decode(text, &after));
+}
+
 int main(void)
 {
     address_contract();
     shared_layout();
     status_contract();
+    ethernet_profile_contract();
     return 0;
 }

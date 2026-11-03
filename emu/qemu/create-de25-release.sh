@@ -26,6 +26,7 @@ PROVIDER=$REPOSITORY/build/de25-linux/astra-storage-aarch64
 FORMATTERS=$REPOSITORY/build/storage-format/de25
 FONT_WORKER=$REPOSITORY/build/de25-capture/astra-font-worker-aarch64
 CODEC_WORKER=$REPOSITORY/build/de25-capture/astra-codec-worker-aarch64
+NETWORK_HELPER=$REPOSITORY/build/de25-capture/astra-network-manager-aarch64
 RELEASE_TOOL=$REPOSITORY/tools/astra_release.py
 JOBS=${ASTRA_DE25_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')}
 case "$JOBS" in
@@ -51,6 +52,9 @@ make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
 make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
     CROSS_COMPILE=aarch64-linux-gnu- DE25_SYSROOT="$DE25_SYSROOT" \
     codec-worker-target
+make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
+    CROSS_COMPILE=aarch64-linux-gnu- DE25_SYSROOT="$DE25_SYSROOT" \
+    network-manager-target
 make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
     CROSS_COMPILE=aarch64-linux-gnu- DE25_SYSROOT="$DE25_SYSROOT" \
     OUT="$REPOSITORY/build/de25-linux" \
@@ -103,7 +107,7 @@ while read -r checksum relative; do
     set -- "$@" "kernel/package/$relative=$KERNEL_PACKAGE/$relative"
 done < "$KERNEL_PACKAGE/SHA256SUMS"
 set -- "$@" "kernel/package/SHA256SUMS=$KERNEL_PACKAGE/SHA256SUMS"
-for library in libblkid.so.1 libmount.so.1 libudev.so.1 libselinux.so.1 libpcre2-8.so.0; do
+for library in libblkid.so.1 libmount.so.1 libudev.so.1 libselinux.so.1 libpcre2-8.so.0 libgio-2.0.so.0 libgobject-2.0.so.0 libffi.so.8; do
     set -- "$@" "qemu/lib/$library=$(readlink -f "$DE25_SYSROOT/usr/lib/aarch64-linux-gnu/$library")"
 done
 for library in libfreetype.so.6 libpng16.so.16 libbrotlidec.so.1 libbrotlicommon.so.1 libz.so.1; do
@@ -123,6 +127,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "bin/astra-audio-host=$AUDIO" \
     "bin/astra-font-worker=$FONT_WORKER" \
     "bin/astra-codec-worker=$CODEC_WORKER" \
+    "bin/astra-network-manager=$NETWORK_HELPER" \
     "bin/astra-storage=$PROVIDER" \
     "bin/astra-mkfs.fat=$FORMATTERS/astra-mkfs.fat" \
     "bin/astra-mkfs.exfat=$FORMATTERS/astra-mkfs.exfat" \

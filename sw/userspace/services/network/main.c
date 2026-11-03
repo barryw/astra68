@@ -1,4 +1,5 @@
 #include <astra/bytes.h>
+#include <astra/config_library.h>
 #include <astra/limits.h>
 #include <astra/network.h>
 #include <astra/network_core.h>
@@ -23,7 +24,7 @@ typedef struct NetworkSession {
     uint32_t active, id, generation;
     uint32_t control, reply, area, notify;
     void *shared;
-    uint32_t shared_size, may_listen;
+    uint32_t shared_size, may_listen, may_admin;
 } NetworkSession;
 
 typedef struct NetworkEndpoint {
@@ -41,6 +42,13 @@ static uint8_t *dma_bytes;
 static uint32_t dma_size;
 static uint32_t outbound_receive, outbound_send;
 static uint32_t listen_receive, listen_send;
+static uint32_t admin_receive, admin_send;
+static uint32_t ethernet_owner;
+static uint64_t ethernet_owner_until;
+static AstraNetworkEthernetIPv4 ethernet_pending;
+static AstraConfig ethernet_config = ASTRA_CONFIG_INIT;
+static const AstraConfigField ethernet_fields[] = {{"profile", 0u}};
+static const AstraConfigSchema ethernet_schema = {1u, ethernet_fields, 1u};
 
 static uint32_t next_nonzero(uint32_t *value)
 {
@@ -155,6 +163,10 @@ static AstraNetworkStatus host_execute(AstraNetworkHostCommand *source,
                             sizeof(AstraNetworkInterfaceAddress))
                 return ASTRA_NETWORK_IO;
             moved *= sizeof(AstraNetworkInterfaceAddress);
+        } else if (command->operation == ASTRA_NETWORK_HOST_DEVICE_LIST) {
+            if (moved > UINT32_MAX / sizeof(AstraNetworkInterfaceInfo))
+                return ASTRA_NETWORK_IO;
+            moved *= sizeof(AstraNetworkInterfaceInfo);
         } else if (command->operation == ASTRA_NETWORK_HOST_RECEIVE &&
                  (command->flags & ASTRA_NETWORK_MESSAGE_TRUNCATE) != 0u &&
                  moved > output_size)
@@ -189,6 +201,14 @@ static void endpoint_release(NetworkEndpoint *endpoint)
 
 static void session_release(NetworkSession *session)
 {
+    if (ethernet_owner == session->id) {
+        AstraNetworkHostCommand command = {0};
+        command.operation = ASTRA_NETWORK_HOST_ETHERNET_REVERT;
+        (void)host_execute(&command, NULL, 0u, NULL, 0u);
+        ethernet_owner = 0u;
+        ethernet_owner_until = 0u;
+        (void)memset(&ethernet_pending, 0, sizeof(ethernet_pending));
+    }
     if (session->shared != NULL)
         (void)astra_rt_area_unmap(session->shared);
     close_handle(&session->control);
@@ -225,7 +245,7 @@ static NetworkEndpoint *endpoint_slot(void)
 }
 
 static void open_session(const AstraNetworkRequestMessage *request,
-                         int may_listen,
+                         int mode,
                          uint32_t *handles, uint32_t handle_count)
 {
     AstraNetworkReplyMessage reply;
@@ -273,7 +293,8 @@ static void open_session(const AstraNetworkRequestMessage *request,
     session->area = handles[1];
     session->shared = shared;
     session->shared_size = mapped;
-    session->may_listen = may_listen != 0;
+    session->may_listen = mode == 1;
+    session->may_admin = mode == 2;
     session->active = 1u;
     ((AstraNetworkSharedHeader *)shared)->generation = session->generation;
     handles[0] = 0u;
@@ -574,20 +595,155 @@ static AstraNetworkStatus dispatch_interfaces(
     AstraNetworkHostCommand command;
     uint8_t *bytes;
     uint32_t length;
+    uint32_t unit = request->header.operation == ASTRA_NETWORK_DEVICES ?
+        sizeof(AstraNetworkInterfaceInfo) :
+        sizeof(AstraNetworkInterfaceAddress);
     AstraNetworkStatus status;
 
     if (!shared_slot(session, request, 0, &bytes, &length) ||
-        length % sizeof(AstraNetworkInterfaceAddress) != 0u)
+        length % unit != 0u)
         return ASTRA_NETWORK_INVALID;
     (void)memset(&command, 0, sizeof(command));
-    command.operation = ASTRA_NETWORK_HOST_INTERFACES;
+    command.operation = request->header.operation == ASTRA_NETWORK_DEVICES ?
+        ASTRA_NETWORK_HOST_DEVICE_LIST : ASTRA_NETWORK_HOST_INTERFACES;
     status = host_execute(&command, NULL, 0u, bytes, length);
     reply->value = command.result_value;
     reply->transferred = command.result_value;
     return status;
 }
 
-static void process_request(uint32_t receive, int may_listen,
+static AstraNetworkStatus dispatch_ethernet(
+    NetworkSession *session, const AstraNetworkRequestMessage *request)
+{
+    AstraNetworkHostCommand command = {0};
+    const void *input = NULL;
+    uint32_t input_size = 0u;
+    uint8_t *bytes;
+    uint32_t length;
+    uint64_t staged_at = 0u;
+    AstraNetworkStatus status;
+
+    if (session->may_admin == 0u || request->endpoint != 0u)
+        return ASTRA_NETWORK_ACCESS;
+    if (request->header.operation == ASTRA_NETWORK_ETHERNET_SAVED) {
+        AstraNetworkEthernetIPv4 query;
+        uint32_t count = 0u;
+        char text[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX];
+        if (!shared_slot(session, request, 1, &bytes, &length) ||
+            length != sizeof(query)) return ASTRA_NETWORK_INVALID;
+        (void)memcpy(&query, bytes, sizeof(query));
+        if (astra_network_ethernet_ipv4_validate(&query) != ASTRA_NETWORK_OK ||
+            astra_config_count(&ethernet_config, "profile", &count) !=
+                ASTRA_CONFIG_OK) return ASTRA_NETWORK_IO;
+        for (uint32_t at = 0u; at < count; ++at) {
+            AstraNetworkEthernetIPv4 saved;
+            if (astra_config_get_string(&ethernet_config, "profile", at,
+                    text, sizeof(text), NULL) != ASTRA_CONFIG_OK ||
+                !astra_network_ethernet_profile_decode(text, &saved))
+                return ASTRA_NETWORK_IO;
+            if (strcmp(saved.name, query.name) == 0) {
+                (void)memcpy(bytes, &saved, sizeof(saved));
+                return ASTRA_NETWORK_OK;
+            }
+        }
+        return ASTRA_NETWORK_NAME_NOT_FOUND;
+    }
+    switch (request->header.operation) {
+    case ASTRA_NETWORK_ETHERNET_PROBE:
+    case ASTRA_NETWORK_ETHERNET_STAGE:
+        if (!shared_slot(session, request, 1, &bytes, &length) ||
+            length != sizeof(AstraNetworkEthernetIPv4) ||
+            astra_network_ethernet_ipv4_validate(
+                (const AstraNetworkEthernetIPv4 *)(const void *)bytes) !=
+                    ASTRA_NETWORK_OK)
+            return ASTRA_NETWORK_INVALID;
+        input = bytes;
+        input_size = length;
+        if (request->header.operation == ASTRA_NETWORK_ETHERNET_STAGE) {
+            if (ethernet_owner != 0u &&
+                astra_clock_monotonic() >= ethernet_owner_until) {
+                ethernet_owner = 0u;
+                ethernet_owner_until = 0u;
+                (void)memset(&ethernet_pending, 0, sizeof(ethernet_pending));
+            }
+            if (ethernet_owner != 0u)
+                return ASTRA_NETWORK_RESOURCE_LIMIT;
+            command.operation = ASTRA_NETWORK_HOST_ETHERNET_STAGE;
+            command.value = request->value;
+        } else command.operation = ASTRA_NETWORK_HOST_ETHERNET_PROBE;
+        break;
+    case ASTRA_NETWORK_ETHERNET_CONFIRM:
+    case ASTRA_NETWORK_ETHERNET_REVERT:
+        if (request->length != 0u || ethernet_owner != session->id)
+            return ASTRA_NETWORK_ACCESS;
+        command.operation = request->header.operation ==
+            ASTRA_NETWORK_ETHERNET_CONFIRM ?
+                ASTRA_NETWORK_HOST_ETHERNET_CONFIRM :
+                ASTRA_NETWORK_HOST_ETHERNET_REVERT;
+        break;
+    default:
+        return ASTRA_NETWORK_INVALID;
+    }
+    if (command.operation == ASTRA_NETWORK_HOST_ETHERNET_CONFIRM) {
+        char next[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX];
+        char previous[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX] = {0};
+        uint32_t count = 0u, index = 0u;
+        int existing = 0;
+        if (!astra_network_ethernet_profile_encode(&ethernet_pending, next) ||
+            astra_config_count(&ethernet_config, "profile", &count) !=
+                ASTRA_CONFIG_OK) return ASTRA_NETWORK_IO;
+        for (index = 0u; index < count; ++index) {
+            AstraNetworkEthernetIPv4 saved;
+            if (astra_config_get_string(&ethernet_config, "profile", index,
+                    previous, sizeof(previous), NULL) != ASTRA_CONFIG_OK ||
+                !astra_network_ethernet_profile_decode(previous, &saved))
+                return ASTRA_NETWORK_IO;
+            if (strcmp(saved.name, ethernet_pending.name) == 0) {
+                existing = 1;
+                break;
+            }
+        }
+        uint32_t written = existing ?
+            astra_config_set_string(&ethernet_config, "profile", index, next) :
+            astra_config_append_string(&ethernet_config, "profile", next);
+        if (written != ASTRA_CONFIG_OK) return ASTRA_NETWORK_IO;
+        status = host_execute(&command, NULL, 0u, NULL, 0u);
+        if (status != ASTRA_NETWORK_OK) {
+            uint32_t restored = existing ?
+                astra_config_set_string(&ethernet_config, "profile", index,
+                                        previous) :
+                astra_config_remove(&ethernet_config, "profile", index);
+            if (restored != ASTRA_CONFIG_OK)
+                (void)astra_log_failure("network config rollback", restored);
+            return status;
+        }
+    } else {
+        if (command.operation == ASTRA_NETWORK_HOST_ETHERNET_STAGE)
+            staged_at = astra_clock_monotonic();
+        status = host_execute(&command, input, input_size, NULL, 0u);
+    }
+    if (status == ASTRA_NETWORK_OK) {
+        if (command.operation == ASTRA_NETWORK_HOST_ETHERNET_STAGE) {
+            ethernet_owner = session->id;
+            ethernet_owner_until = staged_at +
+                (uint64_t)request->value * UINT64_C(1000000000);
+            ethernet_pending = *(const AstraNetworkEthernetIPv4 *)input;
+        } else if (command.operation == ASTRA_NETWORK_HOST_ETHERNET_CONFIRM ||
+                   command.operation == ASTRA_NETWORK_HOST_ETHERNET_REVERT) {
+            ethernet_owner = 0u;
+            ethernet_owner_until = 0u;
+            (void)memset(&ethernet_pending, 0, sizeof(ethernet_pending));
+        }
+    } else if (status == ASTRA_NETWORK_TIMED_OUT &&
+               command.operation == ASTRA_NETWORK_HOST_ETHERNET_CONFIRM) {
+        ethernet_owner = 0u;
+        ethernet_owner_until = 0u;
+        (void)memset(&ethernet_pending, 0, sizeof(ethernet_pending));
+    }
+    return status;
+}
+
+static void process_request(uint32_t receive, int mode,
                             NetworkSession *bound_session,
                             NetworkEndpoint *bound_endpoint)
 {
@@ -612,7 +768,7 @@ static void process_request(uint32_t receive, int may_listen,
     }
     if (request.header.operation == ASTRA_NETWORK_OPEN_SESSION) {
         if (bound_session == NULL && bound_endpoint == NULL)
-            open_session(&request, may_listen, handles, handle_count);
+            open_session(&request, mode, handles, handle_count);
         else
             close_received(handles, handle_count);
         return;
@@ -634,8 +790,13 @@ static void process_request(uint32_t receive, int may_listen,
                 request.header.operation == ASTRA_NETWORK_CANCEL)) {
         reply.status = dispatch_resolve(session, &request, &reply);
     } else if (bound_endpoint == NULL &&
-               request.header.operation == ASTRA_NETWORK_INTERFACES) {
+               (request.header.operation == ASTRA_NETWORK_INTERFACES ||
+                request.header.operation == ASTRA_NETWORK_DEVICES)) {
         reply.status = dispatch_interfaces(session, &request, &reply);
+    } else if (bound_endpoint == NULL &&
+               request.header.operation >= ASTRA_NETWORK_ETHERNET_PROBE &&
+               request.header.operation <= ASTRA_NETWORK_ETHERNET_SAVED) {
+        reply.status = dispatch_ethernet(session, &request);
     } else if (bound_endpoint == NULL &&
                request.header.operation == ASTRA_NETWORK_CLOSE &&
                request.endpoint == 0u) {
@@ -718,6 +879,10 @@ static uint32_t network_start(const AstraStartupInfo *startup)
     irq = astra_startup_capability(startup, ASTRA_CAPABILITY_NETWORK_IRQ);
     if (device == NULL || irq == NULL)
         return NETWORK_FAIL_DEVICE;
+    if (astra_config_open_system(startup, &ethernet_schema,
+            ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE,
+            &ethernet_config, NULL) != ASTRA_CONFIG_OK)
+        return NETWORK_FAIL_DEVICE;
     device_handle = device->handle;
     irq_handle = irq->handle;
     (void)memset(&lease, 0, sizeof(lease));
@@ -748,7 +913,11 @@ static uint32_t network_start(const AstraStartupInfo *startup)
         astra_rt_port_create(
             ASTRA_PORT_MESSAGES_MAX,
             ASTRA_PORT_MESSAGES_MAX * sizeof(AstraNetworkRequestMessage),
-            &listen_receive, &listen_send) != ASTRA_SYSCALL_OK)
+            &listen_receive, &listen_send) != ASTRA_SYSCALL_OK ||
+        astra_rt_port_create(
+            ASTRA_PORT_MESSAGES_MAX,
+            ASTRA_PORT_MESSAGES_MAX * sizeof(AstraNetworkRequestMessage),
+            &admin_receive, &admin_send) != ASTRA_SYSCALL_OK)
         return NETWORK_FAIL_PORT;
     status = astra_irq_arm(irq_handle);
     if (status != ASTRA_SYSCALL_OK) {
@@ -761,7 +930,7 @@ static uint32_t network_start(const AstraStartupInfo *startup)
 int astra_main(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *bootstrap;
-    uint32_t published[2], status;
+    uint32_t published[3], status;
 
     if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
@@ -772,7 +941,8 @@ int astra_main(const AstraStartupInfo *startup)
     status = network_start(startup);
     published[0] = outbound_send;
     published[1] = listen_send;
-    if (astra_service_ready(bootstrap->handle, status, published, 2u) !=
+    published[2] = admin_send;
+    if (astra_service_ready(bootstrap->handle, status, published, 3u) !=
             ASTRA_SYSCALL_OK && status == ASTRA_STATUS_OK)
         status = NETWORK_FAIL_READY;
     (void)astra_close(bootstrap->handle);
@@ -782,11 +952,12 @@ int astra_main(const AstraStartupInfo *startup)
         uint32_t waits[ASTRA_WAIT_MULTIPLE_MAX];
         NetworkSession *wait_sessions[ASTRA_WAIT_MULTIPLE_MAX];
         NetworkEndpoint *wait_endpoints[ASTRA_WAIT_MULTIPLE_MAX];
-        uint32_t count = 3u, index = ASTRA_WAIT_INDEX_NONE;
+        uint32_t count = 4u, index = ASTRA_WAIT_INDEX_NONE;
 
         waits[0] = outbound_receive;
         waits[1] = listen_receive;
         waits[2] = irq_handle;
+        waits[3] = admin_receive;
         (void)memset(wait_sessions, 0, sizeof(wait_sessions));
         (void)memset(wait_endpoints, 0, sizeof(wait_endpoints));
         for (uint32_t slot = 0u; slot < ASTRA_HANDLE_COUNT_MAX; ++slot) {
@@ -825,6 +996,8 @@ int astra_main(const AstraStartupInfo *startup)
             process_request(listen_receive, 1, NULL, NULL);
         else if (index == 2u)
             network_irq();
+        else if (index == 3u)
+            process_request(admin_receive, 2, NULL, NULL);
         else if (index < count && wait_sessions[index] != NULL)
             process_request(waits[index], 0, wait_sessions[index], NULL);
         else if (index < count && wait_endpoints[index] != NULL)
