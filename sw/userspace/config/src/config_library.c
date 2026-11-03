@@ -574,44 +574,86 @@ denied:
     return ASTRA_CONFIG_ACCESS;
 }
 
-static uint32_t change(ConfigState *state, const char *key, uint32_t index,
-                       const char *value, int remove)
+static uint32_t transform(ConfigState *state, const char *source,
+    uint32_t source_length, const char *key, uint32_t index,
+    const char *value, int remove, uint32_t *text_area, char **text,
+    uint32_t *text_length)
 {
-    char *text = NULL;
-    uint32_t text_area = 0u, required = 0u, status;
+    uint32_t required = 0u, status;
 
     if (state == NULL)
         return ASTRA_CONFIG_CLOSED;
     if (schema_field(state, key) == NULL)
         return ASTRA_CONFIG_INVALID;
     status = remove ? astra_config_document_remove(
-                          state->text, state->length, key, index,
+                          source, source_length, key, index,
                           NULL, 0u, &required) :
                       astra_config_document_replace(
-                          state->text, state->length, key, index, value,
+                          source, source_length, key, index, value,
                           NULL, 0u, &required);
     if (status != ASTRA_CONFIG_BUFFER_TOO_SMALL)
         return status;
-    status = area(required, &text_area, (void **)&text);
+    status = area(required, text_area, (void **)text);
     if (status != ASTRA_CONFIG_OK)
         return status;
     status = remove ? astra_config_document_remove(
-                          state->text, state->length, key, index,
-                          text, required, &required) :
+                          source, source_length, key, index,
+                          *text, required, &required) :
                       astra_config_document_replace(
-                          state->text, state->length, key, index, value,
-                          text, required, &required);
+                          source, source_length, key, index, value,
+                          *text, required, &required);
     if (status != ASTRA_CONFIG_OK) {
-        (void)astra_rt_area_unmap(text);
-        (void)astra_close(text_area);
+        (void)astra_rt_area_unmap(*text);
+        (void)astra_close(*text_area);
+        *text = NULL;
+        *text_area = 0u;
         return status;
     }
-    return commit(state, text_area, text, required - 1u);
+    *text_length = required - 1u;
+    return ASTRA_CONFIG_OK;
+}
+
+static uint32_t change(ConfigState *state, const char *key, uint32_t index,
+                       const char *value, int remove)
+{
+    char *text = NULL;
+    uint32_t text_area = 0u, length = 0u;
+    if (state == NULL) return ASTRA_CONFIG_CLOSED;
+    uint32_t status = transform(state, state->text, state->length, key,
+        index, value, remove, &text_area, &text, &length);
+    return status == ASTRA_CONFIG_OK ?
+        commit(state, text_area, text, length) : status;
+}
+
+static uint32_t load_if_unchanged(ConfigState *state)
+{
+    char *previous = state->text;
+    uint32_t previous_area = state->text_area;
+    uint32_t previous_length = state->length;
+    uint32_t status;
+
+    state->text = NULL;
+    state->text_area = 0u;
+    state->length = 0u;
+    status = load(state, NULL);
+    if (status != ASTRA_CONFIG_OK) {
+        release_text(state);
+        state->text = previous;
+        state->text_area = previous_area;
+        state->length = previous_length;
+        return status;
+    }
+    int changed = previous_length != state->length ||
+        memcmp(previous, state->text, previous_length) != 0;
+    (void)astra_rt_area_unmap(previous);
+    (void)astra_close(previous_area);
+    return changed ? ASTRA_CONFIG_CONFLICT : ASTRA_CONFIG_OK;
 }
 
 /* HostFS owns flock state on its open description. A dead writer's close
  * releases it, unlike a shared-memory futex or persistent lock directory. */
-static uint32_t begin_write(ConfigState *state, AstraVfsFile *lock_file)
+static uint32_t begin_write(ConfigState *state, AstraVfsFile *lock_file,
+                            int require_unchanged)
 {
     uint64_t size = 0u;
     uint16_t kind = ASTRA_VFS_KIND_UNKNOWN;
@@ -632,7 +674,8 @@ static uint32_t begin_write(ConfigState *state, AstraVfsFile *lock_file)
     for (uint32_t attempt = 0u; attempt < 5000u; ++attempt) {
         status = astra_vfs_try_lock(&state->client, *lock_file);
         if (status == ASTRA_VFS_OK) {
-            uint32_t loaded = load(state, NULL);
+            uint32_t loaded = require_unchanged ?
+                load_if_unchanged(state) : load(state, NULL);
             if (loaded == ASTRA_CONFIG_OK) return loaded;
             (void)astra_vfs_close(&state->client, *lock_file);
             *lock_file = ASTRA_VFS_FILE_INVALID;
@@ -671,8 +714,9 @@ static uint32_t set_unlocked(ConfigState *state, const char *key,
         change(state, key, index, value, 0);
 }
 
-uint32_t astra_config_set_string(AstraConfig *config, const char *key,
-                           uint32_t index, const char *value)
+static uint32_t set_string(AstraConfig *config, const char *key,
+                           uint32_t index, const char *value,
+                           int require_unchanged)
 {
     ConfigState *state = state_of(config);
     AstraVfsFile lock_file;
@@ -680,10 +724,22 @@ uint32_t astra_config_set_string(AstraConfig *config, const char *key,
     if (state == NULL) return ASTRA_CONFIG_CLOSED;
     if (value == NULL || schema_field(state, key) == NULL)
         return ASTRA_CONFIG_INVALID;
-    status = begin_write(state, &lock_file);
+    status = begin_write(state, &lock_file, require_unchanged);
     if (status != ASTRA_CONFIG_OK) return status;
     return end_write(state, lock_file,
         set_unlocked(state, key, index, value));
+}
+
+uint32_t astra_config_set_string(AstraConfig *config, const char *key,
+    uint32_t index, const char *value)
+{
+    return set_string(config, key, index, value, 0);
+}
+
+uint32_t astra_config_set_string_if_unchanged(AstraConfig *config,
+    const char *key, uint32_t index, const char *value)
+{
+    return set_string(config, key, index, value, 1);
 }
 
 #define CONFIG_SECRET_MAX 1024u
@@ -740,11 +796,10 @@ static uint32_t secret_crypt(ConfigState *state, const char *name,
     return status;
 }
 
-static uint32_t sensitive_set_string(ConfigState *state, const char *key,
-                                     uint32_t index, const char *value)
+static uint32_t sensitive_encode(ConfigState *state, const char *key,
+    const char *value, char encoded[CONFIG_SECRET_ENVELOPE * 2u + 1u])
 {
     static const char hex[] = "0123456789abcdef";
-    char encoded[CONFIG_SECRET_ENVELOPE * 2u + 1u];
     uint8_t sealed[CONFIG_SECRET_ENVELOPE];
     uint32_t sealed_length = 0u, status;
     uint32_t length = (uint32_t)strlen(value);
@@ -760,9 +815,18 @@ static uint32_t sensitive_set_string(ConfigState *state, const char *key,
             encoded[at * 2u + 1u] = hex[sealed[at] & 15u];
         }
         encoded[sealed_length * 2u] = '\0';
-        status = change(state, key, index, encoded, 0);
     }
     astra_secret_wipe(sealed, sizeof(sealed));
+    return status;
+}
+
+static uint32_t sensitive_set_string(ConfigState *state, const char *key,
+                                     uint32_t index, const char *value)
+{
+    char encoded[CONFIG_SECRET_ENVELOPE * 2u + 1u] = {0};
+    uint32_t status = sensitive_encode(state, key, value, encoded);
+    if (status == ASTRA_CONFIG_OK)
+        status = change(state, key, index, encoded, 0);
     astra_secret_wipe(encoded, sizeof(encoded));
     return status;
 }
@@ -852,8 +916,8 @@ uint32_t astra_config_set_bool(AstraConfig *config, const char *key, uint32_t in
     return astra_config_set_string(config, key, index, value != 0 ? "true" : "false");
 }
 
-uint32_t astra_config_append_string(AstraConfig *config, const char *key,
-                              const char *value)
+static uint32_t append_string(AstraConfig *config, const char *key,
+                              const char *value, int require_unchanged)
 {
     ConfigState *state = state_of(config);
     AstraVfsFile lock_file;
@@ -862,12 +926,24 @@ uint32_t astra_config_append_string(AstraConfig *config, const char *key,
     if (state == NULL) return ASTRA_CONFIG_CLOSED;
     if (value == NULL || schema_field(state, key) == NULL)
         return ASTRA_CONFIG_INVALID;
-    status = begin_write(state, &lock_file);
+    status = begin_write(state, &lock_file, require_unchanged);
     if (status != ASTRA_CONFIG_OK) return status;
     status = astra_config_document_count(state->text, state->length, key, &count);
     if (status == ASTRA_CONFIG_OK)
         status = set_unlocked(state, key, count, value);
     return end_write(state, lock_file, status);
+}
+
+uint32_t astra_config_append_string(AstraConfig *config, const char *key,
+    const char *value)
+{
+    return append_string(config, key, value, 0);
+}
+
+uint32_t astra_config_append_string_if_unchanged(AstraConfig *config,
+    const char *key, const char *value)
+{
+    return append_string(config, key, value, 1);
 }
 
 uint32_t astra_config_append_i64(AstraConfig *config, const char *key,
@@ -901,8 +977,88 @@ uint32_t astra_config_remove(AstraConfig *config, const char *key,
     uint32_t status;
     if (state == NULL) return ASTRA_CONFIG_CLOSED;
     if (schema_field(state, key) == NULL) return ASTRA_CONFIG_INVALID;
-    status = begin_write(state, &lock_file);
+    status = begin_write(state, &lock_file, 0);
     if (status != ASTRA_CONFIG_OK) return status;
     return end_write(state, lock_file,
         change(state, key, index, NULL, 1));
+}
+
+static uint32_t apply_changes(AstraConfig *config,
+    const AstraConfigChange *changes, uint32_t count, int require_unchanged)
+{
+    ConfigState *state = state_of(config);
+    AstraVfsFile lock_file;
+    char *working_text;
+    uint32_t working_area = 0u, working_length, status;
+
+    if (state == NULL) return ASTRA_CONFIG_CLOSED;
+    if (changes == NULL || count == 0u || count > 64u)
+        return ASTRA_CONFIG_INVALID;
+    for (uint32_t at = 0u; at < count; ++at) {
+        const AstraConfigChange *item = &changes[at];
+        if (schema_field(state, item->key) == NULL ||
+            (item->operation != ASTRA_CONFIG_CHANGE_SET &&
+             item->operation != ASTRA_CONFIG_CHANGE_APPEND &&
+             item->operation != ASTRA_CONFIG_CHANGE_REMOVE) ||
+            (item->operation == ASTRA_CONFIG_CHANGE_REMOVE ?
+                item->value != NULL : item->value == NULL) ||
+            (item->operation == ASTRA_CONFIG_CHANGE_APPEND && item->index != 0u))
+            return ASTRA_CONFIG_INVALID;
+    }
+    status = begin_write(state, &lock_file, require_unchanged);
+    if (status != ASTRA_CONFIG_OK) return status;
+    working_text = state->text;
+    working_length = state->length;
+    for (uint32_t at = 0u; at < count; ++at) {
+        const AstraConfigChange *item = &changes[at];
+        const AstraConfigField *field = schema_field(state, item->key);
+        char encoded[CONFIG_SECRET_ENVELOPE * 2u + 1u] = {0};
+        char *next_text = NULL;
+        uint32_t next_area = 0u, next_length = 0u;
+        uint32_t index = item->index;
+        const char *value = item->value;
+        if (item->operation == ASTRA_CONFIG_CHANGE_APPEND)
+            status = astra_config_document_count(working_text,
+                working_length, item->key, &index);
+        if (status == ASTRA_CONFIG_OK && value != NULL &&
+            (field->flags & ASTRA_CONFIG_FIELD_SENSITIVE) != 0u) {
+            status = sensitive_encode(state, item->key, value, encoded);
+            value = encoded;
+        }
+        if (status == ASTRA_CONFIG_OK)
+            status = transform(state, working_text, working_length,
+                item->key, index, value,
+                item->operation == ASTRA_CONFIG_CHANGE_REMOVE,
+                &next_area, &next_text, &next_length);
+        astra_secret_wipe(encoded, sizeof(encoded));
+        if (status != ASTRA_CONFIG_OK) break;
+        if (working_area != 0u) {
+            (void)astra_rt_area_unmap(working_text);
+            (void)astra_close(working_area);
+        }
+        working_area = next_area;
+        working_text = next_text;
+        working_length = next_length;
+    }
+    if (status == ASTRA_CONFIG_OK) {
+        status = commit(state, working_area, working_text, working_length);
+        working_area = 0u;
+    }
+    if (working_area != 0u) {
+        (void)astra_rt_area_unmap(working_text);
+        (void)astra_close(working_area);
+    }
+    return end_write(state, lock_file, status);
+}
+
+uint32_t astra_config_apply(AstraConfig *config,
+    const AstraConfigChange *changes, uint32_t count)
+{
+    return apply_changes(config, changes, count, 0);
+}
+
+uint32_t astra_config_apply_if_unchanged(AstraConfig *config,
+    const AstraConfigChange *changes, uint32_t count)
+{
+    return apply_changes(config, changes, count, 1);
 }

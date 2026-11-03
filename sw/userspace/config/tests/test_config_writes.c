@@ -218,8 +218,10 @@ static void *write_values(void *argument)
 
 int main(void)
 {
-    const AstraConfigField fields[] = {{"left", 0u}, {"right", 0u}, {"items", 0u}};
-    const AstraConfigSchema schema = {1u, fields, 3u};
+    const AstraConfigField fields[] = {
+        {"left", 0u}, {"right", 0u}, {"items", 0u}, {"preferred", 0u}
+    };
+    const AstraConfigSchema schema = {1u, fields, 4u};
     pthread_barrier_t start;
     pthread_t threads[2];
     Writer writers[2] = {0};
@@ -258,6 +260,48 @@ int main(void)
             writers[at].key, 0u, value, sizeof(value), &length) == ASTRA_CONFIG_OK);
         assert(strcmp(value, "saved") == 0);
     }
+    assert(astra_config_reload(&writers[1].config, NULL) == ASTRA_CONFIG_OK);
+    assert(astra_config_append_string_if_unchanged(&writers[0].config,
+        "preferred", "z5 first") == ASTRA_CONFIG_OK);
+    assert(astra_config_append_string_if_unchanged(&writers[1].config,
+        "preferred", "z5 second") == ASTRA_CONFIG_CONFLICT);
+    assert(astra_config_count(&writers[1].config, "preferred", &count) == ASTRA_CONFIG_OK);
+    assert(count == 1u);
+    assert(astra_config_set_string_if_unchanged(&writers[1].config,
+        "preferred", 0u, "z5 second") == ASTRA_CONFIG_OK);
+    assert(astra_config_reload(&writers[0].config, NULL) == ASTRA_CONFIG_OK);
+    assert(astra_config_count(&writers[0].config, "preferred", &count) == ASTRA_CONFIG_OK);
+    assert(count == 1u);
+    assert(astra_config_get_string(&writers[0].config, "preferred", 0u,
+        value, sizeof(value), &length) == ASTRA_CONFIG_OK);
+    assert(strcmp(value, "z5 second") == 0);
+    const AstraConfigChange batch[] = {
+        {"left", "batch-left", 0u, ASTRA_CONFIG_CHANGE_SET},
+        {"right", "batch-right", 0u, ASTRA_CONFIG_CHANGE_SET},
+        {"items", "99", 0u, ASTRA_CONFIG_CHANGE_APPEND}
+    };
+    assert(astra_config_apply_if_unchanged(&writers[0].config,
+        batch, 3u) == ASTRA_CONFIG_OK);
+    assert(astra_config_apply_if_unchanged(&writers[1].config,
+        batch, 3u) == ASTRA_CONFIG_CONFLICT);
+    assert(astra_config_reload(&writers[1].config, NULL) == ASTRA_CONFIG_OK);
+    assert(astra_config_get_string(&writers[1].config, "left", 0u,
+        value, sizeof(value), &length) == ASTRA_CONFIG_OK);
+    assert(strcmp(value, "batch-left") == 0);
+    assert(astra_config_get_string(&writers[1].config, "right", 0u,
+        value, sizeof(value), &length) == ASTRA_CONFIG_OK);
+    assert(strcmp(value, "batch-right") == 0);
+    assert(astra_config_count(&writers[1].config, "items", &count) == ASTRA_CONFIG_OK);
+    assert(count == 41u);
+    const AstraConfigChange rejected[] = {
+        {"left", "partial", 0u, ASTRA_CONFIG_CHANGE_SET},
+        {"right", NULL, 99u, ASTRA_CONFIG_CHANGE_REMOVE}
+    };
+    assert(astra_config_apply(&writers[1].config, rejected, 2u) != ASTRA_CONFIG_OK);
+    assert(astra_config_reload(&writers[1].config, NULL) == ASTRA_CONFIG_OK);
+    assert(astra_config_get_string(&writers[1].config, "left", 0u,
+        value, sizeof(value), &length) == ASTRA_CONFIG_OK);
+    assert(strcmp(value, "batch-left") == 0);
     for (uint32_t at = 0u; at < 2u; ++at)
         release_text(&writers[at].state);
     host_path("/app/settings.conf", file);

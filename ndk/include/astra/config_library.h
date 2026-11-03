@@ -48,7 +48,8 @@ enum {
     ASTRA_CONFIG_BUFFER_TOO_SMALL = 8,
     ASTRA_CONFIG_CLOSED = 9,
     ASTRA_CONFIG_AUTH_FAILED = 10,
-    ASTRA_CONFIG_BUSY = 11 /**< Another writer held this owner's document for five seconds. */
+    ASTRA_CONFIG_BUSY = 11, /**< Another writer held this owner's document for five seconds. */
+    ASTRA_CONFIG_CONFLICT = 12 /**< Document changed since this handle loaded it. */
 };
 
 /** Open configuration document owned by one caller. */
@@ -67,6 +68,21 @@ typedef struct AstraConfigField {
 
 /** Config Kit encrypts this field before saving it. */
 #define ASTRA_CONFIG_FIELD_SENSITIVE (1u << 0)
+
+/** One ordered edit within an atomic document update. */
+typedef struct AstraConfigChange {
+    const char *key; /**< Field in owner's schema. */
+    const char *value; /**< Value for SET/APPEND; NULL for REMOVE. */
+    uint32_t index; /**< Value index for SET/REMOVE; zero for APPEND. */
+    uint32_t operation; /**< ASTRA_CONFIG_CHANGE_* operation. */
+} AstraConfigChange;
+
+/** Set or replace one indexed value. */
+#define ASTRA_CONFIG_CHANGE_SET    1u
+/** Append a value after current last value. */
+#define ASTRA_CONFIG_CHANGE_APPEND 2u
+/** Remove one indexed value. */
+#define ASTRA_CONFIG_CHANGE_REMOVE 3u
 
 /** Static owner schema; keep fields alive until configuration is closed. */
 typedef struct AstraConfigSchema {
@@ -190,6 +206,16 @@ uint32_t astra_config_get_bool(const AstraConfig *config, const char *key,
 /** Set a string. @param config Open writable configuration. @param key Key. @param index Value index. @param value UTF-8 value. @return ASTRA_CONFIG_* status. */
 uint32_t astra_config_set_string(AstraConfig *config, const char *key,
                                  uint32_t index, const char *value);
+/** Set only if document still matches this handle's snapshot. On conflict,
+ * refreshes snapshot and returns ASTRA_CONFIG_CONFLICT without writing.
+ * @param config Open writable configuration.
+ * @param key Key.
+ * @param index Value index.
+ * @param value UTF-8 value.
+ * @return ASTRA_CONFIG_* status.
+ */
+uint32_t astra_config_set_string_if_unchanged(AstraConfig *config,
+    const char *key, uint32_t index, const char *value);
 /** Set a signed integer. @param config Open writable configuration. @param key Key. @param index Value index. @param value Value. @return ASTRA_CONFIG_* status. */
 uint32_t astra_config_set_i64(AstraConfig *config, const char *key,
                               uint32_t index, int64_t value);
@@ -202,6 +228,15 @@ uint32_t astra_config_set_bool(AstraConfig *config, const char *key,
 /** Append a string. @param config Open writable configuration. @param key Key. @param value UTF-8 value. @return ASTRA_CONFIG_* status. */
 uint32_t astra_config_append_string(AstraConfig *config, const char *key,
                                     const char *value);
+/** Append only if document still matches this handle's snapshot. On conflict,
+ * refreshes snapshot and returns ASTRA_CONFIG_CONFLICT without writing.
+ * @param config Open writable configuration.
+ * @param key Key.
+ * @param value UTF-8 value.
+ * @return ASTRA_CONFIG_* status.
+ */
+uint32_t astra_config_append_string_if_unchanged(AstraConfig *config,
+    const char *key, const char *value);
 /** Append a signed integer. @param config Open writable configuration. @param key Key. @param value Value. @return ASTRA_CONFIG_* status. */
 uint32_t astra_config_append_i64(AstraConfig *config, const char *key,
                                  int64_t value);
@@ -214,5 +249,23 @@ uint32_t astra_config_append_bool(AstraConfig *config, const char *key,
 /** Remove one value. @param config Open writable configuration. @param key Key. @param index Value index. @return ASTRA_CONFIG_* status. */
 uint32_t astra_config_remove(AstraConfig *config, const char *key,
                              uint32_t index);
+/** Apply ordered changes in one atomic document commit. Failure leaves the
+ * previous committed document intact; changed handle snapshot is reloaded.
+ * @param config Open writable configuration.
+ * @param changes One to 64 validated changes.
+ * @param count Number of changes.
+ * @return ASTRA_CONFIG_* status.
+ */
+uint32_t astra_config_apply(AstraConfig *config,
+    const AstraConfigChange *changes, uint32_t count);
+/** Apply changes only if document still matches this handle's snapshot.
+ * Conflict refreshes snapshot without writing.
+ * @param config Open writable configuration.
+ * @param changes One to 64 validated changes.
+ * @param count Number of changes.
+ * @return ASTRA_CONFIG_* status.
+ */
+uint32_t astra_config_apply_if_unchanged(AstraConfig *config,
+    const AstraConfigChange *changes, uint32_t count);
 
 #endif

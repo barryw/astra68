@@ -37,6 +37,9 @@ def run(qemu, rom, image):
                                        "\n".join(machine.recent_serial(30)))
                 deadline = time.monotonic() + 60
                 required = {marker, "config-secret roundtrip PASS",
+                            "config-stale conflict/retry PASS",
+                            "config-batch atomic PASS",
+                            "config-concurrent writers PASS",
                             "config-public roundtrip PASS",
                             "config-secret unprivileged denied PASS"}
                 while time.monotonic() < deadline:

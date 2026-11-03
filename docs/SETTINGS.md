@@ -91,9 +91,9 @@ exist, it leaves both intact and uses the ID directory.
   Apply them only through the owning service's limited capability.
 - One service owns and writes each system document. Readers consume an immutable
   validated snapshot. If that service restarts, it rebuilds the snapshot from
-  the last committed document or built-in defaults. Cross-process notification
-  and transactional multi-key updates are future work, not implied by Config
-  Kit's current per-key atomic write.
+  the last committed document or built-in defaults. The owning service publishes
+  validated changes through its native service API; Config Kit does not broadcast
+  raw document changes to other owners.
 
 ## Settings application
 
@@ -161,15 +161,25 @@ lock, commits through a synced temporary file and atomic rename, then closes
 the lock handle. The host releases the lock if a writer dies. Concurrent
 instances can write different keys or append without losing another write;
 contention lasting five seconds returns `ASTRA_CONFIG_BUSY`. Reads use the
-handle's last snapshot until `astra_config_reload` is called. A sequence of
-separate API calls is not one transaction; callers doing read-modify-write
-must coordinate through their owner service or handle a changed snapshot.
+handle's last snapshot until `astra_config_reload` is called. Conditional set
+and append compare that snapshot with the current document under the same
+lock; a changed document refreshes the handle and returns
+`ASTRA_CONFIG_CONFLICT` without writing. Callers can recompute their choice
+and retry. Open With uses this path to avoid duplicate file-type preferences.
+A sequence of separate API calls is not one atomic multi-key transaction.
+`astra_config_apply` commits one to 64 ordered set, append, or remove changes
+as one document rename, including sensitive fields. A failed edit leaves the
+committed document intact. `astra_config_apply_if_unchanged` also checks the
+snapshot before applying edits.
 
 ## Haiku reference
 
 Reviewed `src/system/kernel/fs/vfs.cpp` file-lock lifecycle: locks belong to
 open descriptors and are released when the owner closes or dies. Astra adapts
 that pattern to HostFS advisory locks on one per-owner Config Kit lock file.
+Reviewed `src/kits/shared/SettingsMessage.cpp`: it uses `BAutolock` for one
+object's load/save and notifies local listeners after a value changes. Astra
+retains owner-scoped settings and adds cross-process snapshot comparison.
 
 Reviewed `src/servers/app/DesktopSettings.cpp` for server-owned desktop font
 defaults and per-user settings, `src/preferences/appearance/FontView.cpp` for a

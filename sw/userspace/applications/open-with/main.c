@@ -89,21 +89,29 @@ static uint32_t save_preferred(const char *id)
     if (!astra_string_append(&text, type.type) ||
         !astra_string_append_char(&text, ' ') ||
         !astra_string_append(&text, id)) return ASTRA_CONFIG_INVALID;
-    uint32_t status = astra_config_reload(&config, NULL);
-    if (status != ASTRA_CONFIG_OK) return status;
-    status = astra_config_count(&config, PREFERENCE_KEY, &count);
-    if (status != ASTRA_CONFIG_OK) return status;
-    for (uint32_t at = 0u; at < count; ++at) {
-        char prior[sizeof(value)];
-        uint32_t length = 0u;
-        status = astra_config_get_string(&config, PREFERENCE_KEY, at,
-                                         prior, sizeof(prior), &length);
+    for (uint32_t attempt = 0u; attempt < 16u; ++attempt) {
+        uint32_t status = astra_config_reload(&config, NULL);
         if (status != ASTRA_CONFIG_OK) return status;
-        size_t prefix = strlen(type.type);
-        if (strncmp(prior, type.type, prefix) == 0 && prior[prefix] == ' ')
-            return astra_config_set_string(&config, PREFERENCE_KEY, at, value);
+        status = astra_config_count(&config, PREFERENCE_KEY, &count);
+        if (status != ASTRA_CONFIG_OK) return status;
+        uint32_t at = 0u;
+        for (; at < count; ++at) {
+            char prior[sizeof(value)];
+            uint32_t length = 0u;
+            status = astra_config_get_string(&config, PREFERENCE_KEY, at,
+                                             prior, sizeof(prior), &length);
+            if (status != ASTRA_CONFIG_OK) return status;
+            size_t prefix = strlen(type.type);
+            if (strncmp(prior, type.type, prefix) == 0 && prior[prefix] == ' ')
+                break;
+        }
+        status = at < count ? astra_config_set_string_if_unchanged(
+            &config, PREFERENCE_KEY, at, value) :
+            astra_config_append_string_if_unchanged(
+                &config, PREFERENCE_KEY, value);
+        if (status != ASTRA_CONFIG_CONFLICT) return status;
     }
-    return astra_config_append_string(&config, PREFERENCE_KEY, value);
+    return ASTRA_CONFIG_BUSY;
 }
 
 static AstraResult launch(uint32_t index)
