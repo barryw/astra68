@@ -687,6 +687,29 @@ astra_vfs_sync(AstraVfsClient *client, AstraVfsFile file)
     return exchange(client, call, ASTRA_VFS_OP_SYNC);
 }
 
+uint32_t astra_vfs_try_lock(AstraVfsClient *client, AstraVfsFile file)
+{
+    const AstraVfsBackendOps *ops;
+    void *context;
+    AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
+    uint32_t status;
+
+    if (client == NULL || file == ASTRA_VFS_FILE_INVALID)
+        return ASTRA_VFS_ERR_INVALID;
+    if (client->direct_backend_ops != NULL) {
+        status = backend_enter(client, &ops, &context);
+        if (status != ASTRA_VFS_OK)
+            return status;
+        status = ops->try_lock != NULL ? ops->try_lock(context, file) :
+                                         ASTRA_VFS_ERR_UNSUPPORTED;
+        backend_leave(client);
+        return status;
+    }
+    call = begin(client);
+    call->request.file = file;
+    return exchange(client, call, ASTRA_VFS_OP_TRY_LOCK);
+}
+
 uint32_t
 astra_vfs_truncate(AstraVfsClient *client, AstraVfsFile file, uint64_t size)
 {

@@ -436,6 +436,7 @@ uint32_t astra_vfs_host_transport_submit(
         break;
     }
     case ASTRA_HOST_FS_SYNC:
+    case ASTRA_HOST_FS_TRY_LOCK:
     case ASTRA_HOST_FS_CLOSE:
         assert(command->handle == 0x1234u);
         break;
@@ -585,6 +586,11 @@ int main(void)
            host.calls == sync_calls + 1u && host.command.handle == node);
     host.failure = 0u;
     assert(ops->sync(&backend, node) == ASTRA_VFS_OK);
+    EXPECT(ASTRA_HOST_FS_TRY_LOCK);
+    assert(ops->try_lock(&backend, node) == ASTRA_VFS_OK);
+    host.failure = ASTRA_VFS_ERR_BUSY;
+    assert(ops->try_lock(&backend, node) == ASTRA_VFS_ERR_BUSY);
+    host.failure = 0u;
     EXPECT(ASTRA_HOST_FS_TRUNCATE);
     assert(ops->truncate(&backend, node, 12u) == ASTRA_VFS_OK);
     EXPECT(ASTRA_HOST_FS_STAT);
@@ -685,7 +691,7 @@ int main(void)
     assert(ops->close(&backend, node) == ASTRA_VFS_OK);
 #undef EXPECT
     /* Backend calls, including identity and generation boundary checks. */
-    assert(host.calls == 31u);
+    assert(host.calls == 33u);
     {
         uint8_t continuation[ASTRA_VFS_PATH_MAX];
         AstraVfsEscape escape = {.path = continuation, .capacity = ASTRA_VFS_ESCAPE_PATH_MAX};
@@ -703,7 +709,7 @@ int main(void)
         assert(ops->lookup(&backend, 0u, "/escape",
                            ASTRA_VFS_LOOKUP_ENTRY | ASTRA_VFS_LOOKUP_FOLLOW,
                            3u, &info, &escape) == ASTRA_VFS_ERR_INVALID);
-        assert(host.calls == 33u);
+        assert(host.calls == 35u);
     }
     {
         uint64_t token;

@@ -552,6 +552,11 @@ uint32_t astra_vfs_host_direct_transport(
     case ASTRA_VFS_OP_SYNC:
         reply->status = ops->sync(backend.context, request->file);
         break;
+    case ASTRA_VFS_OP_TRY_LOCK:
+        reply->status = ops->try_lock != NULL ?
+            ops->try_lock(backend.context, request->file) :
+            ASTRA_VFS_ERR_UNSUPPORTED;
+        break;
     case ASTRA_VFS_OP_TRUNCATE:
         reply->status = ops->truncate(backend.context, request->file,
                                       request->offset);

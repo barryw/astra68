@@ -189,8 +189,10 @@
 #define ASTRA_VFS_OP_DIRECTORY_PATH UINT32_C(42)
 /** Seal or open a Config Kit value under the receiving grant's provider root. */
 #define ASTRA_VFS_OP_CONFIG_CRYPT UINT32_C(43)
+/** Try an exclusive advisory lock on an open writable file; close releases it. */
+#define ASTRA_VFS_OP_TRY_LOCK     UINT32_C(44)
 /** Highest operation code this build defines. */
-#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_CONFIG_CRYPT
+#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_TRY_LOCK
 
 /** Encrypt a Config Kit value under the receiving grant's provider root. */
 #define ASTRA_VFS_CONFIG_SEAL UINT32_C(1)

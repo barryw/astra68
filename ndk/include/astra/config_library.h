@@ -47,7 +47,8 @@ enum {
     ASTRA_CONFIG_UNSUPPORTED_VERSION = 7,
     ASTRA_CONFIG_BUFFER_TOO_SMALL = 8,
     ASTRA_CONFIG_CLOSED = 9,
-    ASTRA_CONFIG_AUTH_FAILED = 10
+    ASTRA_CONFIG_AUTH_FAILED = 10,
+    ASTRA_CONFIG_BUSY = 11 /**< Another writer held this owner's document for five seconds. */
 };
 
 /** Open configuration document owned by one caller. */

@@ -5926,6 +5926,7 @@ static bool astra_host_fs_mutates(uint16_t operation, uint16_t flags)
     case ASTRA_HOST_FS_MKDIR: case ASTRA_HOST_FS_UNLINK:
     case ASTRA_HOST_FS_RENAME: case ASTRA_HOST_FS_CHMOD:
     case ASTRA_HOST_FS_SYMLINK: case ASTRA_HOST_FS_LINK:
+    case ASTRA_HOST_FS_TRY_LOCK:
         return true;
     default:
         return false;
@@ -6859,6 +6860,18 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
                  fsync(file->description->fd) == 0 ? ASTRA_STATUS_OK :
                  astra_host_path_status(errno, &resolved);
         break;
+    case ASTRA_HOST_FS_TRY_LOCK:
+        if (file == NULL || path[0] != '\0' || path2[0] != '\0' ||
+            flags != 0u || astra_host_get64(command, HOST_FIELD(value_hi)) != 0u) {
+            status = ASTRA_STATUS_INVALID;
+        } else if ((file->description->flags & ASTRA_VFS_OPEN_WRITE) == 0u ||
+                   file->description->directory != NULL) {
+            status = ASTRA_STATUS_ACCESS;
+        } else {
+            status = flock(file->description->fd, LOCK_EX | LOCK_NB) == 0 ?
+                ASTRA_STATUS_OK : astra_host_status_from_errno(errno);
+        }
+        break;
     case ASTRA_HOST_FS_TRUNCATE:
         file = astra_host_session_file(s, owner, session_id, handle);
         if (file == NULL) {
@@ -7178,7 +7191,8 @@ done:
         status = ASTRA_STATUS_LOST;
     if (file != NULL)
         astra_host_file_unlock(s, file);
-    if (namespace_locked && astra_host_fs_mutates(operation, flags)) {
+    if (namespace_locked && operation != ASTRA_HOST_FS_TRY_LOCK &&
+        astra_host_fs_mutates(operation, flags)) {
         qemu_mutex_lock(&s->host.files_lock);
         astra_host_usage_changed_locked(s);
         qemu_mutex_unlock(&s->host.files_lock);
@@ -9876,7 +9890,8 @@ static void astra68_init(MachineState *machine)
             { "astra-host-fs-share", "astra-host-fs-share-execution-ns" },
             { "astra-host-fs-adopt", "astra-host-fs-adopt-execution-ns" },
             { "astra-host-fs-file-flags", "astra-host-fs-file-flags-execution-ns" },
-            { "astra-host-fs-path", "astra-host-fs-path-execution-ns" }
+            { "astra-host-fs-path", "astra-host-fs-path-execution-ns" },
+            { "astra-host-fs-try-lock", "astra-host-fs-try-lock-execution-ns" }
         };
 
         G_STATIC_ASSERT(G_N_ELEMENTS(properties) ==

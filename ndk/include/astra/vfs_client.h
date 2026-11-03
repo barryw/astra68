@@ -408,6 +408,13 @@ uint32_t astra_vfs_write_position(AstraVfsClient *client, AstraVfsFile file,
  */
 uint32_t astra_vfs_sync(AstraVfsClient *client, AstraVfsFile file);
 /**
+ * Try an exclusive lock on an open writable file; close releases it.
+ * @param client Connected client.
+ * @param file Open writable file token.
+ * @return ASTRA_VFS_OK, ASTRA_VFS_ERR_BUSY, or other ASTRA_VFS_* status.
+ */
+uint32_t astra_vfs_try_lock(AstraVfsClient *client, AstraVfsFile file);
+/**
  * Set an open file's byte length.
  * @param client Connected client.
  * @param file Open file token.

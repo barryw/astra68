@@ -269,7 +269,8 @@ static const char *const fs_group_names[] = {
     "host.fs.chmod", "host.fs.readlink", "host.fs.symlink", "host.fs.link",
     "host.fs.filesystem_info", "host.fs.session_open",
     "host.fs.session_close", "host.fs.claim", "host.fs.seek",
-    "host.fs.share", "host.fs.adopt", "host.fs.file_flags", "host.fs.path"
+    "host.fs.share", "host.fs.adopt", "host.fs.file_flags", "host.fs.path",
+    "host.fs.try_lock"
 };
 _Static_assert(sizeof(fs_group_names) / sizeof(fs_group_names[0]) ==
                    ASTRA_HOST_FS_MAX + 1u,

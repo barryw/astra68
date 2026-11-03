@@ -232,6 +232,7 @@ ASTRA_FILESYSTEM_15.10 {
         astra_filesystem_rename_noreplace;
         astra_vfs_rename_noreplace;
         astra_vfs_rename_noreplace_at;
+astra_vfs_try_lock;
 } ASTRA_FILESYSTEM_15.8;
 
 ASTRA_FILESYSTEM_15.11 {

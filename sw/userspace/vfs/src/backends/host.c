@@ -344,6 +344,11 @@ static uint32_t host_sync(void *context, uintptr_t node)
     return host_handle_u64(context, node, ASTRA_HOST_FS_SYNC, 0u);
 }
 
+static uint32_t host_try_lock(void *context, uintptr_t node)
+{
+    return host_handle_u64(context, node, ASTRA_HOST_FS_TRY_LOCK, 0u);
+}
+
 static uint32_t host_truncate(void *context, uintptr_t node, uint64_t size)
 {
     return host_handle_u64(context, node, ASTRA_HOST_FS_TRUNCATE, size);
@@ -893,7 +898,8 @@ static uint32_t host_file_flags(void *context, uintptr_t node, uint32_t mask,
 
 static const AstraVfsBackendOps host_ops = {
     .open = host_open, .close = host_close, .read = host_read,
-    .write = host_write, .sync = host_sync, .truncate = host_truncate,
+    .write = host_write, .sync = host_sync, .try_lock = host_try_lock,
+    .truncate = host_truncate,
     .stat = host_stat, .readdir = host_readdir, .mkdir = host_mkdir,
     .unlink = host_unlink, .rename = host_rename,
     .rename_noreplace = host_rename_noreplace, .chmod = host_chmod,

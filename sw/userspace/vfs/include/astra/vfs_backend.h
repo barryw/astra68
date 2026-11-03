@@ -107,6 +107,8 @@ typedef struct AstraVfsBackendOps {
                       const void *buffer, uint32_t length,
                       uint32_t *moved, uint64_t *position);
     uint32_t (*sync)(void *context, uintptr_t node);
+    /** Optional nonblocking exclusive advisory lock; close releases it. */
+    uint32_t (*try_lock)(void *context, uintptr_t node);
     uint32_t (*truncate)(void *context, uintptr_t node, uint64_t size);
     uint32_t (*stat)(void *context, const char *path, AstraVfsNodeInfo *info);
     /*

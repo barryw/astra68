@@ -236,10 +236,11 @@ enum {
     ASTRA_HOST_FS_SHARE,            /**< Retain handle's description; value answers a one-use token. */
     ASTRA_HOST_FS_ADOPT,            /**< Consume offset's token in this session; handle answers the new handle. */
     ASTRA_HOST_FS_FILE_FLAGS,       /**< flags masks mutable status, value_lo supplies it; value_lo answers open flags. */
-    ASTRA_HOST_FS_PATH              /**< Current directory path beneath the session root, or NOT_FOUND when unnamed. */
+    ASTRA_HOST_FS_PATH,             /**< Current directory path beneath the session root, or NOT_FOUND when unnamed. */
+    ASTRA_HOST_FS_TRY_LOCK          /**< Nonblocking exclusive advisory lock on an open writable file; closing it releases the lock. */
 };
 /** Highest valid ASTRA_HOST_FS_* operation code. */
-#define ASTRA_HOST_FS_MAX ASTRA_HOST_FS_PATH
+#define ASTRA_HOST_FS_MAX ASTRA_HOST_FS_TRY_LOCK
 
 /** A root SESSION_OPEN carries an exact AstraVolumeReference in its input
  * payload. Derived sessions carry no target payload and inherit their parent.

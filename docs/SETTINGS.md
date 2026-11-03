@@ -155,10 +155,21 @@ Label title/description, a growing Container body and a Container of stacked
 actions. Its common layout owns window insets and spacing. Application controls
 and ordinary Interface Kit focus, layout and drawing remain shared; the shell
 adds no settings backend. See the NDK's `settings_pane.c` example.
-Config Kit currently assumes one writer per settings document; multiple app
-instances need an owner-mediated write path before concurrent editing is safe.
+Config Kit serializes each set, append, and remove for one owner document with
+an exclusive file lock. A writer reloads current settings after acquiring the
+lock, commits through a synced temporary file and atomic rename, then closes
+the lock handle. The host releases the lock if a writer dies. Concurrent
+instances can write different keys or append without losing another write;
+contention lasting five seconds returns `ASTRA_CONFIG_BUSY`. Reads use the
+handle's last snapshot until `astra_config_reload` is called. A sequence of
+separate API calls is not one transaction; callers doing read-modify-write
+must coordinate through their owner service or handle a changed snapshot.
 
 ## Haiku reference
+
+Reviewed `src/system/kernel/fs/vfs.cpp` file-lock lifecycle: locks belong to
+open descriptors and are released when the owner closes or dies. Astra adapts
+that pattern to HostFS advisory locks on one per-owner Config Kit lock file.
 
 Reviewed `src/servers/app/DesktopSettings.cpp` for server-owned desktop font
 defaults and per-user settings, `src/preferences/appearance/FontView.cpp` for a

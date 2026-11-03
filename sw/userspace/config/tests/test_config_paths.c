@@ -17,9 +17,11 @@ int main(void)
     assert(path(output.document, sizeof(output.document), normalized, "settings.conf"));
     assert(strlen(output.document) == ASTRA_CAPABILITY_ROOT_MAX + 1u + strlen("settings.conf"));
     assert(output.guard == 0xa5u);
-    assert(!path(output.document, sizeof(output.document) - 1u, normalized, "settings.conf"));
+    assert(!path(output.document, strlen(output.document), normalized, "settings.conf"));
     assert(output.guard == 0xa5u);
     assert(path(output.document, sizeof(output.document), normalized, ".settings.tmp"));
+    assert(output.guard == 0xa5u);
+    assert(path(output.document, sizeof(output.document), normalized, ".settings.lock"));
     assert(output.guard == 0xa5u);
     memset(root, 'r', ASTRA_CAPABILITY_ROOT_MAX);
     root[ASTRA_CAPABILITY_ROOT_MAX] = '\0';

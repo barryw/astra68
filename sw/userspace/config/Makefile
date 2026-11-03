@@ -92,9 +92,17 @@ build/host/test_config_paths: tests/test_config_paths.c src/config_library.c src
 		tests/test_config_paths.c src/config_document.c $(ASTRA_COMMON)/utf8.c \
 		-Wl,--gc-sections -o $@
 
-test: $(HOST_TEST) build/host/test_config_paths
+build/host/test_config_writes: tests/test_config_writes.c src/config_library.c src/config_document.c $(SYSTEM)/src/manifest.c $(ASTRA_COMMON)/utf8.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 -pthread \
+		-ffunction-sections -fdata-sections tests/test_config_writes.c \
+		src/config_document.c $(SYSTEM)/src/manifest.c $(ASTRA_COMMON)/utf8.c \
+		-Wl,--gc-sections -o $@
+
+test: $(HOST_TEST) build/host/test_config_paths build/host/test_config_writes
 	./$(HOST_TEST)
 	./build/host/test_config_paths
+	./build/host/test_config_writes
 
 sanitize:
 	@mkdir -p build/host

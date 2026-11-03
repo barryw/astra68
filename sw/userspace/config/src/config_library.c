@@ -20,7 +20,7 @@ ASTRA_DYNAMIC_LIBRARY("config.library.2", 2, 0, 0,
  * prefix has the canonical capability bound; no full pathname scratch is
  * needed for the two fixed document leaves. State lives in its owned area. */
 #define CONFIG_ROOT_CAPACITY (ASTRA_CAPABILITY_ROOT_MAX + 1u)
-#define CONFIG_PATH_CAPACITY (CONFIG_ROOT_CAPACITY + sizeof("settings.conf"))
+#define CONFIG_PATH_CAPACITY (CONFIG_ROOT_CAPACITY + sizeof(".settings.lock"))
 
 typedef struct ConfigState {
     AstraVfsClient client;
@@ -33,6 +33,7 @@ typedef struct ConfigState {
     char root[CONFIG_ROOT_CAPACITY];
     char path[CONFIG_PATH_CAPACITY];
     char temporary[CONFIG_PATH_CAPACITY];
+    char lock_path[CONFIG_PATH_CAPACITY];
 } ConfigState;
 
 static int schema_valid(const AstraConfigSchema *schema)
@@ -79,6 +80,7 @@ static uint32_t map_status(uint32_t status)
     if (status == ASTRA_VFS_OK) return ASTRA_CONFIG_OK;
     if (status == ASTRA_VFS_ERR_NOT_FOUND) return ASTRA_CONFIG_NOT_FOUND;
     if (status == ASTRA_VFS_ERR_ACCESS) return ASTRA_CONFIG_ACCESS;
+    if (status == ASTRA_VFS_ERR_BUSY) return ASTRA_CONFIG_BUSY;
     if (status == ASTRA_VFS_ERR_LIMIT || status == ASTRA_VFS_ERR_NO_SPACE)
         return ASTRA_CONFIG_NO_MEMORY;
     return ASTRA_CONFIG_IO;
@@ -326,7 +328,8 @@ static uint32_t open_capability(const AstraStartupInfo *startup,
     }
     if (
         !path(state->path, sizeof(state->path), state->root, "settings.conf") ||
-        !path(state->temporary, sizeof(state->temporary), state->root, ".settings.tmp")) {
+        !path(state->temporary, sizeof(state->temporary), state->root, ".settings.tmp") ||
+        !path(state->lock_path, sizeof(state->lock_path), state->root, ".settings.lock")) {
         status = ASTRA_CONFIG_INVALID;
         goto failed;
     }
@@ -606,16 +609,81 @@ static uint32_t change(ConfigState *state, const char *key, uint32_t index,
     return commit(state, text_area, text, required - 1u);
 }
 
+/* HostFS owns flock state on its open description. A dead writer's close
+ * releases it, unlike a shared-memory futex or persistent lock directory. */
+static uint32_t begin_write(ConfigState *state, AstraVfsFile *lock_file)
+{
+    uint64_t size = 0u;
+    uint16_t kind = ASTRA_VFS_KIND_UNKNOWN;
+    uint32_t status;
+
+    *lock_file = ASTRA_VFS_FILE_INVALID;
+    if ((state->flags & ASTRA_CONFIG_OPEN_WRITE) == 0u)
+        return ASTRA_CONFIG_ACCESS;
+    status = astra_vfs_open_mode(&state->client, state->lock_path,
+        ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+        ASTRA_VFS_OPEN_NOFOLLOW, 0600u, lock_file, &size, &kind);
+    if (status != ASTRA_VFS_OK)
+        return map_status(status);
+    if (kind != ASTRA_VFS_KIND_FILE) {
+        status = ASTRA_VFS_ERR_INVALID;
+        goto failed;
+    }
+    for (uint32_t attempt = 0u; attempt < 5000u; ++attempt) {
+        status = astra_vfs_try_lock(&state->client, *lock_file);
+        if (status == ASTRA_VFS_OK) {
+            uint32_t loaded = load(state, NULL);
+            if (loaded == ASTRA_CONFIG_OK) return loaded;
+            (void)astra_vfs_close(&state->client, *lock_file);
+            *lock_file = ASTRA_VFS_FILE_INVALID;
+            return loaded;
+        }
+        if (status != ASTRA_VFS_ERR_BUSY)
+            goto failed;
+        uint32_t slept = astra_rt_thread_sleep(1000000ull,
+            ASTRA_THREAD_SLEEP_RELATIVE, 0u, NULL);
+        if (slept != ASTRA_SYSCALL_TIMED_OUT &&
+            slept != ASTRA_SYSCALL_CANCELLED) {
+            status = ASTRA_VFS_ERR_IO;
+            goto failed;
+        }
+    }
+    status = ASTRA_VFS_ERR_BUSY;
+failed:
+    (void)astra_vfs_close(&state->client, *lock_file);
+    *lock_file = ASTRA_VFS_FILE_INVALID;
+    return map_status(status);
+}
+
+static uint32_t end_write(ConfigState *state, AstraVfsFile lock_file,
+                          uint32_t status)
+{
+    uint32_t closed = astra_vfs_close(&state->client, lock_file);
+    return status == ASTRA_CONFIG_OK ? map_status(closed) : status;
+}
+
+static uint32_t set_unlocked(ConfigState *state, const char *key,
+                             uint32_t index, const char *value)
+{
+    const AstraConfigField *field = schema_field(state, key);
+    return (field->flags & ASTRA_CONFIG_FIELD_SENSITIVE) != 0u ?
+        sensitive_set_string(state, key, index, value) :
+        change(state, key, index, value, 0);
+}
+
 uint32_t astra_config_set_string(AstraConfig *config, const char *key,
                            uint32_t index, const char *value)
 {
     ConfigState *state = state_of(config);
-    const AstraConfigField *field = schema_field(state, key);
+    AstraVfsFile lock_file;
+    uint32_t status;
     if (state == NULL) return ASTRA_CONFIG_CLOSED;
-    if (value == NULL || field == NULL) return ASTRA_CONFIG_INVALID;
-    return (field->flags & ASTRA_CONFIG_FIELD_SENSITIVE) != 0u ?
-        sensitive_set_string(state, key, index, value) :
-        change(state, key, index, value, 0);
+    if (value == NULL || schema_field(state, key) == NULL)
+        return ASTRA_CONFIG_INVALID;
+    status = begin_write(state, &lock_file);
+    if (status != ASTRA_CONFIG_OK) return status;
+    return end_write(state, lock_file,
+        set_unlocked(state, key, index, value));
 }
 
 #define CONFIG_SECRET_MAX 1024u
@@ -787,11 +855,19 @@ uint32_t astra_config_set_bool(AstraConfig *config, const char *key, uint32_t in
 uint32_t astra_config_append_string(AstraConfig *config, const char *key,
                               const char *value)
 {
+    ConfigState *state = state_of(config);
+    AstraVfsFile lock_file;
     uint32_t count = 0u;
-    uint32_t status = astra_config_count(config, key, &count);
-
-    return status == ASTRA_CONFIG_OK ? astra_config_set_string(config, key, count, value) :
-                                      status;
+    uint32_t status;
+    if (state == NULL) return ASTRA_CONFIG_CLOSED;
+    if (value == NULL || schema_field(state, key) == NULL)
+        return ASTRA_CONFIG_INVALID;
+    status = begin_write(state, &lock_file);
+    if (status != ASTRA_CONFIG_OK) return status;
+    status = astra_config_document_count(state->text, state->length, key, &count);
+    if (status == ASTRA_CONFIG_OK)
+        status = set_unlocked(state, key, count, value);
+    return end_write(state, lock_file, status);
 }
 
 uint32_t astra_config_append_i64(AstraConfig *config, const char *key,
@@ -820,5 +896,13 @@ uint32_t astra_config_append_bool(AstraConfig *config, const char *key, int valu
 uint32_t astra_config_remove(AstraConfig *config, const char *key,
                              uint32_t index)
 {
-    return change(state_of(config), key, index, NULL, 1);
+    ConfigState *state = state_of(config);
+    AstraVfsFile lock_file;
+    uint32_t status;
+    if (state == NULL) return ASTRA_CONFIG_CLOSED;
+    if (schema_field(state, key) == NULL) return ASTRA_CONFIG_INVALID;
+    status = begin_write(state, &lock_file);
+    if (status != ASTRA_CONFIG_OK) return status;
+    return end_write(state, lock_file,
+        change(state, key, index, NULL, 1));
 }

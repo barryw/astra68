@@ -1425,6 +1425,24 @@ dispatch_unlocked(AstraVfsService *service, uint32_t owner, uint32_t grant,
             file_release(service, file);
         }
         break;
+    case ASTRA_VFS_OP_TRY_LOCK:
+        file = find_file(service, slot->id, request->file, &status);
+        if (file == NULL) {
+            reply->status = status;
+        } else if ((file->flags & ASTRA_VFS_OPEN_WRITE) == 0u) {
+            reply->status = ASTRA_VFS_ERR_ACCESS;
+        } else if (service->backend.ops->try_lock == NULL) {
+            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
+        } else if (!file_acquire(service, file)) {
+            reply->status = ASTRA_VFS_ERR_IO;
+        } else {
+            state_release(service);
+            reply->status = service->backend.ops->try_lock(
+                service->backend.context, file->node);
+            (void)state_acquire(service);
+            file_release(service, file);
+        }
+        break;
     case ASTRA_VFS_OP_TRUNCATE:
         file = find_file(service, slot->id, request->file, &status);
         if (file == NULL) {
