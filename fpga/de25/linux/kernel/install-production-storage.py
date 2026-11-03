@@ -89,6 +89,8 @@ def verified_package(kernel):
                 "lib/modules/%s/extra/astra/astra_graphics_arena.ko" % release,
                 "lib/modules/%s/extra/astra/astra_display_capture.ko" % release,
                 "lib/modules/%s/modules.dep" % release)
+    if "CONFIG_CIFS=m\n" in (package / "metadata/kernel.config").read_text():
+        required += ("lib/modules/%s/kernel/fs/smb/client/cifs.ko" % release,)
     if any(name not in records for name in required):
         raise RuntimeError("incomplete optical/graphics kernel package")
     for name, value in records.items():

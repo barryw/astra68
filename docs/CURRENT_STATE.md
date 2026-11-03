@@ -22,7 +22,9 @@ also passed after a temporary localhost export was added; that export and the
 test Samba container were removed. Evidence:
 `/mnt/Documents/astra68/network-smb-guest-provider-20261103/` on Beast.
 Credentialed SMB, Settings/CLI saved mappings, and DE25 boot/runtime gates
-remain open. The `storage3` package is still off board.
+remain open. The `storage3` package is still off board. The kernel installer
+now requires `cifs.ko` whenever the package's config enables it; that check
+has not yet run through a DE25 stage.
 
 Network filesystem work, 2026-11-03: branch `network-volumes` adds native
 network source class/origin, `/netN` catalog names, typed NFS source admission,
