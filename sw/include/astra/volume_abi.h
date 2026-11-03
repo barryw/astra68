@@ -53,7 +53,8 @@ enum AstraVolumeClass {
     ASTRA_VOLUME_FIXED = 1,
     ASTRA_VOLUME_USB,
     ASTRA_VOLUME_OPTICAL,
-    ASTRA_VOLUME_RAM
+    ASTRA_VOLUME_RAM,
+    ASTRA_VOLUME_NETWORK
 };
 
 /** Lifecycle is reported independently from metadata visibility or data authority. */
@@ -82,7 +83,9 @@ enum AstraVolumeFormat {
     ASTRA_VOLUME_FAT12,
     ASTRA_VOLUME_FAT16,
     ASTRA_VOLUME_NTFS,
-    ASTRA_VOLUME_UNSUPPORTED
+    ASTRA_VOLUME_UNSUPPORTED,
+    ASTRA_VOLUME_NFS,
+    ASTRA_VOLUME_SMB
 };
 
 /** Sources retain their actual origin instead of fabricating physical devices. */
@@ -91,7 +94,8 @@ enum AstraVolumeOrigin {
     ASTRA_VOLUME_ORIGIN_IMAGE,
     ASTRA_VOLUME_ORIGIN_RAM,
     ASTRA_VOLUME_ORIGIN_EXPORT,
-    ASTRA_VOLUME_ORIGIN_SYSTEM_IMAGE
+    ASTRA_VOLUME_ORIGIN_SYSTEM_IMAGE,
+    ASTRA_VOLUME_ORIGIN_NETWORK
 };
 
 /** Partition map reported for a physical device or its partition source. */

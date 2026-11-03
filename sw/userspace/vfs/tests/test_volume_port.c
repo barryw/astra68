@@ -301,6 +301,17 @@ static void query_validation(void)
     assert(astra_volume_page_valid(&query, &page));
     page.records[0].format = ASTRA_VOLUME_UNSUPPORTED + 1u;
     assert(!astra_volume_page_valid(&query, &page));
+    page.records[0].parent = 0u;
+    page.records[0].parent_generation = 0u;
+    page.records[0].kind = ASTRA_VOLUME_SOURCE;
+    page.records[0].state = ASTRA_VOLUME_UNMOUNTED;
+    page.records[0].class_id = ASTRA_VOLUME_NETWORK;
+    page.records[0].origin = ASTRA_VOLUME_ORIGIN_NETWORK;
+    page.records[0].format = ASTRA_VOLUME_NFS;
+    page.records[0].detected_type[0] = '\0';
+    assert(astra_volume_page_valid(&query, &page));
+    page.records[0].origin = ASTRA_VOLUME_ORIGIN_DEVICE;
+    assert(!astra_volume_page_valid(&query, &page));
     page.records[0].format = ASTRA_VOLUME_FAT32;
     page.records[0].kind = ASTRA_VOLUME_DEVICE;
     page.records[0].class_id = ASTRA_VOLUME_USB;

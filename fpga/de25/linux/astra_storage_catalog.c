@@ -381,6 +381,28 @@ static bool display_label(const char *label, size_t length)
     return true;
 }
 
+int astra_storage_network_source(AstraStorageCatalog *catalog, uint32_t format,
+                                 const char *label, uint64_t *id)
+{
+    size_t length;
+    int error;
+    if (catalog == NULL || label == NULL || id == NULL ||
+        (format != ASTRA_VOLUME_NFS && format != ASTRA_VOLUME_SMB))
+        return EINVAL;
+    length = strnlen(label, sizeof(((AstraStorageRecord *)0)->label));
+    if (length == sizeof(((AstraStorageRecord *)0)->label)) return ENAMETOOLONG;
+    if (!display_label(label, length)) return EILSEQ;
+    error = add(catalog, ASTRA_VOLUME_SOURCE, NULL, ASTRA_VOLUME_NETWORK,
+                ASTRA_VOLUME_UNMOUNTED, id);
+    if (error == 0) {
+        AstraStorageRecord *record = find(catalog, *id);
+        record->format = format;
+        record->origin = ASTRA_VOLUME_ORIGIN_NETWORK;
+        memcpy(record->label, label, length + 1u);
+    }
+    return error;
+}
+
 int astra_storage_probe_result(AstraStorageCatalog *catalog, uint64_t source,
                                uint64_t generation, uint32_t format,
                                const char *uuid, const char *label,
@@ -444,6 +466,8 @@ static bool supported(uint32_t class_id, uint32_t format)
     case ASTRA_VOLUME_OPTICAL:
         return format == ASTRA_VOLUME_ISO9660 || format == ASTRA_VOLUME_UDF;
     case ASTRA_VOLUME_RAM: return format == ASTRA_VOLUME_TMPFS;
+    case ASTRA_VOLUME_NETWORK:
+        return format == ASTRA_VOLUME_NFS || format == ASTRA_VOLUME_SMB;
     default: return false;
     }
 }
@@ -476,8 +500,8 @@ static int mount_name(const AstraStorageCatalog *catalog, uint32_t class_id,
 {
     if (flags & ASTRA_VOLUME_SYSTEM) { strcpy(name, "/dh0"); return 0; }
     if (flags & ASTRA_VOLUME_TEMPORARY) { strcpy(name, "/tmp"); return 0; }
-    static const char *const prefixes[] = {"dh", "usb", "cd", "ram"};
-    if (class_id < ASTRA_VOLUME_FIXED || class_id > ASTRA_VOLUME_RAM) return EINVAL;
+    static const char *const prefixes[] = {"dh", "usb", "cd", "ram", "net"};
+    if (class_id < ASTRA_VOLUME_FIXED || class_id > ASTRA_VOLUME_NETWORK) return EINVAL;
     if (class_id != ASTRA_VOLUME_USB && usb_slot != UINT32_MAX) return EINVAL;
     uint64_t number = usb_slot != UINT32_MAX ? usb_slot :
         class_id == ASTRA_VOLUME_FIXED ? 1u : 0u;

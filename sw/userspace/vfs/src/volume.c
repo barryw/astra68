@@ -143,14 +143,18 @@ int astra_volume_page_valid(const AstraVolumeCatalogQuery *query,
         if (row->id == 0u || row->generation == 0u || row->reserved != 0u ||
             row->kind < ASTRA_VOLUME_DEVICE || row->kind > ASTRA_VOLUME_BINDING ||
             row->state < ASTRA_VOLUME_DISCOVERED || row->state > ASTRA_VOLUME_PARTITIONING ||
-            row->class_id > ASTRA_VOLUME_RAM || row->format > ASTRA_VOLUME_UNSUPPORTED ||
+            row->class_id > ASTRA_VOLUME_NETWORK || row->format > ASTRA_VOLUME_SMB ||
             (row->format == ASTRA_VOLUME_UNSUPPORTED && row->detected_type[0] == '\0') ||
+            ((row->class_id == ASTRA_VOLUME_NETWORK) !=
+             (row->origin == ASTRA_VOLUME_ORIGIN_NETWORK)) ||
+            ((row->format == ASTRA_VOLUME_NFS || row->format == ASTRA_VOLUME_SMB) !=
+             (row->class_id == ASTRA_VOLUME_NETWORK)) ||
             row->partition_map > ASTRA_VOLUME_PARTITION_MAP_OTHER ||
             (row->partition_number == 0u && row->offset_bytes != 0u) ||
             (row->partition_number != 0u &&
                 (row->kind != ASTRA_VOLUME_SOURCE || row->capacity_bytes == 0u ||
                  row->offset_bytes > UINT64_MAX - row->capacity_bytes)) ||
-            row->origin > ASTRA_VOLUME_ORIGIN_SYSTEM_IMAGE ||
+            row->origin > ASTRA_VOLUME_ORIGIN_NETWORK ||
             (row->flags & ~(ASTRA_VOLUME_READ_ONLY | ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_VOLATILE |
                 ASTRA_VOLUME_DUPLICATE_UUID | ASTRA_VOLUME_AMBIGUOUS_FORMAT | ASTRA_VOLUME_LABEL_INVALID |
                 ASTRA_VOLUME_TEMPORARY | ASTRA_VOLUME_CLEANUP_PENDING | ASTRA_VOLUME_CONFIGURED_RAM |

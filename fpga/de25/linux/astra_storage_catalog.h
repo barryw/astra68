@@ -51,6 +51,9 @@ int astra_storage_physical_read_only(AstraStorageCatalog *catalog, uint64_t id,
                                      uint64_t generation, int read_only);
 /* Configured tmpfs is a source, not a fabricated physical disk or medium. */
 int astra_storage_ram_source(AstraStorageCatalog *catalog, uint32_t flags, uint64_t *id);
+/* Configured remote share, without a fabricated device or medium. */
+int astra_storage_network_source(AstraStorageCatalog *catalog, uint32_t format,
+                                 const char *label, uint64_t *id);
 /* Trusted launcher selection, not a fabricated physical device/medium. */
 int astra_storage_system_source(AstraStorageCatalog *catalog, uint64_t *id);
 /* An image pins an exact file description and its backing mount. */

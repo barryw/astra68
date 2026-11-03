@@ -242,6 +242,41 @@ static void policy_and_metadata(void)
     astra_storage_catalog_destroy(&catalog);
 }
 
+static void network_sources(void)
+{
+    AstraStorageCatalog catalog;
+    uint64_t nfs = 0u, smb = 0u, mounted = 0u;
+    char long_label[256];
+    memset(long_label, 'x', sizeof(long_label));
+    assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
+    assert(astra_storage_network_source(&catalog, ASTRA_VOLUME_EXT4,
+        "Invalid", &nfs) == EINVAL);
+    assert(astra_storage_network_source(&catalog, ASTRA_VOLUME_NFS,
+        "Bad\nlabel", &nfs) == EILSEQ);
+    assert(astra_storage_network_source(&catalog, ASTRA_VOLUME_NFS,
+        long_label, &nfs) == ENAMETOOLONG);
+    assert(astra_storage_network_source(&catalog, ASTRA_VOLUME_NFS,
+        "Stories", &nfs) == 0);
+    const AstraStorageRecord *source = astra_storage_find(&catalog, nfs);
+    assert(source->kind == ASTRA_VOLUME_SOURCE &&
+        source->class_id == ASTRA_VOLUME_NETWORK &&
+        source->origin == ASTRA_VOLUME_ORIGIN_NETWORK &&
+        source->format == ASTRA_VOLUME_NFS && source->parent == 0u &&
+        strcmp(source->label, "Stories") == 0);
+    assert(astra_storage_network_source(&catalog, ASTRA_VOLUME_SMB,
+        "Shared", &smb) == 0);
+    assert(astra_storage_mount_begin(&catalog, nfs, 1u, 0u,
+        0u, 0u, UINT32_MAX, &mounted) == 0);
+    assert(strcmp(astra_storage_find(&catalog, mounted)->name, "/net0") == 0);
+    assert(astra_storage_mount_result(&catalog, mounted, 1u, 71u, 0) == 0);
+    assert(astra_storage_mount_begin(&catalog, smb, 1u,
+        ASTRA_VOLUME_READ_ONLY, 0u, 0u, UINT32_MAX, &mounted) == 0);
+    assert(strcmp(astra_storage_find(&catalog, mounted)->name, "/net1") == 0);
+    assert(astra_storage_device(&catalog, ASTRA_VOLUME_NETWORK,
+        0u, 0u, &mounted) == EINVAL);
+    astra_storage_catalog_destroy(&catalog);
+}
+
 static void snapshots_and_budget(void)
 {
     AstraStorageCatalog catalog;
@@ -736,6 +771,7 @@ int main(void)
     lifecycle();
     loss_and_stale_completion();
     policy_and_metadata();
+    network_sources();
     snapshots_and_budget();
     image_dependencies();
     names_and_bindings();
@@ -749,6 +785,6 @@ int main(void)
     physical_write_protection();
     format_lifecycle();
     partition_lifecycle();
-    puts("storage catalog: lifecycle, loss, stale completion, metadata, snapshots, budget PASS");
+    puts("storage catalog: lifecycle, loss, stale completion, metadata, network, snapshots, budget PASS");
     return 0;
 }
