@@ -18,6 +18,7 @@ done
 case "$trial_root" in /var/tmp/astra-*) ;; *) echo "trial root must be under /var/tmp/astra-*" >&2; exit 2 ;; esac
 case "$release" in "$trial_root"/*) ;; *) echo "release is outside trial root" >&2; exit 2 ;; esac
 case "$image" in "$trial_root"/*) ;; *) echo "image is outside trial root" >&2; exit 2 ;; esac
+case "$image" in "$release"/*) echo "trial image must be outside verified release" >&2; exit 2 ;; esac
 case "$seconds" in ''|*[!0-9]*) echo "invalid trial duration" >&2; exit 2 ;; esac
 if [ "$seconds" -lt 1 ] || [ "$seconds" -gt 600 ] ||
    [ ! -f "$image" ] || [ -L "$image" ] ||

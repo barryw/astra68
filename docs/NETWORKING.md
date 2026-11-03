@@ -93,9 +93,16 @@ all three Astra services remained active with no panic. Test veths and host
 profile were removed, with 8.0 GiB board space free. Evidence is archived at
 `/mnt/Documents/astra68/ethernet-config-20261103/` on Beast. Physical `eth0`
 was not reconfigured because it carries remote board access.
-The Config Kit write and host checkpoint confirmation are separate durable
-steps; a crash between them can leave the saved desired profile ahead of the
-restored host connection. Reconciliation after such a crash remains open.
+Keep first writes a pending decision in the service's scoped Config Kit
+document. After host checkpoint confirmation, one atomic Config Kit batch
+promotes that profile and removes the pending record. A service restart or
+failed host confirmation replays the pending decision until the host and saved
+profile agree. The host refuses nested checkpoint creation, so an orphaned
+checkpoint must roll back before recovery stages another connection. A DE25
+private trial seeded the interrupted state and recovered `astra-test0` to
+`198.18.0.2/30`, with no pending record or checkpoint afterward; a separate
+Settings Apply/Keep trial exercised the normal path. Neither test altered
+physical `eth0`, which carries remote access.
 
 `ntpd` opens `config.library` and asks for its `pool` and `server` settings; it
 does not know a configuration path, file format, or storage API. The supervisor

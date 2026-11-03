@@ -171,7 +171,7 @@ AstraNetworkStatus astra_network_ethernet_ipv4_validate(const AstraNetworkEthern
 AstraNetworkStatus astra_network_ethernet_probe(AstraNetworkSession *session, const AstraNetworkEthernetIPv4 *configuration);
 /** Stage configuration with timed automatic rollback, 30-300 seconds. Requires NETWORK_ADMIN. @param session Admin session. @param configuration Candidate profile. @param rollback_seconds Automatic rollback timeout. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_ethernet_stage(AstraNetworkSession *session, const AstraNetworkEthernetIPv4 *configuration, uint32_t rollback_seconds);
-/** Persist staged configuration and stop rollback. Requires same admin session. @param session Owning admin session. @return ASTRA_NETWORK_* status. */
+/** Persist staged configuration and stop rollback. Requires same admin session. Returns IN_PROGRESS if Keep is durable but host recovery is pending. @param session Owning admin session. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_ethernet_confirm(AstraNetworkSession *session);
 /** Restore previous configuration. Requires same admin session. @param session Owning admin session. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_ethernet_revert(AstraNetworkSession *session);

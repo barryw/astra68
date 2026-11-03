@@ -45,10 +45,13 @@ static uint32_t listen_receive, listen_send;
 static uint32_t admin_receive, admin_send;
 static uint32_t ethernet_owner;
 static uint64_t ethernet_owner_until;
+static uint64_t ethernet_recovery_at = ASTRA_DEADLINE_FOREVER;
 static AstraNetworkEthernetIPv4 ethernet_pending;
 static AstraConfig ethernet_config = ASTRA_CONFIG_INIT;
-static const AstraConfigField ethernet_fields[] = {{"profile", 0u}};
-static const AstraConfigSchema ethernet_schema = {1u, ethernet_fields, 1u};
+static const AstraConfigField ethernet_fields[] = {
+    {"profile", 0u}, {"pending", 0u}
+};
+static const AstraConfigSchema ethernet_schema = {1u, ethernet_fields, 2u};
 
 static uint32_t next_nonzero(uint32_t *value)
 {
@@ -612,6 +615,81 @@ static AstraNetworkStatus dispatch_interfaces(
     return status;
 }
 
+static void ethernet_clear_owner(void)
+{
+    ethernet_owner = 0u;
+    ethernet_owner_until = 0u;
+    (void)memset(&ethernet_pending, 0, sizeof(ethernet_pending));
+}
+
+static AstraNetworkStatus ethernet_promote(const char *next,
+                                           const char *name)
+{
+    char previous[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX];
+    uint32_t count = 0u, index, length = 0u;
+    AstraConfigChange changes[2] = {
+        {"profile", next, 0u, ASTRA_CONFIG_CHANGE_APPEND},
+        {"pending", NULL, 0u, ASTRA_CONFIG_CHANGE_REMOVE}
+    };
+
+    if (astra_config_count(&ethernet_config, "profile", &count) !=
+            ASTRA_CONFIG_OK)
+        return ASTRA_NETWORK_IO;
+    for (index = 0u; index < count; ++index) {
+        AstraNetworkEthernetIPv4 saved;
+        if (astra_config_get_string(&ethernet_config, "profile", index,
+                previous, sizeof(previous), &length) != ASTRA_CONFIG_OK ||
+            !astra_network_ethernet_profile_decode(previous, &saved))
+            return ASTRA_NETWORK_IO;
+        if (strcmp(saved.name, name) == 0) {
+            changes[0].operation = ASTRA_CONFIG_CHANGE_SET;
+            changes[0].index = index;
+            break;
+        }
+    }
+    return astra_config_apply(&ethernet_config, changes, 2u) ==
+        ASTRA_CONFIG_OK ? ASTRA_NETWORK_OK : ASTRA_NETWORK_IO;
+}
+
+static void ethernet_recover(void)
+{
+    char text[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX];
+    AstraNetworkEthernetIPv4 profile;
+    AstraNetworkHostCommand command = {0};
+    uint32_t count = 0u, length = 0u;
+    AstraNetworkStatus status;
+
+    if (ethernet_owner != 0u) return;
+    ethernet_recovery_at = ASTRA_DEADLINE_FOREVER;
+    if (astra_config_count(&ethernet_config, "pending", &count) !=
+            ASTRA_CONFIG_OK || count != 1u ||
+        astra_config_get_string(&ethernet_config, "pending", 0u, text,
+            sizeof(text), &length) != ASTRA_CONFIG_OK ||
+        !astra_network_ethernet_profile_decode(text, &profile)) {
+        (void)astra_log_failure("network pending profile invalid",
+                                ASTRA_NETWORK_IO);
+        return;
+    }
+    command.operation = ASTRA_NETWORK_HOST_ETHERNET_STAGE;
+    command.value = 120u;
+    status = host_execute(&command, &profile, sizeof(profile), NULL, 0u);
+    if (status == ASTRA_NETWORK_OK) {
+        command.operation = ASTRA_NETWORK_HOST_ETHERNET_CONFIRM;
+        status = host_execute(&command, NULL, 0u, NULL, 0u);
+        if (status == ASTRA_NETWORK_OK)
+            status = ethernet_promote(text, profile.name);
+        else {
+            command.operation = ASTRA_NETWORK_HOST_ETHERNET_REVERT;
+            (void)host_execute(&command, NULL, 0u, NULL, 0u);
+        }
+    }
+    if (status != ASTRA_NETWORK_OK) {
+        (void)astra_log_failure("network pending profile recovery", status);
+        ethernet_recovery_at = astra_clock_monotonic() +
+            UINT64_C(30000000000);
+    }
+}
+
 static AstraNetworkStatus dispatch_ethernet(
     NetworkSession *session, const AstraNetworkRequestMessage *request)
 {
@@ -661,11 +739,15 @@ static AstraNetworkStatus dispatch_ethernet(
         input = bytes;
         input_size = length;
         if (request->header.operation == ASTRA_NETWORK_ETHERNET_STAGE) {
+            uint32_t pending_count = 0u;
+            if (astra_config_count(&ethernet_config, "pending",
+                    &pending_count) != ASTRA_CONFIG_OK)
+                return ASTRA_NETWORK_IO;
+            if (pending_count != 0u)
+                return ASTRA_NETWORK_IN_PROGRESS;
             if (ethernet_owner != 0u &&
                 astra_clock_monotonic() >= ethernet_owner_until) {
-                ethernet_owner = 0u;
-                ethernet_owner_until = 0u;
-                (void)memset(&ethernet_pending, 0, sizeof(ethernet_pending));
+                ethernet_clear_owner();
             }
             if (ethernet_owner != 0u)
                 return ASTRA_NETWORK_RESOURCE_LIMIT;
@@ -687,36 +769,20 @@ static AstraNetworkStatus dispatch_ethernet(
     }
     if (command.operation == ASTRA_NETWORK_HOST_ETHERNET_CONFIRM) {
         char next[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX];
-        char previous[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX] = {0};
-        uint32_t count = 0u, index = 0u, previous_length = 0u;
-        int existing = 0;
         if (!astra_network_ethernet_profile_encode(&ethernet_pending, next) ||
-            astra_config_count(&ethernet_config, "profile", &count) !=
+            astra_config_append_string(&ethernet_config, "pending", next) !=
                 ASTRA_CONFIG_OK) return ASTRA_NETWORK_IO;
-        for (index = 0u; index < count; ++index) {
-            AstraNetworkEthernetIPv4 saved;
-            if (astra_config_get_string(&ethernet_config, "profile", index,
-                    previous, sizeof(previous), &previous_length) != ASTRA_CONFIG_OK ||
-                !astra_network_ethernet_profile_decode(previous, &saved))
-                return ASTRA_NETWORK_IO;
-            if (strcmp(saved.name, ethernet_pending.name) == 0) {
-                existing = 1;
-                break;
-            }
-        }
-        uint32_t written = existing ?
-            astra_config_set_string(&ethernet_config, "profile", index, next) :
-            astra_config_append_string(&ethernet_config, "profile", next);
-        if (written != ASTRA_CONFIG_OK) return ASTRA_NETWORK_IO;
         status = host_execute(&command, NULL, 0u, NULL, 0u);
+        if (status == ASTRA_NETWORK_OK)
+            status = ethernet_promote(next, ethernet_pending.name);
+        else {
+            command.operation = ASTRA_NETWORK_HOST_ETHERNET_REVERT;
+            (void)host_execute(&command, NULL, 0u, NULL, 0u);
+        }
         if (status != ASTRA_NETWORK_OK) {
-            uint32_t restored = existing ?
-                astra_config_set_string(&ethernet_config, "profile", index,
-                                        previous) :
-                astra_config_remove(&ethernet_config, "profile", index);
-            if (restored != ASTRA_CONFIG_OK)
-                (void)astra_log_failure("network config rollback", restored);
-            return status;
+            ethernet_recovery_at = astra_clock_monotonic() +
+                UINT64_C(30000000000);
+            status = ASTRA_NETWORK_IN_PROGRESS;
         }
     } else {
         if (command.operation == ASTRA_NETWORK_HOST_ETHERNET_STAGE)
@@ -731,15 +797,10 @@ static AstraNetworkStatus dispatch_ethernet(
             ethernet_pending = *(const AstraNetworkEthernetIPv4 *)input;
         } else if (command.operation == ASTRA_NETWORK_HOST_ETHERNET_CONFIRM ||
                    command.operation == ASTRA_NETWORK_HOST_ETHERNET_REVERT) {
-            ethernet_owner = 0u;
-            ethernet_owner_until = 0u;
-            (void)memset(&ethernet_pending, 0, sizeof(ethernet_pending));
+            ethernet_clear_owner();
         }
-    } else if (status == ASTRA_NETWORK_TIMED_OUT &&
-               command.operation == ASTRA_NETWORK_HOST_ETHERNET_CONFIRM) {
-        ethernet_owner = 0u;
-        ethernet_owner_until = 0u;
-        (void)memset(&ethernet_pending, 0, sizeof(ethernet_pending));
+    } else if (status == ASTRA_NETWORK_IN_PROGRESS) {
+        ethernet_clear_owner();
     }
     return status;
 }
@@ -884,6 +945,14 @@ static uint32_t network_start(const AstraStartupInfo *startup)
             ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE,
             &ethernet_config, NULL) != ASTRA_CONFIG_OK)
         return NETWORK_FAIL_DEVICE;
+    {
+        uint32_t pending_count = 0u;
+        if (astra_config_count(&ethernet_config, "pending", &pending_count) !=
+                ASTRA_CONFIG_OK)
+            return NETWORK_FAIL_DEVICE;
+        if (pending_count != 0u)
+            ethernet_recovery_at = 0u;
+    }
     device_handle = device->handle;
     irq_handle = irq->handle;
     (void)memset(&lease, 0, sizeof(lease));
@@ -955,6 +1024,10 @@ int astra_main(const AstraStartupInfo *startup)
         NetworkEndpoint *wait_endpoints[ASTRA_WAIT_MULTIPLE_MAX];
         uint32_t count = 4u, index = ASTRA_WAIT_INDEX_NONE;
 
+        if (ethernet_recovery_at != ASTRA_DEADLINE_FOREVER &&
+            astra_clock_monotonic() >= ethernet_recovery_at)
+            ethernet_recover();
+
         waits[0] = outbound_receive;
         waits[1] = listen_receive;
         waits[2] = irq_handle;
@@ -979,8 +1052,10 @@ int astra_main(const AstraStartupInfo *startup)
             wait_endpoints[count] = &endpoints[slot];
             ++count;
         }
-        status = astra_wait_multiple(waits, count, ASTRA_DEADLINE_FOREVER,
+        status = astra_wait_multiple(waits, count, ethernet_recovery_at,
                                      &index, NULL);
+        if (status == ASTRA_SYSCALL_TIMED_OUT)
+            continue;
         if (status == ASTRA_SYSCALL_PEER_DEAD ||
             status == ASTRA_SYSCALL_CLOSED) {
             if (index < count && wait_endpoints[index] != NULL)

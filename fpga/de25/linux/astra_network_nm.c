@@ -135,7 +135,7 @@ static void clear_pending(AstraNetworkNm *state)
     memset(&state->pending, 0, sizeof(state->pending));
 }
 
-static int checkpoint_exists(AstraNetworkNm *state)
+static int checkpoint_exists(AstraNetworkNm *state, const char *target)
 {
     GVariant *reply = call(state, NM_PATH,
         "org.freedesktop.DBus.Properties", "Get",
@@ -148,7 +148,7 @@ static int checkpoint_exists(AstraNetworkNm *state)
     int found = 0;
     g_variant_iter_init(&iter, paths);
     while (g_variant_iter_next(&iter, "&o", &path))
-        if (strcmp(path, state->checkpoint) == 0) found = 1;
+        if (target == NULL || strcmp(path, target) == 0) found = 1;
     g_variant_unref(paths);
     g_variant_unref(boxed);
     g_variant_unref(reply);
@@ -229,7 +229,7 @@ int astra_network_nm_revert(AstraNetworkNm *state)
     GVariant *result;
     if (state == NULL || state->bus == NULL || state->checkpoint == NULL)
         return EINVAL;
-    int present = checkpoint_exists(state);
+    int present = checkpoint_exists(state, state->checkpoint);
     if (present == 0) {
         clear_pending(state);
         return 0;
@@ -266,10 +266,13 @@ int astra_network_nm_stage(AstraNetworkNm *state,
         astra_network_ethernet_ipv4_validate(profile) != ASTRA_NETWORK_OK)
         return EINVAL;
     if (state->checkpoint != NULL) {
-        int present = checkpoint_exists(state);
+        int present = checkpoint_exists(state, state->checkpoint);
         if (present != 0) return present < 0 ? EIO : EBUSY;
         clear_pending(state);
     }
+    /* A previous helper may have died while its checkpoint still owns rollback. */
+    int other = checkpoint_exists(state, NULL);
+    if (other != 0) return other < 0 ? EIO : EBUSY;
     int found = find_ethernet(state, profile->name, &state->device);
     if (found != 0)
         return found;
@@ -319,7 +322,7 @@ int astra_network_nm_confirm(AstraNetworkNm *state)
     if (state == NULL || state->bus == NULL || state->checkpoint == NULL ||
         state->connection == NULL)
         return EINVAL;
-    int present = checkpoint_exists(state);
+    int present = checkpoint_exists(state, state->checkpoint);
     if (present == 0) {
         clear_pending(state);
         return ETIMEDOUT;

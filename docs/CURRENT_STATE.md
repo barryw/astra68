@@ -37,9 +37,31 @@ audio, and remote desktop services remained active with no panic. The test
 NetworkManager profile and veth pair were removed; disposable trial state was
 archived to `/mnt/Documents/astra68/ethernet-config-20261103/` on Beast and
 removed from board. Board has 8.0 GiB free. Physical `eth0` configuration was
-not changed because it carries the remote control path. Crash recovery across
-the brief Config Kit write to NetworkManager checkpoint-confirm boundary still
-needs a durable reconciliation rule.
+not changed because it carries the remote control path.
+
+Ethernet Keep crash recovery candidate, 2026-11-03: the network service now
+durably records a pending Keep in its scoped Config Kit document, asks the
+host to confirm, then atomically promotes the saved profile and removes the
+pending record. On restart it replays a pending Keep; a NetworkManager
+checkpoint left by a dead helper blocks a nested stage until rollback. Haiku
+reference: `src/preferences/network/NetworkWindow.cpp` keeps editable state
+separate from live interface notifications; Astra uses its native Config Kit
+document and host checkpoint for the same split. Beast MC68040 service and
+Settings builds, host NetworkManager tests, and NDK distribution build pass.
+DE25 isolated `astra-test0` rejected a second stage over an active checkpoint.
+A disposable boot seeded with a pending Keep recovered to `198.18.0.2/30`,
+promoted one saved profile, removed the pending record, and left zero host
+checkpoints; its 120-second private trial reached stage 8 and restored
+production. Evidence hashes match at
+`/mnt/Documents/astra68/ethernet-recovery-20261103/` on Beast. A second
+private trial exercised Settings Apply/Keep on the same isolated adapter and
+confirmed the saved profile and zero checkpoints. The trial guard now rejects
+using a verified release image as writable trial state. Production cutover and
+final release qualification remain. Both trial logs and the saved profile are
+archived with matching hashes on Beast at
+`/mnt/Documents/astra68/ethernet-normal-keep-20261103/`; trial artifacts and
+test NetworkManager connection were removed from DE25, production services are
+active, and board free space is 8.1 GiB.
 
 Ethernet configuration work, 2026-11-03: native Network Kit ABI 1.3 now owns
 IPv4/IPv6 text parsing, replacing the POSIX copy, and validates a typed

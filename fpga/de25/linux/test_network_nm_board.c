@@ -1,5 +1,6 @@
 #include "astra_network_nm.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -28,7 +29,8 @@ int main(int argc, char **argv)
     if (argc == 3 &&
         (strcmp(argv[1], "--trial") != 0 &&
          strcmp(argv[1], "--trial-timeout") != 0 &&
-         strcmp(argv[1], "--trial-confirm") != 0))
+         strcmp(argv[1], "--trial-confirm") != 0 &&
+         strcmp(argv[1], "--trial-nested") != 0))
         return 2;
     if (argc == 3 && strcmp(argv[2], "astra-test0") != 0)
         return 2;
@@ -39,6 +41,14 @@ int main(int argc, char **argv)
             .method = ASTRA_NETWORK_ETHERNET_IPV4_MANUAL,
             .address = {198u, 18u, 0u, 2u}, .prefix = 30u};
         result = astra_network_nm_stage(&state, &candidate, 30u);
+        if (result == 0 && strcmp(argv[1], "--trial-nested") == 0) {
+            AstraNetworkNm other = {0};
+            result = astra_network_nm_open(&other);
+            if (result == 0 &&
+                astra_network_nm_stage(&other, &candidate, 30u) != EBUSY)
+                result = 1;
+            astra_network_nm_close(&other);
+        }
         if (result == 0 && strcmp(argv[1], "--trial-timeout") == 0) {
             g_usleep(32000000u);
             result = astra_network_nm_revert(&state);
@@ -50,8 +60,10 @@ int main(int argc, char **argv)
             result = astra_network_nm_confirm(&state);
             if (delete_connection(&state, path) != 0) result = 1;
             g_free(path);
-        } else if (result == 0)
-            result = astra_network_nm_revert(&state);
+        } else {
+            int reverted = astra_network_nm_revert(&state);
+            if (result == 0) result = reverted;
+        }
     } else if (result == 0)
         result = astra_network_nm_probe(&state, argv[1]);
     astra_network_nm_close(&state);

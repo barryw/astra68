@@ -1032,6 +1032,12 @@ static AstraResult run(void)
                 refresh_ethernet();
                 (void)strcpy(status_text,
                     "Ethernet change expired; previous connection restored.");
+            } else if (changed == ASTRA_NETWORK_IN_PROGRESS) {
+                ethernet_rollback_at = 0u;
+                ethernet_pending[0] = '\0';
+                refresh_ethernet();
+                (void)strcpy(status_text,
+                    "Keep requested; Astra is retrying Ethernet activation.");
             } else (void)strcpy(status_text,
                 "Ethernet change failed. Check current connection.");
             if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
