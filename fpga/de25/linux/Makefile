@@ -87,7 +87,8 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 CODEC_VORBIS_HEADER := $(ROOT)/sw/userspace/sdl2/build/vendor/SDL2_mixer/src/codecs/stb_vorbis/stb_vorbis.h
 NETWORK_NM_FLAGS := $(shell pkg-config --cflags gio-2.0)
 NETWORK_NM_LIBS := $(shell pkg-config --libs gio-2.0)
-NETWORK_NM_CORE := $(ROOT)/sw/userspace/network/src/network_core.c
+NETWORK_NM_CORE := $(ROOT)/sw/userspace/network/src/network_core.c \
+	$(ROOT)/sw/common/utf8.c
 NETWORK_NM_TARGET_PC := PKG_CONFIG_SYSROOT_DIR=$(DE25_SYSROOT) \
 	PKG_CONFIG_LIBDIR=$(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu/pkgconfig:$(DE25_SYSROOT)/usr/share/pkgconfig pkg-config
 NETWORK_NM_TARGET_FLAGS = $(CFLAGS) -I$(ROOT)/ndk/include \

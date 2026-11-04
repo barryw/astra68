@@ -1079,6 +1079,11 @@ static void network_mount_auth(AstraStorageProvider *provider, const char *serve
     close(secret);
     wait_work(provider);
     const AstraStorageRecord *failed = astra_storage_find(&provider->catalog, mount);
+    if (failed == NULL || failed->state != ASTRA_VOLUME_FAILED ||
+        (failed->error != EACCES && failed->error != EPERM))
+        fprintf(stderr, "authenticated SMB refusal: record=%p state=%u error=%d\n",
+            (const void *)failed, failed != NULL ? failed->state : 0u,
+            failed != NULL ? failed->error : 0);
     assert(failed != NULL && failed->state == ASTRA_VOLUME_FAILED &&
         (failed->error == EACCES || failed->error == EPERM));
     secret = test_secret("p,a=s", 1);

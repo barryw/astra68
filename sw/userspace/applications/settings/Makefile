@@ -15,14 +15,24 @@ FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic \
 TARGET := build/m68k/settings.elf
 IMAGE := build/m68k/settings
 OBJECT := build/m68k/main.o
+OBJECTS := build/m68k/volume_usage_dialog.o build/m68k/crc32.o
 LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_CONFIG_LIBRARY) \
 	$(ASTRA_NETWORK_LIBRARY) \
-	$(ASTRA_GRAPHICS_LIBRARY) $(ASTRA_FONT_LIBRARY) \
+	$(ASTRA_GRAPHICS_LIBRARY) $(ASTRA_FONT_LIBRARY) $(ASTRA_FILESYSTEM_LIBRARY) \
 	$(ASTRA_SYSTEM_LIBRARY) $(ASTRA_RUNTIME_LIBRARY) \
 	$(ASTRA_COMPILER_LIBRARY)
 include ../../dynamic-program.mk
 
 $(OBJECT): main.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/volume_usage_dialog.o: ../../common/volume_usage_dialog.c \
+	../../common/volume_usage_dialog.h ../../common/volume_usage_layout.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/crc32.o: ../../../common/crc32.c ../../../include/astra/crc32.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(FLAGS) -MMD -MP -c $< -o $@
 

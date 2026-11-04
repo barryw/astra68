@@ -31,6 +31,7 @@ capability METRICS:r
 capability EVENT_CONTROL
 capability NETWORK
 capability NETWORK_LISTEN
+capability NETWORK_ADMIN
 capability NTP
 capability PCM
 capability POSIX_PROCESS

@@ -55,6 +55,10 @@ static AstraNetworkEthernetIPv4 ethernet_pending;
 static AstraConfig network_config = ASTRA_CONFIG_INIT;
 static AstraHandle volume_metadata, volume_admin;
 static int mapping_store_ok;
+static uint32_t *mapping_paused;
+static uint32_t mapping_paused_count;
+static uint32_t mapping_reconcile_index;
+static uint64_t mapping_reconcile_at = ASTRA_DEADLINE_FOREVER;
 static const AstraConfigField network_fields[] = {
     {"profile", 0u}, {"pending", 0u},
     {"mapping", 0u}, {"mapping_secret", ASTRA_CONFIG_FIELD_SENSITIVE},
@@ -879,6 +883,35 @@ static AstraNetworkStatus mapping_find(uint32_t id, uint32_t *index,
     return ASTRA_NETWORK_NAME_NOT_FOUND;
 }
 
+static int mapping_is_paused(uint32_t id)
+{
+    for (uint32_t at = 0u; at < mapping_paused_count; ++at)
+        if (mapping_paused[at] == id) return 1;
+    return 0;
+}
+
+static int mapping_pause(uint32_t id, int paused)
+{
+    for (uint32_t at = 0u; at < mapping_paused_count; ++at)
+        if (mapping_paused[at] == id) {
+            if (paused) return 1;
+            if (at + 1u < mapping_paused_count)
+                (void)memmove(&mapping_paused[at], &mapping_paused[at + 1u],
+                    (mapping_paused_count - at - 1u) * sizeof(*mapping_paused));
+            --mapping_paused_count;
+            return 1;
+        }
+    if (!paused) return 1;
+    if (mapping_paused_count >= UINT32_MAX / sizeof(*mapping_paused) - 1u)
+        return 0;
+    uint32_t *next = astra_runtime_reallocate(mapping_paused,
+        (mapping_paused_count + 1u) * sizeof(*mapping_paused));
+    if (next == NULL) return 0;
+    mapping_paused = next;
+    mapping_paused[mapping_paused_count++] = id;
+    return 1;
+}
+
 static AstraNetworkStatus volume_status(AstraResult result)
 {
     switch (result) {
@@ -997,6 +1030,41 @@ static AstraNetworkStatus mapping_unmount(const AstraNetworkMapping *mapping,
                                                &admitted));
     if (status == ASTRA_NETWORK_OK) volume->state = ASTRA_VOLUME_QUIESCING;
     return status;
+}
+
+static void mapping_reconcile(void)
+{
+    uint32_t count = 0u;
+    mapping_reconcile_at = astra_clock_monotonic() +
+        UINT64_C(10000000000);
+    if (!mapping_store_ok) return;
+    if (!mapping_count(&count)) return;
+    if (count == 0u) {
+        mapping_reconcile_at = ASTRA_DEADLINE_FOREVER;
+        return;
+    }
+    if (mapping_reconcile_index >= count) mapping_reconcile_index = 0u;
+    for (uint32_t scanned = 0u; scanned < count; ++scanned) {
+        uint32_t index = mapping_reconcile_index++;
+        AstraNetworkMapping mapping;
+        AstraNetworkMappingVolume volume;
+        if (mapping_reconcile_index == count) mapping_reconcile_index = 0u;
+        if (!mapping_read(index, &mapping)) return;
+        if ((mapping.flags & ASTRA_NETWORK_MAPPING_AUTO_CONNECT) == 0u ||
+            mapping_is_paused(mapping.id)) continue;
+        AstraNetworkStatus status = mapping_mount(&mapping, index, &volume);
+        if (status == ASTRA_NETWORK_BUSY && volume.mount.id != 0u &&
+            volume.state == ASTRA_VOLUME_FAILED)
+            (void)mapping_unmount(&mapping, &volume);
+        else if (status != ASTRA_NETWORK_OK &&
+                 status != ASTRA_NETWORK_BUSY)
+            (void)astra_log_failure("network mapping reconnect", status);
+        if (mapping_reconcile_index != 0u)
+            mapping_reconcile_at = astra_clock_monotonic() +
+                UINT64_C(250000000);
+        return;
+    }
+    mapping_reconcile_at = ASTRA_DEADLINE_FOREVER;
 }
 
 static AstraNetworkStatus mapping_release(const AstraNetworkMapping *mapping)
@@ -1136,6 +1204,10 @@ static AstraNetworkStatus dispatch_mapping(NetworkSession *session,
         status = mapping_save(&input, &reply->value);
         astra_secret_wipe(&input, sizeof(input));
         astra_secret_wipe(bytes, sizeof(input));
+        if (status == ASTRA_NETWORK_OK) {
+            (void)mapping_pause(reply->value, 0);
+            mapping_reconcile_at = 0u;
+        }
         return status;
     }
     case ASTRA_NETWORK_MAPPING_REMOVE: {
@@ -1150,8 +1222,11 @@ static AstraNetworkStatus dispatch_mapping(NetworkSession *session,
             ASTRA_CONFIG_CHANGE_REMOVE};
         changes[1] = (AstraConfigChange){"mapping_secret", NULL, index,
             ASTRA_CONFIG_CHANGE_REMOVE};
-        return astra_config_apply(&network_config, changes, 2u) ==
-            ASTRA_CONFIG_OK ? ASTRA_NETWORK_OK : ASTRA_NETWORK_IO;
+        if (astra_config_apply(&network_config, changes, 2u) !=
+            ASTRA_CONFIG_OK) return ASTRA_NETWORK_IO;
+        (void)mapping_pause(request->value, 0);
+        mapping_reconcile_at = 0u;
+        return ASTRA_NETWORK_OK;
     }
     case ASTRA_NETWORK_MAPPING_MOUNT:
     case ASTRA_NETWORK_MAPPING_UNMOUNT:
@@ -1164,9 +1239,20 @@ static AstraNetworkStatus dispatch_mapping(NetworkSession *session,
         if (status != ASTRA_NETWORK_OK) return status;
         if (request->header.operation == ASTRA_NETWORK_MAPPING_MOUNT)
             status = mapping_mount(&mapping, index, &volume);
-        else if (request->header.operation == ASTRA_NETWORK_MAPPING_UNMOUNT)
+        else if (request->header.operation == ASTRA_NETWORK_MAPPING_UNMOUNT) {
+            int was_paused = mapping_is_paused(mapping.id);
+            if (!mapping_pause(mapping.id, 1))
+                return ASTRA_NETWORK_RESOURCE_LIMIT;
             status = mapping_unmount(&mapping, &volume);
-        else status = mapping_volume_state(&mapping, &volume);
+            if (status != ASTRA_NETWORK_OK &&
+                status != ASTRA_NETWORK_IN_PROGRESS && !was_paused)
+                (void)mapping_pause(mapping.id, 0);
+        } else status = mapping_volume_state(&mapping, &volume);
+        if (request->header.operation == ASTRA_NETWORK_MAPPING_MOUNT &&
+            status == ASTRA_NETWORK_OK) {
+            (void)mapping_pause(mapping.id, 0);
+            mapping_reconcile_at = 0u;
+        }
         if (volume.source.id != 0u &&
             (status == ASTRA_NETWORK_OK || status == ASTRA_NETWORK_BUSY ||
              status == ASTRA_NETWORK_IN_PROGRESS)) {
@@ -1407,6 +1493,7 @@ int astra_main(const AstraStartupInfo *startup)
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_STATUS_OK)
         return (int)status;
+    mapping_reconcile_at = 0u;
     for (;;) {
         uint32_t waits[ASTRA_WAIT_MULTIPLE_MAX];
         NetworkSession *wait_sessions[ASTRA_WAIT_MULTIPLE_MAX];
@@ -1416,6 +1503,9 @@ int astra_main(const AstraStartupInfo *startup)
         if (ethernet_recovery_at != ASTRA_DEADLINE_FOREVER &&
             astra_clock_monotonic() >= ethernet_recovery_at)
             ethernet_recover();
+        if (mapping_reconcile_at != ASTRA_DEADLINE_FOREVER &&
+            astra_clock_monotonic() >= mapping_reconcile_at)
+            mapping_reconcile();
 
         waits[0] = outbound_receive;
         waits[1] = listen_receive;
@@ -1441,7 +1531,9 @@ int astra_main(const AstraStartupInfo *startup)
             wait_endpoints[count] = &endpoints[slot];
             ++count;
         }
-        status = astra_wait_multiple(waits, count, ethernet_recovery_at,
+        uint64_t deadline = ethernet_recovery_at < mapping_reconcile_at ?
+            ethernet_recovery_at : mapping_reconcile_at;
+        status = astra_wait_multiple(waits, count, deadline,
                                      &index, NULL);
         if (status == ASTRA_SYSCALL_TIMED_OUT)
             continue;

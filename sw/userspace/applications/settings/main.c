@@ -7,6 +7,7 @@
 #include <astra/network_library.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
+#include <astra/secret_memory.h>
 #include <astra/service.h>
 #include <astra/status.h>
 #include <astra/string.h>
@@ -18,6 +19,8 @@
 
 #include <stdint.h>
 #include <string.h>
+
+#include "../../common/volume_usage_dialog.h"
 
 #define SETTINGS_WIDTH 960u
 #define SETTINGS_HEIGHT 760u
@@ -59,10 +62,25 @@ enum {
     SETTINGS_ETHERNET_KEEP,
     SETTINGS_ETHERNET_REVERT,
     SETTINGS_ETHERNET_PENDING,
-    SETTINGS_CONTROL_COUNT = SETTINGS_ETHERNET_PENDING
+    SETTINGS_SHARE_SCROLL,
+    SETTINGS_SHARE_LIST,
+    SETTINGS_SHARE_NEW,
+    SETTINGS_SHARE_REMOVE,
+    SETTINGS_SHARE_MOUNT,
+    SETTINGS_SHARE_UNMOUNT,
+    SETTINGS_SHARE_SAVE,
+    SETTINGS_SHARE_FORM_FIRST,
+    SETTINGS_SHARE_FORM_LAST = SETTINGS_SHARE_FORM_FIRST + 6u *
+        (ASTRA_FORM_ROW_CONTROL_COUNT + 1u) - 1u,
+    SETTINGS_SHARE_AUTO,
+    SETTINGS_SHARE_READ_ONLY,
+    SETTINGS_SHARE_FORGET_PASSWORD,
+    SETTINGS_SHARE_STATE,
+    SETTINGS_CONTROL_COUNT = SETTINGS_SHARE_STATE
 };
 
-enum { SETTINGS_DOCK = 1u, SETTINGS_FONTS, SETTINGS_INFO, SETTINGS_ETHERNET };
+enum { SETTINGS_DOCK = 1u, SETTINGS_FONTS, SETTINGS_INFO,
+       SETTINGS_ETHERNET, SETTINGS_NFS, SETTINGS_SMB };
 
 _Static_assert(SETTINGS_SIDEBAR_LIST == SETTINGS_SIDEBAR +
     ASTRA_SETTINGS_SIDEBAR_LIST &&
@@ -84,6 +102,8 @@ static const AstraConfigField config_fields[] = {{"pane", 0u}};
 static const AstraConfigSchema config_schema = {1u, config_fields, 1u};
 static AstraHandle gui;
 static AstraHandle launcher;
+static AstraHandle volume_inspector;
+static AstraVolumeUsageDialog busy_dialog;
 static uint32_t config_ready;
 static uint32_t network_ready;
 static uint32_t network_admin_ready;
@@ -99,7 +119,7 @@ static AstraScrollModel sidebar_scroll = ASTRA_SCROLL_MODEL_INIT;
 static AstraScrollModel pins_scroll = ASTRA_SCROLL_MODEL_INIT;
 static AstraCollectionModel navigation = ASTRA_COLLECTION_MODEL_INIT;
 static AstraCollectionModel pin_list = ASTRA_COLLECTION_MODEL_INIT;
-static AstraCollectionItem navigation_storage[2][7];
+static AstraCollectionItem navigation_storage[2][9];
 static uint32_t navigation_active;
 static AstraCollectionItem pin_items[ASTRA_DOCK_PIN_LIMIT];
 static AstraDockPinInfo pins[ASTRA_DOCK_PIN_LIMIT];
@@ -123,6 +143,16 @@ static char ethernet_content[4][80];
 static uint32_t ethernet_metadata[4][128];
 static uint64_t ethernet_rollback_at;
 static char ethernet_pending[96];
+static AstraScrollModel share_scroll = ASTRA_SCROLL_MODEL_INIT;
+static AstraCollectionModel share_list = ASTRA_COLLECTION_MODEL_INIT;
+static AstraCollectionItem *share_items;
+static AstraNetworkMapping *share_mappings;
+static uint32_t share_count, share_selected;
+static AstraTextModel share_models[6];
+static char share_content[6][1024];
+static uint32_t share_metadata[6][1024];
+static uint32_t share_auto, share_read_only, share_forget_password;
+static char share_state[128] = "Select a saved share, or choose New.";
 
 #define CONTROL(id) (&controls[(id) - 1u])
 
@@ -144,13 +174,21 @@ static int contains_folded(const char *haystack, const char *needle,
     return 0;
 }
 
+static int share_page(void)
+{
+    return page == SETTINGS_NFS || page == SETTINGS_SMB;
+}
+
 static AstraResult refresh_navigation(uint32_t live)
 {
-    static const char *const names[] = {"Dock", "Fonts", "Ethernet", "About"};
+    static const char *const names[] = {
+        "Dock", "Fonts", "Ethernet", "NFS", "SMB", "About"};
     static const uint32_t ids[] = {
-        SETTINGS_DOCK, SETTINGS_FONTS, SETTINGS_ETHERNET, SETTINGS_INFO};
+        SETTINGS_DOCK, SETTINGS_FONTS, SETTINGS_ETHERNET,
+        SETTINGS_NFS, SETTINGS_SMB, SETTINGS_INFO};
     static const uint32_t icons[] = {
         ASTRA_TOOLBAR_ICON_GRID, ASTRA_TOOLBAR_ICON_LIST,
+        ASTRA_TOOLBAR_ICON_HOME, ASTRA_TOOLBAR_ICON_HOME,
         ASTRA_TOOLBAR_ICON_HOME, ASTRA_TOOLBAR_ICON_HOME};
     static const char *const headings[] = {"LOOK & FEEL", "NETWORK", "SYSTEM"};
     AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
@@ -165,8 +203,8 @@ static AstraResult refresh_navigation(uint32_t live)
         return ASTRA_ERROR_IO;
     query[bytes] = '\0';
     for (uint32_t group = 0u; group < 3u; ++group) {
-        uint32_t first = group == 0u ? 0u : group + 1u;
-        uint32_t last = group == 0u ? 2u : group + 2u;
+        uint32_t first = group == 0u ? 0u : group == 1u ? 2u : 5u;
+        uint32_t last = group == 0u ? 2u : group == 1u ? 5u : 6u;
         uint32_t heading = count;
         for (uint32_t at = first; at < last; ++at) {
             if (!contains_folded(names[at], query, bytes)) continue;
@@ -312,18 +350,39 @@ static uint32_t ethernet_form_id(uint32_t index)
         (ASTRA_FORM_ROW_CONTROL_COUNT + 1u);
 }
 
-static AstraResult ethernet_text(uint32_t index, char *text, uint32_t capacity)
+static uint32_t share_form_id(uint32_t index)
+{
+    return SETTINGS_SHARE_FORM_FIRST + index *
+        (ASTRA_FORM_ROW_CONTROL_COUNT + 1u);
+}
+
+static AstraResult model_text(const AstraTextModel *model,
+    char *text, uint32_t capacity)
 {
     AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
     uint32_t copied = 0u;
-    if (astra_text_model_get_state(&ethernet_models[index], &state) != ASTRA_OK ||
+    if (astra_text_model_get_state(model, &state) != ASTRA_OK ||
         state.text_bytes >= capacity ||
-        astra_text_model_copy(&ethernet_models[index], 0u, state.text_bytes,
+        astra_text_model_copy(model, 0u, state.text_bytes,
             text, capacity - 1u, &copied) != ASTRA_OK ||
         copied != state.text_bytes)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     text[copied] = '\0';
     return ASTRA_OK;
+}
+
+static AstraResult model_set(AstraTextModel *model, const char *text)
+{
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    if (astra_text_model_get_state(model, &state) != ASTRA_OK)
+        return ASTRA_ERROR_IO;
+    return astra_text_model_replace(model, 0u, state.text_bytes,
+        text, (uint32_t)strlen(text));
+}
+
+static AstraResult ethernet_text(uint32_t index, char *text, uint32_t capacity)
+{
+    return model_text(&ethernet_models[index], text, capacity);
 }
 
 static int parse_ethernet_ipv4(const char *text, uint8_t output[4])
@@ -399,11 +458,7 @@ static void ethernet_countdown(void)
 
 static AstraResult ethernet_set_text(uint32_t index, const char *text)
 {
-    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
-    if (astra_text_model_get_state(&ethernet_models[index], &state) != ASTRA_OK)
-        return ASTRA_ERROR_IO;
-    return astra_text_model_replace(&ethernet_models[index], 0u,
-        state.text_bytes, text, (uint32_t)strlen(text));
+    return model_set(&ethernet_models[index], text);
 }
 
 static int ethernet_address_text(const uint8_t bytes[4], char *text,
@@ -465,6 +520,186 @@ static AstraResult ethernet_load_editor(void)
     return ethernet_set_text(3u, text);
 }
 
+static AstraNetworkMapping *selected_share(void)
+{
+    for (uint32_t at = 0u; at < share_count; ++at)
+        if (share_mappings[at].id == share_selected)
+            return &share_mappings[at];
+    return NULL;
+}
+
+static void share_read_state(void)
+{
+    AstraNetworkMappingVolume volume;
+    AstraNetworkStatus status;
+    AstraString text;
+    (void)astra_string_copy(share_state, sizeof(share_state),
+        "Select a saved share, or choose New.");
+    if (!network_admin_ready) {
+        (void)astra_string_copy(share_state, sizeof(share_state),
+            "Network service unavailable.");
+        return;
+    }
+    if (share_selected == 0u) return;
+    status = astra_network_mapping_state(&network_admin, share_selected,
+                                          &volume);
+    if (status != ASTRA_NETWORK_OK) {
+        (void)astra_string_copy(share_state, sizeof(share_state),
+            "Share status unavailable. Refresh to retry.");
+        return;
+    }
+    astra_string_init(&text, share_state, sizeof(share_state));
+    (void)astra_string_append(&text, "Status: ");
+    (void)astra_string_append(&text,
+        volume.mount.id == 0u ? "Not mounted" :
+        volume.state == ASTRA_VOLUME_MOUNTED ? "Mounted" :
+        volume.state == ASTRA_VOLUME_MOUNTING ? "Connecting" :
+        volume.state == ASTRA_VOLUME_QUIESCING ? "Disconnecting" :
+        volume.state == ASTRA_VOLUME_FAILED ? "Failed" :
+        volume.state == ASTRA_VOLUME_LOST ? "Lost" : "Unmounted");
+    if (volume.status != 0u) {
+        (void)astra_string_append(&text, " (status ");
+        (void)astra_string_append_u64(&text, volume.status);
+        (void)astra_string_append(&text, ")");
+    }
+    AstraNetworkMapping *mapping = selected_share();
+    if (mapping != NULL &&
+        (mapping->flags & ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL) != 0u)
+        (void)astra_string_append(&text, " - Password saved");
+}
+
+static AstraResult share_load_editor(void)
+{
+    AstraNetworkMapping *mapping = selected_share();
+    const char *fields[6] = {"", "", "", "", "", ""};
+    if (mapping != NULL) {
+        fields[0] = mapping->source.server;
+        fields[1] = mapping->source.share;
+        fields[2] = mapping->source.label;
+        fields[3] = mapping->account;
+        fields[4] = mapping->domain;
+        share_auto = (mapping->flags & ASTRA_NETWORK_MAPPING_AUTO_CONNECT) != 0u;
+        share_read_only = (mapping->flags & ASTRA_NETWORK_MAPPING_READ_ONLY) != 0u;
+    } else share_auto = share_read_only = 0u;
+    share_forget_password = 0u;
+    for (uint32_t at = 0u; at < 6u; ++at)
+        if (model_set(&share_models[at], fields[at]) != ASTRA_OK)
+            return ASTRA_ERROR_IO;
+    share_read_state();
+    return ASTRA_OK;
+}
+
+static AstraResult refresh_shares(void)
+{
+    AstraNetworkMapping first = {0};
+    AstraNetworkMapping *mappings = NULL;
+    AstraCollectionItem *items = NULL;
+    uint32_t total = 0u, used = 0u;
+    AstraNetworkStatus status;
+    if (!network_admin_ready) {
+        share_read_state();
+        return ASTRA_OK;
+    }
+    status = astra_network_mapping_read(&network_admin, 0u, &first, &total);
+    if (status != ASTRA_NETWORK_OK &&
+        !(status == ASTRA_NETWORK_NAME_NOT_FOUND && total == 0u))
+        return ASTRA_ERROR_IO;
+    if (total != 0u) {
+        mappings = astra_runtime_callocate(total, sizeof(*mappings));
+        items = astra_runtime_callocate(total, sizeof(*items));
+        if (mappings == NULL || items == NULL) {
+            astra_runtime_deallocate(mappings);
+            astra_runtime_deallocate(items);
+            return ASTRA_ERROR_OUT_OF_MEMORY;
+        }
+    }
+    for (uint32_t at = 0u; at < total; ++at) {
+        AstraNetworkMapping row;
+        uint32_t observed = total;
+        if (at == 0u) row = first;
+        else if (astra_network_mapping_read(&network_admin, at, &row,
+                     &observed) != ASTRA_NETWORK_OK || observed != total) {
+            astra_runtime_deallocate(mappings);
+            astra_runtime_deallocate(items);
+            return ASTRA_ERROR_BUSY;
+        }
+        if (row.source.format != (page == SETTINGS_NFS ?
+                ASTRA_VOLUME_NFS : ASTRA_VOLUME_SMB)) continue;
+        mappings[used] = row;
+        items[used] = (AstraCollectionItem){row.id,
+            mappings[used].source.label,
+            (uint32_t)strlen(mappings[used].source.label),
+            {0u, ASTRA_TOOLBAR_ICON_HOME}};
+        ++used;
+    }
+    astra_runtime_deallocate(share_mappings);
+    astra_runtime_deallocate(share_items);
+    share_mappings = mappings;
+    share_items = items;
+    share_count = used;
+    if (selected_share() == NULL)
+        share_selected = used != 0u ? mappings[0].id : 0u;
+    share_list.items = items;
+    share_list.item_count = used;
+    share_list.selected_id = share_selected;
+    return share_load_editor();
+}
+
+static AstraNetworkStatus share_save(void)
+{
+    AstraNetworkMappingSave save = {0};
+    uint32_t id = 0u;
+    AstraNetworkStatus status = ASTRA_NETWORK_INVALID;
+    save.mapping.size = sizeof(save.mapping);
+    save.mapping.id = share_selected;
+    save.mapping.source.format = page == SETTINGS_NFS ?
+        ASTRA_VOLUME_NFS : ASTRA_VOLUME_SMB;
+    save.mapping.flags = (share_auto ? ASTRA_NETWORK_MAPPING_AUTO_CONNECT : 0u) |
+        (share_read_only ? ASTRA_NETWORK_MAPPING_READ_ONLY : 0u);
+    if (model_text(&share_models[0], save.mapping.source.server,
+            sizeof(save.mapping.source.server)) == ASTRA_OK &&
+        model_text(&share_models[1], save.mapping.source.share,
+            sizeof(save.mapping.source.share)) == ASTRA_OK &&
+        model_text(&share_models[2], save.mapping.source.label,
+            sizeof(save.mapping.source.label)) == ASTRA_OK &&
+        model_text(&share_models[3], save.mapping.account,
+            sizeof(save.mapping.account)) == ASTRA_OK &&
+        model_text(&share_models[4], save.mapping.domain,
+            sizeof(save.mapping.domain)) == ASTRA_OK &&
+        model_text(&share_models[5], save.password,
+            sizeof(save.password)) == ASTRA_OK) {
+        save.password_action = share_forget_password ?
+            ASTRA_NETWORK_PASSWORD_CLEAR : save.password[0] != '\0' ?
+            ASTRA_NETWORK_PASSWORD_REPLACE : ASTRA_NETWORK_PASSWORD_KEEP;
+        if (share_forget_password)
+            astra_secret_wipe(save.password, sizeof(save.password));
+        status = astra_network_mapping_save(&network_admin, &save, &id);
+    }
+    astra_secret_wipe(&save, sizeof(save));
+    if (status == ASTRA_NETWORK_OK) {
+        share_selected = id;
+        share_forget_password = 0u;
+        (void)model_set(&share_models[5], "");
+        astra_secret_wipe(share_content[5], sizeof(share_content[5]));
+    }
+    return status;
+}
+
+static void show_share_holders(const AstraVolumeReference *mount)
+{
+    if (mount == NULL || mount->id == 0u ||
+        volume_inspector == ASTRA_INVALID_HANDLE) {
+        (void)strcpy(status_text,
+            "Share is in use. Holder details are unavailable.");
+        return;
+    }
+    AstraResult result = astra_volume_usage_dialog_open(&busy_dialog, gui,
+        volume_inspector, NULL, mount);
+    if (result != ASTRA_OK)
+        astra_volume_usage_dialog_error(gui,
+            "Could not inspect share holders", result);
+}
+
 static AstraResult init_controls(void)
 {
     static const AstraToolbarAction actions[] = {
@@ -472,13 +707,15 @@ static AstraResult init_controls(void)
         {"Remove from Dock", 16u, 0u}
     };
     static const char *const titles[] = {
-        "", "Dock", "Fonts", "About Astra", "Ethernet"
+        "", "Dock", "Fonts", "About Astra", "Ethernet", "NFS", "SMB"
     };
     static const char *const descriptions[] = {
         "", "Arrange apps pinned to Dock. Running apps appear automatically.",
         "Installed fonts and system face are managed in Fonts.",
         "System information and project details.",
-        "Network interfaces and currently assigned addresses."
+        "Network interfaces and currently assigned addresses.",
+        "Connect and manage NFS shares.",
+        "Connect and manage SMB shares."
     };
     AstraContainerInfo root = ASTRA_CONTAINER_INFO_INIT;
     AstraSettingsSidebarInfo sidebar = ASTRA_SETTINGS_SIDEBAR_INFO_INIT;
@@ -488,6 +725,7 @@ static AstraResult init_controls(void)
     AstraToolbarInfo toolbar = ASTRA_TOOLBAR_INFO_INIT;
     AstraButtonInfo button = ASTRA_BUTTON_INFO_INIT;
     AstraChoiceInfo choice = ASTRA_CHOICE_INFO_INIT;
+    AstraToggleInfo toggle = ASTRA_TOGGLE_INFO_INIT;
     AstraFieldInfo field = ASTRA_FIELD_INFO_INIT;
     AstraFormRowInfo form = ASTRA_FORM_ROW_INFO_INIT;
     AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
@@ -557,6 +795,23 @@ static AstraResult init_controls(void)
     if (result != ASTRA_OK) {
         (void)astra_log_failure("Settings pane", (uint32_t)-result);
         return result;
+    }
+    if (share_page()) {
+        root = (AstraContainerInfo)ASTRA_CONTAINER_INFO_INIT;
+        root.id = SETTINGS_BODY;
+        root.layout.direction = ASTRA_FLEX_COLUMN;
+        root.layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
+        root.layout.main_gap = 6u;
+        result = astra_interface_container_init(CONTROL(SETTINGS_BODY), &root);
+        if (result != ASTRA_OK) return result;
+        root = (AstraContainerInfo)ASTRA_CONTAINER_INFO_INIT;
+        root.id = SETTINGS_ACTIONS;
+        root.layout.direction = ASTRA_FLEX_ROW;
+        root.layout.align_items = ASTRA_FLEX_ALIGN_CENTER;
+        root.layout.main_gap = 8u;
+        result = astra_interface_container_init(CONTROL(SETTINGS_ACTIONS),
+                                                &root);
+        if (result != ASTRA_OK) return result;
     }
     for (uint32_t id = SETTINGS_TITLE; id <= SETTINGS_ACTIONS; ++id) {
         item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
@@ -761,6 +1016,137 @@ static AstraResult init_controls(void)
         CONTROL(SETTINGS_ETHERNET_EMPTY), &item);
     if (result != ASTRA_OK) return result;
 
+    scroll = (AstraScrollViewInfo)ASTRA_SCROLL_VIEW_INFO_INIT;
+    scroll.id = SETTINGS_SHARE_SCROLL;
+    scroll.model = &share_scroll;
+    scroll.preferred_width = 500u;
+    scroll.preferred_height = 100u;
+    scroll.state = share_page() ? 0u : ASTRA_CONTROL_COLLAPSED;
+    result = astra_interface_scroll_view_init(CONTROL(SETTINGS_SHARE_SCROLL),
+                                               &scroll);
+    if (result != ASTRA_OK) return result;
+    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = SETTINGS_BODY;
+    item.minimum_width = 500u;
+    item.minimum_height = 100u;
+    result = astra_interface_control_set_flex(CONTROL(SETTINGS_SHARE_SCROLL),
+                                               &item);
+    if (result != ASTRA_OK) return result;
+    list = (AstraListInfo)ASTRA_LIST_INFO_INIT;
+    list.id = SETTINGS_SHARE_LIST;
+    list.model = &share_list;
+    result = astra_interface_list_init(CONTROL(SETTINGS_SHARE_LIST), &list);
+    if (result != ASTRA_OK) return result;
+    item.parent_id = SETTINGS_SHARE_SCROLL;
+    result = astra_interface_control_set_flex(CONTROL(SETTINGS_SHARE_LIST),
+                                               &item);
+    if (result != ASTRA_OK) return result;
+
+    static const char *const share_fields[] = {
+        "Server", "Export / share", "Display name", "Account", "Domain",
+        "Password"};
+    for (uint32_t at = 0u; at < 6u; ++at) {
+        uint32_t root_id = share_form_id(at);
+        form = (AstraFormRowInfo)ASTRA_FORM_ROW_INFO_INIT;
+        form.first_id = root_id;
+        form.label = share_fields[at];
+        form.label_length = (uint32_t)strlen(share_fields[at]);
+        if (at == 5u) {
+            form.message = "Leave blank to keep the saved password";
+            form.message_length = 38u;
+        }
+        result = astra_interface_form_row_init(CONTROL(root_id), &form);
+        if (result != ASTRA_OK) return result;
+        item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+        item.parent_id = SETTINGS_BODY;
+        result = astra_interface_control_set_flex(CONTROL(root_id), &item);
+        if (result != ASTRA_OK) return result;
+        field = (AstraFieldInfo)ASTRA_FIELD_INFO_INIT;
+        field.id = root_id + ASTRA_FORM_ROW_CONTROL_COUNT;
+        field.model = &share_models[at];
+        field.preferred_columns = at == 1u ? 38u : 30u;
+        result = at == 5u ?
+            astra_interface_secure_field_init(CONTROL(field.id), &field) :
+            astra_interface_field_init(CONTROL(field.id), &field);
+        if (result != ASTRA_OK) return result;
+        item.parent_id = root_id + ASTRA_FORM_ROW_VALUE;
+        item.grow = 1u;
+        result = astra_interface_control_set_flex(CONTROL(field.id), &item);
+        if (result != ASTRA_OK) return result;
+    }
+
+    static const uint32_t toggles[] = {
+        SETTINGS_SHARE_AUTO, SETTINGS_SHARE_READ_ONLY};
+    static const char *const toggle_names[] = {
+        "Connect automatically", "Read-only"};
+    for (uint32_t at = 0u; at < 2u; ++at) {
+        toggle = (AstraToggleInfo)ASTRA_TOGGLE_INFO_INIT;
+        toggle.id = toggles[at];
+        toggle.text = toggle_names[at];
+        toggle.text_length = (uint32_t)strlen(toggle.text);
+        toggle.state = share_page() ?
+            ((at == 0u ? share_auto : share_read_only) ?
+                ASTRA_CONTROL_SELECTED : 0u) : ASTRA_CONTROL_COLLAPSED;
+        result = astra_interface_checkbox_init(CONTROL(toggle.id), &toggle);
+        if (result != ASTRA_OK) return result;
+        item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+        item.parent_id = SETTINGS_BODY;
+        result = astra_interface_control_set_flex(CONTROL(toggle.id), &item);
+        if (result != ASTRA_OK) return result;
+    }
+    toggle = (AstraToggleInfo)ASTRA_TOGGLE_INFO_INIT;
+    toggle.id = SETTINGS_SHARE_FORGET_PASSWORD;
+    toggle.text = "Forget saved password";
+    toggle.text_length = (uint32_t)strlen(toggle.text);
+    toggle.state = page == SETTINGS_SMB && selected_share() != NULL &&
+        (selected_share()->flags & ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL) != 0u ?
+            (share_forget_password ? ASTRA_CONTROL_SELECTED : 0u) :
+            ASTRA_CONTROL_COLLAPSED;
+    result = astra_interface_checkbox_init(
+        CONTROL(SETTINGS_SHARE_FORGET_PASSWORD), &toggle);
+    if (result != ASTRA_OK) return result;
+    item.parent_id = SETTINGS_BODY;
+    result = astra_interface_control_set_flex(
+        CONTROL(SETTINGS_SHARE_FORGET_PASSWORD), &item);
+    if (result != ASTRA_OK) return result;
+
+    label = (AstraLabelInfo)ASTRA_LABEL_INFO_INIT;
+    label.id = SETTINGS_SHARE_STATE;
+    label.text = share_state;
+    label.text_length = (uint32_t)strlen(share_state);
+    label.text_role = ASTRA_TEXT_CLIENT_SECONDARY;
+    label.state = share_page() ? 0u : ASTRA_CONTROL_COLLAPSED;
+    result = astra_interface_label_init(CONTROL(SETTINGS_SHARE_STATE), &label);
+    if (result != ASTRA_OK) return result;
+    item.parent_id = SETTINGS_BODY;
+    result = astra_interface_control_set_flex(CONTROL(SETTINGS_SHARE_STATE),
+                                               &item);
+    if (result != ASTRA_OK) return result;
+
+    static const uint32_t share_actions[] = {
+        SETTINGS_SHARE_NEW, SETTINGS_SHARE_REMOVE, SETTINGS_SHARE_SAVE,
+        SETTINGS_SHARE_MOUNT, SETTINGS_SHARE_UNMOUNT};
+    static const char *const share_action_names[] = {
+        "New", "Remove", "Save", "Mount", "Unmount"};
+    for (uint32_t at = 0u; at < 5u; ++at) {
+        button = (AstraButtonInfo)ASTRA_BUTTON_INFO_INIT;
+        button.id = share_actions[at];
+        button.text = share_action_names[at];
+        button.text_length = (uint32_t)strlen(button.text);
+        button.variant = at == 2u ? ASTRA_BUTTON_PRIMARY :
+            ASTRA_BUTTON_STANDARD;
+        button.state = !share_page() ? ASTRA_CONTROL_COLLAPSED :
+            !network_admin_ready ? ASTRA_CONTROL_DISABLED :
+            (at == 1u || at >= 3u) && share_selected == 0u ?
+                ASTRA_CONTROL_DISABLED : 0u;
+        result = astra_interface_button_init(CONTROL(button.id), &button);
+        if (result != ASTRA_OK) return result;
+        item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+        item.parent_id = SETTINGS_ACTIONS;
+        result = astra_interface_control_set_flex(CONTROL(button.id), &item);
+        if (result != ASTRA_OK) return result;
+    }
+
     toolbar.first_id = SETTINGS_TOOLS;
     toolbar.actions = actions;
     toolbar.action_count = 3u;
@@ -843,6 +1229,12 @@ static AstraResult init_controls(void)
                     ASTRA_NETWORK_ETHERNET_IPV4_MANUAL) ?
                     0u : ASTRA_CONTROL_COLLAPSED) != ASTRA_OK)
             return ASTRA_ERROR_IO;
+    for (uint32_t at = 0u; at < 6u; ++at)
+        if (astra_interface_ui_set_state(&ui,
+                CONTROL(share_form_id(at)),
+                share_page() && (page == SETTINGS_SMB || at < 3u) ?
+                    0u : ASTRA_CONTROL_COLLAPSED) != ASTRA_OK)
+            return ASTRA_ERROR_IO;
     layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
     result = astra_interface_ui_layout(&ui, &layout);
     if (result != ASTRA_OK)
@@ -877,13 +1269,25 @@ static AstraResult rebuild(void)
 static AstraResult run(void)
 {
     for (;;) {
-        uint32_t handle = astra_window_event_wait_handle(&window);
+        uint32_t handles[2] = {astra_window_event_wait_handle(&window),
+            astra_window_event_wait_handle(&busy_dialog.window)};
+        uint32_t handle_count = handles[1] == ASTRA_INVALID_HANDLE ? 1u : 2u;
         uint32_t selected = 0u;
-        uint64_t deadline = ethernet_rollback_at != 0u ?
+        uint64_t deadline = ethernet_rollback_at != 0u ||
+            (share_page() && share_selected != 0u) ?
             astra_clock_monotonic() + UINT64_C(1000000000) :
             ASTRA_DEADLINE_FOREVER;
-        uint32_t waited = astra_wait_multiple(&handle, 1u, deadline,
+        uint32_t waited = astra_wait_multiple(handles, handle_count, deadline,
                                                &selected, NULL);
+        if (selected == 1u && waited == ASTRA_SYSCALL_PEER_DEAD) {
+            astra_volume_usage_dialog_close(&busy_dialog);
+            continue;
+        }
+        if (selected == 1u && waited == ASTRA_SYSCALL_OK) {
+            if (astra_volume_usage_dialog_event(&busy_dialog, gui) != ASTRA_OK)
+                return ASTRA_ERROR_IO;
+            continue;
+        }
         if (waited == ASTRA_SYSCALL_TIMED_OUT &&
             ethernet_rollback_at != 0u) {
             if (astra_clock_monotonic() >= ethernet_rollback_at) {
@@ -893,6 +1297,14 @@ static AstraResult run(void)
                 (void)strcpy(status_text, "Ethernet change expired; previous settings restored.");
             } else ethernet_countdown();
             if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+            continue;
+        }
+        if (waited == ASTRA_SYSCALL_TIMED_OUT && share_page()) {
+            char previous[sizeof(share_state)];
+            (void)memcpy(previous, share_state, sizeof(previous));
+            share_read_state();
+            if (strcmp(previous, share_state) != 0 &&
+                rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
             continue;
         }
         if (waited != ASTRA_SYSCALL_OK)
@@ -921,6 +1333,12 @@ static AstraResult run(void)
                 if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
                 continue;
             }
+            if (activated && share_page()) {
+                if (refresh_shares() != ASTRA_OK)
+                    (void)strcpy(status_text, "Could not refresh network shares.");
+                if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+                continue;
+            }
         }
         if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED &&
             astra_fonts_use_system(gui, &event) != ASTRA_OK)
@@ -942,7 +1360,7 @@ static AstraResult run(void)
         if (action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
             action.control_id == SETTINGS_SIDEBAR_LIST &&
             navigation.selected_id >= SETTINGS_DOCK &&
-            navigation.selected_id <= SETTINGS_ETHERNET) {
+            navigation.selected_id <= SETTINGS_SMB) {
             page = (uint32_t)navigation.selected_id;
             if (page == SETTINGS_DOCK && refresh_pins() != ASTRA_OK)
                 return ASTRA_ERROR_IO;
@@ -952,6 +1370,9 @@ static AstraResult run(void)
                     (void)strcpy(status_text,
                         "Could not load saved Ethernet settings.");
             }
+            if (share_page() && refresh_shares() != ASTRA_OK)
+                (void)strcpy(status_text,
+                    "Could not load saved network shares.");
             if (config_ready && astra_config_set_u64(&config, "pane", 0u,
                     page) != ASTRA_CONFIG_OK)
                 (void)strcpy(status_text, "Could not save Settings view.");
@@ -968,6 +1389,93 @@ static AstraResult run(void)
             ethernet_detail();
             if (ethernet_load_editor() != ASTRA_OK)
                 (void)strcpy(status_text, "Could not load saved Ethernet settings.");
+            if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+            continue;
+        }
+        if (action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+            action.control_id == SETTINGS_SHARE_LIST) {
+            share_selected = (uint32_t)share_list.selected_id;
+            if (share_load_editor() != ASTRA_OK)
+                (void)strcpy(status_text, "Could not load share settings.");
+            if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+            continue;
+        }
+        if (action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+            (action.control_id == SETTINGS_SHARE_AUTO ||
+             action.control_id == SETTINGS_SHARE_READ_ONLY ||
+             action.control_id == SETTINGS_SHARE_FORGET_PASSWORD)) {
+            if (action.control_id == SETTINGS_SHARE_AUTO)
+                share_auto = action.value != 0;
+            else if (action.control_id == SETTINGS_SHARE_READ_ONLY)
+                share_read_only = action.value != 0;
+            else share_forget_password = action.value != 0;
+            if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+            continue;
+        }
+        if (action.type == ASTRA_UI_ACTION_ACTIVATE && share_page() &&
+            action.control_id == SETTINGS_SHARE_NEW) {
+            share_selected = 0u;
+            share_list.selected_id = 0u;
+            if (share_load_editor() != ASTRA_OK || rebuild() != ASTRA_OK)
+                return ASTRA_ERROR_IO;
+            continue;
+        }
+        if (action.type == ASTRA_UI_ACTION_ACTIVATE && share_page() &&
+            action.control_id == SETTINGS_SHARE_SAVE) {
+            AstraNetworkStatus saved = share_save();
+            if (saved != ASTRA_NETWORK_OK)
+                (void)strcpy(status_text,
+                    "Share settings rejected. Check server, share and credentials.");
+            else if (refresh_shares() != ASTRA_OK)
+                (void)strcpy(status_text,
+                    "Saved share, but could not refresh the list.");
+            else status_text[0] = '\0';
+            if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+            continue;
+        }
+        if (action.type == ASTRA_UI_ACTION_ACTIVATE && share_page() &&
+            share_selected != 0u &&
+            action.control_id == SETTINGS_SHARE_REMOVE) {
+            AstraNetworkStatus removed = astra_network_mapping_remove(
+                &network_admin, share_selected);
+            if (removed == ASTRA_NETWORK_BUSY) {
+                AstraNetworkMappingVolume volume;
+                if (astra_network_mapping_state(&network_admin,
+                        share_selected, &volume) == ASTRA_NETWORK_OK)
+                    show_share_holders(&volume.mount);
+                else (void)strcpy(status_text,
+                    "Share is in use. Unmount it before removing it.");
+            }
+            else if (removed != ASTRA_NETWORK_OK)
+                (void)strcpy(status_text, "Could not remove saved share.");
+            else if (refresh_shares() != ASTRA_OK)
+                (void)strcpy(status_text,
+                    "Removed share, but could not refresh the list.");
+            else status_text[0] = '\0';
+            if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
+            continue;
+        }
+        if (action.type == ASTRA_UI_ACTION_ACTIVATE && share_page() &&
+            share_selected != 0u &&
+            (action.control_id == SETTINGS_SHARE_MOUNT ||
+             action.control_id == SETTINGS_SHARE_UNMOUNT)) {
+            AstraNetworkMappingVolume volume = {0};
+            AstraNetworkStatus changed = ASTRA_NETWORK_OK;
+            if (action.control_id == SETTINGS_SHARE_MOUNT)
+                changed = share_save();
+            if (changed == ASTRA_NETWORK_OK)
+                changed = action.control_id == SETTINGS_SHARE_MOUNT ?
+                astra_network_mapping_mount(&network_admin, share_selected,
+                                            &volume) :
+                astra_network_mapping_unmount(&network_admin, share_selected,
+                                              &volume);
+            if (changed == ASTRA_NETWORK_BUSY)
+                show_share_holders(&volume.mount);
+            else if (changed != ASTRA_NETWORK_OK &&
+                     changed != ASTRA_NETWORK_IN_PROGRESS)
+                (void)strcpy(status_text, "Share operation failed.");
+            else status_text[0] = '\0';
+            share_read_state();
             if (rebuild() != ASTRA_OK) return ASTRA_ERROR_IO;
             continue;
         }
@@ -1102,10 +1610,13 @@ int astra_main(const AstraStartupInfo *startup)
     network_cap = astra_startup_capability(startup, ASTRA_CAPABILITY_NETWORK);
     admin_cap = astra_startup_capability(startup, ASTRA_CAPABILITY_NETWORK_ADMIN);
     ready = astra_startup_capability(startup, ASTRA_CAPABILITY_SERVICE_READY);
+    const AstraStartupCapability *usage = astra_startup_capability(startup,
+        ASTRA_CAPABILITY_VOLUME_USAGE);
     if (gui_cap == NULL || launch_cap == NULL || ready == NULL)
         return ASTRA_STATUS_ACCESS;
     gui = gui_cap->handle;
     launcher = launch_cap->handle;
+    volume_inspector = usage != NULL ? usage->handle : ASTRA_INVALID_HANDLE;
     config_ready = astra_config_open(startup, &config_schema,
         ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE,
         &config, NULL) == ASTRA_CONFIG_OK;
@@ -1117,7 +1628,7 @@ int astra_main(const AstraStartupInfo *startup)
             ASTRA_NETWORK_OK;
     if (config_ready && astra_config_get_u64(&config, "pane", 0u,
             &stored) == ASTRA_CONFIG_OK &&
-        stored >= SETTINGS_DOCK && stored <= SETTINGS_ETHERNET)
+        stored >= SETTINGS_DOCK && stored <= SETTINGS_SMB)
         page = (uint32_t)stored;
     if (page == SETTINGS_ETHERNET) refresh_ethernet();
     AstraTextModelInfo search = ASTRA_TEXT_MODEL_INFO_INIT;
@@ -1136,6 +1647,16 @@ int astra_main(const AstraStartupInfo *startup)
         if (astra_text_model_init(&ethernet_models[at], &field) != ASTRA_OK)
             return ASTRA_STATUS_IO;
     }
+    for (uint32_t at = 0u; at < 6u; ++at) {
+        AstraTextModelInfo field = ASTRA_TEXT_MODEL_INFO_INIT;
+        share_models[at] = (AstraTextModel)ASTRA_TEXT_MODEL_INIT;
+        field.content_arena = share_content[at];
+        field.content_arena_bytes = sizeof(share_content[at]);
+        field.metadata_arena = share_metadata[at];
+        field.metadata_arena_bytes = sizeof(share_metadata[at]);
+        if (astra_text_model_init(&share_models[at], &field) != ASTRA_OK)
+            return ASTRA_STATUS_IO;
+    }
     scroll.line_height = 28u;
     const char *failed = NULL;
     if (astra_text_model_init(&search_model, &search) != ASTRA_OK)
@@ -1146,6 +1667,10 @@ int astra_main(const AstraStartupInfo *startup)
         failed = "Settings pins scroll";
     else if (astra_scroll_init(&ethernet_scroll, &scroll) != ASTRA_OK)
         failed = "Settings Ethernet scroll";
+    else if (astra_scroll_init(&share_scroll, &scroll) != ASTRA_OK)
+        failed = "Settings share scroll";
+    else if (share_page() && refresh_shares() != ASTRA_OK)
+        failed = "Settings share query";
     else if (ethernet_load_editor() != ASTRA_OK)
         failed = "Settings Ethernet profile";
     else if (astra_fonts_use_system(gui, NULL) != ASTRA_OK)
@@ -1202,9 +1727,15 @@ int astra_main(const AstraStartupInfo *startup)
     }
     if (surface.area != ASTRA_INVALID_HANDLE)
         (void)astra_shared_surface_close(&surface);
+    astra_volume_usage_dialog_close(&busy_dialog);
     astra_text_model_dispose(&search_model);
     for (uint32_t at = 0u; at < 4u; ++at)
         astra_text_model_dispose(&ethernet_models[at]);
+    for (uint32_t at = 0u; at < 6u; ++at)
+        astra_text_model_dispose(&share_models[at]);
+    astra_secret_wipe(share_content[5], sizeof(share_content[5]));
+    astra_runtime_deallocate(share_mappings);
+    astra_runtime_deallocate(share_items);
     if (ethernet_rollback_at != 0u)
         (void)astra_network_ethernet_revert(&network_admin);
     if (network_admin_ready)

@@ -2,6 +2,38 @@
 
 Status: active continuation map, 2026-11-04
 
+Saved SMB hardware gate, 2026-11-04: A first saved-share Settings trial and
+manual `mount --smb-user` both failed with status 11 because Beast's UFW
+allowed DE25 NFS but dropped DE25 TCP445. A direct board TCP probe timed out;
+the exact board-only TCP445 rule restored connectivity. On the unchanged
+candidate, a 600-second private DE25 trial then mounted authenticated SMB3.1.1
+writable as `/net0`, wrote and read matching server bytes, unmounted, saved a
+credentialed auto-connect mapping in Settings, mounted it automatically, and
+opened its root and files in Atlas. Desktop showed the saved volume label.
+The guard passed with no panic and restored the selected release; trial state
+was removed and board services are active. Evidence and verified SHA256SUMS:
+`/mnt/Documents/astra68/network-smb-saved-firewall-de25-20261104/` on Beast.
+Follow-up release `51f2363a1ac75dd55980d156ef832a572095849f62150cb485ae0c64a88451db`
+passed a 600-second private guard: Settings kept all actions visible after
+saving credentials; auto-connect survived restart, UI Unmount removed icon and
+held off auto-reconnect, and UI Mount restored it. `volumes --all` displayed SMB
+format. Safe Unmount refused Terminal's open file and showed exact PID 20,
+handle, access, inode and `/net0/firewall-proof.txt`; after Terminal closed,
+Unmount succeeded. Both 600-second guards passed, restored selected runtime,
+and left 7.5 GiB free after trial cleanup. Verified UI/CLI evidence is at
+`/mnt/Documents/astra68/network-smb-saved-final-ui-de25-20261104/` on Beast.
+`unmount --saved 1` initially failed because Terminal.app's bundle manifest
+lacked `NETWORK_ADMIN` despite Terminal's launch grant and startup ceiling.
+Release `7326966ffca352bf4ff7e0af4f888199baebae73a772145a72fd7b433423a9fa`
+includes the manifest correction. On DE25, `mount --saved 1` mounted `/net0`,
+`cat` read the server's persisted bytes, `unmount --saved 1` removed the icon,
+and `mount --saved 1` remounted at the stable path. Its 600-second guard passed
+without panic and restored the selected release. Evidence and verified hashes:
+`/mnt/Documents/astra68/network-smb-saved-cli-de25-20261104/` on Beast.
+Broader SMB interoperability/fault cases, active-mapping edit semantics,
+saved-definition CLI parity, and production release remain open. Beast's
+test-only UFW TCP445 rule permits only DE25 192.168.1.52.
+
 Saved network mount lifecycle, 2026-11-04: Network Kit ABI 1.6 adds typed
 mount, unmount and state queries for a saved mapping. Network service uses the
 stable managed source ID, native Volume Kit catalog identities and Config Kit
@@ -12,8 +44,9 @@ Network Kit/service tests, MC68040 service link, shared-library export check
 and NDK dist-check pass. `mount --saved ID` and `unmount --saved ID` now use the
 same Network Kit lifecycle and cross-compile on Beast, but lack runtime tests.
 Coherent DE25 QEMU build passes on Beast.
-Saved-share Settings editing, auto-connect, DE25 runtime tests and release
-remain open; this is not a completed SMB client.
+Saved-share Settings and auto-connect now pass initial DE25 runtime use, as
+recorded above. Full lifecycle and release gates remain open; this is not a
+completed SMB client.
 
 Managed network sources, 2026-11-04: native Filesystem Kit ABI 15.14 now
 admits a saved mapping ID separately from network endpoint definition. Provider

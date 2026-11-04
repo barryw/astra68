@@ -1,7 +1,7 @@
 # Network volumes after the local filesystem cutover
 
 Status: requirements and source-backed feasibility assessment, updated
-2026-11-03. NFSv4 passed a DE25 private trial for mount, guest read/write,
+2026-11-04. NFSv4 passed a DE25 private trial for mount, guest read/write,
 Desktop and Atlas, exact open-file unmount refusal, and source retirement.
 Network mounting is not yet qualified. Private DE25 trials kept `/dh0`
 responsive during stalled NFS read, directory and destination-copy operations;
@@ -24,7 +24,18 @@ Exact in-flight `fsync` timing still needs an instrumented gate. Evidence is on 
 `/mnt/Documents/astra68/network-nfs-lsof-write-sync-20261103/`. All five
 600-second guards passed, production services recovered, and trial state was
 removed.
-SMB fault/recovery, mapping UI, and production runtime release gates remain open. A
+SMB fault/recovery, saved-mapping lifecycle, and production runtime release
+gates remain open. Saved Settings creation and auto-connect passed a private
+DE25 trial after correcting Beast's board-only TCP445 firewall rule. Manual
+authenticated mount, write/read with matching server bytes, unmount, Desktop
+label, and Atlas enumeration passed in the same 600-second no-panic guard.
+Evidence: `/mnt/Documents/astra68/network-smb-saved-firewall-de25-20261104/`.
+Release `51f2363a...` passed Settings action visibility, saved mapping restart
+auto-connect, UI unmount pause/remount and exact open-file refusal on DE25.
+Release `7326966f...` corrected Terminal.app's `NETWORK_ADMIN` bundle grant;
+`mount --saved 1`, file read, `unmount --saved 1`, and remount passed a 600-second
+DE25 guard. Evidence: `/mnt/Documents/astra68/network-smb-saved-final-ui-de25-20261104/`
+and `/mnt/Documents/astra68/network-smb-saved-cli-de25-20261104/`. A
 credentialed SMB candidate passed a Beast provider test: bad password refused;
 good account wrote, synced, and read back the same bytes over SMB3.1.1 with a
 password containing `,` and `=`.

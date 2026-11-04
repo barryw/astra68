@@ -89,7 +89,7 @@ static inline const char *astra_volume_format_name(uint32_t format)
 {
     static const char *const names[] = {
         "unknown", "ext4", "FAT32", "exFAT", "ISO9660", "UDF",
-        "tmpfs", "FAT12", "FAT16", "NTFS", "unsupported"
+        "tmpfs", "FAT12", "FAT16", "NTFS", "unsupported", "NFS", "SMB"
     };
     return format < sizeof(names) / sizeof(names[0]) ? names[format] : "?";
 }

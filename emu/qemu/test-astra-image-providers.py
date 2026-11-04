@@ -41,6 +41,7 @@ with open(os.path.join(astra_image.REPOSITORY,
     assert "capability RAM_READ\n" in terminal_manifest
     assert "capability RAM_WRITE\n" in terminal_manifest
     assert "capability APP_LAUNCH\n" in terminal_manifest
+    assert "capability NETWORK_ADMIN\n" in terminal_manifest
     assert "capability ENTROPY\n" in terminal_manifest
     assert "capability PCM\n" in terminal_manifest
 assert astra_image.HOSTBENCH_SERVICES == \
@@ -99,7 +100,7 @@ assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
     "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG",
     "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
     "trusted /apps/Inspector.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ RAM_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
-    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw NETWORK NETWORK_ADMIN LIBS:r",
+    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw NETWORK NETWORK_ADMIN VOLUME_USAGE LIBS:r",
     "trusted /apps/AstraZ.app grants GUI PCM VOLUMES VOLUME_READ DH0:r HOME:rw STORE:rw WORK:r LIBS:r"]
 assert "CRED_READ" not in astra_image.DISPLAY_STARTUP_MANIFEST
 assert "CRED_WRITE" not in astra_image.DISPLAY_STARTUP_MANIFEST

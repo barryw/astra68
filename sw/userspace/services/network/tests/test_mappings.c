@@ -14,6 +14,22 @@ static uint32_t volume_count, volume_busy;
 static AstraVolumeNetworkSource admitted_source;
 static uint32_t admitted_id;
 
+void *astra_runtime_reallocate(void *pointer, size_t size)
+{
+    return realloc(pointer, size);
+}
+
+uint64_t astra_clock_monotonic(void)
+{
+    return 1000u;
+}
+
+uint32_t astra_log_failure(const char *operation, uint32_t status)
+{
+    (void)operation; (void)status;
+    return ASTRA_SYSCALL_OK;
+}
+
 AstraResult astra_volume_managed_network_source(AstraHandle admin,
     const AstraVolumeNetworkSource *source, uint32_t id,
     AstraVolumeReference *reference)
@@ -71,6 +87,7 @@ AstraResult astra_volume_control(AstraHandle admin,
     if (control->operation == ASTRA_VOLUME_UNMOUNT) {
         if (volume_busy) return ASTRA_ERROR_BUSY;
         volume_records[1].state = ASTRA_VOLUME_UNMOUNTED;
+        volume_count = 1u;
         *reference = control->reference;
         return ASTRA_OK;
     }
@@ -271,7 +288,34 @@ int main(void)
     assert(mapping_save(&input, &id) == ASTRA_NETWORK_OK && id == 3u);
     assert(mapping_integrity());
 
-    strcpy(credentials[1], "broken");
+    definition_count = credential_count = next_count = 0u;
+    admitted_id = volume_count = 0u;
+    input = smb(NULL);
+    input.mapping.flags = ASTRA_NETWORK_MAPPING_AUTO_CONNECT;
+    assert(mapping_save(&input, &id) == ASTRA_NETWORK_OK && id == 1u);
+    mapping_store_ok = 1;
+    mapping_reconcile_index = 0u;
+    mapping_reconcile();
+    assert(volume_count == 2u && volume_records[1].state ==
+           ASTRA_VOLUME_MOUNTED);
+    volume_records[1].state = ASTRA_VOLUME_FAILED;
+    mapping_reconcile();
+    assert(volume_count == 1u);
+    mapping_reconcile();
+    assert(volume_count == 2u && volume_records[1].state ==
+           ASTRA_VOLUME_MOUNTED);
+    assert(mapping_pause(id, 1) && mapping_is_paused(id));
+    volume_records[1].state = ASTRA_VOLUME_UNMOUNTED;
+    volume_count = 1u;
+    mapping_reconcile();
+    assert(volume_count == 1u && mapping_reconcile_at ==
+           ASTRA_DEADLINE_FOREVER);
+    assert(mapping_pause(id, 0) && !mapping_is_paused(id));
+    mapping_reconcile();
+    assert(volume_count == 2u && volume_records[1].state ==
+           ASTRA_VOLUME_MOUNTED);
+
+    strcpy(credentials[0], "broken");
     assert(!mapping_integrity());
     puts("network saved mappings: PASS");
     return 0;
