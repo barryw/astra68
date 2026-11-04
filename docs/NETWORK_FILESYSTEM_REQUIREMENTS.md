@@ -50,6 +50,13 @@ active PID 23 operation while TCP445 was dropped, before network recovery.
 Both guards restored production. Evidence is on Beast at
 `/mnt/Documents/astra68/network-smb-fault-de25-20261103/` and
 `/mnt/Documents/astra68/network-smb-unmount-fix-de25-20261104/`.
+QEMU's final namespace admission now returns BUSY instead of waiting behind
+an active same-volume operation after the preflight race window. A full
+release containing this change passed a 300-second DE25 private trial with
+SMB3.1.1 mount, TCP445 outage, exact active holder, responsive `/dh0`, 4 MiB
+read recovery and successful later unmount. The early preflight caught that
+trial's holder, so the new trylock branch still needs a deterministic gate.
+Evidence: `/mnt/Documents/astra68/network-smb-namespace-busy-de25-20261104/`.
 
 ## AstraZ story workflow
 

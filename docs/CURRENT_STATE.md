@@ -138,6 +138,22 @@ manifests:
 Haiku's read-only `src/system/kernel/fs/vfs.cpp` checks busy partitions and
 vnodes before unmount; Astra adapts that early check to the native retained
 usage snapshot, with the provider still enforcing final admission.
+QEMU now uses `qemu_mutex_trylock` for final network namespace unmount
+admission, returning BUSY if a same-volume operation entered between the
+usage preflight and provider control. Beast's DE25 QEMU cross build and full
+publisher passed; release
+`01ab6d12fabc5af1164a80af894c25f8c569a3be086ae25ff729c38055e45ab3`
+contains the exact built binary. In a 300-second DE25 private trial, a guest
+SMB3.1.1 share mounted as `/net0`; during TCP445 loss a 4 MiB read remained
+active, ordinary Unmount reported PID 22 and the pending operation, and
+`ls /dh0` completed. After traffic returned the read produced all 4 MiB and
+Unmount succeeded. The guard restored the selected runtime without panic;
+all three production services remained active and board free space returned
+to 7.5 GiB after cleanup. Beast archive and SHA256 manifest:
+`/mnt/Documents/astra68/network-smb-namespace-busy-de25-20261104/`.
+The private trial covers the release containing the QEMU change, but its
+early usage preflight caught the holder; a deterministic direct hit of the
+new trylock BUSY branch remains unverified.
 Production image remains unchanged.
 Haiku reference: read-only
 `src/add-ons/kernel/file_systems/nfs4/kernel_interface.cpp` publishes root
