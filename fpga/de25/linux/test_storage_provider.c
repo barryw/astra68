@@ -1026,7 +1026,7 @@ static void network_mount(AstraStorageProvider *provider, const char *server,
     assert(snprintf(definition.server, sizeof(definition.server), "%s", server) > 0);
     assert(snprintf(definition.share, sizeof(definition.share), "%s", share) > 0);
     uint64_t source = 0u, mount = 0u;
-    assert(astra_storage_provider_network_source(provider, &definition, &source) == 0);
+    assert(astra_storage_provider_network_source(provider, &definition, 0u, &source) == 0);
     assert(mount_wait(provider, source, 1u, 0u, 0u, 0u, &mount) == 0);
     const AstraStorageRecord *record = astra_storage_find(&provider->catalog, mount);
     assert(record != NULL && record->state == ASTRA_VOLUME_MOUNTED &&
@@ -1068,7 +1068,7 @@ static void network_mount_auth(AstraStorageProvider *provider, const char *serve
     uint64_t source = 0u, mount = 0u;
     assert(snprintf(definition.server, sizeof(definition.server), "%s", server) > 0);
     strcpy(definition.share, "/astra-auth");
-    assert(astra_storage_provider_network_source(provider, &definition, &source) == 0);
+    assert(astra_storage_provider_network_source(provider, &definition, 0u, &source) == 0);
     int secret = test_secret("p,a=s", 0);
     assert(astra_storage_provider_mount_auth(provider, source, 1u, 0u,
         secret, &auth, &mount) == EINVAL && mount == 0u);
@@ -1133,8 +1133,15 @@ int main(int argc, char **argv)
     AstraVolumeNetworkSource network = {.format = ASTRA_VOLUME_NFS,
         .server = "127.0.0.1", .share = "/test", .label = "Network Test"};
     uint64_t network_source = 0u;
-    assert(astra_storage_provider_network_source(&provider, &network,
+    assert(astra_storage_provider_network_source(&provider, &network, 42u,
         &network_source) == 0);
+    uint64_t resumed_source = 0u;
+    assert(astra_storage_provider_network_source(&provider, &network, 42u,
+        &resumed_source) == 0 && resumed_source == network_source);
+    network.label[0] = 'C';
+    assert(astra_storage_provider_network_source(&provider, &network, 42u,
+        &resumed_source) == EBUSY && resumed_source == 0u);
+    network.label[0] = 'N';
     const AstraStorageRecord *network_record = astra_storage_find(
         &provider.catalog, network_source);
     assert(network_record != NULL && network_record->kind == ASTRA_VOLUME_SOURCE &&
@@ -1147,11 +1154,11 @@ int main(int argc, char **argv)
         network_source, network_record->generation) == 0);
     assert(astra_storage_provider_release(&provider, network_source) == 0);
     network.share[0] = 'x';
-    assert(astra_storage_provider_network_source(&provider, &network,
+    assert(astra_storage_provider_network_source(&provider, &network, 0u,
         &network_source) == EINVAL);
     network.share[0] = '/';
     network.format = ASTRA_VOLUME_SMB;
-    assert(astra_storage_provider_network_source(&provider, &network,
+    assert(astra_storage_provider_network_source(&provider, &network, 42u,
         &network_source) == 0);
     network_record = astra_storage_find(&provider.catalog, network_source);
     assert(network_record != NULL && network_record->format == ASTRA_VOLUME_SMB);
@@ -1159,7 +1166,7 @@ int main(int argc, char **argv)
         network_source, network_record->generation) == 0);
     assert(astra_storage_provider_release(&provider, network_source) == 0);
     strcpy(network.share, "/nested/share");
-    assert(astra_storage_provider_network_source(&provider, &network,
+    assert(astra_storage_provider_network_source(&provider, &network, 0u,
         &network_source) == EINVAL);
     processed_inventory(&provider);
     const char *nfs_server = getenv("ASTRA_TEST_NFS_SERVER");

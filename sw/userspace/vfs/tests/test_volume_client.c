@@ -22,6 +22,7 @@ static uint64_t subscription;
 static unsigned allocations, fail_allocation, snapshot_pages, fail_continuation;
 static uint32_t shares, unshares;
 static uint32_t image_releases;
+static uint32_t expected_network_id;
 uint32_t astra_vfs_share(AstraVfsClient *client, AstraVfsFile file, uint64_t *token)
 { assert(client != NULL && file == 9u); ++shares; *token = 99u; return ASTRA_STATUS_OK; }
 uint32_t astra_vfs_unshare(AstraVfsClient *client, uint64_t token)
@@ -162,6 +163,7 @@ AstraResult astra_port_call(AstraHandle endpoint, AstraCall *call, AstraMonotoni
     } else if (request->header.operation == ASTRA_VOLUME_NETWORK_SOURCE && reply->status == 0u) {
         const AstraVolumeNetworkRequest *wanted = call->request;
         assert(wanted->size == sizeof(shared_network) && wanted->reserved == 0u &&
+            wanted->managed_id == expected_network_id &&
             call->handle_count == 1u &&
             astra_volume_network_source_valid(&shared_network));
         ((AstraVolumeControlReply *)reply)->reference = (AstraVolumeReference){25u, 8u, 1u};
@@ -408,6 +410,12 @@ int main(void)
         .server = "127.0.0.1", .share = "/export", .label = "Test"};
     assert(astra_volume_network_source(77u, &network, &admitted) == ASTRA_OK &&
         admitted.id == 8u);
+    expected_network_id = 42u;
+    assert(astra_volume_managed_network_source(77u, &network, 42u,
+        &admitted) == ASTRA_OK && admitted.id == 8u);
+    expected_network_id = 0u;
+    assert(astra_volume_managed_network_source(77u, &network, 0u,
+        &admitted) == ASTRA_ERROR_INVALID_ARGUMENT && admitted.id == 0u);
     network.share[0] = 'x';
     assert(astra_volume_network_source(77u, &network, &admitted) ==
         ASTRA_ERROR_INVALID_ARGUMENT && admitted.id == 0u);

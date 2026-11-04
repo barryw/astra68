@@ -326,7 +326,7 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST) stack-contract
 		$(NDK)/include/astra/vfs_reader.h include/astra/vfs_port_transport.h \
 		../../include/astra/vfs_service.h
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library.15 15.13.0 ABI 15.13$$'
+		grep -q '^filesystem.library.15 15.14.0 ABI 15.14$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
 	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.15]' >/dev/null
 	@test "$$($(READELF) -dW $< | \

@@ -219,6 +219,18 @@ ASTRA_NODISCARD AstraResult astra_volume_control(AstraHandle administrator,
  */
 ASTRA_NODISCARD AstraResult astra_volume_network_source(AstraHandle administrator,
     const AstraVolumeNetworkSource *source, AstraVolumeReference *reference);
+/** Reopen a saved mapping's source across manager restarts. Matching ID and
+ * definition return the existing source; conflicting definition is BUSY.
+ * ID zero is invalid. The source remains until explicit release.
+ * @param administrator VOLUME_ADMIN capability.
+ * @param source Validated source definition.
+ * @param managed_id Stable saved mapping ID.
+ * @param reference Receives exact source identity, cleared on failure.
+ * @return ASTRA_OK or validation/provider status.
+ */
+ASTRA_NODISCARD AstraResult astra_volume_managed_network_source(
+    AstraHandle administrator, const AstraVolumeNetworkSource *source,
+    uint32_t managed_id, AstraVolumeReference *reference);
 /** Admit one authenticated SMB mount. Credentials are one-use and never
  * entered in the source catalog. Caller must wipe its own password buffer.
  * @param administrator VOLUME_ADMIN capability.

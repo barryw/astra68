@@ -142,6 +142,14 @@ returning `ASTRA_ERROR_BUSY`; successful reread publishes a new generation.
 Only `DISK_ADMIN` admits map edits. Physical DE25 edit and rediscovery gates
 remain open in the current engineering state.
 
+ABI 15.14 adds `astra_volume_managed_network_source` for saved NFS/SMB
+connections. Pass a nonzero saved mapping ID. Repeating admission with the
+same ID and exact source definition returns its existing source after the
+network manager restarts; a changed definition returns `ASTRA_ERROR_BUSY`
+until the old source is unmounted and released. Ordinary
+`astra_volume_network_source` admissions remain independent and always create
+new sources. Both calls require `VOLUME_ADMIN`; neither mounts the source.
+
 HostFS keeps the position, directory cursor, append and nonblocking flags in
 one shared provider description. Sequential I/O advances its position;
 positioned I/O preserves it and positioned writes ignore append. Use

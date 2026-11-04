@@ -2,6 +2,16 @@
 
 Status: active continuation map, 2026-11-04
 
+Managed network sources, 2026-11-04: native Filesystem Kit ABI 15.14 now
+admits a saved mapping ID separately from network endpoint definition. Provider
+returns the same exact source for an unchanged ID/definition after the network
+service restarts, rejects a changed definition until old source retirement,
+and keeps ordinary manual mounts independent. Native Volume client/port/host
+tests, provider mount/format regression, AArch64 provider cross build,
+MC68040 HostFS link and DE25 QEMU cross build passed on Beast. Native volume
+protocol 5, host command 7 and provider control 10 must deploy together.
+Network service use, DE25 runtime and production release are not yet tested.
+
 Saved network mappings, 2026-11-04: `network.library.1` ABI 1.5 exposes
 typed create/update/read/remove operations for NFS and SMB definitions. Network
 service stores definitions and stable IDs with atomic Config Kit edits; SMB

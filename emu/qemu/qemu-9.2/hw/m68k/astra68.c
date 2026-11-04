@@ -6528,7 +6528,8 @@ static uint32_t astra_host_volume_network_source(Astra68State *s, uint32_t owner
     AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
         .operation = ASTRA_STORAGE_CONTROL_NETWORK_SOURCE,
         .epoch = s->host.provider_epoch,
-        .network = {.format = ldl_be_p(data)}};
+        .network = {.format = ldl_be_p(data)},
+        .managed_network_id = ldl_be_p(data + 1552u)};
     memcpy(request.network.server, data + 8u, sizeof(request.network.server));
     memcpy(request.network.share, data + 264u, sizeof(request.network.share));
     memcpy(request.network.label, data + 1288u, sizeof(request.network.label));

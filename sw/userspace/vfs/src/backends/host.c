@@ -1113,7 +1113,7 @@ uint32_t astra_vfs_host_volume_control(AstraVfsHostTransport *transport,
 
 uint32_t astra_vfs_host_volume_network_source(AstraVfsHostTransport *transport,
     uint32_t generation, uint32_t requester, const AstraVolumeNetworkSource *source,
-    AstraVolumeReference *reference)
+    uint32_t managed_id, AstraVolumeReference *reference)
 {
     uint8_t input[sizeof(AstraHostVolumeNetworkSource)] = {0};
     uint8_t output[sizeof(AstraVolumeReference)] = {0};
@@ -1126,6 +1126,7 @@ uint32_t astra_vfs_host_volume_network_source(AstraVfsHostTransport *transport,
     memcpy(input + 264u, source->share, sizeof(source->share));
     memcpy(input + 1288u, source->label, sizeof(source->label));
     astra_store_be32(input + 1544u, requester);
+    astra_store_be32(input + 1552u, managed_id);
     uint32_t status = astra_vfs_host_transport_begin(transport, 0u, sizeof(input), &request);
     if (status != ASTRA_VFS_OK) return status;
     AstraHostCommand *command = request.command;

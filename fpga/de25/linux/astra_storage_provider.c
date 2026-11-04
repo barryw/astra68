@@ -48,6 +48,7 @@ struct AstraStorageResource {
     AstraStorageProbe probe;
     AstraStorageMounted mounted;
     AstraVolumeNetworkSource network;
+    uint32_t managed_network_id;
     AstraStorageWork work;
     struct AstraStorageResource *next;
 };
@@ -643,7 +644,8 @@ int astra_storage_provider_image(AstraStorageProvider *provider, uint64_t mount,
 }
 
 int astra_storage_provider_network_source(AstraStorageProvider *provider,
-    const AstraVolumeNetworkSource *definition, uint64_t *source)
+    const AstraVolumeNetworkSource *definition, uint32_t managed_id,
+    uint64_t *source)
 {
     int error;
     if (provider == NULL || source == NULL || !astra_volume_network_source_valid(definition))
@@ -651,6 +653,20 @@ int astra_storage_provider_network_source(AstraStorageProvider *provider,
     *source = 0u;
     if (provider->worker_limit < 2u)
         return ENOTSUP; /* One worker cannot reserve local I/O capacity. */
+    if (managed_id != 0u)
+        for (AstraStorageResource *entry = provider->resources; entry != NULL;
+             entry = entry->next)
+            if (entry->managed_network_id == managed_id) {
+                const AstraStorageRecord *record = astra_storage_find(
+                    &provider->catalog, entry->id);
+                if (record == NULL || record->state != ASTRA_VOLUME_UNMOUNTED ||
+                    record->kind != ASTRA_VOLUME_SOURCE ||
+                    record->origin != ASTRA_VOLUME_ORIGIN_NETWORK ||
+                    memcmp(&entry->network, definition, sizeof(*definition)) != 0)
+                    return EBUSY;
+                *source = entry->id;
+                return 0;
+            }
     error = astra_storage_network_source(&provider->catalog, definition->format,
         definition->label, source);
     if (error != 0) return error;
@@ -662,6 +678,7 @@ int astra_storage_provider_network_source(AstraStorageProvider *provider,
         return ENOSPC;
     }
     entry->network = *definition;
+    entry->managed_network_id = managed_id;
     return 0;
 }
 
@@ -976,8 +993,9 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
                         sizeof(request.edit)) != 0)
             error = EPROTO;
         else if (request.operation != ASTRA_STORAGE_CONTROL_NETWORK_SOURCE &&
-                 memcmp(&request.network, (AstraVolumeNetworkSource[1]){{0}},
-                        sizeof(request.network)) != 0)
+                 (request.managed_network_id != 0u ||
+                  memcmp(&request.network, (AstraVolumeNetworkSource[1]){{0}},
+                         sizeof(request.network)) != 0))
             error = EPROTO;
         else if (request.operation != ASTRA_STORAGE_CONTROL_MOUNT_AUTH &&
                  memcmp(&request.auth, (AstraStorageMountAuth[1]){{{0}, {0}}},
@@ -1133,7 +1151,8 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
                 error = EINVAL;
             else
                 error = astra_storage_provider_network_source(provider,
-                    &request.network, &reply.object);
+                    &request.network, request.managed_network_id,
+                    &reply.object);
             break;
         case ASTRA_STORAGE_CONTROL_RELEASE_NETWORK_SOURCE:
             if (request.flags || request.byte_limit || request.inode_limit ||

@@ -279,8 +279,9 @@ AstraResult astra_volume_control(AstraHandle administrator, const AstraVolumeCon
     return control_call(administrator, control, reference);
 }
 
-AstraResult astra_volume_network_source(AstraHandle administrator,
-    const AstraVolumeNetworkSource *source, AstraVolumeReference *reference)
+static AstraResult network_source_call(AstraHandle administrator,
+    const AstraVolumeNetworkSource *source, uint32_t managed_id,
+    AstraVolumeReference *reference)
 {
     AstraVolumeNetworkRequest request = {0};
     AstraVolumeControlReply reply = {0};
@@ -293,6 +294,7 @@ AstraResult astra_volume_network_source(AstraHandle administrator,
     astra_message_header_set(&request.header, sizeof(request), ASTRA_VOLUME_PROTOCOL,
         ASTRA_VOLUME_PROTOCOL_VERSION, ASTRA_VOLUME_NETWORK_SOURCE, 1u);
     request.size = sizeof(*source);
+    request.managed_id = managed_id;
     AstraResult result = astra_area_create(sizeof(*source), ASTRA_RIGHT_READ |
         ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &area);
     if (result == ASTRA_OK) result = astra_area_map(&area,
@@ -320,6 +322,23 @@ AstraResult astra_volume_network_source(AstraHandle administrator,
         else *reference = reply.reference;
     }
     return result;
+}
+
+AstraResult astra_volume_network_source(AstraHandle administrator,
+    const AstraVolumeNetworkSource *source, AstraVolumeReference *reference)
+{
+    return network_source_call(administrator, source, 0u, reference);
+}
+
+AstraResult astra_volume_managed_network_source(AstraHandle administrator,
+    const AstraVolumeNetworkSource *source, uint32_t managed_id,
+    AstraVolumeReference *reference)
+{
+    if (managed_id == 0u) {
+        if (reference != NULL) memset(reference, 0, sizeof(*reference));
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
+    return network_source_call(administrator, source, managed_id, reference);
 }
 
 AstraResult astra_volume_mount_auth(AstraHandle administrator,

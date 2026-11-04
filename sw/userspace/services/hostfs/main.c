@@ -1098,14 +1098,15 @@ static uint32_t hostfs_volume_control(void *context, uint32_t requester,
 }
 
 static uint32_t hostfs_volume_network_source(void *context, uint32_t requester,
-    const AstraVolumeNetworkSource *source, AstraVolumeReference *reference)
+    const AstraVolumeNetworkSource *source, uint32_t managed_id,
+    AstraVolumeReference *reference)
 {
     (void)context;
     uint32_t status = hostfs_check_provider();
     if (status != ASTRA_STATUS_OK) return status;
     retire_orphans();
     return astra_vfs_host_volume_network_source(&transport, transport.generation,
-        requester, source, reference);
+        requester, source, managed_id, reference);
 }
 
 static uint32_t hostfs_volume_mount_auth(void *context, uint32_t requester,

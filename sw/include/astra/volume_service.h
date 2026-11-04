@@ -7,7 +7,7 @@
 /* Native metadata control. Bulk pages use caller-owned output areas; the
  * service never reads authority or policy from those areas. */
 #define ASTRA_VOLUME_PROTOCOL UINT32_C(0x564f4c53)
-#define ASTRA_VOLUME_PROTOCOL_VERSION 4u
+#define ASTRA_VOLUME_PROTOCOL_VERSION 5u
 #define ASTRA_CAPABILITY_VOLUME_DELEGATE "VOLUME_DELEGATE"
 enum {
     ASTRA_VOLUME_QUERY = 1u,
@@ -35,6 +35,7 @@ typedef struct AstraVolumeNetworkRequest {
     AstraMessageHeader header;
     uint32_t size;
     uint32_t reserved;
+    uint32_t managed_id;
 } AstraVolumeNetworkRequest;
 typedef struct AstraVolumePartitionRequest {
     AstraMessageHeader header;
@@ -111,6 +112,6 @@ _Static_assert(sizeof(AstraVolumeFormatRequest) == 72u, "volume format request A
 _Static_assert(sizeof(AstraVolumeFormatReply) == 48u, "volume format reply ABI");
 _Static_assert(sizeof(AstraVolumePartitionRequest) == 80u, "volume partition request ABI");
 _Static_assert(sizeof(AstraVolumePartitionReply) == 48u, "volume partition reply ABI");
-_Static_assert(sizeof(AstraVolumeNetworkRequest) == 32u, "volume network request ABI");
+_Static_assert(sizeof(AstraVolumeNetworkRequest) == 36u, "volume network request ABI");
 _Static_assert(sizeof(AstraVolumeAuthRequest) == 32u, "volume auth request ABI");
 #endif

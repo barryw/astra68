@@ -199,7 +199,8 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
                     reply.status = ASTRA_STATUS_INVALID;
                 else
                     reply.status = port->network_source(port->context, owner,
-                        mapped, &response.control.reference);
+                        mapped, incoming.network.managed_id,
+                        &response.control.reference);
                 if (mapped != NULL && astra_rt_area_unmap(mapped) != ASTRA_SYSCALL_OK &&
                     reply.status == ASTRA_STATUS_OK) reply.status = ASTRA_STATUS_BAD_HANDLE;
                 if (reply.status != ASTRA_STATUS_OK)

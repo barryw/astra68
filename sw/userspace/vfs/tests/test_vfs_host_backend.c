@@ -93,7 +93,8 @@ uint32_t astra_vfs_host_transport_submit(
                 strcmp((const char *)wire + 264u, "/export") == 0 &&
                 strcmp((const char *)wire + 1288u, "Test") == 0 &&
                 astra_load_be32(wire + 1544u) == 17u &&
-                astra_load_be32(wire + 1548u) == 0u);
+                astra_load_be32(wire + 1548u) == 0u &&
+                astra_load_be32(wire + 1552u) == 42u);
             if (host->failure != 0u) return host->failure;
             astra_store_be64(output, 7u);
             astra_store_be64((uint8_t *)output + 8u, 12u);
@@ -499,7 +500,7 @@ int main(void)
         .server = "127.0.0.1", .share = "/export", .label = "Test"};
     AstraVolumeReference network_reference = {0};
     assert(astra_vfs_host_volume_network_source((AstraVfsHostTransport *)&catalog_host,
-        9u, 17u, &network, &network_reference) == ASTRA_VFS_OK &&
+        9u, 17u, &network, 42u, &network_reference) == ASTRA_VFS_OK &&
         network_reference.epoch == 7u && network_reference.id == 12u);
     AstraVolumeMountAuth auth = {.source = {7u, 12u, 1u},
         .flags = ASTRA_VOLUME_READ_ONLY, .account = "astratest",

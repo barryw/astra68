@@ -186,10 +186,11 @@ static uint32_t apply_control(void *context, uint32_t owner, const AstraVolumeCo
     return ASTRA_STATUS_OK;
 }
 static uint32_t apply_network(void *context, uint32_t owner,
-    const AstraVolumeNetworkSource *source, AstraVolumeReference *reference)
+    const AstraVolumeNetworkSource *source, uint32_t managed_id,
+    AstraVolumeReference *reference)
 {
     assert(context == &epoch && owner == sender &&
-        astra_volume_network_source_valid(source));
+        astra_volume_network_source_valid(source) && managed_id == 42u);
     ++network_calls;
     *reference = (AstraVolumeReference){epoch, 9u, 1u};
     return ASTRA_STATUS_OK;
@@ -200,6 +201,7 @@ static void network_request(void)
     incoming_size = sizeof(AstraVolumeNetworkRequest);
     request.header.total_size = incoming_size;
     incoming_request.network.size = sizeof(AstraVolumeNetworkSource);
+    incoming_request.network.managed_id = 42u;
     AstraVolumeNetworkSource *source = (void *)&output_storage;
     *source = (AstraVolumeNetworkSource){.format = ASTRA_VOLUME_NFS,
         .server = "127.0.0.1", .share = "/export", .label = "Test"};

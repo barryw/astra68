@@ -257,3 +257,8 @@ ASTRA_FILESYSTEM_15.13 {
         astra_vfs_port_transport;
         astra_vfs_port_wipe_area;
 } ASTRA_FILESYSTEM_15.12;
+
+ASTRA_FILESYSTEM_15.14 {
+    global:
+        astra_volume_managed_network_source;
+} ASTRA_FILESYSTEM_15.13;

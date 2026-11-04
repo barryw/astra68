@@ -21,7 +21,8 @@ typedef uint32_t (*AstraVolumeGrantRoot)(void *context, uint32_t owner,
 typedef uint32_t (*AstraVolumeApplyControl)(void *context, uint32_t owner,
     const AstraVolumeControl *control, AstraVolumeReference *reference);
 typedef uint32_t (*AstraVolumeApplyNetworkSource)(void *context, uint32_t owner,
-    const AstraVolumeNetworkSource *source, AstraVolumeReference *reference);
+    const AstraVolumeNetworkSource *source, uint32_t managed_id,
+    AstraVolumeReference *reference);
 typedef uint32_t (*AstraVolumeApplyMountAuth)(void *context, uint32_t owner,
     const AstraVolumeMountAuth *auth, AstraVolumeReference *reference);
 typedef uint32_t (*AstraVolumeApplyFormat)(void *context, uint32_t owner,

@@ -182,8 +182,9 @@ typedef struct AstraHostVolumeNetworkSource {
     AstraVolumeNetworkSource source;
     uint32_t requester;
     uint32_t reserved;
+    uint32_t managed_id;
 } AstraHostVolumeNetworkSource;
-_Static_assert(sizeof(AstraHostVolumeNetworkSource) == 1552u, "host network source ABI");
+_Static_assert(sizeof(AstraHostVolumeNetworkSource) == 1556u, "host network source ABI");
 typedef struct AstraHostVolumeMountAuth {
     AstraVolumeMountAuth auth;
     uint32_t requester;
@@ -647,7 +648,7 @@ _Static_assert(sizeof(AstraHostNode) == 112u, "host node ABI changed");
 /** @endcond */
 
 /** Wire-format version of ::AstraHostCommand. */
-#define ASTRA_HOST_COMMAND_VERSION 6u
+#define ASTRA_HOST_COMMAND_VERSION 7u
 /** Fixed byte size of ::AstraHostCommand. */
 #define ASTRA_HOST_COMMAND_SIZE 512u
 
