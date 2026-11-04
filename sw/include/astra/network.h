@@ -131,7 +131,9 @@ typedef enum AstraNetworkStatus {
      * kernel, host backend, or network service; the POSIX socket layer maps
      * it to `ENOTSUP`.
      */
-    ASTRA_NETWORK_FORKED = 21u
+    ASTRA_NETWORK_FORKED = 21u,
+    /** A saved volume is mounted, quiescing, or held open (POSIX `EBUSY`). */
+    ASTRA_NETWORK_BUSY = 22u
 } AstraNetworkStatus;
 
 /** Readiness bit: the endpoint has data available to read. */
@@ -617,7 +619,13 @@ enum {
     /** Create or update one saved mapping and its optional sealed password. */
     ASTRA_NETWORK_MAPPING_SAVE = 28u,
     /** Remove one saved mapping by stable ID. */
-    ASTRA_NETWORK_MAPPING_REMOVE = 29u
+    ASTRA_NETWORK_MAPPING_REMOVE = 29u,
+    /** Admit a saved source and mount, returning its exact volume identities. */
+    ASTRA_NETWORK_MAPPING_MOUNT = 30u,
+    /** Safely unmount a saved share, refusing retained users. */
+    ASTRA_NETWORK_MAPPING_UNMOUNT = 31u,
+    /** Read saved mapping's current source and mount state. */
+    ASTRA_NETWORK_MAPPING_STATE = 32u
 };
 
 /** Request a read-only share mount. */
@@ -652,11 +660,23 @@ typedef struct AstraNetworkMappingSave {
     char password[256]; /**< Used only for REPLACE; caller wipes after call. */
 } AstraNetworkMappingSave;
 
+/** Current native volume identities and mount state for one saved mapping. */
+typedef struct AstraNetworkMappingVolume {
+    uint32_t size; /**< sizeof(AstraNetworkMappingVolume). */
+    uint32_t state; /**< AstraVolumeState, or UNMOUNTED without a child. */
+    uint32_t status; /**< Native AstraStatus of current mount. */
+    uint32_t reserved; /**< Zero. */
+    AstraVolumeReference source; /**< Exact managed source. */
+    AstraVolumeReference mount; /**< Exact child mount, zero when absent. */
+} AstraNetworkMappingVolume;
+
 /** @cond ASTRA_INTERNAL */
 _Static_assert(sizeof(AstraNetworkMapping) == 2072u,
                "network mapping ABI changed");
 _Static_assert(sizeof(AstraNetworkMappingSave) == 2332u,
                "network mapping save ABI changed");
+_Static_assert(sizeof(AstraNetworkMappingVolume) == 64u,
+               "network mapping volume ABI changed");
 /** @endcond */
 
 /** Byte size of one shared transfer slot: the complete 16-bit IP packet length. */

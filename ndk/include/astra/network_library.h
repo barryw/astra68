@@ -15,7 +15,7 @@
 /** Network Kit ELF ABI major version. */
 #define ASTRA_NETWORK_LIBRARY_ABI_MAJOR 1u
 /** Network Kit backward-compatible ABI revision. */
-#define ASTRA_NETWORK_LIBRARY_ABI_MINOR 5u
+#define ASTRA_NETWORK_LIBRARY_ABI_MINOR 6u
 
 /** Open network-service session. */
 typedef struct AstraNetworkSession {
@@ -183,9 +183,18 @@ AstraNetworkStatus astra_network_mapping_read(AstraNetworkSession *session,
 /** Create (ID zero) or update (stable ID) one mapping. Password edit is one-use; caller must wipe its input. Requires NETWORK_ADMIN. @param session Admin session. @param save Valid definition and password action. @param id Receives stable ID. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_mapping_save(AstraNetworkSession *session,
     const AstraNetworkMappingSave *save, uint32_t *id);
-/** Delete one saved definition without detaching any mount. Requires NETWORK_ADMIN. @param session Admin session. @param id Stable mapping ID. @return ASTRA_NETWORK_* status. */
+/** Delete one saved definition after its mount is gone; releases its source. Requires NETWORK_ADMIN. @param session Admin session. @param id Stable mapping ID. @return ASTRA_NETWORK_BUSY if still mounted, otherwise ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_mapping_remove(AstraNetworkSession *session,
     uint32_t id);
+/** Admit a saved share mount. Completion is asynchronous; query state. Requires NETWORK_ADMIN. @param session Admin session. @param id Stable mapping ID. @param volume Receives exact source and mount identities. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_mapping_mount(AstraNetworkSession *session,
+    uint32_t id, AstraNetworkMappingVolume *volume);
+/** Safely detach a saved share. Busy mounts retain their identity for holder inspection. Requires NETWORK_ADMIN. @param session Admin session. @param id Stable mapping ID. @param volume Receives exact volume identities when available. @return ASTRA_NETWORK_BUSY if held, otherwise ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_mapping_unmount(AstraNetworkSession *session,
+    uint32_t id, AstraNetworkMappingVolume *volume);
+/** Read current saved share source and mount state. Requires NETWORK_ADMIN. @param session Admin session. @param id Stable mapping ID. @param volume Receives exact volume identities and state. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_mapping_state(AstraNetworkSession *session,
+    uint32_t id, AstraNetworkMappingVolume *volume);
 /** Cancel resolution. @param request Request. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_request_cancel(AstraNetworkRequest *request);
 /** Borrow readiness handle. @param endpoint Endpoint. @return Wait handle. */

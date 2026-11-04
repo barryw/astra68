@@ -1116,6 +1116,87 @@ AstraNetworkStatus astra_network_mapping_remove(AstraNetworkSession *session,
     return status;
 }
 
+static AstraNetworkStatus mapping_volume_action(AstraNetworkSession *session,
+    uint32_t id, uint32_t operation, AstraNetworkMappingVolume *volume)
+{
+    AstraNetworkRequestMessage request;
+    AstraNetworkReplyMessage reply;
+    AstraNetworkSharedHeader *header;
+    AstraNetworkSharedSlot *slots;
+    AstraNetworkStatus status;
+    uint32_t slot;
+    uint8_t *bytes;
+    if (session == NULL || session->_private_id == 0u || id == 0u ||
+        volume == NULL) return ASTRA_NETWORK_INVALID;
+    (void)memset(volume, 0, sizeof(*volume));
+    status = session_lock(session);
+    if (status != ASTRA_NETWORK_OK) return status;
+    header = session->_private_shared;
+    slot = header->tx_slot_count;
+    slots = astra_network_shared_slots(header);
+    bytes = astra_network_shared_slot_bytes(header, slot);
+    if (bytes == NULL) {
+        session_unlock(session);
+        return ASTRA_NETWORK_INVALID;
+    }
+    slots[slot].generation = session->_private_generation;
+    slots[slot].state = ASTRA_NETWORK_SLOT_RX_READING;
+    slots[slot].length = sizeof(*volume);
+    request_init(session, &request, operation);
+    request.value = id;
+    request.slot = slot;
+    request.length = sizeof(*volume);
+    status = exchange_locked(session, session->_private_control,
+                             &request, &reply, NULL, 0u, NULL);
+    if (status == ASTRA_NETWORK_OK || status == ASTRA_NETWORK_BUSY ||
+        status == ASTRA_NETWORK_IN_PROGRESS) {
+        AstraNetworkMappingVolume received;
+        if (status != ASTRA_NETWORK_OK && reply.transferred == 0u)
+            goto done;
+        (void)memcpy(&received, bytes, sizeof(received));
+        if (reply.transferred != sizeof(received) ||
+            received.size != sizeof(received) || received.reserved != 0u ||
+            received.source.epoch == 0u || received.source.id == 0u ||
+            received.source.generation == 0u ||
+            received.state < ASTRA_VOLUME_UNMOUNTED ||
+            received.state > ASTRA_VOLUME_PARTITIONING ||
+            (received.mount.id == 0u) !=
+                (received.mount.generation == 0u) ||
+            (received.mount.id == 0u && received.mount.epoch != 0u) ||
+            (received.mount.id != 0u &&
+             received.mount.epoch != received.source.epoch) ||
+            (operation == ASTRA_NETWORK_MAPPING_MOUNT &&
+             status == ASTRA_NETWORK_OK && received.mount.id == 0u))
+            status = ASTRA_NETWORK_IO;
+        else *volume = received;
+    }
+done:
+    clear_bytes(&slots[slot], sizeof(slots[slot]));
+    session_unlock(session);
+    return status;
+}
+
+AstraNetworkStatus astra_network_mapping_mount(AstraNetworkSession *session,
+    uint32_t id, AstraNetworkMappingVolume *volume)
+{
+    return mapping_volume_action(session, id, ASTRA_NETWORK_MAPPING_MOUNT,
+                                 volume);
+}
+
+AstraNetworkStatus astra_network_mapping_unmount(AstraNetworkSession *session,
+    uint32_t id, AstraNetworkMappingVolume *volume)
+{
+    return mapping_volume_action(session, id, ASTRA_NETWORK_MAPPING_UNMOUNT,
+                                 volume);
+}
+
+AstraNetworkStatus astra_network_mapping_state(AstraNetworkSession *session,
+    uint32_t id, AstraNetworkMappingVolume *volume)
+{
+    return mapping_volume_action(session, id, ASTRA_NETWORK_MAPPING_STATE,
+                                 volume);
+}
+
 static uint32_t append_decimal(char *text, uint32_t at, uint8_t value)
 {
     if (value >= 100u) text[at++] = (char)('0' + value / 100u);

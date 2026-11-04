@@ -66,6 +66,7 @@ static int network_errno(AstraNetworkStatus status)
     case ASTRA_NETWORK_PEER_DEAD: return EPIPE;
     case ASTRA_NETWORK_BUFFER_TOO_SMALL: return ENOBUFS;
     case ASTRA_NETWORK_FORKED: return ENOTSUP;
+    case ASTRA_NETWORK_BUSY: return EBUSY;
     default: return EIO;
     }
 }

@@ -4,12 +4,14 @@
 #include <astra/network.h>
 #include <astra/network_core.h>
 #include <astra/program.h>
+#include <astra/result.h>
 #include <astra/runtime.h>
 #include <astra/secret_memory.h>
 #include <astra/service.h>
 #include <astra/status.h>
 #include <astra/string.h>
 #include <astra/volume_network.h>
+#include <astra/volume.h>
 
 ASTRA_PROGRAM("network-service", 0, 1, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
@@ -51,6 +53,7 @@ static uint64_t ethernet_owner_until;
 static uint64_t ethernet_recovery_at = ASTRA_DEADLINE_FOREVER;
 static AstraNetworkEthernetIPv4 ethernet_pending;
 static AstraConfig network_config = ASTRA_CONFIG_INIT;
+static AstraHandle volume_metadata, volume_admin;
 static int mapping_store_ok;
 static const AstraConfigField network_fields[] = {
     {"profile", 0u}, {"pending", 0u},
@@ -876,6 +879,140 @@ static AstraNetworkStatus mapping_find(uint32_t id, uint32_t *index,
     return ASTRA_NETWORK_NAME_NOT_FOUND;
 }
 
+static AstraNetworkStatus volume_status(AstraResult result)
+{
+    switch (result) {
+    case ASTRA_OK: return ASTRA_NETWORK_OK;
+    case ASTRA_ERROR_BUSY: return ASTRA_NETWORK_BUSY;
+    case ASTRA_ERROR_PERMISSION: return ASTRA_NETWORK_ACCESS;
+    case ASTRA_ERROR_INVALID_ARGUMENT: return ASTRA_NETWORK_INVALID;
+    case ASTRA_ERROR_INVALID_HANDLE:
+    case ASTRA_ERROR_NOT_PRESENT: return ASTRA_NETWORK_NAME_NOT_FOUND;
+    case ASTRA_ERROR_NO_RESOURCES: return ASTRA_NETWORK_RESOURCE_LIMIT;
+    case ASTRA_ERROR_OUT_OF_MEMORY: return ASTRA_NETWORK_OUT_OF_MEMORY;
+    case ASTRA_ERROR_TIMEOUT: return ASTRA_NETWORK_TIMED_OUT;
+    case ASTRA_ERROR_PEER_DEAD: return ASTRA_NETWORK_PEER_DEAD;
+    default: return ASTRA_NETWORK_IO;
+    }
+}
+
+static AstraNetworkStatus mapping_volume_state(const AstraNetworkMapping *mapping,
+    AstraNetworkMappingVolume *volume)
+{
+    AstraVolumeSnapshot snapshot = ASTRA_VOLUME_SNAPSHOT_INIT;
+    AstraResult result;
+    (void)memset(volume, 0, sizeof(*volume));
+    volume->size = sizeof(*volume);
+    volume->state = ASTRA_VOLUME_UNMOUNTED;
+    result = astra_volume_managed_network_source(volume_admin, &mapping->source,
+        mapping->id, &volume->source);
+    if (result != ASTRA_OK) return volume_status(result);
+    result = astra_volume_snapshot_open(volume_metadata, &snapshot);
+    if (result != ASTRA_OK) return volume_status(result);
+    if (astra_volume_snapshot_find(&snapshot, &volume->source) == NULL) {
+        astra_volume_snapshot_close(&snapshot);
+        return ASTRA_NETWORK_IO;
+    }
+    for (uint32_t at = 0u; at < snapshot.count; ++at) {
+        const AstraVolumeRecord *row = &snapshot.records[at];
+        if (row->kind != ASTRA_VOLUME_MOUNT ||
+            row->parent != volume->source.id ||
+            row->parent_generation != volume->source.generation)
+            continue;
+        if (volume->mount.id != 0u) {
+            astra_volume_snapshot_close(&snapshot);
+            return ASTRA_NETWORK_BUSY;
+        }
+        volume->mount = (AstraVolumeReference){snapshot.epoch, row->id,
+                                               row->generation};
+        volume->state = row->state;
+        volume->status = row->status;
+    }
+    astra_volume_snapshot_close(&snapshot);
+    return ASTRA_NETWORK_OK;
+}
+
+static AstraNetworkStatus mapping_mount(const AstraNetworkMapping *mapping,
+    uint32_t index,
+    AstraNetworkMappingVolume *volume)
+{
+    AstraNetworkStatus status = mapping_volume_state(mapping, volume);
+    if (status != ASTRA_NETWORK_OK) return status;
+    if (volume->mount.id != 0u)
+        return volume->state == ASTRA_VOLUME_MOUNTED ||
+               volume->state == ASTRA_VOLUME_MOUNTING ?
+               ASTRA_NETWORK_OK : ASTRA_NETWORK_BUSY;
+    AstraResult result;
+    if (mapping->source.format == ASTRA_VOLUME_SMB && mapping->account[0] != '\0') {
+        AstraVolumeMountAuth auth = {.source = volume->source,
+            .flags = (mapping->flags & ASTRA_NETWORK_MAPPING_READ_ONLY) != 0u ?
+                ASTRA_VOLUME_READ_ONLY : 0u};
+        char secret[sizeof(auth.password) + 3u] = {0};
+        uint32_t length = 0u;
+        (void)memcpy(auth.account, mapping->account, sizeof(auth.account));
+        (void)memcpy(auth.domain, mapping->domain, sizeof(auth.domain));
+        if (astra_config_get_string(&network_config, "mapping_secret", index,
+                secret, sizeof(secret), &length) == ASTRA_CONFIG_OK &&
+            ((secret[0] == 'p' && secret[1] == ':') ||
+             (secret[0] == 'n' && secret[1] == '\0'))) {
+            if (secret[0] == 'p')
+                (void)memcpy(auth.password, secret + 2u,
+                             strlen(secret + 2u) + 1u);
+            result = astra_volume_mount_auth(volume_admin, &auth,
+                                              &volume->mount);
+            status = volume_status(result);
+        } else
+            status = ASTRA_NETWORK_ACCESS;
+        astra_secret_wipe(&auth, sizeof(auth));
+        astra_secret_wipe(secret, sizeof(secret));
+    } else {
+        AstraVolumeControl control = {.reference = volume->source,
+            .operation = ASTRA_VOLUME_MOUNT_SOURCE,
+            .flags = (mapping->flags & ASTRA_NETWORK_MAPPING_READ_ONLY) != 0u ?
+                ASTRA_VOLUME_READ_ONLY : 0u};
+        result = astra_volume_control(volume_admin, &control, &volume->mount);
+        status = volume_status(result);
+    }
+    if (status == ASTRA_NETWORK_OK) volume->state = ASTRA_VOLUME_MOUNTING;
+    return status;
+}
+
+static AstraNetworkStatus mapping_unmount(const AstraNetworkMapping *mapping,
+    AstraNetworkMappingVolume *volume)
+{
+    AstraNetworkStatus status = mapping_volume_state(mapping, volume);
+    AstraVolumeReference admitted = {0};
+    AstraVolumeControl control;
+    if (status != ASTRA_NETWORK_OK) return status;
+    if (volume->mount.id == 0u || volume->state == ASTRA_VOLUME_UNMOUNTED)
+        return ASTRA_NETWORK_OK;
+    if (volume->state == ASTRA_VOLUME_QUIESCING)
+        return ASTRA_NETWORK_IN_PROGRESS;
+    if (volume->state != ASTRA_VOLUME_MOUNTED &&
+        volume->state != ASTRA_VOLUME_FAILED)
+        return ASTRA_NETWORK_BUSY;
+    control = (AstraVolumeControl){.reference = volume->mount,
+        .operation = ASTRA_VOLUME_UNMOUNT};
+    status = volume_status(astra_volume_control(volume_admin, &control,
+                                               &admitted));
+    if (status == ASTRA_NETWORK_OK) volume->state = ASTRA_VOLUME_QUIESCING;
+    return status;
+}
+
+static AstraNetworkStatus mapping_release(const AstraNetworkMapping *mapping)
+{
+    AstraNetworkMappingVolume volume;
+    AstraVolumeReference admitted = {0};
+    AstraNetworkStatus status = mapping_volume_state(mapping, &volume);
+    if (status != ASTRA_NETWORK_OK) return status;
+    if (volume.mount.id != 0u && volume.state != ASTRA_VOLUME_UNMOUNTED)
+        return ASTRA_NETWORK_BUSY;
+    AstraVolumeControl control = {.reference = volume.source,
+        .operation = ASTRA_VOLUME_RELEASE_NETWORK_SOURCE};
+    return volume_status(astra_volume_control(volume_admin, &control,
+                                               &admitted));
+}
+
 static AstraNetworkStatus mapping_save(const AstraNetworkMappingSave *input,
     uint32_t *saved_id)
 {
@@ -923,6 +1060,11 @@ static AstraNetworkStatus mapping_save(const AstraNetworkMappingSave *input,
              strcmp(mapping.source.share, previous.source.share) != 0) &&
             (previous.flags & ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL) != 0u)
             return ASTRA_NETWORK_INVALID;
+        if (memcmp(&mapping.source, &previous.source,
+                   sizeof(mapping.source)) != 0) {
+            status = mapping_release(&previous);
+            if (status != ASTRA_NETWORK_OK) return status;
+        }
     }
     has_password = input->password_action == ASTRA_NETWORK_PASSWORD_REPLACE ||
         (input->password_action == ASTRA_NETWORK_PASSWORD_KEEP &&
@@ -1002,12 +1144,36 @@ static AstraNetworkStatus dispatch_mapping(NetworkSession *session,
             return ASTRA_NETWORK_INVALID;
         status = mapping_find(request->value, &index, &mapping);
         if (status != ASTRA_NETWORK_OK) return status;
+        status = mapping_release(&mapping);
+        if (status != ASTRA_NETWORK_OK) return status;
         changes[0] = (AstraConfigChange){"mapping", NULL, index,
             ASTRA_CONFIG_CHANGE_REMOVE};
         changes[1] = (AstraConfigChange){"mapping_secret", NULL, index,
             ASTRA_CONFIG_CHANGE_REMOVE};
         return astra_config_apply(&network_config, changes, 2u) ==
             ASTRA_CONFIG_OK ? ASTRA_NETWORK_OK : ASTRA_NETWORK_IO;
+    }
+    case ASTRA_NETWORK_MAPPING_MOUNT:
+    case ASTRA_NETWORK_MAPPING_UNMOUNT:
+    case ASTRA_NETWORK_MAPPING_STATE: {
+        AstraNetworkMappingVolume volume;
+        if (request->value == 0u ||
+            !shared_slot(session, request, 0, &bytes, &length) ||
+            length != sizeof(volume)) return ASTRA_NETWORK_INVALID;
+        status = mapping_find(request->value, &index, &mapping);
+        if (status != ASTRA_NETWORK_OK) return status;
+        if (request->header.operation == ASTRA_NETWORK_MAPPING_MOUNT)
+            status = mapping_mount(&mapping, index, &volume);
+        else if (request->header.operation == ASTRA_NETWORK_MAPPING_UNMOUNT)
+            status = mapping_unmount(&mapping, &volume);
+        else status = mapping_volume_state(&mapping, &volume);
+        if (volume.source.id != 0u &&
+            (status == ASTRA_NETWORK_OK || status == ASTRA_NETWORK_BUSY ||
+             status == ASTRA_NETWORK_IN_PROGRESS)) {
+            (void)memcpy(bytes, &volume, sizeof(volume));
+            reply->transferred = sizeof(volume);
+        }
+        return status;
     }
     default:
         return ASTRA_NETWORK_INVALID;
@@ -1070,7 +1236,7 @@ static void process_request(uint32_t receive, int mode,
         reply.status = dispatch_ethernet(session, &request);
     } else if (bound_endpoint == NULL &&
                request.header.operation >= ASTRA_NETWORK_MAPPING_READ &&
-               request.header.operation <= ASTRA_NETWORK_MAPPING_REMOVE) {
+               request.header.operation <= ASTRA_NETWORK_MAPPING_STATE) {
         reply.status = dispatch_mapping(session, &request, &reply);
     } else if (bound_endpoint == NULL &&
                request.header.operation == ASTRA_NETWORK_CLOSE &&
@@ -1144,7 +1310,7 @@ static void network_irq(void)
 
 static uint32_t network_start(const AstraStartupInfo *startup)
 {
-    const AstraStartupCapability *device, *irq;
+    const AstraStartupCapability *device, *irq, *metadata, *administrator;
     AstraNetworkLeaseInfo lease;
     AstraDmaBufferInfo dma;
     uint32_t status;
@@ -1152,8 +1318,14 @@ static uint32_t network_start(const AstraStartupInfo *startup)
     device = astra_startup_capability(startup,
                                       ASTRA_CAPABILITY_NETWORK_DEVICE);
     irq = astra_startup_capability(startup, ASTRA_CAPABILITY_NETWORK_IRQ);
-    if (device == NULL || irq == NULL)
+    metadata = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUMES);
+    administrator = astra_startup_capability(startup,
+                                              ASTRA_CAPABILITY_VOLUME_ADMIN);
+    if (device == NULL || irq == NULL || metadata == NULL ||
+        administrator == NULL)
         return NETWORK_FAIL_DEVICE;
+    volume_metadata = metadata->handle;
+    volume_admin = administrator->handle;
     if (astra_config_open_system(startup, &network_schema,
             ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE,
             &network_config, NULL) != ASTRA_CONFIG_OK)

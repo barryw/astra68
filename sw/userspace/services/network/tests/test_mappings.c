@@ -9,6 +9,90 @@ static char definitions[TEST_CAPACITY][ASTRA_NETWORK_MAPPING_TEXT_MAX];
 static char credentials[TEST_CAPACITY][sizeof(((AstraNetworkMappingSave *)0)->password) + 3u];
 static char next_id[16];
 static uint32_t definition_count, credential_count, next_count, fail_apply;
+static AstraVolumeRecord volume_records[2];
+static uint32_t volume_count, volume_busy;
+static AstraVolumeNetworkSource admitted_source;
+static uint32_t admitted_id;
+
+AstraResult astra_volume_managed_network_source(AstraHandle admin,
+    const AstraVolumeNetworkSource *source, uint32_t id,
+    AstraVolumeReference *reference)
+{
+    (void)admin;
+    if (admitted_id != 0u && admitted_id == id &&
+        memcmp(&admitted_source, source, sizeof(*source)) != 0)
+        return ASTRA_ERROR_BUSY;
+    admitted_id = id;
+    admitted_source = *source;
+    volume_records[0] = (AstraVolumeRecord){.id = id + 10u,
+        .generation = 1u, .kind = ASTRA_VOLUME_SOURCE,
+        .state = ASTRA_VOLUME_UNMOUNTED};
+    if (volume_count == 0u) volume_count = 1u;
+    *reference = (AstraVolumeReference){1u, id + 10u, 1u};
+    return ASTRA_OK;
+}
+
+AstraResult astra_volume_snapshot_open(AstraHandle metadata,
+    AstraVolumeSnapshot *snapshot)
+{
+    (void)metadata;
+    *snapshot = (AstraVolumeSnapshot){1u, 1u, volume_records, volume_count};
+    return ASTRA_OK;
+}
+
+const AstraVolumeRecord *astra_volume_snapshot_find(
+    const AstraVolumeSnapshot *snapshot, const AstraVolumeReference *reference)
+{
+    for (uint32_t at = 0u; at < snapshot->count; ++at)
+        if (snapshot->epoch == reference->epoch &&
+            snapshot->records[at].id == reference->id &&
+            snapshot->records[at].generation == reference->generation)
+            return &snapshot->records[at];
+    return NULL;
+}
+
+void astra_volume_snapshot_close(AstraVolumeSnapshot *snapshot)
+{
+    (void)memset(snapshot, 0, sizeof(*snapshot));
+}
+
+AstraResult astra_volume_control(AstraHandle admin,
+    const AstraVolumeControl *control, AstraVolumeReference *reference)
+{
+    (void)admin;
+    if (control->operation == ASTRA_VOLUME_RELEASE_NETWORK_SOURCE) {
+        if (volume_count > 1u &&
+            volume_records[1].state != ASTRA_VOLUME_UNMOUNTED)
+            return ASTRA_ERROR_BUSY;
+        volume_count = 0u;
+        admitted_id = 0u;
+        return ASTRA_OK;
+    }
+    if (control->operation == ASTRA_VOLUME_UNMOUNT) {
+        if (volume_busy) return ASTRA_ERROR_BUSY;
+        volume_records[1].state = ASTRA_VOLUME_UNMOUNTED;
+        *reference = control->reference;
+        return ASTRA_OK;
+    }
+    assert(control->operation == ASTRA_VOLUME_MOUNT_SOURCE);
+    volume_records[1] = (AstraVolumeRecord){.id = 100u,
+        .generation = 1u, .parent = control->reference.id,
+        .parent_generation = control->reference.generation,
+        .kind = ASTRA_VOLUME_MOUNT, .state = ASTRA_VOLUME_MOUNTED};
+    volume_count = 2u;
+    *reference = (AstraVolumeReference){1u, 100u, 1u};
+    return ASTRA_OK;
+}
+
+AstraResult astra_volume_mount_auth(AstraHandle admin,
+    const AstraVolumeMountAuth *auth, AstraVolumeReference *reference)
+{
+    assert(strcmp(auth->account, "barry") == 0 &&
+           strcmp(auth->password, "p,a=s:word") == 0);
+    AstraVolumeControl control = {.reference = auth->source,
+        .operation = ASTRA_VOLUME_MOUNT_SOURCE, .flags = auth->flags};
+    return astra_volume_control(admin, &control, reference);
+}
 
 static char *entry(const char *key, uint32_t index)
 {
@@ -125,6 +209,10 @@ int main(void)
            credential_count == 1u && strcmp(credentials[0], "n") == 0);
     assert(mapping_read(0u, &saved) && saved.id == id &&
            (saved.flags & ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL) == 0u);
+    input.mapping.id = id;
+    strcpy(input.mapping.source.label, "Renamed");
+    assert(mapping_save(&input, &id) == ASTRA_NETWORK_OK && id == 1u);
+    assert(admitted_id == 0u);
 
     input = smb("barry");
     input.mapping.flags = ASTRA_NETWORK_MAPPING_AUTO_CONNECT;
@@ -135,6 +223,18 @@ int main(void)
     assert(mapping_integrity() && strcmp(credentials[1], "p:p,a=s:word") == 0);
     assert(mapping_read(1u, &saved) &&
            (saved.flags & ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL) != 0u);
+    AstraNetworkMappingVolume volume;
+    assert(mapping_mount(&saved, 1u, &volume) == ASTRA_NETWORK_OK &&
+           volume.mount.id == 100u);
+    assert(mapping_volume_state(&saved, &volume) == ASTRA_NETWORK_OK &&
+           volume.state == ASTRA_VOLUME_MOUNTED);
+    assert(mapping_release(&saved) == ASTRA_NETWORK_BUSY);
+    volume_busy = 1u;
+    assert(mapping_unmount(&saved, &volume) == ASTRA_NETWORK_BUSY &&
+           volume.mount.id == 100u);
+    volume_busy = 0u;
+    assert(mapping_unmount(&saved, &volume) == ASTRA_NETWORK_OK);
+    assert(mapping_release(&saved) == ASTRA_NETWORK_OK);
 
     input.mapping.id = id;
     input.password_action = ASTRA_NETWORK_PASSWORD_KEEP;

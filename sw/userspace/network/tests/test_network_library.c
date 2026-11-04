@@ -13,6 +13,7 @@ static uint32_t open_until_area;
 static uint32_t created_area_bytes;
 static int mock_exchange;
 static int mock_zero_token;
+static int mock_mapping_no_reference;
 static AstraNetworkRequestMessage last_request;
 
 uint32_t astra_log_failure(const char *operation, uint32_t status)
@@ -176,6 +177,25 @@ uint32_t astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
                    ASTRA_NETWORK_MAPPING_REMOVE) {
             assert(last_request.value == 42u && last_request.length == 0u);
             reply->status = ASTRA_NETWORK_OK;
+        } else if (last_request.header.operation >=
+                   ASTRA_NETWORK_MAPPING_MOUNT &&
+                   last_request.header.operation <= ASTRA_NETWORK_MAPPING_STATE) {
+            AstraNetworkMappingVolume volume = {.size = sizeof(volume),
+                .state = ASTRA_VOLUME_MOUNTED,
+                .source = {7u, 8u, 9u}, .mount = {7u, 10u, 11u}};
+            uint8_t *bytes = astra_network_shared_slot_bytes(
+                mapped_area, last_request.slot);
+            assert(last_request.value == 42u &&
+                   last_request.length == sizeof(volume));
+            if (mock_mapping_no_reference) {
+                reply->status = ASTRA_NETWORK_BUSY;
+                return ASTRA_SYSCALL_OK;
+            }
+            (void)memcpy(bytes, &volume, sizeof(volume));
+            reply->transferred = sizeof(volume);
+            reply->status = last_request.header.operation ==
+                ASTRA_NETWORK_MAPPING_UNMOUNT ? ASTRA_NETWORK_BUSY :
+                ASTRA_NETWORK_OK;
         } else {
             AstraNetworkInterfaceAddress record = {0};
             uint8_t *bytes = astra_network_shared_slot_bytes(
@@ -355,6 +375,17 @@ int main(void)
         assert(cleared[at] == 0u);
     assert(astra_network_mapping_remove(&session, mapping_id) ==
            ASTRA_NETWORK_OK);
+    AstraNetworkMappingVolume volume;
+    assert(astra_network_mapping_mount(&session, mapping_id, &volume) ==
+           ASTRA_NETWORK_OK && volume.mount.id == 10u);
+    assert(astra_network_mapping_state(&session, mapping_id, &volume) ==
+           ASTRA_NETWORK_OK && volume.state == ASTRA_VOLUME_MOUNTED);
+    assert(astra_network_mapping_unmount(&session, mapping_id, &volume) ==
+           ASTRA_NETWORK_BUSY && volume.mount.id == 10u);
+    mock_mapping_no_reference = 1;
+    assert(astra_network_mapping_mount(&session, mapping_id, &volume) ==
+           ASTRA_NETWORK_BUSY && volume.source.id == 0u);
+    mock_mapping_no_reference = 0;
     save.password_action = 3u;
     assert(astra_network_mapping_save(&session, &save, &mapping_id) ==
            ASTRA_NETWORK_INVALID);

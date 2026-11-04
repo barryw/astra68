@@ -2,6 +2,19 @@
 
 Status: active continuation map, 2026-11-04
 
+Saved network mount lifecycle, 2026-11-04: Network Kit ABI 1.6 adds typed
+mount, unmount and state queries for a saved mapping. Network service uses the
+stable managed source ID, native Volume Kit catalog identities and Config Kit
+secret retrieval to admit SMB credentials once. Busy unmounts retain the exact
+mount identity. Deleting a mapping or changing its source refuses an active
+mount and releases an idle source before the atomic Config Kit edit. Beast host
+Network Kit/service tests, MC68040 service link, shared-library export check
+and NDK dist-check pass. `mount --saved ID` and `unmount --saved ID` now use the
+same Network Kit lifecycle and cross-compile on Beast, but lack runtime tests.
+Coherent DE25 QEMU build passes on Beast.
+Saved-share Settings editing, auto-connect, DE25 runtime tests and release
+remain open; this is not a completed SMB client.
+
 Managed network sources, 2026-11-04: native Filesystem Kit ABI 15.14 now
 admits a saved mapping ID separately from network endpoint definition. Provider
 returns the same exact source for an unchanged ID/definition after the network
@@ -10,17 +23,17 @@ and keeps ordinary manual mounts independent. Native Volume client/port/host
 tests, provider mount/format regression, AArch64 provider cross build,
 MC68040 HostFS link and DE25 QEMU cross build passed on Beast. Native volume
 protocol 5, host command 7 and provider control 10 must deploy together.
-Network service use, DE25 runtime and production release are not yet tested.
+Network service runtime, DE25 and production release are not yet tested.
 
-Saved network mappings, 2026-11-04: `network.library.1` ABI 1.5 exposes
+Saved network mappings, 2026-11-04: `network.library.1` ABI 1.5 introduced
 typed create/update/read/remove operations for NFS and SMB definitions. Network
 service stores definitions and stable IDs with atomic Config Kit edits; SMB
 passwords use its sensitive field and are excluded from list results. Host
 Network Kit tests and a service persistence test cover validation, credential
 retention, failed atomic writes, ID continuity and corrupt entries. MC68040
 service and library link passed on Beast. These APIs manage definitions only:
-mount/unmount ownership, reconnect, Settings and CLI integration, DE25 runtime
-and production release gates remain open. For this mechanism, Haiku references
+ABI 1.6 now adds mount/unmount ownership; reconnect, Settings and CLI
+integration, DE25 runtime and production release gates remain open. Haiku references
 were `src/add-ons/kernel/file_systems/netfs/client/ShareVolume.cpp` (separate
 connection credentials and share lifecycle) and
 `src/preferences/network/NetworkWindow.cpp` (shared network list/details UI).

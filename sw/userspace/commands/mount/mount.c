@@ -1,4 +1,5 @@
 #include "../volumes/volume_cli.h"
+#include <astra/network_library.h>
 #include <astra/posix.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
@@ -15,6 +16,7 @@ int main(int argc, char **argv)
     int image = argc == 3 && strcmp(argv[1], "--image") == 0;
     int ram = argc == 5 && strcmp(argv[1], "--ram") == 0;
     int readonly = argc == 3 && strcmp(argv[1], "--read-only") == 0;
+    int saved = argc == 3 && strcmp(argv[1], "--saved") == 0;
     int nfs = argc >= 2 && strcmp(argv[1], "--nfs") == 0;
     int smb_guest = argc >= 2 && strcmp(argv[1], "--smb-guest") == 0;
     int smb_user = argc >= 2 && strcmp(argv[1], "--smb-user") == 0;
@@ -23,12 +25,13 @@ int main(int argc, char **argv)
         strcmp(argv[argc - 1], "--read-only") == 0;
     int network_fields = argc - network_readonly;
     uint64_t bytes = 0u, inodes = 0u;
-    if ((!image && !ram && !readonly && !network && argc != 2) ||
+    if ((!image && !ram && !readonly && !network && !saved && argc != 2) ||
         (network && (smb_user ?
             (network_fields != 6 && network_fields != 7) :
             network_fields != 5)) ||
         (ram && (!volume_cli_number(argv[3], &bytes) || !volume_cli_number(argv[4], &inodes)))) {
         fputs("usage: mount [--read-only] SOURCE_ID\n"
+              "       mount --saved MAPPING_ID\n"
               "       mount --image NATIVE_FILE\n"
               "       mount --ram SOURCE_ID BYTES INODES\n"
               "       mount --nfs SERVER EXPORT LABEL [--read-only]\n"
@@ -41,7 +44,30 @@ int main(int argc, char **argv)
     AstraVolumeReference source = {0};
     AstraVolumeRecord record = {0};
     int success = 0;
-    if (network) {
+    if (saved) {
+        uint64_t id = 0u;
+        const AstraStartupCapability *admin = astra_startup_capability(
+            astra_posix_startup(), ASTRA_CAPABILITY_NETWORK_ADMIN);
+        AstraNetworkSession session = ASTRA_NETWORK_SESSION_INIT;
+        AstraNetworkMappingVolume volume;
+        if (!volume_cli_number(argv[2], &id) || id == 0u ||
+            id > UINT32_MAX || admin == NULL ||
+            astra_network_session_open(admin->handle, &session) !=
+                ASTRA_NETWORK_OK)
+            fputs("mount: saved mapping ID or network admin unavailable\n", stderr);
+        else {
+            AstraNetworkStatus status = astra_network_mapping_mount(
+                &session, (uint32_t)id, &volume);
+            if (status != ASTRA_NETWORK_OK)
+                fprintf(stderr, "mount: saved mapping admission failed (%u)\n",
+                        (unsigned)status);
+            else if (volume.mount.id != 0u &&
+                     volume_cli_wait(&cli, &volume.mount,
+                         ASTRA_VOLUME_MOUNTED, 0, &record))
+                success = printf("mounted %s\n", record.name) >= 0;
+            (void)astra_network_session_close(&session);
+        }
+    } else if (network) {
         AstraVolumeNetworkSource definition = {
             .format = nfs ? ASTRA_VOLUME_NFS : ASTRA_VOLUME_SMB};
         if (strlen(argv[2]) >= sizeof(definition.server) ||

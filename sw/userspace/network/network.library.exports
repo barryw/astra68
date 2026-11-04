@@ -63,3 +63,10 @@ ASTRA_NETWORK_1.5 {
         astra_network_mapping_save;
         astra_network_mapping_remove;
 } ASTRA_NETWORK_1.4;
+
+ASTRA_NETWORK_1.6 {
+    global:
+        astra_network_mapping_mount;
+        astra_network_mapping_unmount;
+        astra_network_mapping_state;
+} ASTRA_NETWORK_1.5;

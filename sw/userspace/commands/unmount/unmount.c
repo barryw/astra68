@@ -1,5 +1,9 @@
 #include "../volumes/volume_cli.h"
+#include <astra/network_library.h>
+#include <astra/posix.h>
 #include <astra/program.h>
+#include <astra/runtime.h>
+#include <astra/status.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -10,8 +14,10 @@ int main(int argc, char **argv)
     int eject = argc == 3 && strcmp(argv[1], "--eject") == 0;
     int source_only = argc == 3 && strcmp(argv[1], "--image-source") == 0;
     int network_source = argc == 3 && strcmp(argv[1], "--network-source") == 0;
-    if (argc != 2 && !eject && !source_only && !network_source) {
+    int saved = argc == 3 && strcmp(argv[1], "--saved") == 0;
+    if (argc != 2 && !eject && !source_only && !network_source && !saved) {
         fputs("usage: unmount [--eject] /VOLUME_OR_MOUNT_ID\n"
+              "       unmount --saved MAPPING_ID\n"
               "       unmount --image-source SOURCE_ID\n"
               "       unmount --network-source SOURCE_ID\n", stderr);
         return 2;
@@ -21,6 +27,41 @@ int main(int argc, char **argv)
     AstraVolumeRecord record = {0};
     AstraVolumeReference reference, retired;
     int success = 0;
+    if (saved) {
+        uint64_t id = 0u;
+        const AstraStartupCapability *admin = astra_startup_capability(
+            astra_posix_startup(), ASTRA_CAPABILITY_NETWORK_ADMIN);
+        AstraNetworkSession session = ASTRA_NETWORK_SESSION_INIT;
+        AstraNetworkMappingVolume volume;
+        if (!volume_cli_number(argv[2], &id) || id == 0u ||
+            id > UINT32_MAX || admin == NULL ||
+            astra_network_session_open(admin->handle, &session) !=
+                ASTRA_NETWORK_OK)
+            fputs("unmount: saved mapping ID or network admin unavailable\n",
+                  stderr);
+        else {
+            AstraNetworkStatus status = astra_network_mapping_unmount(
+                &session, (uint32_t)id, &volume);
+            if (status == ASTRA_NETWORK_BUSY && volume.mount.id != 0u)
+                volume_cli_report_busy(&cli, &volume.mount, 1);
+            if (status != ASTRA_NETWORK_OK &&
+                status != ASTRA_NETWORK_IN_PROGRESS)
+                fprintf(stderr, "unmount: saved mapping refused (%u)\n",
+                        (unsigned)status);
+            else {
+                int settled = volume.mount.id == 0u ||
+                    volume_cli_wait(&cli, &volume.mount,
+                        ASTRA_VOLUME_UNMOUNTED, 1, &record);
+                if (settled)
+                    success = printf("unmounted saved mapping %llu\n",
+                                     (unsigned long long)id) >= 0;
+                else if (record.status == ASTRA_STATUS_BUSY)
+                    volume_cli_report_busy(&cli, &volume.mount, 1);
+            }
+            (void)astra_network_session_close(&session);
+        }
+        goto done;
+    }
     if (!volume_cli_select(&cli, argv[eject || source_only || network_source ? 2 : 1],
         source_only || network_source ? ASTRA_VOLUME_SOURCE : ASTRA_VOLUME_MOUNT,
         &record, &reference, NULL)) goto done;
