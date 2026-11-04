@@ -169,6 +169,8 @@ enum {
 #define ASTRA_HOST_VOLUME_NETWORK_SOURCE UINT16_C(7)
 /** One-use authenticated SMB mount through the claimed provider. */
 #define ASTRA_HOST_VOLUME_MOUNT_AUTH UINT16_C(8)
+/** Look up an existing managed network source by stable mapping ID. */
+#define ASTRA_HOST_VOLUME_NETWORK_LOOKUP UINT16_C(9)
 /** Provider-only lifecycle request. requester is kernel-stamped by HostFS's
  * receive endpoint, never accepted from an application payload. */
 typedef struct AstraHostVolumeControl {

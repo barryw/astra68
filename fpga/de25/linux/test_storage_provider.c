@@ -1138,9 +1138,13 @@ int main(int argc, char **argv)
     AstraVolumeNetworkSource network = {.format = ASTRA_VOLUME_NFS,
         .server = "127.0.0.1", .share = "/test", .label = "Network Test"};
     uint64_t network_source = 0u;
+    uint64_t resumed_source = 0u;
+    assert(astra_storage_provider_network_lookup(&provider, 42u,
+        &resumed_source) == ENOENT && resumed_source == 0u);
     assert(astra_storage_provider_network_source(&provider, &network, 42u,
         &network_source) == 0);
-    uint64_t resumed_source = 0u;
+    assert(astra_storage_provider_network_lookup(&provider, 42u,
+        &resumed_source) == 0 && resumed_source == network_source);
     assert(astra_storage_provider_network_source(&provider, &network, 42u,
         &resumed_source) == 0 && resumed_source == network_source);
     network.label[0] = 'C';
@@ -1158,6 +1162,8 @@ int main(int argc, char **argv)
     assert(astra_storage_provider_release_network_source(&provider,
         network_source, network_record->generation) == 0);
     assert(astra_storage_provider_release(&provider, network_source) == 0);
+    assert(astra_storage_provider_network_lookup(&provider, 42u,
+        &resumed_source) == ENOENT && resumed_source == 0u);
     network.share[0] = 'x';
     assert(astra_storage_provider_network_source(&provider, &network, 0u,
         &network_source) == EINVAL);

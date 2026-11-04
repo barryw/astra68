@@ -48,6 +48,17 @@ AstraResult astra_volume_managed_network_source(AstraHandle admin,
     return ASTRA_OK;
 }
 
+AstraResult astra_volume_managed_network_source_lookup(AstraHandle admin,
+    uint32_t id, AstraVolumeReference *reference)
+{
+    (void)admin;
+    if (id == 0u || reference == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    *reference = (AstraVolumeReference){0};
+    if (admitted_id != id) return ASTRA_ERROR_NOT_PRESENT;
+    *reference = (AstraVolumeReference){1u, id + 10u, 1u};
+    return ASTRA_OK;
+}
+
 AstraResult astra_volume_snapshot_open(AstraHandle metadata,
     AstraVolumeSnapshot *snapshot)
 {
@@ -269,9 +280,31 @@ int main(void)
     assert(mapping_save(&input, &id) == ASTRA_NETWORK_INVALID);
     strcpy(input.mapping.source.share, "/games");
 
+    assert(mapping_mount(&saved, 1u, &volume) == ASTRA_NETWORK_OK);
+    strcpy(input.mapping.source.share, "/other");
+    input.password_action = ASTRA_NETWORK_PASSWORD_REPLACE;
+    strcpy(input.password, "p,a=s:word");
+    fail_apply = 1u;
+    assert(mapping_save(&input, &id) == ASTRA_NETWORK_IO &&
+           strcmp(admitted_source.share, "/games") == 0);
+    assert(mapping_read(1u, &saved) &&
+           strcmp(saved.source.share, "/games") == 0);
+    fail_apply = 0u;
+    assert(mapping_save(&input, &id) == ASTRA_NETWORK_OK && id == 2u);
+    assert(strcmp(admitted_source.share, "/games") == 0);
+    assert(mapping_volume_state(&input.mapping, &volume) == ASTRA_NETWORK_OK &&
+           volume.mount.id == 100u && volume.state == ASTRA_VOLUME_MOUNTED);
+    assert(mapping_mount(&input.mapping, 1u, &volume) == ASTRA_NETWORK_BUSY);
+    assert(mapping_unmount(&input.mapping, &volume) == ASTRA_NETWORK_OK);
+    assert(mapping_mount(&input.mapping, 1u, &volume) == ASTRA_NETWORK_OK &&
+           strcmp(admitted_source.share, "/other") == 0);
+    assert(mapping_unmount(&input.mapping, &volume) == ASTRA_NETWORK_OK);
+    assert(mapping_release(&input.mapping) == ASTRA_NETWORK_OK);
+
     fail_apply = 1u;
     input.mapping.id = 0u;
     input.password_action = ASTRA_NETWORK_PASSWORD_REPLACE;
+    memset(input.password, 0, sizeof(input.password));
     strcpy(input.password, "new");
     assert(mapping_save(&input, &id) == ASTRA_NETWORK_IO);
     assert(mapping_integrity() && definition_count == 2u &&

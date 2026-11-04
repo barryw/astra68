@@ -5452,7 +5452,7 @@ static uint32_t astra_host_volume_partition(Astra68State *s, uint32_t owner,
 static uint32_t astra_host_volume_control(Astra68State *s, uint32_t owner,
     AstraHostChannel *channel, uint8_t *data);
 static uint32_t astra_host_volume_network_source(Astra68State *s, uint32_t owner,
-    AstraHostChannel *channel, uint8_t *data);
+    AstraHostChannel *channel, uint8_t *data, bool lookup);
 static uint32_t astra_host_volume_mount_auth(Astra68State *s, uint32_t owner,
     AstraHostChannel *channel, uint8_t *data);
 
@@ -5826,6 +5826,7 @@ static void astra_host_execute_volumes(Astra68State *s, uint32_t owner,
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_FORMAT &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_PARTITION &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_NETWORK_SOURCE &&
+         lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_NETWORK_LOOKUP &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_MOUNT_AUTH &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_USAGE &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_HOLDERS_CHANGED) ||
@@ -5885,13 +5886,15 @@ static void astra_host_execute_volumes(Astra68State *s, uint32_t owner,
             stl_be_p(command + HOST_FIELD(result_length), sizeof(AstraVolumeReference));
         goto done;
     }
-    if (lduw_be_p(command + HOST_FIELD(operation)) == ASTRA_HOST_VOLUME_NETWORK_SOURCE) {
+    if (lduw_be_p(command + HOST_FIELD(operation)) == ASTRA_HOST_VOLUME_NETWORK_SOURCE ||
+        lduw_be_p(command + HOST_FIELD(operation)) == ASTRA_HOST_VOLUME_NETWORK_LOOKUP) {
         if (ldl_be_p(command + HOST_FIELD(data_length)) != sizeof(AstraHostVolumeNetworkSource) ||
             ldl_be_p(command + HOST_FIELD(data_capacity)) < sizeof(AstraVolumeReference)) goto done;
         uint8_t *data = astra_host_command_data(s, physical, bytes, command_bytes,
             command, sizeof(AstraHostVolumeNetworkSource));
         if (data == NULL) goto done;
-        status = astra_host_volume_network_source(s, owner, channel, data);
+        status = astra_host_volume_network_source(s, owner, channel, data,
+            lduw_be_p(command + HOST_FIELD(operation)) == ASTRA_HOST_VOLUME_NETWORK_LOOKUP);
         if (status == ASTRA_STATUS_OK)
             stl_be_p(command + HOST_FIELD(result_length), sizeof(AstraVolumeReference));
         goto done;
@@ -6519,20 +6522,28 @@ done:
 }
 
 static uint32_t astra_host_volume_network_source(Astra68State *s, uint32_t owner,
-    AstraHostChannel *channel, uint8_t *data)
+    AstraHostChannel *channel, uint8_t *data, bool lookup)
 {
     if (channel == NULL || !channel->provider || channel->bound || owner == 0u ||
         owner != qatomic_read(&s->host.fs_owner)) return ASTRA_STATUS_ACCESS;
     if (ldl_be_p(data + 1544u) == 0u || ldl_be_p(data + 1548u) != 0u ||
         ldl_be_p(data + 4u) != 0u) return ASTRA_STATUS_INVALID;
+    if (lookup) {
+        if (ldl_be_p(data + 1552u) == 0u) return ASTRA_STATUS_INVALID;
+        for (size_t at = 0u; at < 1544u; ++at)
+            if (data[at] != 0u) return ASTRA_STATUS_INVALID;
+    }
     AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
-        .operation = ASTRA_STORAGE_CONTROL_NETWORK_SOURCE,
+        .operation = lookup ? ASTRA_STORAGE_CONTROL_NETWORK_LOOKUP :
+            ASTRA_STORAGE_CONTROL_NETWORK_SOURCE,
         .epoch = s->host.provider_epoch,
-        .network = {.format = ldl_be_p(data)},
         .managed_network_id = ldl_be_p(data + 1552u)};
-    memcpy(request.network.server, data + 8u, sizeof(request.network.server));
-    memcpy(request.network.share, data + 264u, sizeof(request.network.share));
-    memcpy(request.network.label, data + 1288u, sizeof(request.network.label));
+    if (!lookup) {
+        request.network.format = ldl_be_p(data);
+        memcpy(request.network.server, data + 8u, sizeof(request.network.server));
+        memcpy(request.network.share, data + 264u, sizeof(request.network.share));
+        memcpy(request.network.label, data + 1288u, sizeof(request.network.label));
+    }
     AstraStorageControlReply reply;
     int output = -1;
     qemu_mutex_lock(&s->host.namespace_lock);

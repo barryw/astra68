@@ -231,6 +231,16 @@ ASTRA_NODISCARD AstraResult astra_volume_network_source(AstraHandle administrato
 ASTRA_NODISCARD AstraResult astra_volume_managed_network_source(
     AstraHandle administrator, const AstraVolumeNetworkSource *source,
     uint32_t managed_id, AstraVolumeReference *reference);
+/** Find a saved mapping's existing source without changing its definition.
+ * An active mount keeps its exact source until safe unmount and release.
+ * @param administrator VOLUME_ADMIN capability.
+ * @param managed_id Nonzero saved mapping ID.
+ * @param reference Existing exact source, cleared when absent or on error.
+ * @return ASTRA_ERROR_NOT_PRESENT if no source exists for the ID.
+ */
+ASTRA_NODISCARD AstraResult astra_volume_managed_network_source_lookup(
+    AstraHandle administrator, uint32_t managed_id,
+    AstraVolumeReference *reference);
 /** Admit one authenticated SMB mount. Credentials are one-use and never
  * entered in the source catalog. Caller must wipe its own password buffer.
  * @param administrator VOLUME_ADMIN capability.

@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-11-04
 
+SMB active mapping edit, 2026-11-04: Filesystem Kit ABI 15.15 adds exact
+managed network source lookup by saved mapping ID. Network service now keeps
+an active source and mount attached to their original definition while an
+edited definition is saved; Mount refuses the change until Unmount retires the
+old source, then admits the edited definition at the stable `/net0` path.
+Beast Network service, native Volume client/port/host, storage provider, NDK
+distribution and DE25 QEMU builds pass. Release
+`199561fd60ee896da40003e7547e20a8f27030925cd9b0428e1758c0d1311371`
+passed two private DE25 guards (600 and 300 seconds): Settings mounted
+authenticated `EditOld`, saved `EditNew` while old mount stayed visible,
+Unmount removed it, then Mount published `EditNew`; Atlas enumerated the SMB
+share on `/net0`. Both guards reached boot stage 8 without panic, restored
+production `7326966f...`, and left Astra, audio, remote desktop active with
+8.0 GiB free after trial cleanup. Evidence:
+`/mnt/Documents/astra68/network-smb-edit-candidate-20261104/` on Beast;
+board console archive verified by checksum comparison. Settings' Mount action
+showed an inaccurate holder dialog when the edited source remained mounted;
+the UI now explains that the share must be unmounted before applying changes.
+That UI correction builds on Beast but awaits DE25 release qualification.
+Broader SMB interoperability/fault gates and saved-definition CLI parity
+remain open.
+
 Saved SMB hardware gate, 2026-11-04: A first saved-share Settings trial and
 manual `mount --smb-user` both failed with status 11 because Beast's UFW
 allowed DE25 NFS but dropped DE25 TCP445. A direct board TCP probe timed out;

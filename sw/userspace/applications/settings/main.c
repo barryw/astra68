@@ -1469,8 +1469,12 @@ static AstraResult run(void)
                                             &volume) :
                 astra_network_mapping_unmount(&network_admin, share_selected,
                                               &volume);
-            if (changed == ASTRA_NETWORK_BUSY)
-                show_share_holders(&volume.mount);
+            if (changed == ASTRA_NETWORK_BUSY) {
+                if (action.control_id == SETTINGS_SHARE_MOUNT)
+                    (void)strcpy(status_text,
+                        "Share is active. Unmount it before applying changes.");
+                else show_share_holders(&volume.mount);
+            }
             else if (changed != ASTRA_NETWORK_OK &&
                      changed != ASTRA_NETWORK_IN_PROGRESS)
                 (void)strcpy(status_text, "Share operation failed.");

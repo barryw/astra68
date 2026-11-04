@@ -682,6 +682,24 @@ int astra_storage_provider_network_source(AstraStorageProvider *provider,
     return 0;
 }
 
+int astra_storage_provider_network_lookup(AstraStorageProvider *provider,
+    uint32_t managed_id, uint64_t *source)
+{
+    if (provider == NULL || managed_id == 0u || source == NULL) return EINVAL;
+    *source = 0u;
+    for (AstraStorageResource *entry = provider->resources; entry != NULL;
+         entry = entry->next)
+        if (entry->managed_network_id == managed_id) {
+            const AstraStorageRecord *record = astra_storage_find(
+                &provider->catalog, entry->id);
+            if (record == NULL || record->kind != ASTRA_VOLUME_SOURCE ||
+                record->origin != ASTRA_VOLUME_ORIGIN_NETWORK) return ESTALE;
+            *source = entry->id;
+            return 0;
+        }
+    return ENOENT;
+}
+
 int astra_storage_provider_release_network_source(AstraStorageProvider *provider,
     uint64_t source, uint64_t generation)
 {
@@ -993,6 +1011,7 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
                         sizeof(request.edit)) != 0)
             error = EPROTO;
         else if (request.operation != ASTRA_STORAGE_CONTROL_NETWORK_SOURCE &&
+                 request.operation != ASTRA_STORAGE_CONTROL_NETWORK_LOOKUP &&
                  (request.managed_network_id != 0u ||
                   memcmp(&request.network, (AstraVolumeNetworkSource[1]){{0}},
                          sizeof(request.network)) != 0))
@@ -1154,6 +1173,17 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
                     &request.network, request.managed_network_id,
                     &reply.object);
             break;
+        case ASTRA_STORAGE_CONTROL_NETWORK_LOOKUP:
+            if (request.target || request.generation || request.flags ||
+                request.byte_limit || request.inode_limit || request.backing_object ||
+                request.sequence || request.after || request.managed_network_id == 0u ||
+                memcmp(&request.network, (AstraVolumeNetworkSource[1]){{0}},
+                       sizeof(request.network)) != 0)
+                error = EINVAL;
+            else
+                error = astra_storage_provider_network_lookup(provider,
+                    request.managed_network_id, &reply.object);
+            break;
         case ASTRA_STORAGE_CONTROL_RELEASE_NETWORK_SOURCE:
             if (request.flags || request.byte_limit || request.inode_limit ||
                 request.sequence || request.after || request.backing_object)
@@ -1173,7 +1203,8 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
     if (error == 0 && (request.operation == ASTRA_STORAGE_CONTROL_MOUNT ||
         request.operation == ASTRA_STORAGE_CONTROL_MOUNT_AUTH ||
         request.operation == ASTRA_STORAGE_CONTROL_IMAGE ||
-        request.operation == ASTRA_STORAGE_CONTROL_NETWORK_SOURCE)) {
+        request.operation == ASTRA_STORAGE_CONTROL_NETWORK_SOURCE ||
+        request.operation == ASTRA_STORAGE_CONTROL_NETWORK_LOOKUP)) {
         const AstraStorageRecord *admitted = astra_storage_find(&provider->catalog, reply.object);
         if (admitted == NULL) error = EPROTO;
         else { reply.records[0] = *admitted; reply.count = 1u; }

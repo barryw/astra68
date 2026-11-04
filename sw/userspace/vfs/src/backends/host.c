@@ -1119,12 +1119,15 @@ uint32_t astra_vfs_host_volume_network_source(AstraVfsHostTransport *transport,
     uint8_t output[sizeof(AstraVolumeReference)] = {0};
     AstraVfsHostRequest request;
     if (transport == NULL || requester == 0u || reference == NULL ||
-        !astra_volume_network_source_valid(source)) return ASTRA_VFS_ERR_INVALID;
+        (source == NULL ? managed_id == 0u :
+         !astra_volume_network_source_valid(source))) return ASTRA_VFS_ERR_INVALID;
     memset(reference, 0, sizeof(*reference));
-    astra_store_be32(input, source->format);
-    memcpy(input + 8u, source->server, sizeof(source->server));
-    memcpy(input + 264u, source->share, sizeof(source->share));
-    memcpy(input + 1288u, source->label, sizeof(source->label));
+    if (source != NULL) {
+        astra_store_be32(input, source->format);
+        memcpy(input + 8u, source->server, sizeof(source->server));
+        memcpy(input + 264u, source->share, sizeof(source->share));
+        memcpy(input + 1288u, source->label, sizeof(source->label));
+    }
     astra_store_be32(input + 1544u, requester);
     astra_store_be32(input + 1552u, managed_id);
     uint32_t status = astra_vfs_host_transport_begin(transport, 0u, sizeof(input), &request);
@@ -1133,7 +1136,8 @@ uint32_t astra_vfs_host_volume_network_source(AstraVfsHostTransport *transport,
     memset(command, 0, sizeof(*command));
     command->size = sizeof(*command); command->version = ASTRA_HOST_COMMAND_VERSION;
     command->service = ASTRA_HOST_SERVICE_VOLUMES;
-    command->operation = ASTRA_HOST_VOLUME_NETWORK_SOURCE;
+    command->operation = source == NULL ? ASTRA_HOST_VOLUME_NETWORK_LOOKUP :
+        ASTRA_HOST_VOLUME_NETWORK_SOURCE;
     command->generation = generation;
     status = astra_vfs_host_transport_submit(transport, &request, input, sizeof(input),
         output, sizeof(output));

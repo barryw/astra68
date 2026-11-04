@@ -149,6 +149,11 @@ network manager restarts; a changed definition returns `ASTRA_ERROR_BUSY`
 until the old source is unmounted and released. Ordinary
 `astra_volume_network_source` admissions remain independent and always create
 new sources. Both calls require `VOLUME_ADMIN`; neither mounts the source.
+ABI 15.15 adds `astra_volume_managed_network_source_lookup`. It retrieves the
+exact source for a saved mapping ID without comparing or changing its proposed
+definition. A manager can save an edit while the old source remains mounted,
+then unmount and release that source before admitting the new definition.
+An unknown ID returns `ASTRA_ERROR_NOT_PRESENT`.
 
 HostFS keeps the position, directory cursor, append and nonblocking flags in
 one shared provider description. Sequential I/O advances its position;

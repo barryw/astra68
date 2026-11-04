@@ -154,6 +154,7 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
         AstraVolumeReply reply = {0};
         uint32_t reply_size = (incoming.header.operation == ASTRA_VOLUME_CONTROL ||
             incoming.header.operation == ASTRA_VOLUME_NETWORK_SOURCE ||
+            incoming.header.operation == ASTRA_VOLUME_MANAGED_NETWORK_LOOKUP ||
             incoming.header.operation == ASTRA_VOLUME_MOUNT_AUTH) ?
             sizeof(response.control) : incoming.header.operation == ASTRA_VOLUME_BROKER_INFO ?
             sizeof(response.broker) :
@@ -181,7 +182,8 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
                 else if (response.control.reference.epoch == 0u || response.control.reference.id == 0u ||
                          response.control.reference.generation == 0u)
                     reply.status = ASTRA_STATUS_PROTOCOL;
-            } else if (incoming.header.operation == ASTRA_VOLUME_NETWORK_SOURCE &&
+            } else if ((incoming.header.operation == ASTRA_VOLUME_NETWORK_SOURCE ||
+                        incoming.header.operation == ASTRA_VOLUME_MANAGED_NETWORK_LOOKUP) &&
                        size == sizeof(incoming.network) && count == 2u) {
                 void *mapped = NULL;
                 uint32_t bytes = 0u;
@@ -195,11 +197,16 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
                     reply.status = ASTRA_STATUS_ACCESS;
                 else if (bytes < sizeof(AstraVolumeNetworkSource) ||
                     bytes > ASTRA_MEMORY_PAGE_SIZE ||
-                    !astra_volume_network_source_valid(mapped))
+                    (incoming.header.operation == ASTRA_VOLUME_NETWORK_SOURCE ?
+                     !astra_volume_network_source_valid(mapped) :
+                     incoming.network.managed_id == 0u ||
+                     memcmp(mapped, (AstraVolumeNetworkSource[1]){{0}},
+                            sizeof(AstraVolumeNetworkSource)) != 0))
                     reply.status = ASTRA_STATUS_INVALID;
                 else
                     reply.status = port->network_source(port->context, owner,
-                        mapped, incoming.network.managed_id,
+                        incoming.header.operation == ASTRA_VOLUME_NETWORK_SOURCE ?
+                            mapped : NULL, incoming.network.managed_id,
                         &response.control.reference);
                 if (mapped != NULL && astra_rt_area_unmap(mapped) != ASTRA_SYSCALL_OK &&
                     reply.status == ASTRA_STATUS_OK) reply.status = ASTRA_STATUS_BAD_HANDLE;

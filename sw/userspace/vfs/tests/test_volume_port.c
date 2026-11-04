@@ -189,8 +189,8 @@ static uint32_t apply_network(void *context, uint32_t owner,
     const AstraVolumeNetworkSource *source, uint32_t managed_id,
     AstraVolumeReference *reference)
 {
-    assert(context == &epoch && owner == sender &&
-        astra_volume_network_source_valid(source) && managed_id == 42u);
+    assert(context == &epoch && owner == sender && managed_id == 42u &&
+        (source == NULL || astra_volume_network_source_valid(source)));
     ++network_calls;
     *reference = (AstraVolumeReference){epoch, 9u, 1u};
     return ASTRA_STATUS_OK;
@@ -424,6 +424,15 @@ int main(void)
     network_request(); ((AstraVolumeNetworkSource *)&output_storage)->share[0] = 'x';
     assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u &&
         reply.status == ASTRA_STATUS_INVALID && network_calls == 1u);
+    network_request();
+    incoming_request.network.header.operation = ASTRA_VOLUME_MANAGED_NETWORK_LOOKUP;
+    memset(&output_storage, 0, sizeof(AstraVolumeNetworkSource));
+    assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_OK && admitted.id == 9u && network_calls == 2u);
+    network_request();
+    incoming_request.network.header.operation = ASTRA_VOLUME_MANAGED_NETWORK_LOOKUP;
+    assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_INVALID && network_calls == 2u);
     auth_request();
     assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u &&
         reply.status == ASTRA_STATUS_OK && admitted.id == 10u && auth_calls == 1u);

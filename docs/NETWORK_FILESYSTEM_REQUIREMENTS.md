@@ -38,8 +38,15 @@ DE25 guard. Evidence: `/mnt/Documents/astra68/network-smb-saved-final-ui-de25-20
 and `/mnt/Documents/astra68/network-smb-saved-cli-de25-20261104/`. A
 `7326966f...` is now selected on DE25 after full deployment with system-image
 migration, matching-kernel confirmation, boot stage 8, zero Astra restarts,
-active production services, and 8.0 GiB free. Active mapping edits and saved
-definition CLI parity remain open. A
+active production services, and 8.0 GiB free. ABI 15.15 now looks up the
+exact managed source for a saved mapping ID. Two DE25 private guards on release
+`199561fd...` confirmed an active `EditOld` share survives a saved label edit,
+Unmount removes its icon, Mount publishes `EditNew` at `/net0`, and Atlas
+enumerates its files. Both guards passed without panic, restored production,
+and left 8.0 GiB free after cleanup. Evidence:
+`/mnt/Documents/astra68/network-smb-edit-candidate-20261104/` on Beast.
+The Settings Mount busy message was corrected after the trial; that UI edit
+awaits DE25 qualification. Saved definition CLI parity remains open. A
 credentialed SMB candidate passed a Beast provider test: bad password refused;
 good account wrote, synced, and read back the same bytes over SMB3.1.1 with a
 password containing `,` and `=`.

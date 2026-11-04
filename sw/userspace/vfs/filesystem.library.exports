@@ -262,3 +262,8 @@ ASTRA_FILESYSTEM_15.14 {
     global:
         astra_volume_managed_network_source;
 } ASTRA_FILESYSTEM_15.13;
+
+ASTRA_FILESYSTEM_15.15 {
+    global:
+        astra_volume_managed_network_source_lookup;
+} ASTRA_FILESYSTEM_15.14;
