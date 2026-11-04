@@ -939,9 +939,7 @@ static AstraNetworkStatus mapping_volume_state(const AstraNetworkMapping *mappin
     volume->state = ASTRA_VOLUME_UNMOUNTED;
     result = astra_volume_managed_network_source_lookup(volume_admin,
         mapping->id, &volume->source);
-    if (result == ASTRA_ERROR_NOT_PRESENT)
-        result = astra_volume_managed_network_source(volume_admin,
-            &mapping->source, mapping->id, &volume->source);
+    if (result == ASTRA_ERROR_NOT_PRESENT) return ASTRA_NETWORK_OK;
     if (result != ASTRA_OK) return volume_status(result);
     result = astra_volume_snapshot_open(volume_metadata, &snapshot);
     if (result != ASTRA_OK) return volume_status(result);
@@ -1091,6 +1089,7 @@ static AstraNetworkStatus mapping_release(const AstraNetworkMapping *mapping)
     AstraVolumeReference admitted = {0};
     AstraNetworkStatus status = mapping_volume_state(mapping, &volume);
     if (status != ASTRA_NETWORK_OK) return status;
+    if (volume.source.id == 0u) return ASTRA_NETWORK_OK;
     if (volume.mount.id != 0u && volume.state != ASTRA_VOLUME_UNMOUNTED)
         return ASTRA_NETWORK_BUSY;
     AstraVolumeControl control = {.reference = volume.source,
@@ -1272,9 +1271,9 @@ static AstraNetworkStatus dispatch_mapping(NetworkSession *session,
             (void)mapping_pause(mapping.id, 0);
             mapping_reconcile_at = 0u;
         }
-        if (volume.source.id != 0u &&
-            (status == ASTRA_NETWORK_OK || status == ASTRA_NETWORK_BUSY ||
-             status == ASTRA_NETWORK_IN_PROGRESS)) {
+        if (status == ASTRA_NETWORK_OK ||
+            ((status == ASTRA_NETWORK_BUSY ||
+              status == ASTRA_NETWORK_IN_PROGRESS) && volume.source.id != 0u)) {
             (void)memcpy(bytes, &volume, sizeof(volume));
             reply->transferred = sizeof(volume);
         }

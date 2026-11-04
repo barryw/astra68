@@ -20,9 +20,23 @@ production `7326966f...`, and left Astra, audio, remote desktop active with
 board console archive verified by checksum comparison. Settings' Mount action
 showed an inaccurate holder dialog when the edited source remained mounted;
 the UI now explains that the share must be unmounted before applying changes.
-That UI correction builds on Beast but awaits DE25 release qualification.
-Broader SMB interoperability/fault gates and saved-definition CLI parity
-remain open.
+Release `48e9e00a30103d973234d690ad2004b955c2b98fa2936bd4586f42ef077151d2`
+qualified the Settings busy message in a 360-second DE25 private guard and is
+now selected. Native `shares` adds CLI parity for saved NFS/SMB definitions:
+list, show, add, set, password, forget-password and remove. Its SMB password
+prompt never uses argv. A focused DE25 install revealed that state lookup for
+a saved, never-mounted mapping returned `NOT_FOUND` through an invalid-handle
+translation, and then the Network service omitted the empty source reply.
+The native lookup and Network Kit reply/validation now preserve a real
+`not-mounted` result without admitting a source. Beast Network Kit/service and
+Volume client tests pass. A focused DE25 install of both Kits, Network service
+and `shares` passed. On selected release plus these hot updates, `shares show`
+reported `state=not-mounted mount=0`, a label edit succeeded before first
+mount, authenticated SMB mounted as `/net0`, Terminal read matching server
+bytes, and unmount/remove left the mapping list empty and icon absent.
+Evidence: `/mnt/Documents/astra68/network-smb-edit-ui-20261104/` on Beast.
+Selected release still needs a clean publication containing hot updates.
+Broader SMB interoperability and fault gates remain open.
 
 Saved SMB hardware gate, 2026-11-04: A first saved-share Settings trial and
 manual `mount --smb-user` both failed with status 11 because Beast's UFW

@@ -1156,8 +1156,14 @@ static AstraNetworkStatus mapping_volume_action(AstraNetworkSession *session,
         (void)memcpy(&received, bytes, sizeof(received));
         if (reply.transferred != sizeof(received) ||
             received.size != sizeof(received) || received.reserved != 0u ||
-            received.source.epoch == 0u || received.source.id == 0u ||
-            received.source.generation == 0u ||
+            (received.source.id == 0u ?
+                (operation == ASTRA_NETWORK_MAPPING_MOUNT ||
+                 received.source.epoch != 0u ||
+                 received.source.generation != 0u ||
+                 received.mount.id != 0u ||
+                 received.state != ASTRA_VOLUME_UNMOUNTED) :
+                (received.source.epoch == 0u ||
+                 received.source.generation == 0u)) ||
             received.state < ASTRA_VOLUME_UNMOUNTED ||
             received.state > ASTRA_VOLUME_PARTITIONING ||
             (received.mount.id == 0u) !=

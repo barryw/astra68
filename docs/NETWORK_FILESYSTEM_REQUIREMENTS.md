@@ -36,7 +36,7 @@ Release `7326966f...` corrected Terminal.app's `NETWORK_ADMIN` bundle grant;
 `mount --saved 1`, file read, `unmount --saved 1`, and remount passed a 600-second
 DE25 guard. Evidence: `/mnt/Documents/astra68/network-smb-saved-final-ui-de25-20261104/`
 and `/mnt/Documents/astra68/network-smb-saved-cli-de25-20261104/`. A
-`7326966f...` is now selected on DE25 after full deployment with system-image
+`48e9e00a...` is now selected on DE25 after full deployment with system-image
 migration, matching-kernel confirmation, boot stage 8, zero Astra restarts,
 active production services, and 8.0 GiB free. ABI 15.15 now looks up the
 exact managed source for a saved mapping ID. Two DE25 private guards on release
@@ -45,8 +45,14 @@ Unmount removes its icon, Mount publishes `EditNew` at `/net0`, and Atlas
 enumerates its files. Both guards passed without panic, restored production,
 and left 8.0 GiB free after cleanup. Evidence:
 `/mnt/Documents/astra68/network-smb-edit-candidate-20261104/` on Beast.
-The Settings Mount busy message was corrected after the trial; that UI edit
-awaits DE25 qualification. Saved definition CLI parity remains open. A
+The Settings Mount busy message passed a later 360-second DE25 private guard.
+Native `shares` now lists, shows, adds, edits and removes saved NFS/SMB
+definitions, with a terminal password prompt for authenticated SMB. A DE25
+hot-install gate found and fixed fresh-mapping state: `show` now reports
+`not-mounted` without registering a source. On DE25, editing a fresh mapping,
+mounting authenticated SMB at `/net0`, reading server data, unmounting and
+removing the mapping all passed. This hot update needs clean publication.
+Evidence: `/mnt/Documents/astra68/network-smb-edit-ui-20261104/` on Beast. A
 credentialed SMB candidate passed a Beast provider test: bad password refused;
 good account wrote, synced, and read back the same bytes over SMB3.1.1 with a
 password containing `,` and `=`.

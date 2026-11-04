@@ -14,6 +14,7 @@ static uint32_t created_area_bytes;
 static int mock_exchange;
 static int mock_zero_token;
 static int mock_mapping_no_reference;
+static int mock_mapping_unadmitted;
 static AstraNetworkRequestMessage last_request;
 
 uint32_t astra_log_failure(const char *operation, uint32_t status)
@@ -191,11 +192,16 @@ uint32_t astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
                 reply->status = ASTRA_NETWORK_BUSY;
                 return ASTRA_SYSCALL_OK;
             }
+            if (mock_mapping_unadmitted) {
+                memset(&volume, 0, sizeof(volume));
+                volume.size = sizeof(volume);
+                volume.state = ASTRA_VOLUME_UNMOUNTED;
+            }
             (void)memcpy(bytes, &volume, sizeof(volume));
             reply->transferred = sizeof(volume);
             reply->status = last_request.header.operation ==
-                ASTRA_NETWORK_MAPPING_UNMOUNT ? ASTRA_NETWORK_BUSY :
-                ASTRA_NETWORK_OK;
+                ASTRA_NETWORK_MAPPING_UNMOUNT && !mock_mapping_unadmitted ?
+                ASTRA_NETWORK_BUSY : ASTRA_NETWORK_OK;
         } else {
             AstraNetworkInterfaceAddress record = {0};
             uint8_t *bytes = astra_network_shared_slot_bytes(
@@ -382,6 +388,13 @@ int main(void)
            ASTRA_NETWORK_OK && volume.state == ASTRA_VOLUME_MOUNTED);
     assert(astra_network_mapping_unmount(&session, mapping_id, &volume) ==
            ASTRA_NETWORK_BUSY && volume.mount.id == 10u);
+    mock_mapping_unadmitted = 1;
+    assert(astra_network_mapping_state(&session, mapping_id, &volume) ==
+           ASTRA_NETWORK_OK && volume.state == ASTRA_VOLUME_UNMOUNTED &&
+           volume.source.id == 0u && volume.mount.id == 0u);
+    assert(astra_network_mapping_unmount(&session, mapping_id, &volume) ==
+           ASTRA_NETWORK_OK && volume.source.id == 0u);
+    mock_mapping_unadmitted = 0;
     mock_mapping_no_reference = 1;
     assert(astra_network_mapping_mount(&session, mapping_id, &volume) ==
            ASTRA_NETWORK_BUSY && volume.source.id == 0u);

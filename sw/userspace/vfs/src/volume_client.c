@@ -314,6 +314,10 @@ static AstraResult network_source_call(AstraHandle administrator,
             ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &sent);
     if (result == ASTRA_OK) result = exchange(administrator, &request,
         sizeof(request), &sent, &reply.reply, sizeof(reply), NULL);
+    if (operation == ASTRA_VOLUME_MANAGED_NETWORK_LOOKUP &&
+        result == ASTRA_ERROR_INVALID_HANDLE &&
+        reply.reply.status == ASTRA_STATUS_NOT_FOUND)
+        result = ASTRA_ERROR_NOT_PRESENT;
     if (sent != ASTRA_INVALID_HANDLE) {
         AstraResult closed = astra_handle_close(&sent);
         if (result == ASTRA_OK) result = closed;

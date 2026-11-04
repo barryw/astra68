@@ -420,6 +420,10 @@ int main(void)
     expected_network_id = 42u;
     assert(astra_volume_managed_network_source(77u, &network, 42u,
         &admitted) == ASTRA_OK && admitted.id == 8u);
+    service_failure = ASTRA_STATUS_NOT_FOUND;
+    assert(astra_volume_managed_network_source_lookup(77u, 42u,
+        &admitted) == ASTRA_ERROR_NOT_PRESENT && admitted.id == 0u);
+    service_failure = 0u;
     assert(astra_volume_managed_network_source_lookup(77u, 42u,
         &admitted) == ASTRA_OK && admitted.id == 8u);
     assert(astra_volume_managed_network_source_lookup(77u, 0u,

@@ -88,6 +88,7 @@ AstraResult astra_volume_control(AstraHandle admin,
 {
     (void)admin;
     if (control->operation == ASTRA_VOLUME_RELEASE_NETWORK_SOURCE) {
+        assert(control->reference.id != 0u);
         if (volume_count > 1u &&
             volume_records[1].state != ASTRA_VOLUME_UNMOUNTED)
             return ASTRA_ERROR_BUSY;
@@ -226,6 +227,7 @@ int main(void)
 {
     AstraNetworkMappingSave input;
     AstraNetworkMapping saved;
+    AstraNetworkMappingVolume volume;
     uint32_t id;
     assert(network_fields[3].flags == ASTRA_CONFIG_FIELD_SENSITIVE);
     assert(mapping_integrity());
@@ -237,6 +239,9 @@ int main(void)
            credential_count == 1u && strcmp(credentials[0], "n") == 0);
     assert(mapping_read(0u, &saved) && saved.id == id &&
            (saved.flags & ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL) == 0u);
+    assert(mapping_volume_state(&saved, &volume) == ASTRA_NETWORK_OK &&
+           volume.source.id == 0u && volume.mount.id == 0u &&
+           admitted_id == 0u);
     input.mapping.id = id;
     strcpy(input.mapping.source.label, "Renamed");
     assert(mapping_save(&input, &id) == ASTRA_NETWORK_OK && id == 1u);
@@ -251,7 +256,6 @@ int main(void)
     assert(mapping_integrity() && strcmp(credentials[1], "p:p,a=s:word") == 0);
     assert(mapping_read(1u, &saved) &&
            (saved.flags & ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL) != 0u);
-    AstraNetworkMappingVolume volume;
     assert(mapping_mount(&saved, 1u, &volume) == ASTRA_NETWORK_OK &&
            volume.mount.id == 100u);
     assert(mapping_volume_state(&saved, &volume) == ASTRA_NETWORK_OK &&
