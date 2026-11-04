@@ -6429,7 +6429,10 @@ static uint32_t astra_host_volume_control(Astra68State *s, uint32_t owner,
                                                  request.generation);
         if (namespace == NULL)
             return ASTRA_STATUS_LOST;
-        qemu_mutex_lock(&namespace->lock);
+        if (qemu_mutex_trylock(&namespace->lock) != 0) {
+            astra_host_namespace_release(s, namespace);
+            return ASTRA_STATUS_BUSY;
+        }
     }
     qemu_mutex_lock(&s->host.namespace_lock);
     if (operation == ASTRA_VOLUME_IMAGE) {
