@@ -34,8 +34,17 @@ and `shares` passed. On selected release plus these hot updates, `shares show`
 reported `state=not-mounted mount=0`, a label edit succeeded before first
 mount, authenticated SMB mounted as `/net0`, Terminal read matching server
 bytes, and unmount/remove left the mapping list empty and icon absent.
-Evidence: `/mnt/Documents/astra68/network-smb-edit-ui-20261104/` on Beast.
-Selected release still needs a clean publication containing hot updates.
+Clean release `68cbf32d57ab7721e81c61cd14fd7b13343e88dd8f1308e56fd604afe312b504`
+contains these fixes and `shares`. Its 360-second private DE25 guard reached
+stage 8 without panic, repeated authenticated CLI add/edit before mount,
+mount/read/unmount/remove and Desktop icon checks, then mounted the same share
+read-only: read succeeded, copy into share returned access denied, and server
+contained no destination file. Guard restored the selected release with all
+services active. Console and UI evidence was archived and checksum verified
+on Beast at `/mnt/Documents/astra68/network-smb-edit-ui-20261104/`; disposable
+board trial was removed. Standard deployment then selected this release,
+verified the matching kernel, migrated the system image, passed boot checks,
+and left Astra, audio host and remote desktop active with 7.9 GiB free.
 Broader SMB interoperability and fault gates remain open.
 
 Saved SMB hardware gate, 2026-11-04: A first saved-share Settings trial and
@@ -67,7 +76,7 @@ and `mount --saved 1` remounted at the stable path. Its 600-second guard passed
 without panic and restored the selected release. Evidence and verified hashes:
 `/mnt/Documents/astra68/network-smb-saved-cli-de25-20261104/` on Beast.
 Release `7326966ffca352bf4ff7e0af4f888199baebae73a772145a72fd7b433423a9fa`
-is now selected on DE25 after the guarded trial. Deployment preserved the
+was selected on DE25 after the guarded trial. Deployment preserved the
 existing system image through migration, verified the matching kernel,
 reached boot stage 8 with no panic or Astra restart, and left Astra, audio
 host, and remote desktop active. Previous release remains the rollback

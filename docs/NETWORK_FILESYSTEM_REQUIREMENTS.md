@@ -36,7 +36,7 @@ Release `7326966f...` corrected Terminal.app's `NETWORK_ADMIN` bundle grant;
 `mount --saved 1`, file read, `unmount --saved 1`, and remount passed a 600-second
 DE25 guard. Evidence: `/mnt/Documents/astra68/network-smb-saved-final-ui-de25-20261104/`
 and `/mnt/Documents/astra68/network-smb-saved-cli-de25-20261104/`. A
-`48e9e00a...` is now selected on DE25 after full deployment with system-image
+`48e9e00a...` was selected on DE25 after full deployment with system-image
 migration, matching-kernel confirmation, boot stage 8, zero Astra restarts,
 active production services, and 8.0 GiB free. ABI 15.15 now looks up the
 exact managed source for a saved mapping ID. Two DE25 private guards on release
@@ -51,7 +51,12 @@ definitions, with a terminal password prompt for authenticated SMB. A DE25
 hot-install gate found and fixed fresh-mapping state: `show` now reports
 `not-mounted` without registering a source. On DE25, editing a fresh mapping,
 mounting authenticated SMB at `/net0`, reading server data, unmounting and
-removing the mapping all passed. This hot update needs clean publication.
+removing the mapping all passed. Clean release `68cbf32d...` repeated these
+checks in a 360-second DE25 private guard without panic. Saved read-only
+policy allowed reads and refused a copy into the share; the server had no
+destination file. Standard deployment selected that release, verified its
+kernel and migrated the system image. Astra, audio and remote desktop are
+active with 7.9 GiB free.
 Evidence: `/mnt/Documents/astra68/network-smb-edit-ui-20261104/` on Beast. A
 credentialed SMB candidate passed a Beast provider test: bad password refused;
 good account wrote, synced, and read back the same bytes over SMB3.1.1 with a
@@ -85,6 +90,20 @@ SMB3.1.1 mount, TCP445 outage, exact active holder, responsive `/dh0`, 4 MiB
 read recovery and successful later unmount. The early preflight caught that
 trial's holder, so the new trylock branch still needs a deterministic gate.
 Evidence: `/mnt/Documents/astra68/network-smb-namespace-busy-de25-20261104/`.
+
+## Saved share CLI
+
+`shares list` lists saved NFS and SMB definitions without passwords.
+`shares show ID` includes mount state. `shares add nfs SERVER EXPORT LABEL`
+and `shares add smb SERVER /SHARE LABEL [ACCOUNT [DOMAIN]]` create mappings;
+an SMB account causes a terminal password prompt. `shares set ID FIELD VALUE`
+edits `server`, `share`, `label`, `account`, `domain`, `auto`, or `read-only`;
+boolean values are `on` or `off`. `shares set ID FIELD VALUE --password`
+changes a field and its password together. `shares password ID` and
+`shares forget-password ID` manage the saved secret. `shares remove ID`
+deletes an unmounted mapping. `mount --saved ID` and `unmount --saved ID`
+control its volume through the same Network Kit lifecycle used by Settings.
+Active source changes take effect after unmount and remount.
 
 ## AstraZ story workflow
 
