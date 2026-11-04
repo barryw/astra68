@@ -280,6 +280,16 @@ describes stable client identity and DNS upcalls.
 
 ## Acceptance evidence
 
+Current SMB evidence (2026-11-04): authenticated DE25 mount, saved mapping
+edit/CLI, Atlas volume icon and root view, Unicode and long names, case-fold
+lookup, writable and read-only policy, persistent fsbench read/write/append/
+directory/durable-save operations, and exact busy-unmount holders passed on
+disposable Samba. Guest and authenticated provider tests cover mount, refusal,
+read, write, fsync and unmount. The Unicode case exposed a missing CIFS
+`iocharset=utf8` option; corrected provider and Filesystem Kit passed a DE25
+hot-install test. A coherent release containing that fix is pending. Remaining
+fault and concurrency cases below are still acceptance gates.
+
 Run disposable Samba and NFS servers on Beast before testing the DE25 against
 real shares. Cover Unicode/long names, case behavior, read-only/writable shares,
 authentication refusal, rename/unlink of open files, server-side permissions,

@@ -920,7 +920,9 @@ astra_vfs_union_directory_read(AstraVfsUnionDirectory *directory,
         if (member != NULL)
             *member = directory->member;
         directory->cursor = next;
-        if (next == 0u) {
+        if (found == 0u ||
+            (next == 0u &&
+             (client->features & ASTRA_VFS_FEATURE_DESCRIPTIONS) == 0u)) {
             union_directory_close_file(directory);
             ++directory->member;
             directory->cursor = 0u;

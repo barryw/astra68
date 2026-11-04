@@ -21,6 +21,8 @@ static const char *answers_also;
 static const char *empty_directory;
 static uint16_t answer_kind = ASTRA_VFS_KIND_FILE;
 static uint32_t close_count;
+static uint32_t descriptor_page;
+static int zero_cookie_stream;
 static AstraVfsClient standin;
 typedef struct TestLink {
     const char *path;
@@ -47,6 +49,7 @@ static void reset_asked(void)
     stat_total = 0u;
     link_count = 0u;
     close_count = 0u;
+    descriptor_page = 0u;
 }
 
 void *astra_runtime_reallocate(void *pointer, size_t size)
@@ -278,6 +281,16 @@ uint32_t astra_vfs_readdir_file_batch(
     uint32_t *count, uint64_t *next)
 {
     assert(directory == 42u);
+    if (zero_cookie_stream && strcmp(path, "/local/commands") == 0) {
+        assert(cursor == ASTRA_VFS_CURSOR_CURRENT);
+        if (descriptor_page == 2u)
+            return ASTRA_VFS_ERR_NOT_FOUND;
+        strcpy(entries[0].name, descriptor_page++ == 0u ? "first" : "last");
+        entries[0].kind = ASTRA_VFS_KIND_FILE;
+        *count = 1u;
+        *next = 0u;
+        return ASTRA_VFS_OK;
+    }
     return astra_vfs_readdir_batch(client, path, cursor, entries, capacity,
                                    count, next);
 }
@@ -621,6 +634,39 @@ static void test_directory_skips_an_empty_member(void)
     astra_assign_table_destroy(&table);
 }
 
+static void test_descriptor_stream_ignores_zero_cookie_until_eof(void)
+{
+    AstraAssignTable table;
+    AstraVfsUnionDirectory directory = ASTRA_VFS_UNION_DIRECTORY_INIT;
+    AstraVfsDirEntry entry;
+    uint32_t count = 0u;
+
+    union_table(&table);
+    reset_asked();
+    answers = "/local/commands";
+    answers_also = NULL;
+    answer_kind = ASTRA_VFS_KIND_DIRECTORY;
+    standin.features = ASTRA_VFS_FEATURE_DESCRIPTIONS;
+    zero_cookie_stream = 1;
+    assert(astra_vfs_union_directory_open(&table, "/commands", client_for,
+                                           NULL, &directory) == ASTRA_VFS_OK);
+    assert(astra_vfs_union_directory_read(&directory, &entry, 1u, &count,
+                                           NULL) == ASTRA_VFS_OK);
+    assert(count == 1u && strcmp(entry.name, "first") == 0);
+    assert(astra_vfs_union_directory_read(&directory, &entry, 1u, &count,
+                                           NULL) == ASTRA_VFS_OK);
+    assert(count == 1u && strcmp(entry.name, "last") == 0);
+    assert(astra_vfs_union_directory_read(&directory, &entry, 1u, &count,
+                                           NULL) == ASTRA_VFS_OK);
+    assert(count == 0u);
+    astra_vfs_union_directory_close(&directory);
+    assert(close_count == 1u);
+    zero_cookie_stream = 0;
+    standin.features = 0u;
+    answer_kind = ASTRA_VFS_KIND_FILE;
+    astra_assign_table_destroy(&table);
+}
+
 /*
  * A caller's traversal is often a plain stack variable. Open owns the whole
  * state: a stale client and handle left in it were once closed as if open,
@@ -849,6 +895,7 @@ main(void)
     test_primary_skips_a_read_only_member();
     test_stat_checks_rights_after_finding_the_name();
     test_directory_skips_an_empty_member();
+    test_descriptor_stream_ignores_zero_cookie_until_eof();
     test_directory_open_owns_the_whole_state();
     test_links_follow_without_crossing_authority();
     test_ordered_components_and_provider_continuations();

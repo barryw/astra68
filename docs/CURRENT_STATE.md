@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-11-04
 
+SMB root enumeration correction, 2026-11-04: DE25 authenticated `/net0`
+initially returned only two of seven server entries. Host CIFS presented
+`0Café.txt` with a Latin-1 `é`; QEMU correctly rejected the non-UTF-8 name,
+so POSIX `ls` stopped before later entries. Both authenticated and guest CIFS
+mounts now request `iocharset=utf8`. A separate Filesystem Kit union defect
+closed descriptor-backed directory streams when their numeric cookie was zero,
+even after a nonempty batch; descriptor streams now end on provider EOF or an
+empty batch. Beast VFS tests include the zero-cookie regression. Beast's
+authenticated storage-provider test now opens a server-seeded Unicode name
+and passes mount/refusal/read/write/fsync/unmount. Target Filesystem Kit and
+storage provider were hot installed on DE25. Terminal listed all seven SMB
+root entries; Atlas showed seven icons, including `0Café.txt`, the 100-character
+name, and both directories. Busy unmount named the two exact `/net0/` holders;
+after Atlas closed and Terminal left `/net0`, unmount and mapping removal
+succeeded. Production release rebuild and broader SMB fault gates remain open.
+Evidence: `/mnt/Documents/astra68/network-smb-edit-ui-20261104/` on Beast.
+Haiku references reviewed read-only: `src/system/kernel/fs/vfs.cpp` `dir_read`
+retains the filesystem's directory cookie and returned count;
+`src/add-ons/kernel/file_systems/fat/encodings.cpp` converts disk Unicode
+to UTF-8 for native names. Astra retains its descriptor/union contract and
+explicitly requests UTF-8 from Linux CIFS; no Haiku code was copied.
+
 SMB active mapping edit, 2026-11-04: Filesystem Kit ABI 15.15 adds exact
 managed network source lookup by saved mapping ID. Network service now keeps
 an active source and mount attached to their original definition while an

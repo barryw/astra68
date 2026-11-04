@@ -508,6 +508,7 @@ static int authenticated_smb_mount(const char *source, const char *target,
     SET_STRING("source", source);
     SET_STRING("vers", "3.1.1");
     SET_STRING("sec", "ntlmssp");
+    SET_STRING("iocharset", "utf8");
     SET_STRING("ip", address);
     SET_STRING("uid", uid_text);
     SET_STRING("gid", gid_text);
@@ -590,7 +591,7 @@ int astra_storage_linux_attach(AstraStorageDomain *domain,
         else if (auth == NULL)
             /* Anonymous shares have no credential material to retain or leak. */
             printed = snprintf(options, sizeof(options),
-                "vers=3.1.1,sec=none,hard,ip=%s,uid=%u,gid=%u", address,
+                "vers=3.1.1,sec=none,hard,iocharset=utf8,ip=%s,uid=%u,gid=%u", address,
                 (unsigned)domain->uid, (unsigned)domain->gid);
         if (printed < 0 || (size_t)printed >= sizeof(options)) return ENAMETOOLONG;
     } else if (record->format == ASTRA_VOLUME_TMPFS)

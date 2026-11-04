@@ -1094,6 +1094,11 @@ static void network_mount_auth(AstraStorageProvider *provider, const char *serve
     assert(astra_storage_find(&provider->catalog, mount)->state == ASTRA_VOLUME_MOUNTED);
     int root = -1;
     assert(astra_storage_provider_root(provider, mount, 1u, &root) == 0);
+    int unicode = openat(root, "0Café.txt", O_RDONLY);
+    char unicode_bytes[7];
+    assert(unicode >= 0 && read(unicode, unicode_bytes, sizeof(unicode_bytes)) == 7 &&
+        memcmp(unicode_bytes, "unicode", 7) == 0);
+    close(unicode);
     int file = openat(root, "authenticated-proof", O_CREAT | O_TRUNC | O_RDWR, 0600);
     assert(file >= 0);
     assert(write(file, "auth-pass", 9u) == 9 && fsync(file) == 0);
