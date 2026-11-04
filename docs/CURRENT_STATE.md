@@ -51,7 +51,12 @@ Astra, audio host, and remote desktop active. Post-deployment authenticated
 options; unmount and source release removed icon and CIFS mount. Seven selected
 release frames and 11 test reports were checksum-verified on Beast before
 their board copies were removed. No dev shadow or trial tree remains; board
-has 7.9 GiB free. Performance qualification remains separate. The host root
+has 7.9 GiB free. Haiku references reviewed read-only:
+`src/add-ons/kernel/file_systems/netfs/client/ServerConnection.cpp` reports
+broken connections, while `ShareVolume.cpp` owns unmount lifecycle. Astra
+retains its native Volume lifecycle and delegates bounded SMB I/O errors to
+Linux CIFS; no Haiku code was copied. Performance qualification remains
+separate. The host root
 filesystem emitted repeated `ext4_block_to_path` warnings for current console
 log inode 112146 after the earlier emergency reboot; the file has normal
 size and extents, but the warning's caller is not yet identified. This is a
