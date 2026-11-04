@@ -339,9 +339,25 @@ recovered 20 saves with matching server SHA-256 and no temporary file.
 A 95-second first-write outage also recovered 20 saves with matching server
 bytes; a second Terminal completed `/dh0` listing during the outage. Clean
 unmount left no CIFS mount and the provider's normal two processes. Evidence
-resides in `source-loss/` under the Beast archive above. This provider change
-still requires sustained-outage error return and coherent release
-qualification. Linux CIFS `soft` returns I/O errors when a server fails;
+resides in `source-loss/` under the Beast archive above. A sustained outage
+returned a write error after 218 seconds: `fsbench` reported zero committed
+bytes, no final file existed, and only a zero-byte temporary file remained.
+An initial unmount refused the retained writeback error; retry after server
+recovery unmounted and both disposable network sources were released. Candidate
+release `acccff5bfeef37eb8ed730a1046f9adbf082e8127db14c6b1d44c987a7671a57`
+built and verified on Beast. Its 360-second private DE25 guard reached stage 8
+without panic, authenticated `/net0` with `soft,cache=none`, read matching
+server text, completed 20 durable saves with matching server SHA-256, and
+unmounted. Guard restored the selected release and all three services.
+Console, 10 RFB frames, and report were checksum-verified on Beast; disposable
+board trial tree was removed. Standard deployment selected this exact release,
+confirmed packaged kernel and stage 8, and left all three services active.
+Post-deployment authenticated SMB read matched the server, mount options
+remained `soft,cache=none`, and unmount plus source release removed the volume
+without a CIFS mount leak. Seven selected-release frames and 11 reports were
+checksum-verified on Beast before board copies were removed. No dev shadow
+or disposable trial tree remains; board has 7.9 GiB free.
+Linux CIFS `soft` returns I/O errors when a server fails;
 `cache=none` avoids normal cached file data
 ([mount.cifs](https://man7.org/linux/man-pages/man8/mount.cifs.8.html),
 [Linux CIFS usage](https://docs.kernel.org/admin-guide/cifs/usage.html)).

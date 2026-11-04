@@ -31,9 +31,31 @@ and no temporary file. Reports are checksum-verified in the Beast archive.
 A 95-second first-write outage also recovered all 20 saves with matching
 server bytes; a second Terminal completed `/dh0` listing while SMB waited.
 After unmount, the provider had its normal two processes and no CIFS mount.
-Sustained-outage error return, coherent release guard/deployment, and board
-cleanup remain before this provider change is selected. Performance
-qualification remains separate.
+A sustained first-write outage returned a truthful failure after 218 seconds:
+`fsbench` reported one failed operation, zero committed bytes, and no final
+server file; only a zero-byte `save.tmp` remained. Astra stayed active and
+the firewall rule was removed. First unmount refused the retained writeback
+error (status 11); retry after server recovery unmounted, and both disposable
+network sources were released. Candidate release
+`acccff5bfeef37eb8ed730a1046f9adbf082e8127db14c6b1d44c987a7671a57`
+built and verified on Beast. Its 360-second private DE25 guard reached stage
+8 with no panic. Exact-release authenticated `/net0` reported `soft,cache=none`,
+read `auth-pass` from the server, completed 20 durable saves with matching
+65,536-byte server SHA-256, and unmounted without a CIFS mount leak. Guard
+restored the prior selected release and all three services. Trial console,
+10 RFB frames, and JSON report were checksum-verified in the Beast archive;
+the disposable board trial tree was removed. Standard deployment selected
+this exact release, confirmed packaged kernel identity and stage 8, and left
+Astra, audio host, and remote desktop active. Post-deployment authenticated
+`/net0` read matched server text; `soft,cache=none` appeared in Linux mount
+options; unmount and source release removed icon and CIFS mount. Seven selected
+release frames and 11 test reports were checksum-verified on Beast before
+their board copies were removed. No dev shadow or trial tree remains; board
+has 7.9 GiB free. Performance qualification remains separate. The host root
+filesystem emitted repeated `ext4_block_to_path` warnings for current console
+log inode 112146 after the earlier emergency reboot; the file has normal
+size and extents, but the warning's caller is not yet identified. This is a
+separate host-storage diagnostic risk, not evidence of an Astra panic.
 
 SMB source-loss recovery, 2026-11-04: the QEMU HostFS transport now checks
 known lost handles and source identity before provider-root preflight. Local
