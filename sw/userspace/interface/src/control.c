@@ -369,7 +369,7 @@ static int collection_items_valid(const AstraCollectionItem *items,
         if (items[at].id == 0u || items[at].text_length == 0u ||
             !astra_utf8_validate(items[at].text, items[at].text_length, 0u) ||
             (items[at].presentation.flags & ~ASTRA_COLLECTION_HEADING) != 0u ||
-            items[at].presentation.icon > ASTRA_TOOLBAR_ICON_INSTALL ||
+            items[at].presentation.icon > ASTRA_TOOLBAR_ICON_NETWORK_VOLUME ||
             ((items[at].presentation.flags & ASTRA_COLLECTION_HEADING) != 0u &&
              items[at].presentation.icon != ASTRA_TOOLBAR_ICON_NONE))
             return 0;
@@ -923,7 +923,7 @@ static int control_valid(const AstraControl *control)
                 ~(ASTRA_BUTTON_STYLE_MASK | ASTRA_BUTTON_ICON_MASK |
                   ASTRA_BUTTON_ICON_ONLY)) == 0u &&
                ASTRA_BUTTON_ICON(control->_private_style) <=
-                   ASTRA_TOOLBAR_ICON_INSTALL &&
+                   ASTRA_TOOLBAR_ICON_NETWORK_VOLUME &&
                (ASTRA_BUTTON_ICON(control->_private_style) == 0u ||
                 (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
                     ASTRA_BUTTON_TOOLBAR) &&
@@ -1980,7 +1980,7 @@ AstraResult astra_interface_segmented_set_icons(AstraControl *control,
         return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t at = 0u; at < count; ++at)
         if (icons[at] <= ASTRA_TOOLBAR_ICON_NONE ||
-            icons[at] > ASTRA_TOOLBAR_ICON_INSTALL)
+            icons[at] > ASTRA_TOOLBAR_ICON_NETWORK_VOLUME)
             return ASTRA_ERROR_INVALID_ARGUMENT;
     control->_private_display_model = icons;
     return ASTRA_OK;
@@ -5793,6 +5793,12 @@ static void render_toolbar_icon(AstraSurfaceView *surface, uint32_t icon,
         {2, 4, 14, 4}, {14, 4, 14, 12}, {14, 12, 2, 12},
         {2, 12, 2, 4}, {4, 7, 12, 7}, {4, 9, 12, 9}
     };
+    static const ToolbarLine network_volume[] = {
+        {2, 2, 14, 2}, {14, 2, 14, 10}, {14, 10, 2, 10},
+        {2, 10, 2, 2}, {2, 6, 14, 6}, {4, 4, 5, 4},
+        {4, 8, 5, 8}, {8, 10, 8, 13}, {3, 13, 13, 13},
+        {3, 12, 3, 15}, {13, 12, 13, 15}
+    };
     static const ToolbarLine ram[] = {
         {3, 4, 13, 4}, {13, 4, 13, 11}, {13, 11, 3, 11},
         {3, 11, 3, 4}, {5, 11, 5, 14}, {11, 11, 11, 14}
@@ -5854,6 +5860,7 @@ static void render_toolbar_icon(AstraSurfaceView *surface, uint32_t icon,
     case ASTRA_TOOLBAR_ICON_HOME: PICK(home); break;
     case ASTRA_TOOLBAR_ICON_RECENT: PICK(recent); break;
     case ASTRA_TOOLBAR_ICON_VOLUME: PICK(volume); break;
+    case ASTRA_TOOLBAR_ICON_NETWORK_VOLUME: PICK(network_volume); break;
     case ASTRA_TOOLBAR_ICON_RAM: PICK(ram); break;
     case ASTRA_TOOLBAR_ICON_MORE: PICK(more); break;
     case ASTRA_TOOLBAR_ICON_INSTALL: PICK(install); break;

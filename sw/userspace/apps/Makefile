@@ -47,7 +47,7 @@ $(ATLAS_RESOURCES)/%.aicon: ../../../tools/aicon.py
 
 $(eval $(call astra_app_bundle,build,Terminal,$(TERMINAL),Terminal.app/manifest,terminal,))
 $(eval $(call astra_app_bundle,build,InterfaceGallery,$(GALLERY),InterfaceGallery.app/manifest,gallery,))
-$(eval $(call astra_app_bundle,build,Atlas,$(ATLAS),Atlas.app/manifest,atlas,$(addprefix $(ATLAS_RESOURCES)/,drawer.aicon document.aicon volume.aicon installer.aicon)))
+$(eval $(call astra_app_bundle,build,Atlas,$(ATLAS),Atlas.app/manifest,atlas,$(addprefix $(ATLAS_RESOURCES)/,drawer.aicon document.aicon volume.aicon network-volume.aicon installer.aicon)))
 $(eval $(call astra_app_bundle,build,Fonts,$(FONTS),Fonts.app/manifest,fonts,))
 $(eval $(call astra_app_bundle,build,DiskSetup,$(DISK_SETUP),DiskSetup.app/manifest,volume,))
 $(eval $(call astra_app_bundle,build,Installer,$(INSTALLER),Installer.app/manifest,installer,))

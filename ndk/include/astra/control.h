@@ -364,7 +364,8 @@ enum {
     ASTRA_TOOLBAR_ICON_RECENT,
     ASTRA_TOOLBAR_ICON_VOLUME,
     ASTRA_TOOLBAR_ICON_RAM,
-    ASTRA_TOOLBAR_ICON_INSTALL
+    ASTRA_TOOLBAR_ICON_INSTALL,
+    ASTRA_TOOLBAR_ICON_NETWORK_VOLUME
 };
 
 /** Creation data for a viewport that clips and translates one direct child. */

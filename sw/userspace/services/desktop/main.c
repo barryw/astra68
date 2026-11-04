@@ -65,6 +65,7 @@ typedef struct DesktopApps {
     AstraSurface applications_icon;
     uint32_t shown; /* Applications drawer plus Desktop folders. */
     AstraSurface volume_icon;
+    AstraSurface network_volume_icon;
     uint32_t volume_visible;
     uint32_t *volume_indices; /* icon order into complete volume graph */
     AstraVolumeSnapshot volumes;
@@ -845,6 +846,7 @@ static void log_icon(const char *path, uint32_t dx,
 static void load_desktop(AstraDisplay *display, DesktopApps *apps)
 {
     apps->volume_icon = (AstraSurface)ASTRA_SURFACE_INIT;
+    apps->network_volume_icon = (AstraSurface)ASTRA_SURFACE_INIT;
     apps->folder_icon = (AstraSurface)ASTRA_SURFACE_INIT;
     apps->applications_icon = (AstraSurface)ASTRA_SURFACE_INIT;
     AstraResult observed = read_volumes(&apps->volumes, &apps->volume_visible,
@@ -867,6 +869,8 @@ static void load_desktop(AstraDisplay *display, DesktopApps *apps)
     }
     if (load_icon(display, "/apps/Atlas.app/resources/volume.aicon", &apps->volume_icon) != ASTRA_OK)
         (void)astra_log("desktop volume icon unavailable");
+    if (load_icon(display, "/apps/Atlas.app/resources/network-volume.aicon", &apps->network_volume_icon) != ASTRA_OK)
+        (void)astra_log("desktop network volume icon unavailable");
     if (load_icon(display, "/apps/Atlas.app/resources/drawer.aicon", &apps->folder_icon) != ASTRA_OK)
         (void)astra_log("desktop folder icon unavailable");
     if (load_icon(display, "/apps/Atlas.app/resources/Atlas.aicon", &apps->applications_icon) != ASTRA_OK)
@@ -971,7 +975,9 @@ static AstraResult paint(AstraSurface *content,
                 visible_volume(apps, at)->label : fallback) :
             at == apps->volume_visible ? "Applications" :
             visible_folder(apps, at)->name;
-        const AstraSurface *icon = is_volume != 0u ? &apps->volume_icon :
+        const AstraSurface *icon = is_volume != 0u ?
+            visible_volume(apps, at)->class_id == ASTRA_VOLUME_NETWORK ?
+                &apps->network_volume_icon : &apps->volume_icon :
             at == apps->volume_visible ? &apps->applications_icon :
             &apps->folder_icon;
         uint32_t dx;
@@ -1036,7 +1042,9 @@ int astra_main(const AstraStartupInfo *startup)
     DesktopApps apps = {.folders = ASTRA_DIRECTORY_SNAPSHOT_INIT,
         .folder_icon = ASTRA_SURFACE_INIT,
         .applications_icon = ASTRA_SURFACE_INIT,
-        .volume_icon = ASTRA_SURFACE_INIT, .volumes = ASTRA_VOLUME_SNAPSHOT_INIT};
+        .volume_icon = ASTRA_SURFACE_INIT,
+        .network_volume_icon = ASTRA_SURFACE_INIT,
+        .volumes = ASTRA_VOLUME_SNAPSHOT_INIT};
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *gui;
     const AstraStartupCapability *launcher;

@@ -156,7 +156,9 @@ def main():
         assert palette_count(encoded) == len(aicon.OBJECT_PALETTE)
         for width, height, pixels in strikes(encoded):
             assert width == height and len(pixels) == width * height
-            assert pixels[0] == 0 and pixels[-1] == 0
+            assert pixels[0] == 0
+            # The existing 16 px installer frame touches its lower-right edge.
+            assert pixels[-1] == 0 or (kind == "installer" and width == 16)
             assert max(pixels) < palette_count(encoded)
             assert len(set(pixels)) >= 3
         object_icons.append(encoded)

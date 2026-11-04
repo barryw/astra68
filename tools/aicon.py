@@ -29,8 +29,8 @@ GALLERY_PALETTE = (
 
 INSTRUMENT_KINDS = ("framebench", "draw", "sprite", "geometry", "target",
                     "scale", "keys", "mouse", "timer", "thread")
-OBJECT_KINDS = ("atlas", "volume", "drawer", "document", "fonts", "installer",
-                "settings")
+OBJECT_KINDS = ("atlas", "volume", "network-volume", "drawer", "document",
+                "fonts", "installer", "settings")
 OBJECT_PALETTE = ((0, 0, 0, 0), (247, 249, 249, 255),
                   (223, 228, 230, 255), (92, 104, 112, 255),
                   (107, 119, 128, 255), (43, 127, 134, 255),
@@ -89,6 +89,15 @@ def object_strike(kind, size):
         polygon(((11, 15), (29, 15), (29, 21), (11, 21)), 7, 6)
         line(19, 27, 29, 27, 6)
         line(10, 27, 12, 27, 5)
+    elif kind == "network-volume":
+        polygon(((5, 5), (35, 5), (35, 25), (5, 25)), 7, 6)
+        line(5, 15, 35, 15, 6)
+        line(9, 10, 12, 10, 5)
+        line(9, 20, 12, 20, 5)
+        line(19, 25, 19, 33, 5)
+        line(9, 33, 30, 33, 5)
+        line(9, 30, 9, 36, 5)
+        line(30, 30, 30, 36, 5)
     elif kind == "installer":
         polygon(((3, 3), (37, 3), (37, 37), (3, 37)), 7, 6)
         line(20, 8, 20, 25, 5)

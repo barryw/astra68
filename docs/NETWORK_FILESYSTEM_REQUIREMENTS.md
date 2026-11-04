@@ -38,6 +38,28 @@ checksum-matched in
 macOS, Windows, and NAS servers remain untested.
 NFSv4 passed a DE25 private trial for mount, guest read/write,
 Desktop and Atlas, exact open-file unmount refusal, and source retirement.
+Desktop and Atlas now give network volumes a dedicated server icon, distinct
+from local disk and RAM. A targeted DE25 install showed both icons; Settings
+auto-connect survived Astra restart and its Mount, Unmount, and Remove actions
+updated mount state and Desktop visibility. An NFS `fsync` with DE25 TCP2049
+dropped for 25 seconds recovered, completed 20 durable saves without failure,
+and left the server final file matching the guest SHA-256. Packet capture shows
+retransmissions and eventual reply; Atlas opened local `/dh0` during the drop.
+Evidence is under `/mnt/Documents/astra68/network-nfs-icons-cert-20261104/`
+on Beast. The drop began before first captured NFS request, so a deterministic
+cut after `fsync` dispatch remains unqualified.
+Earlier release `c7d13b47...` passed writable NFSv4 mount, both volume icons,
+Atlas enumeration, 20 durable saves with matching server bytes, unmount, and
+source retirement on selected DE25 runtime. An external unmount exposed a
+stale Atlas sidebar place and blank current view. Atlas now refreshes places
+after volume loss and moves the view to `/home`; targeted DE25 trials passed
+for an Atlas sidebar visit and direct Desktop volume launch. Coherent release
+`cc5725ae...` passed preserved-state deployment and selected-runtime DE25
+mount, Desktop and Atlas network icons, root enumeration, external unmount,
+Atlas Home recovery, and source retirement. Fifteen final-release RFB captures
+match board SHA-256 in `nfs-final-board.sha256` under the Beast archive. Stage
+8, runtime, audio, and remote desktop remain active with 7.9 GiB free. Exact
+network interruption after a dispatched `fsync` RPC remains unqualified.
 Selected release `732448be...` also mounted NFSv4 writable at `/net0`, read
 the server proof, showed `NFSProof` on Desktop, and enumerated its root in
 Atlas. Twenty durable saves passed with matching server bytes and no temporary

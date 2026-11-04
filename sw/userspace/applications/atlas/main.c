@@ -709,7 +709,10 @@ static AstraResult browser_update_places(void)
             (uint32_t)strlen(label), record->name};
         presentation[count++] = (AstraCollectionPresentation){0u,
             strcmp(record->name, "/ram0") == 0 ?
-                ASTRA_TOOLBAR_ICON_RAM : ASTRA_TOOLBAR_ICON_VOLUME};
+                ASTRA_TOOLBAR_ICON_RAM :
+                record->class_id == ASTRA_VOLUME_NETWORK ?
+                    ASTRA_TOOLBAR_ICON_NETWORK_VOLUME :
+                    ASTRA_TOOLBAR_ICON_VOLUME};
     }
     places[count] = (AstraFilePanelPlace){"QUERIES", 7u, NULL};
     presentation[count++] = (AstraCollectionPresentation){
@@ -4454,11 +4457,18 @@ static AstraResult run(AstraHandle gui)
                 result = astra_volume_watch_open(volume_metadata,
                     &volume_watch);
             else result = ASTRA_OK;
-            if (result == ASTRA_OK)
-                result = volume_lost ? ASTRA_ERROR_INVALID_HANDLE :
-                    viewed_volume.id != 0u ? volume_observe(NULL) : ASTRA_OK;
-            if (result == ASTRA_OK)
-                result = browser_update_places();
+            if (result == ASTRA_OK && viewed_volume.id != 0u && !volume_lost) {
+                result = volume_observe(NULL);
+                if (result != ASTRA_OK && result != ASTRA_ERROR_BUSY &&
+                    result != ASTRA_ERROR_OUT_OF_MEMORY &&
+                    result != ASTRA_ERROR_IO)
+                    volume_lost = 1u;
+            }
+            if (result == ASTRA_OK || volume_lost) {
+                AstraResult places = browser_update_places();
+                result = places != ASTRA_OK ? places :
+                    volume_lost ? ASTRA_ERROR_INVALID_HANDLE : ASTRA_OK;
+            }
             if ((viewed_volume.id == 0u && result != ASTRA_OK) ||
                 result == ASTRA_ERROR_BUSY || result == ASTRA_ERROR_OUT_OF_MEMORY ||
                 result == ASTRA_ERROR_IO) {
@@ -4473,6 +4483,9 @@ static AstraResult run(AstraHandle gui)
                 repaint = 1u;
             }
         }
+        if (volume_lost && worker == 0u &&
+            navigate_to("/home", NAVIGATION_PUSH) == ASTRA_OK)
+            continue;
         if (removal_active && astra_clock_monotonic() >= removal_retry) {
             AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
             result = astra_volume_snapshot_open(volume_metadata, &catalog);

@@ -89,16 +89,18 @@ static void test_toolbar_composition(void)
            ASTRA_TOOLBAR_ICON_OPEN);
     {
         const uint32_t expanded[2] = {
-            ASTRA_TOOLBAR_ICON_NEW_FOLDER, ASTRA_TOOLBAR_ICON_TRASH
+            ASTRA_TOOLBAR_ICON_NEW_FOLDER, ASTRA_TOOLBAR_ICON_NETWORK_VOLUME
         };
         assert(astra_interface_toolbar_set_icons(controls, expanded, 2u) ==
                ASTRA_OK);
         assert(ASTRA_BUTTON_ICON(controls[1]._private_style) ==
                ASTRA_TOOLBAR_ICON_NEW_FOLDER);
+        assert(ASTRA_BUTTON_ICON(controls[2]._private_style) ==
+               ASTRA_TOOLBAR_ICON_NETWORK_VOLUME);
     }
     {
         const uint32_t invalid[2] = {
-            ASTRA_TOOLBAR_ICON_BACK, ASTRA_TOOLBAR_ICON_INSTALL + 1u
+            ASTRA_TOOLBAR_ICON_BACK, ASTRA_TOOLBAR_ICON_NETWORK_VOLUME + 1u
         };
         assert(astra_interface_toolbar_set_icons(controls, invalid, 2u) ==
                ASTRA_ERROR_INVALID_ARGUMENT);
@@ -1930,7 +1932,7 @@ static void test_segmented_control(void)
             ASTRA_TOOLBAR_ICON_COLUMNS
         };
         static const uint32_t invalid[] = {
-            ASTRA_TOOLBAR_ICON_LIST, ASTRA_TOOLBAR_ICON_INSTALL + 1u,
+            ASTRA_TOOLBAR_ICON_LIST, ASTRA_TOOLBAR_ICON_NETWORK_VOLUME + 1u,
             ASTRA_TOOLBAR_ICON_COLUMNS
         };
         AstraControl icon_control = ASTRA_CONTROL_INIT;

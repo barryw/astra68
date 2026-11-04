@@ -2,6 +2,56 @@
 
 Status: active continuation map, 2026-11-04
 
+Network-volume presentation and NFS outage gate, 2026-11-04: Desktop uses a
+dedicated network-volume `.aicon` for `ASTRA_VOLUME_NETWORK`; Atlas' shared
+Collection glyph uses the same server shape. Local disk and RAM glyphs retain
+their own shapes. The UI binaries and resource passed a targeted DE25 install:
+NFSv4 `/net0` displayed its network icon on Desktop and in Atlas, while local
+volume icons stayed distinct. Settings created an auto-connect NFS mapping,
+reconnected it after Astra restart, unmounted and remounted it from the NFS
+page, removed the Desktop icon at unmount, and deleted the test mapping.
+Twenty durable saves passed while Beast dropped DE25 TCP2049 for 25 seconds
+around an NFS `fsync`: tcpdump captured repeated NFS retransmissions before
+the server replied, `fsbench` returned `failed:false`, no temporary save
+remained, and the server's final SHA-256 was
+`729512428e9663885f746f2b8b2aaafd55f8324b84600b79ff1cf4ea73b385ba`.
+Atlas opened `/dh0` during the outage. All 29 UI frames have matching
+board/archive hashes at
+`/mnt/Documents/astra68/network-nfs-icons-cert-20261104/` on Beast, beside
+the workload report, packet capture, and server final file. Board trial files
+were removed; production services remain active with 7.9 GiB free. The cut
+preceded the first captured NFS request, so an exact cut after a dispatched
+`fsync` RPC remains unverified. Haiku's `src/kits/tracker/IconCache.cpp`
+uses shared-volume status for its icon choice; Astra uses native volume class.
+Earlier release `c7d13b47fb0a4138b1211ddc7c17c40ef6a3ac8b388fbe243133a6d80cd5a1d0`
+passed kernel match, system-image migration, stage 8, three active production
+services, writable NFSv4 mount, Desktop/Atlas network icons, Atlas root
+enumeration, 20 durable saves (`failed:false`, 44.97 ms median, 47.54 ms
+p95), matching server final hash, unmount, and source retirement. External
+unmount exposed an Atlas gap: its sidebar retained a stale network place and
+the open view could become blank. Atlas now refreshes places even when its
+current volume is lost and navigates the view to `/home`; targeted DE25
+installs verified both sidebar navigation and direct Desktop volume launch,
+followed by external unmount. The network icon disappeared from Desktop and
+Atlas, while Atlas remained usable at Home. Forty-five additional RFB frames
+and the selected-release workload report have matching board/archive hashes
+in the same Beast evidence directory. Haiku's
+`src/kits/tracker/PoseView.cpp` handles `B_DEVICE_UNMOUNTED` by leaving a
+view on the lost volume; Astra navigates to Home. Final coherent release
+`cc5725ae3634ddb747c0f25d114a27605ddea977635c4cb28bc1f1dd2ac0c3`
+passed package verification and normal preserved-state deployment. On its
+selected DE25 runtime, Astra reached stage 8 with runtime, audio host, and
+remote desktop active. Writable NFSv4 mounted at `/net0`; Desktop and Atlas
+showed the network server glyph beside distinct local-volume glyphs. Atlas
+opened the NFS root and enumerated 12 entries. External CLI unmount removed
+the Desktop icon and moved Atlas to Home with four entries and no stale NFS
+place; native network-source retirement removed the source from `volumes
+--all`. Fifteen final-release RFB frames match board SHA-256 in the Beast
+archive's `nfs-final-board.sha256`. Board capture files were removed after
+verification. Current console has stage 8 and no new panic; all three
+services remain active with 7.9 GiB free. The retained `panic-latest.log`
+is dated 2026-11-02 and predates this release.
+
 NFS selected-release gate, 2026-11-04: release
 `732448be669203cf03c816d680c0b495bc3c9e094efc34e721cd6e4a7c508c04`
 mounted Beast's disposable NFSv4 export writable at `/net0` on DE25.
