@@ -21,6 +21,18 @@ with pending I/O and bounded-resource gates remain. Haiku read-only references:
 `src/kits/tracker/FSUtils.cpp` uses rename on one volume and copy then remove
 across volumes; `src/kits/tracker/FSClipboard.cpp` centralizes move/copy policy.
 Astra reused its existing Filesystem Kit operation; no Haiku code was copied.
+Source commit `b9e42415` produced release
+`e1c81852e8f1953a74386dcce29cea7de9a9d6ca76ee060b6f213be78eead0c1`.
+Beast publisher and release verification passed. Its 360-second private DE25
+guard reached stage 8 without panic; exact release's `mv` moved a disposable
+RAM file to authenticated SMB with matching server bytes and no source, then
+cleaned the destination and unmounted. Guard restored the prior selected
+runtime with all three services active. Trial log, console and three frames
+were archived and checksum-checked under `mv-gate/`; board trial tree was
+removed. Standard deployment selected the new release, confirmed packaged
+kernel, migrated system image, booted to stage 8, and left Astra, audio host
+and remote desktop active with 7.9 GiB free. Build and deployment logs reside
+beside release at `/mnt/Documents/astra68/network-smb-edit-ui-20261104/`.
 
 SMB root enumeration correction, 2026-11-04: DE25 authenticated `/net0`
 initially returned only two of seven server entries. Host CIFS presented

@@ -289,7 +289,7 @@ read, write, fsync and unmount. The Unicode case exposed a missing CIFS
 `iocharset=utf8` option; corrected provider and Filesystem Kit passed a DE25
 hot-install test. Coherent release `7eecee711b408ce87725a6a71dce9b4ebe615e150112eaeb2596f3784b22c701`
 passed a 360-second private DE25 guard with authenticated mount, complete
-Terminal/Atlas listing and unmount, and is selected. On that release, a
+Terminal/Atlas listing and unmount, and was selected. On that release, a
 15-second TCP445 drop at creation of `save.tmp` delayed durable-save work;
 all 20 saves recovered, final 65,536-byte server file persisted, and no
 temporary file remained. A RAM-to-SMB copy preserved SHA-256. New shared `mv`
@@ -301,6 +301,12 @@ denial, and nonzero `df` capacity passed. Evidence is archived at
 In-flight write and `fsync` interruption, concurrent users and other fault
 cases below remain acceptance gates. Beast's provider regression covers the
 same permission, capacity and open-handle cases.
+Release `e1c81852e8f1953a74386dcce29cea7de9a9d6ca76ee060b6f213be78eead0c1`
+then passed a 360-second private DE25 guard, including exact-release RAM-to-SMB
+move, server byte check, cleanup and unmount. Deployment selected it, confirmed
+the packaged kernel, migrated system image, booted to stage 8, and left all
+three services active with 7.9 GiB free. Trial and deploy evidence is in the
+same Beast archive.
 
 Run disposable Samba and NFS servers on Beast before testing the DE25 against
 real shares. Cover Unicode/long names, case behavior, read-only/writable shares,
