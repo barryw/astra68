@@ -209,6 +209,22 @@ int main(int argc, char **argv)
     assert(result == 0);
     assert(!mounted.attached && mounted.root == -1 && mounted.loop == -1 &&
            mounted.backing == -1 && mounted.linux_mount_id == 0u);
+    record.id = 2u;
+    assert(astra_storage_linux_mount(&domain, &record, source,
+        0u, (uint64_t)info.st_size, &mounted) == 0);
+    root_loan = dup(mounted.root);
+    assert(root_loan >= 0);
+    assert(astra_storage_linux_detach(&mounted, 0, 1) == 0);
+    assert(!mounted.attached && mounted.root == -1 && mounted.linux_mount_id == 0u);
+    close(root_loan);
+    for (unsigned attempt = 0u;; ++attempt) {
+        result = astra_storage_linux_cleanup(&mounted);
+        if (result != EAGAIN)
+            break;
+        assert(attempt < 10000u);
+        (void)poll(NULL, 0u, 1);
+    }
+    assert(result == 0);
     close(source);
     assert(astra_storage_domain_close(&domain) == 0);
     puts("storage mount: unprivileged contents, read-only, busy/refusal restore, unmount/loop cleanup PASS");

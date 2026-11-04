@@ -64,7 +64,7 @@ int astra_storage_linux_bind(AstraStorageDomain *domain,
  * On refusal, reacquire only the same verified Linux mount. EAGAIN after real
  * unmount keeps loop/backing charges and requires a later cleanup retry. */
 int astra_storage_linux_unmount(AstraStorageMounted *mounted, int writable);
-int astra_storage_linux_detach(AstraStorageMounted *mounted, int writable);
+int astra_storage_linux_detach(AstraStorageMounted *mounted, int writable, int lost);
 int astra_storage_linux_cleanup(AstraStorageMounted *mounted);
 /* After worker exit, inspect the protected target rather than guessing whether
  * an interrupted mount/unmount syscall committed. */

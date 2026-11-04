@@ -22,7 +22,7 @@ def main(argv=None):
     parser.add_argument("provider", type=Path)
     parser.add_argument("--uid", type=int, required=True)
     parser.add_argument("--gid", type=int, required=True)
-    parser.add_argument("--scenario", choices=("full", "serial", "budgets", "memory"), default="full")
+    parser.add_argument("--scenario", choices=("full", "serial", "budgets", "memory", "provider_loss"), default="full")
     parser.add_argument("--budget-out", type=Path)
     args = parser.parse_args(argv)
     if args.scenario == "memory" and args.budget_out is None:
@@ -123,6 +123,8 @@ def main(argv=None):
                     gate.budgets(qtest, str(root), qmp_path)
                 elif args.scenario == "memory":
                     gate.measure_objects(qtest, str(root), qmp_path, str(args.budget_out))
+                elif args.scenario == "provider_loss":
+                    gate.provider_loss(qtest, str(root), qmp_path)
                 else:
                     gate.run(qtest, str(root / "work"), str(outside))
                     qtest.write32(gate.HACC_RESET, 1)

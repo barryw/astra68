@@ -6425,6 +6425,7 @@ static uint32_t astra_host_volume_control(Astra68State *s, uint32_t owner,
     AstraHostDescription *description = NULL;
     AstraHostNamespace *namespace = NULL;
     int output = -1, input = -1, error = EINVAL;
+    bool quiesced = false;
     if (requester == 0u || ldl_be_p(data + 60u) != 0u) return ASTRA_STATUS_INVALID;
     if (operation == ASTRA_VOLUME_UNMOUNT && request.target != 0u &&
         request.generation != 0u) {
@@ -6471,13 +6472,19 @@ static uint32_t astra_host_volume_control(Astra68State *s, uint32_t owner,
             if (request.flags || request.byte_limit || request.inode_limit) goto done;
             request.operation = ASTRA_STORAGE_CONTROL_QUIESCE;
             error = astra_host_storage_control(s, &request, -1, &reply, &output);
-            if (error != 0) goto done;
+            if (error == 0)
+                quiesced = true;
+            else if (error != EBUSY)
+                goto done;
             if (astra_host_mount_busy(s, request.target, request.generation)) {
-                request.operation = ASTRA_STORAGE_CONTROL_RESUME;
-                error = astra_host_storage_control(s, &request, -1, &reply, &output);
-                if (error == 0) error = EBUSY;
+                if (quiesced) {
+                    request.operation = ASTRA_STORAGE_CONTROL_RESUME;
+                    error = astra_host_storage_control(s, &request, -1, &reply, &output);
+                }
+                if (!quiesced || error == 0) error = EBUSY;
                 goto done;
             }
+            /* FAILED is already fenced. Provider retires its retained mount. */
             request.operation = ASTRA_STORAGE_CONTROL_UNMOUNT;
         } else if (operation == ASTRA_VOLUME_EJECT ||
                    operation == ASTRA_VOLUME_RELEASE_IMAGE_SOURCE ||
@@ -6490,7 +6497,7 @@ static uint32_t astra_host_volume_control(Astra68State *s, uint32_t owner,
         } else goto done;
     }
     error = astra_host_storage_control(s, &request, input, &reply, &output);
-    if (error != 0 && operation == ASTRA_VOLUME_UNMOUNT) {
+    if (error != 0 && operation == ASTRA_VOLUME_UNMOUNT && quiesced) {
         int first = error;
         request.operation = ASTRA_STORAGE_CONTROL_RESUME;
         (void)astra_host_storage_control(s, &request, -1, &reply, &output);
@@ -6795,6 +6802,19 @@ static bool astra_host_lost_file(Astra68State *s, uint32_t owner,
     return lost;
 }
 
+static bool astra_host_lost_share(Astra68State *s, uint32_t session_id,
+                                  uint64_t token)
+{
+    bool lost;
+
+    qemu_mutex_lock(&s->host.files_lock);
+    AstraHostShare *share = g_hash_table_lookup(s->host.shares, &token);
+    lost = share != NULL && share->session == session_id &&
+           share->description == NULL;
+    qemu_mutex_unlock(&s->host.files_lock);
+    return lost;
+}
+
 /* The parent directory and leaf of `path`: relative beneath the open
  * directory `base`, or absolute beneath the session root when base < 0. */
 static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
@@ -6971,10 +6991,19 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         status = ASTRA_STATUS_READ_ONLY;
         goto done;
     }
+    bool disconnected_share = operation == ASTRA_HOST_FS_SHARE &&
+        flags == 0u && path[0] == '\0' && path2[0] == '\0' &&
+        astra_host_lost_file(s, owner, handle, false);
+    bool disconnected_adopt = operation == ASTRA_HOST_FS_ADOPT &&
+        !(flags & ~ASTRA_HOST_FS_ADOPT_DISCARD) && handle == 0u &&
+        path[0] == '\0' && path2[0] == '\0' &&
+        astra_host_lost_share(s, session_id,
+            astra_host_get64(command, HOST_FIELD(offset_hi)));
     /* Paths resolve beneath the session root, or beneath an open
      * directory of this session; handles answer only in their session. */
     root = session->root;
-    if (operation != ASTRA_HOST_FS_CLOSE) {
+    if (operation != ASTRA_HOST_FS_CLOSE && !disconnected_share &&
+        !disconnected_adopt) {
         int admitted = astra_host_provider_root(s, session->mount,
                                                 session->mount_generation, NULL, NULL);
         if (admitted < 0) {
@@ -6997,14 +7026,23 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     }
     status = ASTRA_STATUS_INVALID;
     /* Fork may inherit a disconnected description; it never reopens a path. */
-    if (operation == ASTRA_HOST_FS_SHARE && flags == 0u && path[0] == '\0' &&
-        path2[0] == '\0' && astra_host_lost_file(s, owner, handle, false)) {
+    if (disconnected_share) {
         uint64_t token;
 
         status = astra_host_share_file(s, NULL, owner, handle, session, session_id,
                                        bound ? scope.files : 0u, &token);
         if (status == ASTRA_STATUS_OK)
             astra_host_put64(command, HOST_FIELD(value_hi), token);
+        goto done;
+    }
+    if (disconnected_adopt) {
+        status = astra_host_adopt_file(s, owner,
+            channel != NULL ? channel->process : 0u, session, session_id,
+            astra_host_get64(command, HOST_FIELD(offset_hi)),
+            flags & ASTRA_HOST_FS_ADOPT_DISCARD,
+            bound ? scope.files : 0u, &handle);
+        if (status == ASTRA_STATUS_OK && !(flags & ASTRA_HOST_FS_ADOPT_DISCARD))
+            stl_be_p(command + HOST_FIELD(handle), handle);
         goto done;
     }
     if (handle != 0u &&

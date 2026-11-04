@@ -323,7 +323,7 @@ int astra_storage_linux_cleanup(AstraStorageMounted *mounted)
     return 0;
 }
 
-int astra_storage_linux_detach(AstraStorageMounted *mounted, int writable)
+int astra_storage_linux_detach(AstraStorageMounted *mounted, int writable, int lost)
 {
     struct libmnt_context *ctx = NULL;
     int error;
@@ -347,22 +347,27 @@ int astra_storage_linux_detach(AstraStorageMounted *mounted, int writable)
         if (error != 0)
             return error;
     }
-    error = context(&ctx);
-    if (error != 0)
-        return error;
-    if (mnt_context_set_target(ctx, mounted->target) != 0) {
-        mnt_free_context(ctx);
-        return EINVAL;
+    if (!lost) {
+        error = context(&ctx);
+        if (error != 0)
+            return error;
+        if (mnt_context_set_target(ctx, mounted->target) != 0) {
+            mnt_free_context(ctx);
+            return EINVAL;
+        }
     }
     if (mounted->root >= 0) {
         close(mounted->root);
         mounted->root = -1;
     }
-    status = mnt_context_umount(ctx);
-    error = status == 0 ? 0 : mnt_context_get_syscall_errno(ctx);
+    /* Once the catalog declares source loss, a network root may return
+     * ESTALE even to libmount's lookup; detach the owned private mount. */
+    status = lost ? umount2(mounted->target, MNT_DETACH) : mnt_context_umount(ctx);
+    error = status == 0 ? 0 : lost ? errno : mnt_context_get_syscall_errno(ctx);
     if (status != 0 && error == 0)
         error = EIO;
-    mnt_free_context(ctx);
+    if (ctx != NULL)
+        mnt_free_context(ctx);
     if (error != 0) {
         int restored = same_root(mounted);
         return restored == 0 ? error : restored;
@@ -376,7 +381,7 @@ int astra_storage_linux_unmount(AstraStorageMounted *mounted, int writable)
 {
     if (mounted == NULL || mounted->id == 0u)
         return EINVAL;
-    int error = mounted->attached ? astra_storage_linux_detach(mounted, writable) : 0;
+    int error = mounted->attached ? astra_storage_linux_detach(mounted, writable, 0) : 0;
     return error == 0 ? astra_storage_linux_cleanup(mounted) : error;
 }
 

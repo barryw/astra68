@@ -70,7 +70,9 @@ static void child(AstraStorageDomain domain, AstraStorageRecord record,
             &mounted, originals[3] < 0 ? -1 : 6, auth);
     else
         error = astra_storage_linux_detach(&mounted, (record.flags & ASTRA_VOLUME_READ_ONLY) == 0u &&
-            record.state != ASTRA_VOLUME_LOST && record.error != ENODEV);
+            record.state != ASTRA_VOLUME_LOST && record.error != ENODEV,
+            record.state == ASTRA_VOLUME_LOST &&
+            record.origin == ASTRA_VOLUME_ORIGIN_NETWORK);
     AstraStorageWorkReply reply = {.id = record.id, .generation = record.generation,
         .linux_mount_id = mounted.linux_mount_id, .operation = operation,
         .error = error, .attached = (uint32_t)mounted.attached,

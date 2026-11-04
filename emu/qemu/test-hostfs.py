@@ -49,7 +49,7 @@ SUBMISSION = 0x0200F000
 CHANNEL_CONFIG = 0x0200F040
 CHANNEL_APERTURE = 0xFFD00000
 COMMAND_SIZE = 512
-COMMAND_VERSION = 6
+COMMAND_VERSION = 7
 SUBMISSION_SIZE = 64
 CHANNEL_HEADER_SIZE = 64
 SESSION_FIELD = 60
@@ -1875,7 +1875,7 @@ def provider_loss(qtest, root, qmp_path):
         qtest.write32(HACC_RESET, 1)
         generation = qtest.read32(HACC_GENERATION)
         result, epoch = claim(qtest, generation, epoch=True)
-        assert result == STATUS_OK and epoch != 0
+        assert result == STATUS_OK and epoch != 0, (result, epoch)
         session = open_session(qtest, generation)
         assert configure_scope(qtest, generation, CONFIG_OPEN, 7, 21,
             session, SCOPE_BOUND, PROVIDER) == 0

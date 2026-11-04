@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 apk add --no-cache samba >/dev/null
-adduser -D -H astratest
+id astratest >/dev/null 2>&1 || adduser -D -H astratest
 printf 'p,a=s\np,a=s\n' | smbpasswd -a -s astratest >/dev/null
 chown astratest:astratest /srv/astra
 printf 'unicode' > '/srv/astra/0Café.txt'
