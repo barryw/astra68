@@ -1,15 +1,39 @@
 # Network volumes after the local filesystem cutover
 
 Status: requirements and source-backed feasibility assessment, updated
-2026-11-04. Selected DE25 SMB release `acccff5b...` passed authenticated
+2026-11-04. Prior DE25 SMB release `acccff5b...` passed authenticated
 read/write/durable-save, guest read-only mount/read/Atlas enumeration,
 write refusal, exact unmount and source retirement, source-loss recovery,
 bounded shutdown, and 30/95/240-second TCP445 fault gates. Guest evidence:
 `/mnt/Documents/astra68/network-smb-edit-ui-20261104/guest-final/` on Beast.
-External SMB server interoperability remains unqualified.
+An independent Linux `ksmbd` SMB3.1.1 server also passed selected-release
+DE25 authentication, read, Unicode Terminal/Atlas enumeration, 20 durable
+saves with matching 65,536-byte server SHA-256, unmount, and source retirement.
+The board report and 12 checksum-matched RFB frames are archived under
+`/mnt/Documents/astra68/network-smb-edit-ui-20261104/ksmbd-interop/` on Beast.
+Selected DE25 release
+`732448be669203cf03c816d680c0b495bc3c9e094efc34e721cd6e4a7c508c04`
+passed a 360-second private stage-8 trial and a selected-runtime stage-8 gate
+with authenticated SMB3.1.1 read, 20 durable saves, matching server final
+SHA-256, unmount, and source retirement; the private trial also passed guest
+read-only mount/read. Evidence is under `smb3-release-trial/` and
+`smb3-production/` beside the archives above. No panic or residual CIFS
+mount; runtime, audio, and remote desktop services remain active. Short-run
+selected-save p95 was 241,915,280 ns, so performance still needs qualification.
+The same selected release also passed an SMB3.0-only server with authenticated
+read, 20 durable saves, matching server SHA-256, and source retirement.
+Seven checksum-matched capture/report files are under `smb30-production/`.
+Provider now requests `vers=3` (SMB3.0 or newer) for authenticated and guest
+mounts. A DE25 SMB3.0-only Samba gate confirmed the old exact 3.1.1 request
+failed, then the updated provider negotiated `Dialect 0x300`, passed
+authenticated read and 20 durable saves, guest read-only access, native
+unmount and source retirement. Eighteen board captures and the report are
+checksum-matched in
+`/mnt/Documents/astra68/network-smb-edit-ui-20261104/smb30-compat/` on Beast.
+macOS, Windows, and NAS servers remain untested.
 NFSv4 passed a DE25 private trial for mount, guest read/write,
 Desktop and Atlas, exact open-file unmount refusal, and source retirement.
-Network mounting is not yet qualified. Private DE25 trials kept `/dh0`
+NFS mounting is not yet qualified. Private DE25 trials kept `/dh0`
 responsive during stalled NFS read, directory and destination-copy operations;
 read and directory traversal recovered, and a copied file committed after
 traffic returned. NFS file and nonempty folder copies persisted with matching

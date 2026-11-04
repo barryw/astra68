@@ -2,6 +2,72 @@
 
 Status: active continuation map, 2026-11-04
 
+SMB3 release, 2026-11-04: coherent release
+`732448be669203cf03c816d680c0b495bc3c9e094efc34e721cd6e4a7c508c04`
+passed a 360-second DE25 private trial from a disposable image with stage 8,
+no panic, authenticated SMB3.1.1 read and 20 durable saves, guest read-only
+mount/read, exact unmount, and source retirement. Private save median was
+34,681,600 ns; server final SHA-256 was
+`729512428e9663885f746f2b8b2aaafd55f8324b84600b79ff1cf4ea73b385ba`.
+Fifteen raw captures/report/console files match Beast archive at
+`/mnt/Documents/astra68/network-smb-edit-ui-20261104/smb3-release-trial/`.
+Deployment selected the same release and confirmed packaged kernel identity.
+Selected runtime reached stage 8 with runtime, audio, and remote desktop
+services active. Its authenticated SMB3.1.1 gate read the proof file, completed
+20 durable saves with the same server SHA-256, then unmounted and retired its
+source. Ten captures/report files match
+`/mnt/Documents/astra68/network-smb-edit-ui-20261104/smb3-production/`.
+Board trial/capture/report files and development shadow were removed; no CIFS
+mount remains, all three services are active, and 7.9 GiB is free. Selected
+save median was 34,780,400 ns; p95 reached 241,915,280 ns in this short run,
+so SMB performance remains unqualified. Production user data was preserved.
+The same selected release then negotiated `Dialect 0x300` against an SMB3.0-only
+server, read its proof file, and completed 20 durable saves with matching
+server SHA-256 and no temporary file (`median_ns=33997040`,
+`p95_ns=37845120`). Unmount/source retirement removed the CIFS mount and
+desktop icon. Seven capture/report files match Beast archive at
+`/mnt/Documents/astra68/network-smb-edit-ui-20261104/smb30-production/`.
+The standard Samba fixture was restored and board captures/report removed.
+
+SMB dialect interoperability, 2026-11-04: the storage provider now requests
+`vers=3` for authenticated and guest mounts. Linux CIFS interprets this as
+SMB3.0 or newer; the old `vers=3.1.1` required that exact dialect. A
+disposable Samba server restricted to SMB3.0 rejected the selected release's
+old provider (`status 13`), while its two-line provider update mounted
+authenticated `/net0` writable and guest `/net0` read-only on DE25. Kernel
+CIFS DebugData reported negotiated `Dialect 0x300` for both. Terminal read
+the proof files; authenticated `fsbench` completed 20 durable saves without
+failure (`median_ns=33179120`, `p95_ns=37181600`, `max_inflight=4`). Server
+held the expected 65,536-byte final file with SHA-256
+`729512428e9663885f746f2b8b2aaafd55f8324b84600b79ff1cf4ea73b385ba`
+and no temporary save. Both volumes unmounted and both network sources
+retired; desktop icons vanished. Eighteen board captures and report were
+checksum-matched to the Beast archive at
+`/mnt/Documents/astra68/network-smb-edit-ui-20261104/smb30-compat/`; board
+captures and report were removed. Original Samba fixture was restored.
+Haiku reference: `src/add-ons/kernel/file_systems/netfs/client/ServerConnection.cpp`
+and `ShareVolume.cpp` keep connection and volume lifecycle separate;
+Astra retains that split. Dialect meaning follows Linux `mount.cifs(8)`.
+
+SMB independent-server gate, 2026-11-04: selected DE25 release
+`acccff5bfeef37eb8ed730a1046f9adbf082e8127db14c6b1d44c987a7671a57`
+mounted a disposable Linux `ksmbd` SMB3.1.1 export as writable `/net0`.
+Terminal read its proof file and listed `Café.txt`; Atlas opened the volume
+and displayed the same Unicode name. `fsbench` completed 20 durable saves
+without failure (`median_ns=35716400`, `p95_ns=44532960`,
+`max_inflight=5`). The server held a 65,536-byte final `save` with SHA-256
+`729512428e9663885f746f2b8b2aaafd55f8324b84600b79ff1cf4ea73b385ba`
+and no `save.tmp`. Provider mount options included `rw`, `vers=3.1.1`,
+`sec=ntlmssp`, `soft`, and `cache=none`. Unmount removed the desktop icon and
+CIFS mount; the native source was retired. Beast's independent SMB client
+authenticated; anonymous access to the test share was refused. Twelve raw
+RFB frames, the board report,
+and final server file are checksum-verified under
+`/mnt/Documents/astra68/network-smb-edit-ui-20261104/ksmbd-interop/` on Beast.
+The test server and module were stopped, the Samba fixture restored, board
+captures and report removed, and all three production services remain active
+with 7.9 GiB free. macOS, Windows, and NAS servers remain untested.
+
 SMB guest release gate, 2026-11-04: selected DE25 release
 `acccff5bfeef37eb8ed730a1046f9adbf082e8127db14c6b1d44c987a7671a57`
 mounted a disposable Samba SMB3.1.1 guest export as read-only `/net0`.
@@ -16,8 +82,7 @@ unknown-user access to the authenticated export also returned access denied.
 Fourteen raw RFB
 captures were checksum-matched between board and Beast under
 `/mnt/Documents/astra68/network-smb-edit-ui-20261104/guest-final/`; board
-captures were removed. No code or release change was needed. External SMB
-server interoperability remains unqualified.
+captures were removed. No code or release change was needed.
 
 SMB final fault gates, 2026-11-04: On selected release
 `58858b645e4195b86c0978196371f386c195ea4ae120bb13ea8be6e3fa9d4c5f`,
