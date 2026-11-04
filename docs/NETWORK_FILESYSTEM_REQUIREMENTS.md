@@ -24,8 +24,8 @@ Exact in-flight `fsync` timing still needs an instrumented gate. Evidence is on 
 `/mnt/Documents/astra68/network-nfs-lsof-write-sync-20261103/`. All five
 600-second guards passed, production services recovered, and trial state was
 removed.
-SMB fault/recovery, saved-mapping lifecycle, and production runtime release
-gates remain open. Saved Settings creation and auto-connect passed a private
+Broader SMB fault/recovery and interoperability gates remain open. Saved
+Settings creation and auto-connect passed a private
 DE25 trial after correcting Beast's board-only TCP445 firewall rule. Manual
 authenticated mount, write/read with matching server bytes, unmount, Desktop
 label, and Atlas enumeration passed in the same 600-second no-panic guard.
@@ -36,6 +36,10 @@ Release `7326966f...` corrected Terminal.app's `NETWORK_ADMIN` bundle grant;
 `mount --saved 1`, file read, `unmount --saved 1`, and remount passed a 600-second
 DE25 guard. Evidence: `/mnt/Documents/astra68/network-smb-saved-final-ui-de25-20261104/`
 and `/mnt/Documents/astra68/network-smb-saved-cli-de25-20261104/`. A
+`7326966f...` is now selected on DE25 after full deployment with system-image
+migration, matching-kernel confirmation, boot stage 8, zero Astra restarts,
+active production services, and 8.0 GiB free. Active mapping edits and saved
+definition CLI parity remain open. A
 credentialed SMB candidate passed a Beast provider test: bad password refused;
 good account wrote, synced, and read back the same bytes over SMB3.1.1 with a
 password containing `,` and `=`.
@@ -51,7 +55,7 @@ informed separation of share authentication from volume publication.
 The native `mount --smb-user` command now prompts through libc's reusable
 terminal secret reader and passes credentials through Volume authority without
 placing the password in argv or environment; MC68040 link and prompt tests
-pass. Saved mapping management remains separate work.
+pass. Saved mapping definitions, Settings, and mount lifecycle are covered above.
 An SMB TCP445 outage trial on DE25 confirmed local `/dh0` access and `lsof`
 continued while a share read stalled; the read resumed after traffic returned.
 The trial exposed a delayed ordinary Unmount busy response. Shared Volume

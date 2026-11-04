@@ -30,8 +30,14 @@ includes the manifest correction. On DE25, `mount --saved 1` mounted `/net0`,
 and `mount --saved 1` remounted at the stable path. Its 600-second guard passed
 without panic and restored the selected release. Evidence and verified hashes:
 `/mnt/Documents/astra68/network-smb-saved-cli-de25-20261104/` on Beast.
+Release `7326966ffca352bf4ff7e0af4f888199baebae73a772145a72fd7b433423a9fa`
+is now selected on DE25 after the guarded trial. Deployment preserved the
+existing system image through migration, verified the matching kernel,
+reached boot stage 8 with no panic or Astra restart, and left Astra, audio
+host, and remote desktop active. Previous release remains the rollback
+selector; retention pruning left two releases and 8.0 GiB free.
 Broader SMB interoperability/fault cases, active-mapping edit semantics,
-saved-definition CLI parity, and production release remain open. Beast's
+and saved-definition CLI parity remain open. Beast's
 test-only UFW TCP445 rule permits only DE25 192.168.1.52.
 
 Saved network mount lifecycle, 2026-11-04: Network Kit ABI 1.6 adds typed
