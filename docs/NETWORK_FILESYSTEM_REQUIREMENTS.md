@@ -322,6 +322,30 @@ board checksums in the same archive. Standard deployment selected it,
 confirmed the packaged kernel and stage 8, and left Astra, audio host and
 remote desktop active with 7.9 GiB free after disposable trial cleanup.
 
+Further DE25 gates on that selected release passed two simultaneous
+authenticated durable-save clients, exact first-write and first-`fsync`
+TCP445 outages, different-export identity refusal while an old descriptor
+remained open, and prompt DNS failure without a desktop icon. In-flight
+write and sync outages recovered all 20 saves, left the expected 65,536-byte
+server file and no temporary file. Provider shutdown with a write pending
+then exposed explicit CIFS `hard`: its uninterruptible Linux writeback
+prevented service stop. After syncing local SD state, an emergency reboot
+restored stage 8 and services. Updated authenticated and guest mounts use
+`soft,cache=none`; Beast provider tests and a DE25 hot install pass. The
+board reported those exact CIFS options. With TCP445 blocked at `fsync`,
+service stopped in 2 seconds, provider and mount disappeared, and no final
+save was published. After restart, 30-second write and sync outages both
+recovered 20 saves with matching server SHA-256 and no temporary file.
+A 95-second first-write outage also recovered 20 saves with matching server
+bytes; a second Terminal completed `/dh0` listing during the outage. Clean
+unmount left no CIFS mount and the provider's normal two processes. Evidence
+resides in `source-loss/` under the Beast archive above. This provider change
+still requires sustained-outage error return and coherent release
+qualification. Linux CIFS `soft` returns I/O errors when a server fails;
+`cache=none` avoids normal cached file data
+([mount.cifs](https://man7.org/linux/man-pages/man8/mount.cifs.8.html),
+[Linux CIFS usage](https://docs.kernel.org/admin-guide/cifs/usage.html)).
+
 Run disposable Samba and NFS servers on Beast before testing the DE25 against
 real shares. Cover Unicode/long names, case behavior, read-only/writable shares,
 authentication refusal, rename/unlink of open files, server-side permissions,

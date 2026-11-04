@@ -2,6 +2,39 @@
 
 Status: active continuation map, 2026-11-04
 
+SMB final fault gates, 2026-11-04: On selected release
+`58858b645e4195b86c0978196371f386c195ea4ae120bb13ea8be6e3fa9d4c5f`,
+two concurrent authenticated durable-save clients completed 20 operations
+each with matching server bytes. Deterministic TCP445 loss immediately before
+the first write and immediately before `fsync` each recovered 20 saves with
+the expected 65,536-byte server file, no temporary file, and unrelated `/dh0`
+access responsive. Changing a saved mapping from `/astra-auth` to
+`/astra-other` while an original-source descriptor remained open refused
+Mount and named the exact unmount holder; after close, the same `/net0` path
+read only the new export's seed. An unresolvable server name failed promptly
+without publishing an icon. Reports and RFB frames are archived on Beast at
+`/mnt/Documents/astra68/network-smb-edit-ui-20261104/source-loss/`.
+
+Pending-I/O shutdown exposed a host CIFS policy defect: explicit `hard`
+left Linux writeback in uninterruptible sleep, so `astra.service` could not
+stop. The board required an emergency reboot after local SD state sync; it
+returned to stage 8 with all services active. SMB mounts now request Linux
+CIFS `soft,cache=none` for both authenticated and guest shares. Beast mount
+and provider tests pass. On DE25 with hot-loaded provider, `/net0` reported
+those exact options. With TCP445 blocked at first `fsync`, `astra.service`
+stopped in 2 seconds, provider exited without a leaked mount, and only an
+unpublished `save.tmp` remained; services restarted to stage 8. With the
+same updated provider, 30-second write and sync outages each recovered all
+20 durable saves with final server SHA-256
+`729512428e9663885f746f2b8b2aaafd55f8324b84600b79ff1cf4ea73b385ba`
+and no temporary file. Reports are checksum-verified in the Beast archive.
+A 95-second first-write outage also recovered all 20 saves with matching
+server bytes; a second Terminal completed `/dh0` listing while SMB waited.
+After unmount, the provider had its normal two processes and no CIFS mount.
+Sustained-outage error return, coherent release guard/deployment, and board
+cleanup remain before this provider change is selected. Performance
+qualification remains separate.
+
 SMB source-loss recovery, 2026-11-04: the QEMU HostFS transport now checks
 known lost handles and source identity before provider-root preflight. Local
 `/dh0` access stays responsive when CIFS disconnects, and duplicating an

@@ -2,7 +2,8 @@
  * fsbench -- the filesystem baseline (docs/FILESYSTEM_PRODUCTION_PRD.md,
  * "Acceptance and performance gates").
  *
- *   fsbench --label NAME [--dir DIR] [--cold-handshake] [--only W]...
+ *   fsbench --label NAME [--dir DIR] [--cold-handshake]
+ *           [--fault-handshake write|sync] [--only W]...
  *
  * Runs each workload over DIR (default /work/fsbench-NAME) and writes one
  * JSON object to /work/.astra/fsbench-NAME.json, then prints
@@ -18,6 +19,9 @@
  * understands the shared marker (drops everything) still unblocks this one
  * correctly -- it just contaminates the measurement again, which is why it
  * is a separate marker rather than a separate protocol.
+ * --fault-handshake pauses first durable save before its first write or
+ * fsync at /work/.astra/fsbench-NAME.write or .sync. Host fault driver
+ * removes marker after arranging outage; 60-second timeout applies.
  *
  * Times are CLOCK_MONOTONIC, which Astra derives from QEMU's guest timebase:
  * 12.5 MHz, so MC68040 cycles = ns / 80. "host_commands" and "max_inflight"
@@ -92,6 +96,7 @@ static uint8_t chunk[CHUNK];
 static char directory[128];
 static char label[48];
 static int handshake;
+static int fault_point;
 static int only[W_COUNT];
 static int any_only;
 
@@ -186,20 +191,20 @@ static uint64_t percentile(Result *result, uint32_t percent)
 /* `suffix` distinguishes which marker a waiting host driver sees, so it can
  * tell the shared cold point (drop everything) from held-miss's own (drop
  * only big2) without guessing from call order. */
-static int cold_point_named(const char *suffix)
+static int handshake_point(const char *suffix, const char *kind, int enabled)
 {
     char path[160];
     int fd;
 
-    if (!handshake)
+    if (!enabled)
         return 0;
-    (void)snprintf(path, sizeof(path), "/work/.astra/fsbench-%s%s.cold",
-                   label, suffix);
+    (void)snprintf(path, sizeof(path), "/work/.astra/fsbench-%s%s.%s",
+                   label, suffix, kind);
     fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0)
         return -1;
     (void)close(fd);
-    printf("fsbench: cold %s%s\n", label, suffix);
+    printf("fsbench: %s %s%s\n", kind, label, suffix);
     fflush(stdout);
     for (uint32_t waited = 0u; waited < 600u; ++waited) {
         struct stat st;
@@ -214,12 +219,12 @@ static int cold_point_named(const char *suffix)
 
 static int cold_point(void)
 {
-    return cold_point_named("");
+    return handshake_point("", "cold", handshake);
 }
 
 static int held_miss_cold_point(void)
 {
-    return cold_point_named(".heldmiss");
+    return handshake_point(".heldmiss", "cold", handshake);
 }
 
 static int write_whole(const char *path, uint32_t bytes)
@@ -417,8 +422,12 @@ static void run_durable(Result *result)
         int ok = fd >= 0;
         int parent;
 
+        if (ok && op == 0u && fault_point == 1)
+            ok = handshake_point("", "write", 1) == 0;
         for (uint32_t done = 0u; ok && done < SAVE_BYTES; done += CHUNK)
             ok = write(fd, chunk, CHUNK) == (ssize_t)CHUNK;
+        if (ok && op == 0u && fault_point == 2)
+            ok = handshake_point("", "sync", 1) == 0;
         ok = ok && fsync(fd) == 0;
         if (fd >= 0)
             ok = close(fd) == 0 && ok;
@@ -645,6 +654,13 @@ int main(int argc, char **argv)
                            argv[++index]);
         else if (strcmp(argv[index], "--cold-handshake") == 0)
             handshake = 1;
+        else if (strcmp(argv[index], "--fault-handshake") == 0 &&
+                 index + 1 < argc) {
+            const char *point = argv[++index];
+            if (strcmp(point, "write") == 0) fault_point = 1;
+            else if (strcmp(point, "sync") == 0) fault_point = 2;
+            else return 2;
+        }
         else if (strcmp(argv[index], "--only") == 0 && index + 1 < argc) {
             const char *name = argv[++index];
             uint32_t at = 0u;
@@ -659,7 +675,8 @@ int main(int argc, char **argv)
             any_only = 1;
         } else {
             fprintf(stderr, "usage: fsbench --label NAME [--dir DIR] "
-                    "[--cold-handshake] [--only WORKLOAD]...\n");
+                    "[--cold-handshake] [--fault-handshake write|sync] "
+                    "[--only WORKLOAD]...\n");
             return 2;
         }
     }
