@@ -41,6 +41,15 @@ The native `mount --smb-user` command now prompts through libc's reusable
 terminal secret reader and passes credentials through Volume authority without
 placing the password in argv or environment; MC68040 link and prompt tests
 pass. Saved mapping management remains separate work.
+An SMB TCP445 outage trial on DE25 confirmed local `/dh0` access and `lsof`
+continued while a share read stalled; the read resumed after traffic returned.
+The trial exposed a delayed ordinary Unmount busy response. Shared Volume
+removal now checks known holders before requesting provider unmount. Its host
+test and a second 300-second DE25 private trial pass: Unmount returned an
+active PID 23 operation while TCP445 was dropped, before network recovery.
+Both guards restored production. Evidence is on Beast at
+`/mnt/Documents/astra68/network-smb-fault-de25-20261103/` and
+`/mnt/Documents/astra68/network-smb-unmount-fix-de25-20261104/`.
 
 ## AstraZ story workflow
 

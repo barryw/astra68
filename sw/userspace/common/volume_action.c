@@ -27,6 +27,21 @@ AstraResult astra_volume_action_begin(AstraHandle administrator,
         record->state != ASTRA_VOLUME_MOUNTED ||
         (record->flags & (ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_TEMPORARY)) != 0u)
         return ASTRA_ERROR_INVALID_HANDLE;
+    if (!eject) {
+        if (inspector == ASTRA_INVALID_HANDLE)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        AstraVolumeUsageSnapshot usage = ASTRA_VOLUME_USAGE_SNAPSHOT_INIT;
+        AstraResult checked = astra_volume_usage_snapshot_open(inspector,
+            mount, &usage);
+        if (checked == ASTRA_OK && usage.count != 0u)
+            checked = ASTRA_ERROR_BUSY;
+        astra_volume_usage_snapshot_close(&usage);
+        if (checked != ASTRA_OK) {
+            if (checked == ASTRA_ERROR_BUSY)
+                action->failure_mount = *mount;
+            return checked;
+        }
+    }
     const AstraVolumeRecord *source = NULL, *medium = NULL;
     if (eject) {
         source = astra_volume_snapshot_ancestor(catalog, mount,

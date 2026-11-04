@@ -17,8 +17,8 @@ typedef struct AstraVolumeAction {
     uint32_t finished;
 } AstraVolumeAction;
 
-/* Admission owns no data grant. Eject checks all mounted partitions for known
- * holders before starting. BUSY callers inspect failure_mount when present. */
+/* Admission owns no data grant. Unmount checks its mount for known holders;
+ * eject checks all mounted partitions. BUSY callers inspect failure_mount. */
 AstraResult astra_volume_action_begin(AstraHandle administrator,
     AstraHandle inspector,
     const AstraVolumeSnapshot *catalog, const AstraVolumeReference *mount,

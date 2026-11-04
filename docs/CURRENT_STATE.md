@@ -120,6 +120,24 @@ disables echo, drains oversized input, and wipes failure buffers. Beast POSIX
 tests, libc export contract, filesystem library export, and MC68040 `mount`
 link passed; the DE25 guest CLI mount succeeded. Saved mapping CLI parity is
 still open.
+An SMB TCP445 outage trial on DE25 kept `/dh0` responsive while `cat` waited
+on `/net0`; `lsof /net0` returned the active operation, and the read recovered
+after traffic returned. Ordinary Unmount remained pending during the outage
+even though the known holder could be inspected. Shared Volume removal now
+preflights the usage snapshot for ordinary unmount as it already did for
+optical eject; its host behavior test passes. A second private DE25 trial of
+release `84184cb08a97c852cd2d9b63508ca2cadb2c318cfb753a91e322530288a705c7`
+mounted the authenticated share, then dropped TCP445 while `cat` was active.
+Unmount returned PID 23 and the active operation before traffic resumed;
+the guest Terminal remained responsive. The 300-second guard passed without a
+panic and restored the selected production runtime. The first 600-second guard
+also passed. Both trials left 7.5 GiB free after cleanup. Evidence and SHA256
+manifests:
+`/mnt/Documents/astra68/network-smb-fault-de25-20261103/` on Beast.
+`/mnt/Documents/astra68/network-smb-unmount-fix-de25-20261104/` on Beast.
+Haiku's read-only `src/system/kernel/fs/vfs.cpp` checks busy partitions and
+vnodes before unmount; Astra adapts that early check to the native retained
+usage snapshot, with the provider still enforcing final admission.
 Production image remains unchanged.
 Haiku reference: read-only
 `src/add-ons/kernel/file_systems/nfs4/kernel_interface.cpp` publishes root

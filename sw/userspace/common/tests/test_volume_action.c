@@ -106,6 +106,12 @@ int main(void)
     assert(astra_volume_action_begin(7u, 8u, &catalog, &mount, 1, &action) ==
         ASTRA_ERROR_INVALID_ARGUMENT);
     assert(action.removal.mount.id == 0u && controls == 2u);
+    held_mount = 10u;
+    assert(astra_volume_action_begin(7u, 8u, &catalog, &mount, 0, &action) ==
+        ASTRA_ERROR_BUSY);
+    assert(action.failure_mount.id == 10u && controls == 2u);
+    held_mount = 0u;
+    action = (AstraVolumeAction){0};
     admission = ASTRA_ERROR_BUSY;
     assert(astra_volume_action_begin(7u, 8u, &catalog, &mount, 0, &action) ==
         ASTRA_ERROR_BUSY);
