@@ -292,12 +292,15 @@ passed a 360-second private DE25 guard with authenticated mount, complete
 Terminal/Atlas listing and unmount, and is selected. On that release, a
 15-second TCP445 drop at creation of `save.tmp` delayed durable-save work;
 all 20 saves recovered, final 65,536-byte server file persisted, and no
-temporary file remained. A RAM-to-SMB copy preserved SHA-256. In-flight write
-and `fsync` interruption, cross-volume move, permissions, capacity, concurrent
-users and other fault cases below are still acceptance gates.
-Beast's provider regression now also covers server-enforced access denial,
-capacity and rename/unlink of an open file; equivalent native DE25 operations
-remain to be tested.
+temporary file remained. A RAM-to-SMB copy preserved SHA-256. New shared `mv`
+CLI passed a focused DE25 install and moved a disposable RAM file to SMB with
+matching server bytes and no RAM source. Native same-volume SMB rename,
+rename and unlink with an open readable descriptor, server-enforced access
+denial, and nonzero `df` capacity passed. Evidence is archived at
+`/mnt/Documents/astra68/network-smb-edit-ui-20261104/mv-gate/` on Beast.
+In-flight write and `fsync` interruption, concurrent users and other fault
+cases below remain acceptance gates. Beast's provider regression covers the
+same permission, capacity and open-handle cases.
 
 Run disposable Samba and NFS servers on Beast before testing the DE25 against
 real shares. Cover Unicode/long names, case behavior, read-only/writable shares,

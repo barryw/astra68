@@ -71,7 +71,7 @@ TERMINFO_LIBRARY := $(ASTRA_TERMINFO_LIBRARY)
 # port builds them (it owns SDL's headers and build rules); this directory
 # strips them and checks their libraries like every other command.
 SDL_COMMANDS := loopwave
-COMMANDS := status events log devices volumes disk mount unmount shares lsof df which open service shutdown restart ls ps metrics cat cp mkdir rm apkg \
+COMMANDS := status events log devices volumes disk mount unmount shares lsof df which open service shutdown restart ls ps metrics cat cp mv mkdir rm apkg \
 	    nice renice \
 	    heapbench fsstress fsbench date echo ntp ping lua vim zsh $(SDL_COMMANDS)
 TEST_COMMANDS := posix hello cxx fpucheck logburst fssem fsprobe
@@ -115,6 +115,9 @@ ps_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 metrics_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 cat_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 cp_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+cp_EXTRA_SOURCES := file_target.c
+mv_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+mv_EXTRA_SOURCES := file_target.c
 mkdir_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 nice_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 renice_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
@@ -578,10 +581,14 @@ build/host/test_metrics: tests/test_metrics.c metrics/metrics.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) $< -o $@
 
+build/host/test_file_target: file_target.c tests/test_file_target.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) $^ -o $@
+
 test: build/host/test_events_support build/host/test_log_filter \
 		build/host/test_date_support \
 		build/host/test_ps_support build/host/test_ps build/host/test_open \
-		build/host/test_metrics
+		build/host/test_metrics build/host/test_file_target
 	./build/host/test_events_support
 	./build/host/test_log_filter
 	./build/host/test_date_support
@@ -589,6 +596,7 @@ test: build/host/test_events_support build/host/test_log_filter \
 	./build/host/test_ps
 	./build/host/test_open
 	./build/host/test_metrics
+	./build/host/test_file_target
 
 sanitize: test
 

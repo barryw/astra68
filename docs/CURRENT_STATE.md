@@ -2,6 +2,26 @@
 
 Status: active continuation map, 2026-11-04
 
+SMB native move and interoperability gate, 2026-11-04: a shared CLI target
+resolver now serves `cp` and new `mv`; `mv` calls Filesystem Kit's existing
+same-volume rename or cross-volume copy-and-remove operation and reports
+destination publication if source cleanup fails. Beast command tests and both
+MC68040 binaries pass. Focused DE25 install of only `cp` and `mv` passed. On
+authenticated writable `/net0`, Terminal moved a disposable file from `/ram0`
+to SMB: RAM source disappeared, Astra read the destination, and Beast's Samba
+server held matching 30 bytes. Same-volume SMB rename passed. With an open
+native descriptor, a second rename and unlink passed; reading that descriptor
+after unlink returned the original bytes. A server mode-000 file returned
+`Permission denied`; `df` reported `/net0` capacity; unmount removed the
+desktop icon. Four RFB captures and raw frames were archived and checksum
+verified at `/mnt/Documents/astra68/network-smb-edit-ui-20261104/mv-gate/`;
+board captures were removed. Exact in-flight write/`fsync`, concurrent users,
+source loss, server restart, different-export reconnect, DNS failure, shutdown
+with pending I/O and bounded-resource gates remain. Haiku read-only references:
+`src/kits/tracker/FSUtils.cpp` uses rename on one volume and copy then remove
+across volumes; `src/kits/tracker/FSClipboard.cpp` centralizes move/copy policy.
+Astra reused its existing Filesystem Kit operation; no Haiku code was copied.
+
 SMB root enumeration correction, 2026-11-04: DE25 authenticated `/net0`
 initially returned only two of seven server entries. Host CIFS presented
 `0Café.txt` with a Latin-1 `é`; QEMU correctly rejected the non-UTF-8 name,
