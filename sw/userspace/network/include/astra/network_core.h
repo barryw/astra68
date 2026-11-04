@@ -15,6 +15,13 @@ int astra_network_ethernet_profile_encode(
     char text[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX]);
 int astra_network_ethernet_profile_decode(
     const char *text, AstraNetworkEthernetIPv4 *profile);
+int astra_network_mapping_valid(const AstraNetworkMapping *mapping,
+                                int allow_new, int allow_status);
+#define ASTRA_NETWORK_MAPPING_TEXT_MAX (6u + sizeof(AstraNetworkMapping) * 2u)
+int astra_network_mapping_encode(const AstraNetworkMapping *mapping,
+    char text[ASTRA_NETWORK_MAPPING_TEXT_MAX]);
+int astra_network_mapping_decode(const char *text,
+                                 AstraNetworkMapping *mapping);
 AstraNetworkStatus astra_network_status_from_syscall(uint32_t status);
 int astra_network_shared_initialize(void *memory, uint32_t byte_size,
                                     uint32_t generation);

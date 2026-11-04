@@ -96,11 +96,49 @@ static void ethernet_profile_contract(void)
     assert(!astra_network_ethernet_profile_decode(text, &after));
 }
 
+static void mapping_contract(void)
+{
+    AstraNetworkMapping before = {.size = sizeof(before), .id = 9u,
+        .flags = ASTRA_NETWORK_MAPPING_READ_ONLY,
+        .source = {.format = ASTRA_VOLUME_SMB, .server = "files.example",
+                   .share = "/stories", .label = "Stories"},
+        .account = "reader", .domain = "WORKGROUP"};
+    AstraNetworkMapping after = {0};
+    char text[ASTRA_NETWORK_MAPPING_TEXT_MAX];
+
+    assert(astra_network_mapping_valid(&before, 0, 0));
+    assert(astra_network_mapping_encode(&before, text));
+    assert(strlen(text) == sizeof(text) - 1u);
+    assert(astra_network_mapping_decode(text, &after));
+    assert(memcmp(&before, &after, sizeof(before)) == 0);
+    text[sizeof(text) - 2u] = 'z';
+    assert(!astra_network_mapping_decode(text, &after));
+    assert(memcmp(&before, &after, sizeof(before)) == 0);
+    before.id = 0u;
+    assert(astra_network_mapping_valid(&before, 1, 0));
+    assert(!astra_network_mapping_encode(&before, text));
+    before.id = 9u;
+    before.flags |= ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL;
+    assert(astra_network_mapping_valid(&before, 0, 1));
+    assert(!astra_network_mapping_valid(&before, 0, 0));
+    before.flags &= ~ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL;
+    before.account[7] = 'x';
+    assert(!astra_network_mapping_valid(&before, 0, 0));
+    before.account[7] = '\0';
+    before.source.format = ASTRA_VOLUME_NFS;
+    assert(!astra_network_mapping_valid(&before, 0, 0));
+    memset(before.account, 0, sizeof(before.account));
+    memset(before.domain, 0, sizeof(before.domain));
+    before.source.share[0] = '/';
+    assert(astra_network_mapping_valid(&before, 0, 0));
+}
+
 int main(void)
 {
     address_contract();
     shared_layout();
     status_contract();
     ethernet_profile_contract();
+    mapping_contract();
     return 0;
 }

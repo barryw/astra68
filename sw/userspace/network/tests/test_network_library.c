@@ -147,6 +147,35 @@ uint32_t astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
                 if (reply->status == ASTRA_NETWORK_OK)
                     (void)memcpy(bytes, hostname, sizeof(hostname));
             }
+        } else if (last_request.header.operation ==
+                   ASTRA_NETWORK_MAPPING_READ) {
+            AstraNetworkMapping mapping = {.size = sizeof(mapping), .id = 42u,
+                .flags = ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL,
+                .source = {.format = ASTRA_VOLUME_SMB,
+                    .server = "files.example", .share = "/stories",
+                    .label = "Stories"}, .account = "reader"};
+            uint8_t *bytes = astra_network_shared_slot_bytes(
+                mapped_area, last_request.slot);
+            assert(last_request.value == 0u &&
+                   last_request.length == sizeof(mapping));
+            (void)memcpy(bytes, &mapping, sizeof(mapping));
+            reply->value = 1u;
+            reply->transferred = sizeof(mapping);
+            reply->status = ASTRA_NETWORK_OK;
+        } else if (last_request.header.operation ==
+                   ASTRA_NETWORK_MAPPING_SAVE) {
+            const AstraNetworkMappingSave *save = (const void *)
+                astra_network_shared_slot_bytes(mapped_area,
+                                                last_request.slot);
+            assert(last_request.length == sizeof(*save));
+            assert(save->mapping.id == 0u &&
+                   strcmp(save->password, "secret") == 0);
+            reply->value = 42u;
+            reply->status = ASTRA_NETWORK_OK;
+        } else if (last_request.header.operation ==
+                   ASTRA_NETWORK_MAPPING_REMOVE) {
+            assert(last_request.value == 42u && last_request.length == 0u);
+            reply->status = ASTRA_NETWORK_OK;
         } else {
             AstraNetworkInterfaceAddress record = {0};
             uint8_t *bytes = astra_network_shared_slot_bytes(
@@ -306,6 +335,28 @@ int main(void)
     assert(interface_address.address.address[0] == 127u &&
            interface_address.address.address[3] == 1u);
     assert(astra_network_interfaces(&session, NULL, 1u, &count) ==
+           ASTRA_NETWORK_INVALID);
+    AstraNetworkMapping mapping = {0};
+    assert(astra_network_mapping_read(&session, 0u, &mapping, &count) ==
+           ASTRA_NETWORK_OK);
+    assert(count == 1u && mapping.id == 42u &&
+           (mapping.flags & ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL) != 0u);
+    AstraNetworkMappingSave save = {.mapping = {.size = sizeof(mapping),
+        .source = {.format = ASTRA_VOLUME_SMB, .server = "files.example",
+            .share = "/stories", .label = "Stories"},
+        .account = "reader"},
+        .password_action = ASTRA_NETWORK_PASSWORD_REPLACE,
+        .password = "secret"};
+    uint32_t mapping_id = 0u;
+    assert(astra_network_mapping_save(&session, &save, &mapping_id) ==
+           ASTRA_NETWORK_OK && mapping_id == 42u);
+    const uint8_t *cleared = astra_network_shared_slot_bytes(mapped_area, 0u);
+    for (uint32_t at = 0u; at < sizeof(save); ++at)
+        assert(cleared[at] == 0u);
+    assert(astra_network_mapping_remove(&session, mapping_id) ==
+           ASTRA_NETWORK_OK);
+    save.password_action = 3u;
+    assert(astra_network_mapping_save(&session, &save, &mapping_id) ==
            ASTRA_NETWORK_INVALID);
     char formatted[40];
     assert(astra_network_address_format(&interface_address.address,

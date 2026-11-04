@@ -1,6 +1,20 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-11-03
+Status: active continuation map, 2026-11-04
+
+Saved network mappings, 2026-11-04: `network.library.1` ABI 1.5 exposes
+typed create/update/read/remove operations for NFS and SMB definitions. Network
+service stores definitions and stable IDs with atomic Config Kit edits; SMB
+passwords use its sensitive field and are excluded from list results. Host
+Network Kit tests and a service persistence test cover validation, credential
+retention, failed atomic writes, ID continuity and corrupt entries. MC68040
+service and library link passed on Beast. These APIs manage definitions only:
+mount/unmount ownership, reconnect, Settings and CLI integration, DE25 runtime
+and production release gates remain open. For this mechanism, Haiku references
+were `src/add-ons/kernel/file_systems/netfs/client/ShareVolume.cpp` (separate
+connection credentials and share lifecycle) and
+`src/preferences/network/NetworkWindow.cpp` (shared network list/details UI).
+Astra retains native Volume Kit admission and Config Kit storage contracts.
 
 SMB3 kernel prerequisite, 2026-11-03: Beast built a complete, distinct
 `6.12.11-astra-storage3-gd7d192a9ddd9` Image and matching module set from

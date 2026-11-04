@@ -18,6 +18,7 @@ HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 
 CORE := src/network_core.c
+UTF8_HOST := ../../common/utf8.c
 PING_CORE := src/ping_core.c
 CORE_OBJECTS := build/m68k/network_library.o build/m68k/network_core.o \
 	build/m68k/ping_core.o
@@ -92,7 +93,7 @@ library-contract: $(NETWORK_LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(NETWORK_LIBRARY_MAP) $(NETWORK_LIBRARY)
 	@python3 ../../../tools/library_info.py $(NETWORK_LIBRARY) | \
-		grep -q '^network.library.1 1.0.0 ABI 1.4$$'
+		grep -q '^network.library.1 1.0.0 ABI 1.5$$'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [network.library.1]'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.2]')" = 1
@@ -100,14 +101,14 @@ library-contract: $(NETWORK_LIBRARY)
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'
 	@$(READELF) -lW $< | grep -q ' GNU_RELRO '
-	@$(READELF) -VW $< | grep -q 'ASTRA_NETWORK_1.4'
+	@$(READELF) -VW $< | grep -q 'ASTRA_NETWORK_1.5'
 	@echo "astra network shared library: PASS"
 
-$(HOST_TEST): $(CORE) tests/test_network_core.c
+$(HOST_TEST): $(CORE) $(UTF8_HOST) tests/test_network_core.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
-$(LIBRARY_TEST): $(CORE) src/network_library.c \
+$(LIBRARY_TEST): $(CORE) $(UTF8_HOST) src/network_library.c \
 		tests/test_network_library.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
@@ -124,10 +125,10 @@ test: $(HOST_TEST) $(LIBRARY_TEST) $(PING_TEST)
 sanitize:
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
-	$(CORE) tests/test_network_core.c -o build/host/test_network_core_sanitize
+	$(CORE) $(UTF8_HOST) tests/test_network_core.c -o build/host/test_network_core_sanitize
 	./build/host/test_network_core_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
-		$(CORE) src/network_library.c tests/test_network_library.c \
+		$(CORE) $(UTF8_HOST) src/network_library.c tests/test_network_library.c \
 		-o build/host/test_network_library_sanitize
 	./build/host/test_network_library_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \

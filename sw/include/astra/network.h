@@ -25,6 +25,7 @@
 
 #include <astra/message_abi.h>
 #include <astra/syscall.h>
+#include <astra/volume_abi.h>
 
 /** Device class identifier (the ASCII characters "NETW") for the network device. */
 #define ASTRA_DEVICE_CLASS_NETWORK UINT32_C(0x4e455457) /* NETW */
@@ -610,8 +611,53 @@ enum {
     /** Read the confirmed Config Kit profile for an interface. */
     ASTRA_NETWORK_ETHERNET_SAVED = 25u,
     /** Enumerate host interfaces, including unaddressed devices. */
-    ASTRA_NETWORK_DEVICES = 26u
+    ASTRA_NETWORK_DEVICES = 26u,
+    /** Read one saved NFS or SMB mapping by zero-based index. */
+    ASTRA_NETWORK_MAPPING_READ = 27u,
+    /** Create or update one saved mapping and its optional sealed password. */
+    ASTRA_NETWORK_MAPPING_SAVE = 28u,
+    /** Remove one saved mapping by stable ID. */
+    ASTRA_NETWORK_MAPPING_REMOVE = 29u
 };
+
+/** Request a read-only share mount. */
+#define ASTRA_NETWORK_MAPPING_READ_ONLY      (1u << 0)
+/** Reconnect this saved mapping when network becomes available. */
+#define ASTRA_NETWORK_MAPPING_AUTO_CONNECT   (1u << 1)
+/** Read-only status: Config Kit has a credential for this mapping. */
+#define ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL (1u << 2)
+
+/** Stable saved definition; its ID survives mount generations and reboot. */
+typedef struct AstraNetworkMapping {
+    uint32_t size; /**< sizeof(AstraNetworkMapping). */
+    uint32_t id; /**< Zero when creating; assigned by network service. */
+    uint32_t flags; /**< ASTRA_NETWORK_MAPPING_* policy and returned status. */
+    uint32_t reserved; /**< Zero. */
+    AstraVolumeNetworkSource source; /**< Native NFS or SMB source definition. */
+    char account[256]; /**< SMB account, empty for guest/NFS. */
+    char domain[256]; /**< Optional SMB domain, empty for guest/NFS. */
+} AstraNetworkMapping;
+
+/** Retain existing password; on creation, save none. */
+#define ASTRA_NETWORK_PASSWORD_KEEP    0u
+/** Replace saved password with one-use request field. */
+#define ASTRA_NETWORK_PASSWORD_REPLACE 1u
+/** Remove saved password. */
+#define ASTRA_NETWORK_PASSWORD_CLEAR   2u
+
+/** One-use save request; password never appears in mapping list or catalog. */
+typedef struct AstraNetworkMappingSave {
+    AstraNetworkMapping mapping; /**< Definition to create or update. */
+    uint32_t password_action; /**< ASTRA_NETWORK_PASSWORD_*. */
+    char password[256]; /**< Used only for REPLACE; caller wipes after call. */
+} AstraNetworkMappingSave;
+
+/** @cond ASTRA_INTERNAL */
+_Static_assert(sizeof(AstraNetworkMapping) == 2072u,
+               "network mapping ABI changed");
+_Static_assert(sizeof(AstraNetworkMappingSave) == 2332u,
+               "network mapping save ABI changed");
+/** @endcond */
 
 /** Byte size of one shared transfer slot: the complete 16-bit IP packet length. */
 #define ASTRA_NETWORK_SLOT_BYTES UINT32_C(0x00010000)

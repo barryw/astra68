@@ -2,6 +2,7 @@
 #include <astra/network_library.h>
 
 #include <astra/bytes.h>
+#include <astra/volume_network.h>
 
 static int parse_ipv4(const char *text, uint8_t bytes[4])
 {
@@ -156,22 +157,28 @@ AstraNetworkStatus astra_network_ethernet_ipv4_validate(
     return ASTRA_NETWORK_OK;
 }
 
+static void hex_record_encode(const void *record, size_t size,
+    const char *prefix, char *text)
+{
+    static const char digits[] = "0123456789abcdef";
+    const uint8_t *bytes = record;
+    size_t prefix_size = strlen(prefix);
+    (void)memcpy(text, prefix, prefix_size);
+    for (size_t at = 0u; at < size; ++at) {
+        text[prefix_size + at * 2u] = digits[bytes[at] >> 4];
+        text[prefix_size + at * 2u + 1u] = digits[bytes[at] & 15u];
+    }
+    text[prefix_size + size * 2u] = '\0';
+}
+
 int astra_network_ethernet_profile_encode(
     const AstraNetworkEthernetIPv4 *profile,
     char text[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX])
 {
-    static const char digits[] = "0123456789abcdef";
-    static const char prefix[] = "ipv4-1:";
-    const uint8_t *bytes = (const uint8_t *)(const void *)profile;
     if (text == NULL || astra_network_ethernet_ipv4_validate(profile) !=
             ASTRA_NETWORK_OK)
         return 0;
-    (void)memcpy(text, prefix, sizeof(prefix) - 1u);
-    for (uint32_t at = 0u; at < sizeof(*profile); ++at) {
-        text[sizeof(prefix) - 1u + at * 2u] = digits[bytes[at] >> 4];
-        text[sizeof(prefix) + at * 2u] = digits[bytes[at] & 15u];
-    }
-    text[sizeof(prefix) - 1u + sizeof(*profile) * 2u] = '\0';
+    hex_record_encode(profile, sizeof(*profile), "ipv4-1:", text);
     return 1;
 }
 
@@ -182,25 +189,75 @@ static int hex_nibble(char value)
     return -1;
 }
 
-int astra_network_ethernet_profile_decode(
-    const char *text, AstraNetworkEthernetIPv4 *profile)
+static int hex_record_decode(const char *text, const char *prefix,
+    void *record, size_t size)
 {
-    static const char prefix[] = "ipv4-1:";
-    AstraNetworkEthernetIPv4 parsed;
-    uint8_t *bytes = (uint8_t *)(void *)&parsed;
-    if (text == NULL || profile == NULL ||
-        strlen(text) != sizeof(prefix) - 1u + sizeof(parsed) * 2u ||
-        memcmp(text, prefix, sizeof(prefix) - 1u) != 0)
+    size_t prefix_size = strlen(prefix);
+    uint8_t *bytes = record;
+    if (text == NULL || record == NULL ||
+        strlen(text) != prefix_size + size * 2u ||
+        memcmp(text, prefix, prefix_size) != 0)
         return 0;
-    for (uint32_t at = 0u; at < sizeof(parsed); ++at) {
-        int high = hex_nibble(text[sizeof(prefix) - 1u + at * 2u]);
-        int low = hex_nibble(text[sizeof(prefix) + at * 2u]);
+    for (size_t at = 0u; at < size; ++at) {
+        int high = hex_nibble(text[prefix_size + at * 2u]);
+        int low = hex_nibble(text[prefix_size + at * 2u + 1u]);
         if (high < 0 || low < 0) return 0;
         bytes[at] = (uint8_t)(high * 16 + low);
     }
+    return 1;
+}
+
+int astra_network_ethernet_profile_decode(
+    const char *text, AstraNetworkEthernetIPv4 *profile)
+{
+    AstraNetworkEthernetIPv4 parsed;
+    if (!hex_record_decode(text, "ipv4-1:", &parsed, sizeof(parsed)))
+        return 0;
     if (astra_network_ethernet_ipv4_validate(&parsed) != ASTRA_NETWORK_OK)
         return 0;
     *profile = parsed;
+    return 1;
+}
+
+int astra_network_mapping_valid(const AstraNetworkMapping *mapping,
+                                int allow_new, int allow_status)
+{
+    if (mapping == NULL || mapping->size != sizeof(*mapping) ||
+        (!allow_new && mapping->id == 0u) || mapping->reserved != 0u ||
+        (mapping->flags & ~(ASTRA_NETWORK_MAPPING_READ_ONLY |
+            ASTRA_NETWORK_MAPPING_AUTO_CONNECT |
+            (allow_status ? ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL : 0u))) != 0u ||
+        !astra_volume_network_source_valid(&mapping->source) ||
+        !astra_volume_auth_field_valid(mapping->account,
+            sizeof(mapping->account), 0, 1) ||
+        !astra_volume_auth_field_valid(mapping->domain,
+            sizeof(mapping->domain), 0, 1)) return 0;
+    if (mapping->source.format == ASTRA_VOLUME_NFS)
+        return mapping->account[0] == '\0' &&
+               mapping->domain[0] == '\0' &&
+               (mapping->flags & ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL) == 0u;
+    return mapping->account[0] != '\0' ||
+           (mapping->domain[0] == '\0' &&
+            (mapping->flags & ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL) == 0u);
+}
+
+int astra_network_mapping_encode(const AstraNetworkMapping *mapping,
+    char text[ASTRA_NETWORK_MAPPING_TEXT_MAX])
+{
+    if (text == NULL || !astra_network_mapping_valid(mapping, 0, 0))
+        return 0;
+    hex_record_encode(mapping, sizeof(*mapping), "map1:", text);
+    return 1;
+}
+
+int astra_network_mapping_decode(const char *text,
+                                 AstraNetworkMapping *mapping)
+{
+    AstraNetworkMapping parsed;
+    if (!hex_record_decode(text, "map1:", &parsed, sizeof(parsed)) ||
+        !astra_network_mapping_valid(&parsed, 0, 0))
+        return 0;
+    *mapping = parsed;
     return 1;
 }
 

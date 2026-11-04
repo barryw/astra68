@@ -5,8 +5,11 @@
 #include <astra/network_core.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
+#include <astra/secret_memory.h>
 #include <astra/service.h>
 #include <astra/status.h>
+#include <astra/string.h>
+#include <astra/volume_network.h>
 
 ASTRA_PROGRAM("network-service", 0, 1, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
@@ -47,11 +50,14 @@ static uint32_t ethernet_owner;
 static uint64_t ethernet_owner_until;
 static uint64_t ethernet_recovery_at = ASTRA_DEADLINE_FOREVER;
 static AstraNetworkEthernetIPv4 ethernet_pending;
-static AstraConfig ethernet_config = ASTRA_CONFIG_INIT;
-static const AstraConfigField ethernet_fields[] = {
-    {"profile", 0u}, {"pending", 0u}
+static AstraConfig network_config = ASTRA_CONFIG_INIT;
+static int mapping_store_ok;
+static const AstraConfigField network_fields[] = {
+    {"profile", 0u}, {"pending", 0u},
+    {"mapping", 0u}, {"mapping_secret", ASTRA_CONFIG_FIELD_SENSITIVE},
+    {"mapping_next", 0u}
 };
-static const AstraConfigSchema ethernet_schema = {1u, ethernet_fields, 2u};
+static const AstraConfigSchema network_schema = {1u, network_fields, 5u};
 
 static uint32_t next_nonzero(uint32_t *value)
 {
@@ -632,12 +638,12 @@ static AstraNetworkStatus ethernet_promote(const char *next,
         {"pending", NULL, 0u, ASTRA_CONFIG_CHANGE_REMOVE}
     };
 
-    if (astra_config_count(&ethernet_config, "profile", &count) !=
+    if (astra_config_count(&network_config, "profile", &count) !=
             ASTRA_CONFIG_OK)
         return ASTRA_NETWORK_IO;
     for (index = 0u; index < count; ++index) {
         AstraNetworkEthernetIPv4 saved;
-        if (astra_config_get_string(&ethernet_config, "profile", index,
+        if (astra_config_get_string(&network_config, "profile", index,
                 previous, sizeof(previous), &length) != ASTRA_CONFIG_OK ||
             !astra_network_ethernet_profile_decode(previous, &saved))
             return ASTRA_NETWORK_IO;
@@ -647,7 +653,7 @@ static AstraNetworkStatus ethernet_promote(const char *next,
             break;
         }
     }
-    return astra_config_apply(&ethernet_config, changes, 2u) ==
+    return astra_config_apply(&network_config, changes, 2u) ==
         ASTRA_CONFIG_OK ? ASTRA_NETWORK_OK : ASTRA_NETWORK_IO;
 }
 
@@ -661,9 +667,9 @@ static void ethernet_recover(void)
 
     if (ethernet_owner != 0u) return;
     ethernet_recovery_at = ASTRA_DEADLINE_FOREVER;
-    if (astra_config_count(&ethernet_config, "pending", &count) !=
+    if (astra_config_count(&network_config, "pending", &count) !=
             ASTRA_CONFIG_OK || count != 1u ||
-        astra_config_get_string(&ethernet_config, "pending", 0u, text,
+        astra_config_get_string(&network_config, "pending", 0u, text,
             sizeof(text), &length) != ASTRA_CONFIG_OK ||
         !astra_network_ethernet_profile_decode(text, &profile)) {
         (void)astra_log_failure("network pending profile invalid",
@@ -711,12 +717,12 @@ static AstraNetworkStatus dispatch_ethernet(
             length != sizeof(query)) return ASTRA_NETWORK_INVALID;
         (void)memcpy(&query, bytes, sizeof(query));
         if (astra_network_ethernet_ipv4_validate(&query) != ASTRA_NETWORK_OK ||
-            astra_config_count(&ethernet_config, "profile", &count) !=
+            astra_config_count(&network_config, "profile", &count) !=
                 ASTRA_CONFIG_OK) return ASTRA_NETWORK_IO;
         for (uint32_t at = 0u; at < count; ++at) {
             AstraNetworkEthernetIPv4 saved;
             uint32_t text_length = 0u;
-            if (astra_config_get_string(&ethernet_config, "profile", at,
+            if (astra_config_get_string(&network_config, "profile", at,
                     text, sizeof(text), &text_length) != ASTRA_CONFIG_OK ||
                 !astra_network_ethernet_profile_decode(text, &saved))
                 return ASTRA_NETWORK_IO;
@@ -740,7 +746,7 @@ static AstraNetworkStatus dispatch_ethernet(
         input_size = length;
         if (request->header.operation == ASTRA_NETWORK_ETHERNET_STAGE) {
             uint32_t pending_count = 0u;
-            if (astra_config_count(&ethernet_config, "pending",
+            if (astra_config_count(&network_config, "pending",
                     &pending_count) != ASTRA_CONFIG_OK)
                 return ASTRA_NETWORK_IO;
             if (pending_count != 0u)
@@ -770,7 +776,7 @@ static AstraNetworkStatus dispatch_ethernet(
     if (command.operation == ASTRA_NETWORK_HOST_ETHERNET_CONFIRM) {
         char next[ASTRA_NETWORK_ETHERNET_PROFILE_TEXT_MAX];
         if (!astra_network_ethernet_profile_encode(&ethernet_pending, next) ||
-            astra_config_append_string(&ethernet_config, "pending", next) !=
+            astra_config_append_string(&network_config, "pending", next) !=
                 ASTRA_CONFIG_OK) return ASTRA_NETWORK_IO;
         status = host_execute(&command, NULL, 0u, NULL, 0u);
         if (status == ASTRA_NETWORK_OK)
@@ -803,6 +809,209 @@ static AstraNetworkStatus dispatch_ethernet(
         ethernet_clear_owner();
     }
     return status;
+}
+
+static int mapping_count(uint32_t *count)
+{
+    uint32_t secrets = 0u, next = 0u;
+    return astra_config_count(&network_config, "mapping", count) ==
+            ASTRA_CONFIG_OK &&
+        astra_config_count(&network_config, "mapping_secret", &secrets) ==
+            ASTRA_CONFIG_OK &&
+        astra_config_count(&network_config, "mapping_next", &next) ==
+            ASTRA_CONFIG_OK && *count == secrets && next <= 1u &&
+        (*count == 0u || next == 1u);
+}
+
+static int mapping_read(uint32_t index, AstraNetworkMapping *mapping)
+{
+    char text[ASTRA_NETWORK_MAPPING_TEXT_MAX];
+    char secret[sizeof(((AstraNetworkMappingSave *)0)->password) + 3u] = {0};
+    uint32_t length = 0u;
+    int valid = astra_config_get_string(&network_config, "mapping", index,
+            text, sizeof(text), &length) == ASTRA_CONFIG_OK &&
+        astra_network_mapping_decode(text, mapping) &&
+        astra_config_get_string(&network_config, "mapping_secret", index,
+            secret, sizeof(secret), &length) == ASTRA_CONFIG_OK;
+    if (valid && secret[0] == 'p' && secret[1] == ':')
+        mapping->flags |= ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL;
+    else if (!valid || strcmp(secret, "n") != 0)
+        valid = 0;
+    if (valid)
+        valid = astra_network_mapping_valid(mapping, 0, 1);
+    astra_secret_wipe(secret, sizeof(secret));
+    return valid;
+}
+
+static int mapping_integrity(void)
+{
+    uint32_t count = 0u, next_count = 0u, previous = 0u;
+    uint64_t next = 0u;
+    if (!mapping_count(&count) ||
+        astra_config_count(&network_config, "mapping_next", &next_count) !=
+            ASTRA_CONFIG_OK) return 0;
+    for (uint32_t index = 0u; index < count; ++index) {
+        AstraNetworkMapping mapping;
+        if (!mapping_read(index, &mapping) || mapping.id <= previous)
+            return 0;
+        previous = mapping.id;
+    }
+    return next_count == 0u ? count == 0u :
+        astra_config_get_u64(&network_config, "mapping_next", 0u, &next) ==
+            ASTRA_CONFIG_OK && next > previous && next <= UINT32_MAX;
+}
+
+static AstraNetworkStatus mapping_find(uint32_t id, uint32_t *index,
+    AstraNetworkMapping *mapping)
+{
+    uint32_t count = 0u;
+    if (id == 0u || !mapping_count(&count)) return ASTRA_NETWORK_INVALID;
+    for (uint32_t at = 0u; at < count; ++at) {
+        if (!mapping_read(at, mapping)) return ASTRA_NETWORK_IO;
+        if (mapping->id == id) {
+            *index = at;
+            return ASTRA_NETWORK_OK;
+        }
+    }
+    return ASTRA_NETWORK_NAME_NOT_FOUND;
+}
+
+static AstraNetworkStatus mapping_save(const AstraNetworkMappingSave *input,
+    uint32_t *saved_id)
+{
+    AstraNetworkMapping mapping = input->mapping, previous = {0};
+    AstraConfigChange changes[3];
+    char text[ASTRA_NETWORK_MAPPING_TEXT_MAX];
+    char secret[sizeof(input->password) + 3u] = {0};
+    char next_text[16];
+    uint32_t count = 0u, index = 0u, next_count = 0u;
+    uint64_t next = 1u;
+    uint32_t change_count = 0u;
+    AstraNetworkStatus status = ASTRA_NETWORK_INVALID;
+    int has_password = 0;
+
+    if (!astra_network_mapping_valid(&mapping, 1, 0) ||
+        input->password_action > ASTRA_NETWORK_PASSWORD_CLEAR ||
+        (input->password_action == ASTRA_NETWORK_PASSWORD_REPLACE &&
+         (mapping.source.format != ASTRA_VOLUME_SMB ||
+          mapping.account[0] == '\0' ||
+          !astra_volume_auth_field_valid(input->password,
+              sizeof(input->password), 0, 0)))) return status;
+    if (input->password_action != ASTRA_NETWORK_PASSWORD_REPLACE)
+        for (uint32_t at = 0u; at < sizeof(input->password); ++at)
+            if (input->password[at] != '\0') return status;
+    if (!mapping_count(&count) ||
+        astra_config_count(&network_config, "mapping_next", &next_count) !=
+            ASTRA_CONFIG_OK) return ASTRA_NETWORK_IO;
+    if (mapping.id == 0u) {
+        if (next_count != 0u &&
+            astra_config_get_u64(&network_config, "mapping_next", 0u,
+                                 &next) != ASTRA_CONFIG_OK)
+            return ASTRA_NETWORK_IO;
+        if (next == 0u || next >= UINT32_MAX)
+            return ASTRA_NETWORK_RESOURCE_LIMIT;
+        mapping.id = (uint32_t)next;
+        index = count;
+    } else {
+        status = mapping_find(mapping.id, &index, &previous);
+        if (status != ASTRA_NETWORK_OK) return status;
+        if (input->password_action == ASTRA_NETWORK_PASSWORD_KEEP &&
+            (strcmp(mapping.account, previous.account) != 0 ||
+             strcmp(mapping.domain, previous.domain) != 0 ||
+             mapping.source.format != previous.source.format ||
+             strcmp(mapping.source.server, previous.source.server) != 0 ||
+             strcmp(mapping.source.share, previous.source.share) != 0) &&
+            (previous.flags & ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL) != 0u)
+            return ASTRA_NETWORK_INVALID;
+    }
+    has_password = input->password_action == ASTRA_NETWORK_PASSWORD_REPLACE ||
+        (input->password_action == ASTRA_NETWORK_PASSWORD_KEEP &&
+         (previous.flags & ASTRA_NETWORK_MAPPING_HAS_CREDENTIAL) != 0u);
+    if ((mapping.flags & ASTRA_NETWORK_MAPPING_AUTO_CONNECT) != 0u &&
+        mapping.source.format == ASTRA_VOLUME_SMB &&
+        mapping.account[0] != '\0' && !has_password)
+        return ASTRA_NETWORK_INVALID;
+    if (!astra_network_mapping_encode(&mapping, text))
+        return ASTRA_NETWORK_INVALID;
+    changes[change_count++] = (AstraConfigChange){"mapping", text, index,
+        index == count ? ASTRA_CONFIG_CHANGE_APPEND : ASTRA_CONFIG_CHANGE_SET};
+    if (input->password_action != ASTRA_NETWORK_PASSWORD_KEEP || index == count) {
+        if (has_password) {
+            secret[0] = 'p'; secret[1] = ':';
+            (void)memcpy(secret + 2u, input->password,
+                         strlen(input->password) + 1u);
+        } else (void)memcpy(secret, "n", 2u);
+        changes[change_count++] = (AstraConfigChange){"mapping_secret",
+            secret, index, index == count ? ASTRA_CONFIG_CHANGE_APPEND :
+                                       ASTRA_CONFIG_CHANGE_SET};
+    }
+    if (index == count) {
+        AstraString next_string;
+        astra_string_init(&next_string, next_text, sizeof(next_text));
+        if (!astra_string_append_u64(&next_string, mapping.id + 1u)) {
+            astra_secret_wipe(secret, sizeof(secret));
+            return ASTRA_NETWORK_IO;
+        }
+        changes[change_count++] = (AstraConfigChange){"mapping_next",
+            next_text, 0u, next_count == 0u ? ASTRA_CONFIG_CHANGE_APPEND :
+                                             ASTRA_CONFIG_CHANGE_SET};
+    }
+    status = astra_config_apply(&network_config, changes, change_count) ==
+        ASTRA_CONFIG_OK ? ASTRA_NETWORK_OK : ASTRA_NETWORK_IO;
+    astra_secret_wipe(secret, sizeof(secret));
+    if (status == ASTRA_NETWORK_OK) *saved_id = mapping.id;
+    return status;
+}
+
+static AstraNetworkStatus dispatch_mapping(NetworkSession *session,
+    const AstraNetworkRequestMessage *request, AstraNetworkReplyMessage *reply)
+{
+    uint32_t count = 0u, index = 0u, length = 0u;
+    uint8_t *bytes = NULL;
+    AstraNetworkMapping mapping;
+    AstraNetworkStatus status;
+    if (session->may_admin == 0u || request->endpoint != 0u)
+        return ASTRA_NETWORK_ACCESS;
+    if (!mapping_store_ok || !mapping_count(&count))
+        return ASTRA_NETWORK_IO;
+    switch (request->header.operation) {
+    case ASTRA_NETWORK_MAPPING_READ:
+        if (!shared_slot(session, request, 0, &bytes, &length) ||
+            length != sizeof(mapping)) return ASTRA_NETWORK_INVALID;
+        reply->value = count;
+        if (request->value >= count)
+            return ASTRA_NETWORK_NAME_NOT_FOUND;
+        if (!mapping_read(request->value, &mapping))
+            return ASTRA_NETWORK_IO;
+        (void)memcpy(bytes, &mapping, sizeof(mapping));
+        reply->transferred = sizeof(mapping);
+        return ASTRA_NETWORK_OK;
+    case ASTRA_NETWORK_MAPPING_SAVE: {
+        AstraNetworkMappingSave input;
+        if (!shared_slot(session, request, 1, &bytes, &length) ||
+            length != sizeof(input)) return ASTRA_NETWORK_INVALID;
+        (void)memcpy(&input, bytes, sizeof(input));
+        status = mapping_save(&input, &reply->value);
+        astra_secret_wipe(&input, sizeof(input));
+        astra_secret_wipe(bytes, sizeof(input));
+        return status;
+    }
+    case ASTRA_NETWORK_MAPPING_REMOVE: {
+        AstraConfigChange changes[2];
+        if (request->length != 0u || request->value == 0u)
+            return ASTRA_NETWORK_INVALID;
+        status = mapping_find(request->value, &index, &mapping);
+        if (status != ASTRA_NETWORK_OK) return status;
+        changes[0] = (AstraConfigChange){"mapping", NULL, index,
+            ASTRA_CONFIG_CHANGE_REMOVE};
+        changes[1] = (AstraConfigChange){"mapping_secret", NULL, index,
+            ASTRA_CONFIG_CHANGE_REMOVE};
+        return astra_config_apply(&network_config, changes, 2u) ==
+            ASTRA_CONFIG_OK ? ASTRA_NETWORK_OK : ASTRA_NETWORK_IO;
+    }
+    default:
+        return ASTRA_NETWORK_INVALID;
+    }
 }
 
 static void process_request(uint32_t receive, int mode,
@@ -859,6 +1068,10 @@ static void process_request(uint32_t receive, int mode,
                request.header.operation >= ASTRA_NETWORK_ETHERNET_PROBE &&
                request.header.operation <= ASTRA_NETWORK_ETHERNET_SAVED) {
         reply.status = dispatch_ethernet(session, &request);
+    } else if (bound_endpoint == NULL &&
+               request.header.operation >= ASTRA_NETWORK_MAPPING_READ &&
+               request.header.operation <= ASTRA_NETWORK_MAPPING_REMOVE) {
+        reply.status = dispatch_mapping(session, &request, &reply);
     } else if (bound_endpoint == NULL &&
                request.header.operation == ASTRA_NETWORK_CLOSE &&
                request.endpoint == 0u) {
@@ -941,13 +1154,17 @@ static uint32_t network_start(const AstraStartupInfo *startup)
     irq = astra_startup_capability(startup, ASTRA_CAPABILITY_NETWORK_IRQ);
     if (device == NULL || irq == NULL)
         return NETWORK_FAIL_DEVICE;
-    if (astra_config_open_system(startup, &ethernet_schema,
+    if (astra_config_open_system(startup, &network_schema,
             ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE,
-            &ethernet_config, NULL) != ASTRA_CONFIG_OK)
+            &network_config, NULL) != ASTRA_CONFIG_OK)
         return NETWORK_FAIL_DEVICE;
+    mapping_store_ok = mapping_integrity();
+    if (!mapping_store_ok)
+        (void)astra_log_failure("network mapping store invalid",
+                                ASTRA_NETWORK_IO);
     {
         uint32_t pending_count = 0u;
-        if (astra_config_count(&ethernet_config, "pending", &pending_count) !=
+        if (astra_config_count(&network_config, "pending", &pending_count) !=
                 ASTRA_CONFIG_OK)
             return NETWORK_FAIL_DEVICE;
         if (pending_count != 0u)

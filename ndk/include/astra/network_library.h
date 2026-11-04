@@ -15,7 +15,7 @@
 /** Network Kit ELF ABI major version. */
 #define ASTRA_NETWORK_LIBRARY_ABI_MAJOR 1u
 /** Network Kit backward-compatible ABI revision. */
-#define ASTRA_NETWORK_LIBRARY_ABI_MINOR 4u
+#define ASTRA_NETWORK_LIBRARY_ABI_MINOR 5u
 
 /** Open network-service session. */
 typedef struct AstraNetworkSession {
@@ -177,6 +177,15 @@ AstraNetworkStatus astra_network_ethernet_confirm(AstraNetworkSession *session);
 AstraNetworkStatus astra_network_ethernet_revert(AstraNetworkSession *session);
 /** Read saved IPv4 profile for an interface; returns NAME_NOT_FOUND if absent. Requires NETWORK_ADMIN. @param session Admin session. @param name Interface name. @param configuration Receives confirmed profile. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_ethernet_saved(AstraNetworkSession *session, const char *name, AstraNetworkEthernetIPv4 *configuration);
+/** Read one saved NFS/SMB definition by list index; password stays in network service. Requires NETWORK_ADMIN. @param session Admin session. @param index Zero-based index. @param mapping Receives definition and credential-present status. @param count Receives total saved definitions. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_mapping_read(AstraNetworkSession *session,
+    uint32_t index, AstraNetworkMapping *mapping, uint32_t *count);
+/** Create (ID zero) or update (stable ID) one mapping. Password edit is one-use; caller must wipe its input. Requires NETWORK_ADMIN. @param session Admin session. @param save Valid definition and password action. @param id Receives stable ID. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_mapping_save(AstraNetworkSession *session,
+    const AstraNetworkMappingSave *save, uint32_t *id);
+/** Delete one saved definition without detaching any mount. Requires NETWORK_ADMIN. @param session Admin session. @param id Stable mapping ID. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_mapping_remove(AstraNetworkSession *session,
+    uint32_t id);
 /** Cancel resolution. @param request Request. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_request_cancel(AstraNetworkRequest *request);
 /** Borrow readiness handle. @param endpoint Endpoint. @return Wait handle. */

@@ -56,3 +56,10 @@ ASTRA_NETWORK_1.4 {
         astra_network_ethernet_saved;
         astra_network_devices;
 } ASTRA_NETWORK_1.3;
+
+ASTRA_NETWORK_1.5 {
+    global:
+        astra_network_mapping_read;
+        astra_network_mapping_save;
+        astra_network_mapping_remove;
+} ASTRA_NETWORK_1.4;

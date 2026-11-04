@@ -3,6 +3,7 @@
 #include <astra/bytes.h>
 #include <astra/network_core.h>
 #include <astra/runtime.h>
+#include <astra/secret_memory.h>
 
 static void clear_bytes(void *memory, uint32_t size)
 {
@@ -1003,6 +1004,116 @@ AstraNetworkStatus astra_network_ethernet_saved(
     (void)memcpy(query.name, name, length + 1u);
     return ethernet_change(session, ASTRA_NETWORK_ETHERNET_SAVED, &query,
                            0u, configuration);
+}
+
+AstraNetworkStatus astra_network_mapping_read(AstraNetworkSession *session,
+    uint32_t index, AstraNetworkMapping *mapping, uint32_t *count)
+{
+    AstraNetworkRequestMessage request;
+    AstraNetworkReplyMessage reply;
+    AstraNetworkSharedHeader *header;
+    AstraNetworkSharedSlot *slots;
+    AstraNetworkStatus status;
+    uint32_t slot;
+    uint8_t *bytes;
+    if (session == NULL || session->_private_id == 0u ||
+        mapping == NULL || count == NULL) return ASTRA_NETWORK_INVALID;
+    (void)memset(mapping, 0, sizeof(*mapping));
+    *count = 0u;
+    status = session_lock(session);
+    if (status != ASTRA_NETWORK_OK) return status;
+    header = session->_private_shared;
+    slot = header->tx_slot_count;
+    slots = astra_network_shared_slots(header);
+    bytes = astra_network_shared_slot_bytes(header, slot);
+    if (bytes == NULL) {
+        session_unlock(session);
+        return ASTRA_NETWORK_INVALID;
+    }
+    slots[slot].generation = session->_private_generation;
+    slots[slot].state = ASTRA_NETWORK_SLOT_RX_READING;
+    slots[slot].length = sizeof(*mapping);
+    request_init(session, &request, ASTRA_NETWORK_MAPPING_READ);
+    request.value = index;
+    request.slot = slot;
+    request.length = sizeof(*mapping);
+    status = exchange_locked(session, session->_private_control,
+                             &request, &reply, NULL, 0u, NULL);
+    if (status == ASTRA_NETWORK_OK) {
+        AstraNetworkMapping received;
+        (void)memcpy(&received, bytes, sizeof(received));
+        if (reply.transferred != sizeof(received) || reply.value <= index ||
+            !astra_network_mapping_valid(&received, 0, 1))
+            status = ASTRA_NETWORK_IO;
+        else *mapping = received;
+    }
+    if (status == ASTRA_NETWORK_OK || status == ASTRA_NETWORK_NAME_NOT_FOUND)
+        *count = reply.value;
+    clear_bytes(&slots[slot], sizeof(slots[slot]));
+    session_unlock(session);
+    return status;
+}
+
+AstraNetworkStatus astra_network_mapping_save(AstraNetworkSession *session,
+    const AstraNetworkMappingSave *save, uint32_t *id)
+{
+    AstraNetworkRequestMessage request;
+    AstraNetworkReplyMessage reply;
+    AstraNetworkSharedHeader *header;
+    AstraNetworkSharedSlot *slots;
+    AstraNetworkStatus status;
+    uint8_t *bytes;
+    if (session == NULL || session->_private_id == 0u || save == NULL ||
+        id == NULL || !astra_network_mapping_valid(&save->mapping, 1, 0) ||
+        save->password_action > ASTRA_NETWORK_PASSWORD_CLEAR)
+        return ASTRA_NETWORK_INVALID;
+    *id = 0u;
+    status = session_lock(session);
+    if (status != ASTRA_NETWORK_OK) return status;
+    header = session->_private_shared;
+    slots = astra_network_shared_slots(header);
+    bytes = astra_network_shared_slot_bytes(header, 0u);
+    if (bytes == NULL) {
+        session_unlock(session);
+        return ASTRA_NETWORK_INVALID;
+    }
+    (void)memcpy(bytes, save, sizeof(*save));
+    slots[0].generation = session->_private_generation;
+    slots[0].state = ASTRA_NETWORK_SLOT_TX_READY;
+    slots[0].length = sizeof(*save);
+    request_init(session, &request, ASTRA_NETWORK_MAPPING_SAVE);
+    request.slot = 0u;
+    request.length = sizeof(*save);
+    status = exchange_locked(session, session->_private_control,
+                             &request, &reply, NULL, 0u, NULL);
+    if (status == ASTRA_NETWORK_OK) {
+        if (reply.value == 0u ||
+            (save->mapping.id != 0u && reply.value != save->mapping.id))
+            status = ASTRA_NETWORK_IO;
+        else *id = reply.value;
+    }
+    astra_secret_wipe(bytes, sizeof(*save));
+    clear_bytes(&slots[0], sizeof(slots[0]));
+    session_unlock(session);
+    return status;
+}
+
+AstraNetworkStatus astra_network_mapping_remove(AstraNetworkSession *session,
+    uint32_t id)
+{
+    AstraNetworkRequestMessage request;
+    AstraNetworkReplyMessage reply;
+    AstraNetworkStatus status;
+    if (session == NULL || session->_private_id == 0u || id == 0u)
+        return ASTRA_NETWORK_INVALID;
+    status = session_lock(session);
+    if (status != ASTRA_NETWORK_OK) return status;
+    request_init(session, &request, ASTRA_NETWORK_MAPPING_REMOVE);
+    request.value = id;
+    status = exchange_locked(session, session->_private_control,
+                             &request, &reply, NULL, 0u, NULL);
+    session_unlock(session);
+    return status;
 }
 
 static uint32_t append_decimal(char *text, uint32_t at, uint8_t value)
