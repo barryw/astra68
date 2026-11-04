@@ -287,8 +287,17 @@ directory/durable-save operations, and exact busy-unmount holders passed on
 disposable Samba. Guest and authenticated provider tests cover mount, refusal,
 read, write, fsync and unmount. The Unicode case exposed a missing CIFS
 `iocharset=utf8` option; corrected provider and Filesystem Kit passed a DE25
-hot-install test. A coherent release containing that fix is pending. Remaining
-fault and concurrency cases below are still acceptance gates.
+hot-install test. Coherent release `7eecee711b408ce87725a6a71dce9b4ebe615e150112eaeb2596f3784b22c701`
+passed a 360-second private DE25 guard with authenticated mount, complete
+Terminal/Atlas listing and unmount, and is selected. On that release, a
+15-second TCP445 drop at creation of `save.tmp` delayed durable-save work;
+all 20 saves recovered, final 65,536-byte server file persisted, and no
+temporary file remained. A RAM-to-SMB copy preserved SHA-256. In-flight write
+and `fsync` interruption, cross-volume move, permissions, capacity, concurrent
+users and other fault cases below are still acceptance gates.
+Beast's provider regression now also covers server-enforced access denial,
+capacity and rename/unlink of an open file; equivalent native DE25 operations
+remain to be tested.
 
 Run disposable Samba and NFS servers on Beast before testing the DE25 against
 real shares. Cover Unicode/long names, case behavior, read-only/writable shares,

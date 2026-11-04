@@ -16,7 +16,28 @@ storage provider were hot installed on DE25. Terminal listed all seven SMB
 root entries; Atlas showed seven icons, including `0Café.txt`, the 100-character
 name, and both directories. Busy unmount named the two exact `/net0/` holders;
 after Atlas closed and Terminal left `/net0`, unmount and mapping removal
-succeeded. Production release rebuild and broader SMB fault gates remain open.
+succeeded. Release `7eecee711b408ce87725a6a71dce9b4ebe615e150112eaeb2596f3784b22c701`
+was built on Beast, verified on DE25, passed a 360-second private guard with
+authenticated mount, all seven Terminal/Atlas entries and clean unmount, then
+was selected as the active DE25 release. The guard reached stage 8 without
+panic, restored the prior release, and all three services recovered; deployment
+also passed packaged-kernel confirmation. Trial logs and RFB captures were
+archived and checksum-checked before board staging was removed. Selected release
+reached stage 8 without panic; Astra, audio host, and remote desktop remain
+active, with 7.9 GiB free after cleanup.
+On that release, a controlled Beast TCP445 drop began when SMB `save.tmp`
+appeared at size zero. Astra's durable-save workload recovered after the
+15-second outage: 20 saves passed, final server file was 65,536 bytes,
+and no temporary file remained. The JSON reports `failed:false` and a
+27.1-second total. RAM-to-SMB `cp` preserved the source SHA-256, then the
+SMB volume unmounted cleanly. A separate sequential-write drop fired only
+after the full 4 MiB reached the server and does not qualify an in-flight
+write. Exact in-flight `fsync`, rename/unlink of open files, concurrent users,
+permissions, capacity, and source-loss/shutdown gates remain open. `mv` is not
+installed, so CLI cross-volume move remains untested.
+Beast's authenticated provider regression additionally passed server-side
+permission denial, nonzero capacity, and rename/unlink while a file handle
+remained readable. These three cases still need a native DE25 client gate.
 Evidence: `/mnt/Documents/astra68/network-smb-edit-ui-20261104/` on Beast.
 Haiku references reviewed read-only: `src/system/kernel/fs/vfs.cpp` `dir_read`
 retains the filesystem's directory cookie and returned count;

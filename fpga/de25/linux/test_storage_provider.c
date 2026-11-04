@@ -19,6 +19,7 @@
 #include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/sysmacros.h>
@@ -1099,6 +1100,24 @@ static void network_mount_auth(AstraStorageProvider *provider, const char *serve
     assert(unicode >= 0 && read(unicode, unicode_bytes, sizeof(unicode_bytes)) == 7 &&
         memcmp(unicode_bytes, "unicode", 7) == 0);
     close(unicode);
+    assert(openat(root, "server-denied", O_RDONLY) < 0 && errno == EACCES);
+    int directory = openat(root, ".", O_RDONLY | O_DIRECTORY);
+    struct statvfs capacity;
+    assert(directory >= 0 && fstatvfs(directory, &capacity) == 0 &&
+        capacity.f_blocks > 0 && capacity.f_frsize > 0);
+    close(directory);
+    int retained = openat(root, "open-rename-before", O_CREAT | O_TRUNC | O_RDWR, 0600);
+    char retained_bytes[8];
+    assert(retained >= 0 && write(retained, "retained", 8) == 8 &&
+        fsync(retained) == 0);
+    assert(renameat(root, "open-rename-before", root, "open-rename-after") == 0);
+    assert(pread(retained, retained_bytes, 8, 0) == 8 &&
+        memcmp(retained_bytes, "retained", 8) == 0);
+    assert(unlinkat(root, "open-rename-after", 0) == 0);
+    assert(pread(retained, retained_bytes, 8, 0) == 8 &&
+        memcmp(retained_bytes, "retained", 8) == 0);
+    close(retained);
+    assert(faccessat(root, "open-rename-after", F_OK, 0) < 0 && errno == ENOENT);
     int file = openat(root, "authenticated-proof", O_CREAT | O_TRUNC | O_RDWR, 0600);
     assert(file >= 0);
     assert(write(file, "auth-pass", 9u) == 9 && fsync(file) == 0);
