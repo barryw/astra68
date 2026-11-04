@@ -308,6 +308,20 @@ the packaged kernel, migrated system image, booted to stage 8, and left all
 three services active with 7.9 GiB free. Trial and deploy evidence is in the
 same Beast archive.
 
+Source-loss recovery at source `2c8780c4` then passed focused DE25 tests:
+disconnected SMB did not block local `/dh0` commands; an inherited open SMB
+descriptor retained its original bytes across server restart; busy unmount
+named exact holders; failed saved mounts could be retired and remounted.
+Provider shutdown detached only lost network mounts and finished in 4.3
+seconds. Beast's full HostFS and storage-provider suites pass. Six raw DE25
+captures are checksum-verified under the archive's `source-loss/` directory.
+Coherent release `58858b645e4195b86c0978196371f386c195ea4ae120bb13ea8be6e3fa9d4c5f`
+passed Beast verification and a 360-second private DE25 guard at stage 8,
+with Terminal `/dh0` listing and no panic. Console and trial frames match
+board checksums in the same archive. Standard deployment selected it,
+confirmed the packaged kernel and stage 8, and left Astra, audio host and
+remote desktop active with 7.9 GiB free after disposable trial cleanup.
+
 Run disposable Samba and NFS servers on Beast before testing the DE25 against
 real shares. Cover Unicode/long names, case behavior, read-only/writable shares,
 authentication refusal, rename/unlink of open files, server-side permissions,

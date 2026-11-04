@@ -2,6 +2,37 @@
 
 Status: active continuation map, 2026-11-04
 
+SMB source-loss recovery, 2026-11-04: the QEMU HostFS transport now checks
+known lost handles and source identity before provider-root preflight. Local
+`/dh0` access stays responsive when CIFS disconnects, and duplicating an
+already-open SMB descriptor retains its original source identity. The storage
+provider detaches a catalog-declared lost *network* mount in its private
+namespace; physical-volume unmount semantics stay unchanged. Failed saved
+mounts can now be retired when no native holders exist, then mounted again.
+The authenticated Samba fixture is restartable. Beast's full HostFS suite,
+focused provider-loss scenario, storage-mount test and storage-provider test
+pass. On DE25, a live `/net0` file descriptor survived server restart and
+read its original bytes; an unrelated `/dh0` command launched during loss;
+busy unmount named exact `/net0` holders; after those handles closed, unmount
+and saved-mapping removal succeeded. Provider shutdown under lost CIFS
+completed in 4.3 seconds with no mount leak. Six raw RFB captures are
+checksum-verified on Beast under
+`/mnt/Documents/astra68/network-smb-edit-ui-20261104/source-loss/`; board
+captures were removed. Source commit `2c8780c4` is pushed. The coherent
+release `58858b645e4195b86c0978196371f386c195ea4ae120bb13ea8be6e3fa9d4c5f`
+passed Beast publisher verification and a 360-second private DE25 guard:
+stage 8, Terminal `/dh0` listing, no panic, and restoration of prior selected
+release with all three services active. Console and trial frames match board
+checksums in the same Beast archive; disposable trial tree was removed.
+Standard deployment selected this release, confirmed the packaged kernel,
+booted to stage 8 with HostFS status 0, and left Astra, audio host and remote
+desktop active with 7.9 GiB free; dev shadow was removed. Haiku
+references reviewed read-only: `src/system/kernel/fs/fd.cpp` retains open
+descriptor identity; `src/system/kernel/fs/vfs.cpp` disconnects and forces
+unmount without silently reopening a different source. No Haiku code copied.
+Exact in-flight write/`fsync`, concurrent users, different-export reconnect,
+DNS failure, pending-I/O shutdown, and bounded-resource gates remain.
+
 SMB native move and interoperability gate, 2026-11-04: a shared CLI target
 resolver now serves `cp` and new `mv`; `mv` calls Filesystem Kit's existing
 same-volume rename or cross-volume copy-and-remove operation and reports
@@ -16,7 +47,7 @@ after unlink returned the original bytes. A server mode-000 file returned
 desktop icon. Four RFB captures and raw frames were archived and checksum
 verified at `/mnt/Documents/astra68/network-smb-edit-ui-20261104/mv-gate/`;
 board captures were removed. Exact in-flight write/`fsync`, concurrent users,
-source loss, server restart, different-export reconnect, DNS failure, shutdown
+different-export reconnect, DNS failure, shutdown
 with pending I/O and bounded-resource gates remain. Haiku read-only references:
 `src/kits/tracker/FSUtils.cpp` uses rename on one volume and copy then remove
 across volumes; `src/kits/tracker/FSClipboard.cpp` centralizes move/copy policy.
