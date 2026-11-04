@@ -28,6 +28,13 @@ server SHA-256 and no temporary file (`median_ns=33997040`,
 desktop icon. Seven capture/report files match Beast archive at
 `/mnt/Documents/astra68/network-smb-edit-ui-20261104/smb30-production/`.
 The standard Samba fixture was restored and board captures/report removed.
+Five more selected-release SMB3.1.1 durable-save runs completed 100/100
+operations with matching final server files and no temporary saves. Medians
+were 36.9-43.5 ms; four p95s were 42.5-52.5 ms and one was 157.5 ms. A
+same-session local HostFS run had 66.3 ms median and 77.8 ms p95. Six reports,
+ten RFB captures, and final files are archived at
+`/mnt/Documents/astra68/network-smb-edit-ui-20261104/smb-performance/` on Beast;
+board test files were removed. Tail cause and sustained throughput remain open.
 
 SMB dialect interoperability, 2026-11-04: the storage provider now requests
 `vers=3` for authenticated and guest mounts. Linux CIFS interprets this as

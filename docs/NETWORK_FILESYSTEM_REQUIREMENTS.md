@@ -23,6 +23,11 @@ selected-save p95 was 241,915,280 ns, so performance still needs qualification.
 The same selected release also passed an SMB3.0-only server with authenticated
 read, 20 durable saves, matching server SHA-256, and source retirement.
 Seven checksum-matched capture/report files are under `smb30-production/`.
+Five selected-release SMB3.1.1 repeat runs completed 100 durable saves with
+matching final files. Medians were 36.9-43.5 ms; one p95 was 157.5 ms while
+four were 42.5-52.5 ms. A local HostFS comparison had 66.3 ms median and
+77.8 ms p95. Evidence is under `smb-performance/`; sustained performance and
+tail cause remain open.
 Provider now requests `vers=3` (SMB3.0 or newer) for authenticated and guest
 mounts. A DE25 SMB3.0-only Samba gate confirmed the old exact 3.1.1 request
 failed, then the updated provider negotiated `Dialect 0x300`, passed
