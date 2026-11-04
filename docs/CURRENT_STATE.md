@@ -2,6 +2,27 @@
 
 Status: active continuation map, 2026-11-04
 
+NFS selected-release gate, 2026-11-04: release
+`732448be669203cf03c816d680c0b495bc3c9e094efc34e721cd6e4a7c508c04`
+mounted Beast's disposable NFSv4 export writable at `/net0` on DE25.
+Terminal read the server proof; Desktop published `NFSProof`; Atlas enumerated
+the volume root. Twenty durable saves passed with `failed:false`, no temporary
+file, and matching server SHA-256
+`729512428e9663885f746f2b8b2aaafd55f8324b84600b79ff1cf4ea73b385ba`.
+Native unmount and source retirement removed the NFS mount and desktop icon.
+A saved NFS definition then mounted writable through `mount --saved`, reported
+`state=mounted`, unmounted through `unmount --saved`, and was removed; final
+`shares list` contained no test mapping. Sixteen RFB captures, workload report,
+and server final file are archived at
+`/mnt/Documents/astra68/network-nfs-selected-20261104/` on Beast with
+matching board/archive hashes. Board captures and report were removed; Astra,
+audio host, and remote desktop services remain active with 7.9 GiB free.
+Exact in-flight `fsync` fault timing and final resource-sequence fault recheck
+remain open. Haiku reference:
+`src/add-ons/kernel/file_systems/nfs4/kernel_interface.cpp` separates mount
+and volume lifecycle; Astra keeps the same distinction through its native
+source and Volume interfaces.
+
 SMB3 release, 2026-11-04: coherent release
 `732448be669203cf03c816d680c0b495bc3c9e094efc34e721cd6e4a7c508c04`
 passed a 360-second DE25 private trial from a disposable image with stage 8,

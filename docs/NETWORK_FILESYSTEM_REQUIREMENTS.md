@@ -38,7 +38,16 @@ checksum-matched in
 macOS, Windows, and NAS servers remain untested.
 NFSv4 passed a DE25 private trial for mount, guest read/write,
 Desktop and Atlas, exact open-file unmount refusal, and source retirement.
-NFS mounting is not yet qualified. Private DE25 trials kept `/dh0`
+Selected release `732448be...` also mounted NFSv4 writable at `/net0`, read
+the server proof, showed `NFSProof` on Desktop, and enumerated its root in
+Atlas. Twenty durable saves passed with matching server bytes and no temporary
+file. Native unmount/source retirement removed the mount and icon. A saved NFS
+mapping mounted writable, reported mounted state, unmounted, and was removed;
+final `shares list` contained no test mapping. Sixteen board captures, report,
+and server final file are archived with matching hashes at
+`/mnt/Documents/astra68/network-nfs-selected-20261104/` on Beast. Board trial
+files were removed; runtime, audio host, and remote desktop remain active.
+Private DE25 trials kept `/dh0`
 responsive during stalled NFS read, directory and destination-copy operations;
 read and directory traversal recovered, and a copied file committed after
 traffic returned. NFS file and nonempty folder copies persisted with matching
@@ -51,7 +60,8 @@ descriptor paths for network diagnostics without asking the server to
 revalidate metadata. It also recovered after TCP2049 was dropped mid-write at
 2 MiB and during a durable-save run when the pending file reached 65,536 bytes;
 both completed 20 durable saves with `failed:false` and matching server bytes.
-Exact in-flight `fsync` timing still needs an instrumented gate. Evidence is on Beast in
+Exact in-flight `fsync` timing and the final resource-sequence fault recheck
+still need instrumented DE25 gates. Evidence is on Beast in
 `/mnt/Documents/astra68/network-nfs-root-admission-20261103/` and
 `/mnt/Documents/astra68/network-nfs-recovery-20261103/`, and
 `/mnt/Documents/astra68/network-nfs-copy-20261103/`,
