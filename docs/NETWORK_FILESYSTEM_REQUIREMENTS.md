@@ -1,7 +1,13 @@
 # Network volumes after the local filesystem cutover
 
 Status: requirements and source-backed feasibility assessment, updated
-2026-11-04. NFSv4 passed a DE25 private trial for mount, guest read/write,
+2026-11-04. Selected DE25 SMB release `acccff5b...` passed authenticated
+read/write/durable-save, guest read-only mount/read/Atlas enumeration,
+write refusal, exact unmount and source retirement, source-loss recovery,
+bounded shutdown, and 30/95/240-second TCP445 fault gates. Guest evidence:
+`/mnt/Documents/astra68/network-smb-edit-ui-20261104/guest-final/` on Beast.
+External SMB server interoperability remains unqualified.
+NFSv4 passed a DE25 private trial for mount, guest read/write,
 Desktop and Atlas, exact open-file unmount refusal, and source retirement.
 Network mounting is not yet qualified. Private DE25 trials kept `/dh0`
 responsive during stalled NFS read, directory and destination-copy operations;
@@ -24,7 +30,7 @@ Exact in-flight `fsync` timing still needs an instrumented gate. Evidence is on 
 `/mnt/Documents/astra68/network-nfs-lsof-write-sync-20261103/`. All five
 600-second guards passed, production services recovered, and trial state was
 removed.
-Broader SMB fault/recovery and interoperability gates remain open. Saved
+Saved
 Settings creation and auto-connect passed a private
 DE25 trial after correcting Beast's board-only TCP445 firewall rule. Manual
 authenticated mount, write/read with matching server bytes, unmount, Desktop

@@ -2,6 +2,23 @@
 
 Status: active continuation map, 2026-11-04
 
+SMB guest release gate, 2026-11-04: selected DE25 release
+`acccff5bfeef37eb8ed730a1046f9adbf082e8127db14c6b1d44c987a7671a57`
+mounted a disposable Samba SMB3.1.1 guest export as read-only `/net0`.
+The desktop showed `GuestSMB`; `cat` returned the server's `guest-source`,
+copying into the share returned `access denied`, and Atlas listed
+`guest-proof.txt`. Linux's private provider mount reported
+`ro,soft,cache=none`. Unmount removed the desktop icon and CIFS mount; Atlas's
+sidebar dropped the volume when brought forward. The native network source
+was retired. Authenticated provider regression still passed with bad-password
+refusal after the fixture enabled a separate guest share; anonymous and
+unknown-user access to the authenticated export also returned access denied.
+Fourteen raw RFB
+captures were checksum-matched between board and Beast under
+`/mnt/Documents/astra68/network-smb-edit-ui-20261104/guest-final/`; board
+captures were removed. No code or release change was needed. External SMB
+server interoperability remains unqualified.
+
 SMB final fault gates, 2026-11-04: On selected release
 `58858b645e4195b86c0978196371f386c195ea4ae120bb13ea8be6e3fa9d4c5f`,
 two concurrent authenticated durable-save clients completed 20 operations

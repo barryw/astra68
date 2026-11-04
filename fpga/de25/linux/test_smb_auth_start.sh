@@ -8,6 +8,10 @@ mkdir -p /srv/astra-other
 chown astratest:astratest /srv/astra-other
 chmod 0700 /srv/astra-other
 printf 'other-source' > /srv/astra-other/other-identity.txt
+mkdir -p /srv/astra-guest
+chmod 0755 /srv/astra-guest
+printf 'guest-source' > /srv/astra-guest/guest-proof.txt
+chmod 0644 /srv/astra-guest/guest-proof.txt
 printf 'unicode' > '/srv/astra/0Café.txt'
 printf 'private' > /srv/astra/server-denied
 chmod 000 /srv/astra/server-denied
