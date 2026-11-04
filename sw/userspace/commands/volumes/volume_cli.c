@@ -1,5 +1,6 @@
 #include "volume_cli.h"
 #include <astra/posix.h>
+#include <astra/messaging_abi.h>
 #include <astra/runtime.h>
 #include <astra/status.h>
 #include <stdio.h>
@@ -10,17 +11,20 @@ int volume_cli_open(VolumeCli *cli, const char *command)
     memset(cli, 0, sizeof(*cli));
     const AstraStartupInfo *startup = astra_posix_startup();
     const AstraStartupCapability *metadata = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUMES);
+    const AstraStartupCapability *messaging = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_MESSAGING);
     const AstraStartupCapability *administrator = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUME_ADMIN);
-    if (metadata == NULL || administrator == NULL) {
+    if (metadata == NULL || messaging == NULL || administrator == NULL) {
         fprintf(stderr, "%s: volume metadata or administrator capability unavailable\n", command);
         return 0;
     }
     cli->metadata = metadata->handle;
+    cli->messaging = messaging->handle;
     cli->administrator = administrator->handle;
     const AstraStartupCapability *inspector = astra_startup_capability(startup,
         ASTRA_CAPABILITY_VOLUME_USAGE);
     cli->inspector = inspector == NULL ? ASTRA_INVALID_HANDLE : inspector->handle;
-    AstraResult result = astra_volume_watch_open(cli->metadata, &cli->watch);
+    AstraResult result = astra_volume_watch_open(cli->messaging, &cli->watch);
     if (result != ASTRA_OK) {
         fprintf(stderr, "%s: cannot observe lifecycle (%ld)\n", command, (long)result);
         return 0;
@@ -30,7 +34,7 @@ int volume_cli_open(VolumeCli *cli, const char *command)
 
 void volume_cli_close(VolumeCli *cli)
 {
-    AstraResult result = astra_volume_watch_close(cli->metadata, &cli->watch);
+    AstraResult result = astra_volume_watch_close(cli->messaging, &cli->watch);
     (void)result;
 }
 

@@ -6,6 +6,7 @@
 
 typedef struct VolumeCli {
     AstraHandle metadata;
+    AstraHandle messaging;
     AstraHandle administrator;
     AstraHandle inspector;
     AstraVolumeWatch watch;

@@ -18,6 +18,14 @@ Handles and rights, shared areas, message ports, and bulk rings.
 :project: astra-ndk
 ```
 
+```{doxygenfile} messaging.h
+:project: astra-ndk
+```
+
+```{doxygenfile} messaging_abi.h
+:project: astra-ndk
+```
+
 ```{doxygenfile} message_abi.h
 :project: astra-ndk
 ```

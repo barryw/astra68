@@ -12,6 +12,7 @@
 #include <astra/vfs_process.h>
 #include <astra/vfs_library_source.h>
 #include <astra/volume.h>
+#include <astra/messaging_abi.h>
 #include <astra/resource.h>
 
 #include <stddef.h>
@@ -71,6 +72,7 @@ static ProcessNamespace *namespace_current;
 static ProcessNamespace *namespace_owners;
 static AstraVolumeWatch namespace_watch = ASTRA_VOLUME_WATCH_INIT;
 static AstraHandle namespace_catalog;
+static AstraHandle namespace_messaging;
 static AstraHandle namespace_read;
 static AstraHandle namespace_write;
 static AstraHandle namespace_ram_read;
@@ -292,9 +294,10 @@ static uint32_t namespace_build_locked(const AstraVolumeSnapshot *catalog)
 
 static void namespace_refresh_locked(void)
 {
-    if (namespace_catalog == ASTRA_INVALID_HANDLE) return;
+    if (namespace_catalog == ASTRA_INVALID_HANDLE ||
+        namespace_messaging == ASTRA_INVALID_HANDLE) return;
     if (namespace_watch.receive == ASTRA_INVALID_HANDLE) {
-        AstraResult opened = astra_volume_watch_open(namespace_catalog, &namespace_watch);
+        AstraResult opened = astra_volume_watch_open(namespace_messaging, &namespace_watch);
         if (opened == ASTRA_OK) namespace_dirty = 1u;
         else namespace_dirty = 1u;
     }
@@ -305,7 +308,7 @@ static void namespace_refresh_locked(void)
             if (result == ASTRA_ERROR_WOULD_BLOCK) break;
             namespace_dirty = 1u;
             if (result != ASTRA_OK) {
-                AstraResult closed = astra_volume_watch_close(namespace_catalog, &namespace_watch);
+                AstraResult closed = astra_volume_watch_close(namespace_messaging, &namespace_watch);
                 (void)closed;
                 if (result == ASTRA_ERROR_PEER_DEAD || result == ASTRA_ERROR_CLOSED) {
                     (void)namespace_build_locked(NULL);
@@ -416,12 +419,13 @@ static void close_process_vfs(void)
     current_file = (AstraFile)ASTRA_FILE_INIT;
     current_ready = 0u;
     if (namespace_watch.receive != ASTRA_INVALID_HANDLE) {
-        AstraResult closed = astra_volume_watch_close(namespace_catalog, &namespace_watch);
+        AstraResult closed = astra_volume_watch_close(namespace_messaging, &namespace_watch);
         (void)closed;
     }
     namespace_release_locked(namespace_current);
     namespace_current = NULL;
-    namespace_catalog = namespace_read = namespace_write = ASTRA_INVALID_HANDLE;
+    namespace_catalog = namespace_messaging = namespace_read =
+        namespace_write = ASTRA_INVALID_HANDLE;
     namespace_ram_read = namespace_ram_write = ASTRA_INVALID_HANDLE;
     namespace_dirty = 0u;
     while (client_count != 0u) {
@@ -891,7 +895,7 @@ uint32_t astra_process_vfs_import(const AstraStartupInfo *startup,
     namespace_current = restored;
     if (namespace_watch.receive != ASTRA_INVALID_HANDLE &&
         (namespace_watch.id != header->watch.id || namespace_watch.receive != header->watch.receive)) {
-        AstraResult closed = astra_volume_watch_close(namespace_catalog, &namespace_watch);
+        AstraResult closed = astra_volume_watch_close(namespace_messaging, &namespace_watch);
         (void)closed;
     }
     namespace_watch = header->watch;
@@ -1018,11 +1022,14 @@ static uint32_t seed_process_vfs(const AstraStartupInfo *startup,
     if (status != ASTRA_VFS_OK)
         return status;
     const AstraStartupCapability *catalog = astra_startup_capability(startup, "VOLUMES");
+    const AstraStartupCapability *messaging = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_MESSAGING);
     const AstraStartupCapability *reader = astra_startup_capability(startup, "VOLUME_READ");
     const AstraStartupCapability *writer = astra_startup_capability(startup, "VOLUME_WRITE");
     const AstraStartupCapability *ram_reader = astra_startup_capability(startup, ASTRA_CAPABILITY_RAM_READ);
     const AstraStartupCapability *ram_writer = astra_startup_capability(startup, ASTRA_CAPABILITY_RAM_WRITE);
     namespace_catalog = catalog != NULL ? catalog->handle : ASTRA_INVALID_HANDLE;
+    namespace_messaging = messaging != NULL ? messaging->handle : ASTRA_INVALID_HANDLE;
     namespace_read = reader != NULL ? reader->handle : ASTRA_INVALID_HANDLE;
     namespace_write = writer != NULL ? writer->handle : ASTRA_INVALID_HANDLE;
     namespace_ram_read = ram_reader != NULL ? ram_reader->handle : ASTRA_INVALID_HANDLE;

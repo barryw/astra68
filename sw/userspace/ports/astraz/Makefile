@@ -26,7 +26,7 @@ $(PROGRAM): CMakeLists.txt src/main.c src/audio.c src/audio.h \
 		--readelf m68k-astra-readelf \
 		--needed interface.library.12 --needed graphics.library.3 \
 		--needed font.library.5 --needed system.library.4 \
-		--needed filesystem.library.15 \
+		--needed filesystem.library.16 \
 		--needed config.library.2 \
 		--needed SDL2_mixer.library.3 \
 		--needed runtime.library.2 --needed compiler.library.2 \

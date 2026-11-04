@@ -17,7 +17,7 @@ SYSTEM := ../sw/userspace/system
 KERNEL_ABI_HEADERS := $(addprefix ../sw/include/astra/,address_space.h \
 	application_service.h audio_stream.h block.h bytes.h civil.h compiler.h display.h \
 	divide.h endian.h event.h event_descriptor.h gui.h host.h input.h library.h \
-	limits.h log_ring.h message_abi.h network.h ntp.h pcm_format.h posix_process.h \
+	limits.h log_ring.h message_abi.h messaging_abi.h network.h ntp.h pcm_format.h posix_process.h \
 	proc.h process.h program.h service_manager_abi.h shutdown.h status.h \
 	object_abi.h stream_service.h syscall.h time_page.h vfs_service.h volume_abi.h)
 # Headers of the third-party APIs the shipped libraries export:

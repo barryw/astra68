@@ -70,7 +70,7 @@ PICOLIBC_MATH := $(PICOLIBC)/lib/libm.a
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 STREAMS_LIBRARY := $(STREAMS)/build/m68k/libraries/streams.library.1
-FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.15
+FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.16
 NETWORK_LIBRARY := $(NETWORK)/build/m68k/libraries/network.library.1
 NETWORK_LIB := $(NETWORK)/build/m68k/libastranetwork.a
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
@@ -209,7 +209,7 @@ $(LIBC_LIBRARY): $(LIBC_IDENTITY) $(LIBRARY_OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
 		-L$(dir $(NETWORK_LIBRARY)) \
 		-Wl,--no-as-needed \
-		-Wl,-l:streams.library.1 -Wl,-l:filesystem.library.15 \
+		-Wl,-l:streams.library.1 -Wl,-l:filesystem.library.16 \
 		-Wl,-l:network.library.1 \
 		-Wl,-l:runtime.library.2 -Wl,-l:compiler.library.2 \
 		-Wl,--start-group $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
@@ -234,7 +234,7 @@ libc-library-contract: $(LIBC_LIBRARY)
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [streams.library.1]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
-		grep -Fc 'Shared library: [filesystem.library.15]')" = 1
+		grep -Fc 'Shared library: [filesystem.library.16]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \

@@ -31,11 +31,8 @@ typedef uint32_t (*AstraVolumeApplyPartition)(void *context, uint32_t owner,
     const AstraVolumePartitionRequest *request, uint32_t *outcome);
 typedef uint32_t (*AstraVolumeReadUsage)(void *context,
     const AstraVolumeUsageQuery *query, AstraVolumeUsagePage *page);
-typedef struct AstraVolumeSubscriber AstraVolumeSubscriber;
 typedef struct AstraVolumePort {
     uint32_t receive;
-    uint32_t owner_limit;
-    uint64_t next_subscription;
     AstraVolumeReadCatalog read;
     AstraVolumeGrantRoot root;
     AstraVolumeApplyControl control;
@@ -45,13 +42,12 @@ typedef struct AstraVolumePort {
     AstraVolumeApplyPartition partition;
     AstraVolumeReadUsage usage;
     void *context;
-    AstraVolumeSubscriber *subscribers;
     AstraVolumeCatalogPage page;
     AstraVolumeUsagePage usage_page;
     AstraVolumeChange observed;
 } AstraVolumePort;
 int astra_volume_port_init(AstraVolumePort *port, uint32_t receive,
-    uint32_t owner_limit, AstraVolumeReadCatalog read, void *context);
+    AstraVolumeReadCatalog read, void *context);
 uint32_t astra_volume_port_pump(AstraVolumePort *port, uint32_t budget);
 /* Broker authority comes from the selected receive endpoint, not the packet. */
 uint32_t astra_volume_port_root_pump(AstraVolumePort *port, uint32_t receive,
@@ -63,7 +59,7 @@ uint32_t astra_volume_port_format_pump(AstraVolumePort *port, uint32_t receive,
     uint32_t budget);
 uint32_t astra_volume_port_usage_pump(AstraVolumePort *port, uint32_t receive,
     uint32_t budget);
-/* Sample and invalidate; also reap closed subscribers when nothing changed. */
+/* Sample the current catalog for nonblocking publication by HostFS. */
 void astra_volume_port_poll(AstraVolumePort *port);
 void astra_volume_port_destroy(AstraVolumePort *port);
 #endif

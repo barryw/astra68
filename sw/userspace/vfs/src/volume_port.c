@@ -4,14 +4,6 @@
 #include <astra/status.h>
 #include <string.h>
 
-struct AstraVolumeSubscriber {
-    AstraVolumeSubscriber *next;
-    uint64_t id;
-    uint32_t owner;
-    uint32_t send;
-    AstraVolumeChange delivered;
-};
-
 static int header_valid(const AstraMessageHeader *header, uint32_t size)
 {
     return header->total_size == size &&
@@ -21,36 +13,16 @@ static int header_valid(const AstraMessageHeader *header, uint32_t size)
         header->transaction_id != 0u;
 }
 
-static int query_empty(const AstraVolumeCatalogQuery *query)
-{
-    return query->version == 0u && query->size == 0u && query->epoch == 0u &&
-        query->sequence == 0u && query->after == 0u;
-}
-
 int astra_volume_port_init(AstraVolumePort *port, uint32_t receive,
-    uint32_t owner_limit, AstraVolumeReadCatalog read, void *context)
+    AstraVolumeReadCatalog read, void *context)
 {
-    if (port == NULL || receive == 0u || owner_limit == 0u || read == NULL) return 0;
+    if (port == NULL || receive == 0u || read == NULL) return 0;
     memset(port, 0, sizeof(*port));
     port->receive = receive;
-    port->owner_limit = owner_limit;
-    port->next_subscription = 1u;
     port->read = read;
     port->context = context;
     port->observed.status = ASTRA_STATUS_LOST;
     return 1;
-}
-
-static uint32_t notify(AstraVolumePort *port, AstraVolumeSubscriber *subscriber)
-{
-    AstraVolumeNotification message = {0};
-    astra_message_header_set(&message.header, sizeof(message), ASTRA_VOLUME_PROTOCOL,
-        ASTRA_VOLUME_PROTOCOL_VERSION, ASTRA_VOLUME_CHANGED, 0u);
-    message.subscription = subscriber->id;
-    message.change = port->observed;
-    uint32_t status = astra_port_send(subscriber->send, &message, sizeof(message), NULL, 0u);
-    if (status == ASTRA_SYSCALL_OK) subscriber->delivered = port->observed;
-    return status;
 }
 
 void astra_volume_port_poll(AstraVolumePort *port)
@@ -68,64 +40,6 @@ void astra_volume_port_poll(AstraVolumePort *port)
             port->observed.sequence = port->page.sequence;
         }
     }
-    AstraVolumeSubscriber **at = &port->subscribers;
-    while (*at != NULL) {
-        AstraVolumeSubscriber *subscriber = *at;
-        uint32_t status = astra_wait_one(subscriber->send, 0u, NULL);
-        if (status == ASTRA_SYSCALL_OK || status == ASTRA_SYSCALL_TIMED_OUT ||
-            status == ASTRA_SYSCALL_WOULD_BLOCK) {
-            if (memcmp(&subscriber->delivered, &port->observed, sizeof(port->observed)) != 0)
-                status = notify(port, subscriber);
-            else status = ASTRA_SYSCALL_OK;
-        }
-        if (status != ASTRA_SYSCALL_OK && status != ASTRA_SYSCALL_WOULD_BLOCK &&
-            status != ASTRA_SYSCALL_TIMED_OUT) {
-            *at = subscriber->next;
-            (void)astra_close(subscriber->send);
-            astra_runtime_deallocate(subscriber);
-        } else at = &subscriber->next;
-    }
-}
-
-static uint32_t subscribe(AstraVolumePort *port, uint32_t owner, uint32_t *send, uint64_t *id)
-{
-    uint32_t held = 0u;
-    for (AstraVolumeSubscriber *at = port->subscribers; at != NULL; at = at->next)
-        if (at->owner == owner) ++held;
-    if (held >= port->owner_limit || port->next_subscription == UINT64_MAX)
-        return ASTRA_STATUS_LIMIT;
-    AstraVolumeSubscriber *subscriber = astra_runtime_callocate(1u, sizeof(*subscriber));
-    if (subscriber == NULL) return ASTRA_STATUS_LIMIT;
-    subscriber->id = port->next_subscription++;
-    subscriber->owner = owner;
-    subscriber->send = *send;
-    uint32_t status = notify(port, subscriber);
-    if (status != ASTRA_SYSCALL_OK && status != ASTRA_SYSCALL_WOULD_BLOCK) {
-        astra_runtime_deallocate(subscriber);
-        return status == ASTRA_SYSCALL_PEER_DEAD ? ASTRA_STATUS_PEER_DEAD : ASTRA_STATUS_BAD_HANDLE;
-    }
-    subscriber->next = port->subscribers;
-    port->subscribers = subscriber;
-    *send = 0u;
-    *id = subscriber->id;
-    return ASTRA_STATUS_OK;
-}
-
-static uint32_t unsubscribe(AstraVolumePort *port, uint32_t owner, uint64_t id)
-{
-    AstraVolumeSubscriber **at = &port->subscribers;
-    while (*at != NULL) {
-        AstraVolumeSubscriber *subscriber = *at;
-        if (subscriber->id == id) {
-            if (subscriber->owner != owner) return ASTRA_STATUS_ACCESS;
-            *at = subscriber->next;
-            (void)astra_close(subscriber->send);
-            astra_runtime_deallocate(subscriber);
-            return ASTRA_STATUS_OK;
-        }
-        at = &subscriber->next;
-    }
-    return ASTRA_STATUS_BAD_HANDLE;
 }
 
 static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
@@ -317,7 +231,7 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
             else if (size != sizeof(*request))
                 reply.status = ASTRA_STATUS_PROTOCOL;
             else if (request->header.operation == ASTRA_VOLUME_QUERY && count == 2u &&
-                request->subscription == 0u && astra_volume_query_valid(&request->query)) {
+                astra_volume_query_valid(&request->query)) {
                 reply.status = port->read(port->context, &request->query, &port->page);
                 if (reply.status == ASTRA_STATUS_OK) {
                     void *mapped = NULL;
@@ -331,13 +245,7 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
                     if (mapped != NULL && astra_rt_area_unmap(mapped) != ASTRA_SYSCALL_OK &&
                         reply.status == ASTRA_STATUS_OK) reply.status = ASTRA_STATUS_IO;
                 }
-            } else if (request->header.operation == ASTRA_VOLUME_SUBSCRIBE && count == 2u &&
-                request->subscription == 0u && query_empty(&request->query)) {
-                astra_volume_port_poll(port);
-                reply.status = subscribe(port, owner, &handles[1], &reply.subscription);
-            } else if (request->header.operation == ASTRA_VOLUME_UNSUBSCRIBE && count == 1u &&
-                request->subscription != 0u && query_empty(&request->query))
-                reply.status = unsubscribe(port, owner, request->subscription);
+            }
         }
         if (count != 0u) {
             reply.header.total_size = reply_size;
@@ -382,11 +290,5 @@ uint32_t astra_volume_port_format_pump(AstraVolumePort *port, uint32_t receive, 
 
 void astra_volume_port_destroy(AstraVolumePort *port)
 {
-    while (port->subscribers != NULL) {
-        AstraVolumeSubscriber *subscriber = port->subscribers;
-        port->subscribers = subscriber->next;
-        (void)astra_close(subscriber->send);
-        astra_runtime_deallocate(subscriber);
-    }
     memset(port, 0, sizeof(*port));
 }

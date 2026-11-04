@@ -67,6 +67,7 @@ const AstraStartupCapability *astra_startup_capability(const AstraStartupInfo *s
     (void)startup;
     static const AstraStartupCapability capabilities[] = {
         {.name = "VOLUMES", .handle = 90001u},
+        {.name = "MESSAGING", .handle = 90007u},
         {.name = "VOLUME_READ", .handle = 90002u},
         {.name = "VOLUME_WRITE", .handle = 90003u},
         {.name = "RAM_READ", .handle = 90005u},
@@ -74,10 +75,10 @@ const AstraStartupCapability *astra_startup_capability(const AstraStartupInfo *s
     if (!catalog_enabled) return NULL;
     for (uint32_t at = 0u; at < sizeof(capabilities) / sizeof(capabilities[0]); ++at)
         if (strcmp(name, capabilities[at].name) == 0) {
-            if (at == 1u && (global_brokers & ASTRA_RIGHT_READ) == 0u) return NULL;
-            if (at == 2u && (global_brokers & ASTRA_RIGHT_WRITE) == 0u) return NULL;
-            if (at == 3u && (ram_brokers & ASTRA_RIGHT_READ) == 0u) return NULL;
-            if (at == 4u && (ram_brokers & ASTRA_RIGHT_WRITE) == 0u) return NULL;
+            if (at == 2u && (global_brokers & ASTRA_RIGHT_READ) == 0u) return NULL;
+            if (at == 3u && (global_brokers & ASTRA_RIGHT_WRITE) == 0u) return NULL;
+            if (at == 4u && (ram_brokers & ASTRA_RIGHT_READ) == 0u) return NULL;
+            if (at == 5u && (ram_brokers & ASTRA_RIGHT_WRITE) == 0u) return NULL;
             return &capabilities[at];
         }
     return NULL;
@@ -85,7 +86,7 @@ const AstraStartupCapability *astra_startup_capability(const AstraStartupInfo *s
 uint32_t astra_close(uint32_t handle) { if (handle >= 50000u && handle < 90000u) ++root_closes; return ASTRA_SYSCALL_OK; }
 AstraResult astra_volume_watch_open(AstraHandle service, AstraVolumeWatch *watch)
 {
-    assert(service == 90001u); ++watch_opens;
+    assert(service == 90007u); ++watch_opens;
     *watch = (AstraVolumeWatch){watch_opens, 90004u, 0u};
     return ASTRA_OK;
 }

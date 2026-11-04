@@ -26,7 +26,7 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -Wl,--gc-sections \
 	$(ASTRA_STATIC_LINK_SCRIPT_FLAGS)
-SOURCES := src/supervisor.c src/main.c src/volume.c src/loader.c \
+SOURCES := src/supervisor.c src/main.c src/volume.c src/loader.c src/messaging.c \
 	src/launch_report.c \
 	src/loader_manifest.c src/service_definition_store.c src/vfs_host.c \
 	src/vfs_read.c src/proc_tree.c
@@ -56,6 +56,7 @@ LAUNCH_REPORT_TEST := build/host/test_launch_report
 VOLUME_READ_TEST := build/host/test_volume_read
 LOADER_RECOVERY_TEST := build/host/test_loader_recovery
 LAUNCH_VOLUME_TEST := build/host/test_launch_volume
+MESSAGING_TEST := build/host/test_messaging
 TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c $(ASTRA_COMMON)/utf8.c \
 	tests/test_supervisor.c
 ASTRA_PROGRAM_OWNER_TARGETS := $(RUNTIME):all \
@@ -167,9 +168,15 @@ $(LAUNCH_VOLUME_TEST): tests/test_launch_volume.c src/loader.c include/loader.h 
 		-ffunction-sections -fdata-sections $< $(RUNTIME)/src/string.c \
 		-Wl,--gc-sections -o $@
 
+$(MESSAGING_TEST): tests/test_messaging.c src/messaging.c include/messaging.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/messaging.c tests/test_messaging.c -o $@
+
 test: $(HOST_TEST) $(LOADER_TEST) $(PROC_TREE_ROOT_TEST) \
 		$(SERVICE_DEFINITION_TEST) $(LOADER_STATUS_TEST) $(LAUNCH_REPORT_TEST) \
-		$(VOLUME_READ_TEST) $(LOADER_RECOVERY_TEST) $(LAUNCH_VOLUME_TEST)
+		$(VOLUME_READ_TEST) $(LOADER_RECOVERY_TEST) $(LAUNCH_VOLUME_TEST) \
+		$(MESSAGING_TEST)
 	./$(HOST_TEST)
 	./$(LOADER_TEST)
 	./$(PROC_TREE_ROOT_TEST)
@@ -179,6 +186,7 @@ test: $(HOST_TEST) $(LOADER_TEST) $(PROC_TREE_ROOT_TEST) \
 	./$(VOLUME_READ_TEST)
 	./$(LOADER_RECOVERY_TEST)
 	./$(LAUNCH_VOLUME_TEST)
+	./$(MESSAGING_TEST)
 
 sanitize:
 	@mkdir -p build/host

@@ -6,6 +6,13 @@ The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
 Kernel-internal structures and function calls may change at any time.
 
+Current filesystem client ABI is 16.0 (`filesystem.library.16`,
+`ASTRA_FILESYSTEM_16.0`). Native Volume protocol 6 removes its private watch
+operations; `astra_volume_watch_*` now uses the generic MSGG 1 broker through
+the `MESSAGING` startup capability. `VOLUMES` still supplies catalog snapshots.
+All in-tree filesystem consumers use ABI 16.0; historical ABI 14 and 15 notes
+below describe earlier migrations, not supported coexistence.
+
 ## Unreleased native volume migration
 
 Host transport is now `0x00030000`, command record 5. SESSION_OPEN takes a

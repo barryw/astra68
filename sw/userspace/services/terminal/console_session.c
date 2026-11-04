@@ -10,6 +10,7 @@
 #include <astra/gui.h>
 #include <astra/event_control.h>
 #include <astra/log_ring.h>
+#include <astra/messaging_abi.h>
 #include <astra/network.h>
 #include <astra/ntp.h>
 #include <astra/pcm_format.h>
@@ -118,6 +119,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
         ASTRA_CAPABILITY_POSIX_PROCESS,
         ASTRA_CAPABILITY_APPLICATION_LAUNCH,
         ASTRA_CAPABILITY_SERVICE_MANAGER,
+        ASTRA_CAPABILITY_MESSAGING,
         ASTRA_CAPABILITY_ENTROPY,
         ASTRA_CAPABILITY_VOLUMES,
         ASTRA_CAPABILITY_VOLUME_READ,

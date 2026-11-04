@@ -30,6 +30,7 @@
 #include <astra/text_style.h>
 #include <astra/window.h>
 #include <astra/volume.h>
+#include <astra/messaging_abi.h>
 #include <astra/ascii.h>
 #include <astra/trash.h>
 
@@ -106,6 +107,7 @@ static uint32_t read_folders(DesktopApps *apps)
 }
 
 static AstraHandle volume_metadata;
+static AstraHandle volume_messaging;
 static AstraHandle volume_administrator;
 static AstraHandle volume_inspector;
 static AstraVolumeWatch volume_watch = ASTRA_VOLUME_WATCH_INIT;
@@ -1083,10 +1085,13 @@ int astra_main(const AstraStartupInfo *startup)
         startup, ASTRA_CAPABILITY_SERVICE_MANAGER);
     pcm = astra_startup_capability(startup, ASTRA_CAPABILITY_PCM);
     metadata = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUMES);
+    const AstraStartupCapability *messaging = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_MESSAGING);
     administrator = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUME_ADMIN);
     inspector = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUME_USAGE);
     if (bootstrap == NULL || gui == NULL || launcher == NULL ||
-        manager == NULL || metadata == NULL || administrator == NULL || inspector == NULL ||
+        manager == NULL || metadata == NULL || messaging == NULL ||
+        administrator == NULL || inspector == NULL ||
         (manager->rights & ASTRA_RIGHT_SIGNAL) == 0u)
         return ASTRA_STATUS_BAD_HANDLE;
     if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
@@ -1097,10 +1102,16 @@ int astra_main(const AstraStartupInfo *startup)
     command_context.gui = gui->handle;
     command_context.launcher = launcher->handle;
     volume_metadata = metadata->handle;
+    volume_messaging = messaging->handle;
     volume_administrator = administrator->handle;
     volume_inspector = inspector->handle;
-    if (astra_volume_watch_open(volume_metadata, &volume_watch) != ASTRA_OK)
+    AstraResult watch_result = astra_volume_watch_open(volume_messaging,
+        &volume_watch);
+    if (watch_result != ASTRA_OK) {
+        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_DISPLAY, ASTRA_EVENT_LEVEL_ERROR,
+            "desktop volume watch open result=%d", watch_result);
         return DESKTOP_FAIL_FILESYSTEM;
+    }
     status = astra_process_filesystem_open(&process_filesystem, startup);
     if (status != ASTRA_STATUS_OK) status = DESKTOP_FAIL_FILESYSTEM;
     /* A GPU-surface window: its first shared area is only the initial
@@ -1184,13 +1195,13 @@ int astra_main(const AstraStartupInfo *startup)
             AstraVolumeChange change;
             result = astra_volume_watch_receive(&volume_watch, &change);
             if (result != ASTRA_OK || change.status != ASTRA_STATUS_OK) {
-                AstraResult ignored = astra_volume_watch_close(volume_metadata, &volume_watch);
+                AstraResult ignored = astra_volume_watch_close(volume_messaging, &volume_watch);
                 (void)ignored;
             }
             volume_refresh = 1u;
             volume_retry = 0u;
         } else if (waited == ASTRA_SYSCALL_PEER_DEAD && selected == 1u && volume_watch.receive != ASTRA_INVALID_HANDLE) {
-            AstraResult ignored = astra_volume_watch_close(volume_metadata, &volume_watch);
+            AstraResult ignored = astra_volume_watch_close(volume_messaging, &volume_watch);
             (void)ignored;
             volume_refresh = 1u;
             volume_retry = 0u;

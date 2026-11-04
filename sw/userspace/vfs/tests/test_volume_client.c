@@ -1,6 +1,7 @@
 #include <astra/volume_port.h>
 #include <astra/area.h>
 #include <astra/port.h>
+#include <astra/messaging.h>
 #include <astra/result.h>
 #include <astra/filesystem_library.h>
 #include <assert.h>
@@ -14,7 +15,7 @@ static AstraVolumeUsagePage shared_usage;
 static AstraVolumeNetworkSource shared_network;
 static AstraVolumeMountAuth shared_auth;
 static uint32_t shared_size;
-static AstraVolumeNotification notification;
+static AstraMessagingEvent notification;
 static AstraResult transport_failure, map_failure;
 static uint32_t service_failure, corrupt_reply, corrupt_page;
 static uint32_t maps, closes, queued;
@@ -101,6 +102,9 @@ AstraResult astra_port_create(uint32_t count, uint32_t bytes, AstraPort *port)
 }
 AstraResult astra_port_close(AstraPort *port)
 {
+    if (port->receive == ASTRA_INVALID_HANDLE &&
+        port->send == ASTRA_INVALID_HANDLE)
+        return ASTRA_ERROR_INVALID_HANDLE;
     if (port->receive != 0u) assert(astra_handle_close(&port->receive) == ASTRA_OK);
     if (port->send != 0u) assert(astra_handle_close(&port->send) == ASTRA_OK);
     return ASTRA_OK;
@@ -236,28 +240,48 @@ AstraResult astra_port_call(AstraHandle endpoint, AstraCall *call, AstraMonotoni
                 if (fail_continuation) reply->status = ASTRA_STATUS_BUSY;
             }
         }
-    } else if (request->header.operation == ASTRA_VOLUME_SUBSCRIBE && reply->status == 0u) {
-        assert(call->handle_count == 1u); reply->subscription = ++subscription;
-        memset(&notification, 0, sizeof(notification));
-        astra_message_header_set(&notification.header, sizeof(notification), ASTRA_VOLUME_PROTOCOL,
-            ASTRA_VOLUME_PROTOCOL_VERSION, ASTRA_VOLUME_CHANGED, 0u);
-        notification.subscription = subscription;
-        notification.change = (AstraVolumeChange){25u, 3u, 0u, 0u}; queued = 1u;
-    } else if (request->header.operation == ASTRA_VOLUME_UNSUBSCRIBE)
-        assert(call->handle_count == 0u && request->subscription != 0u);
+    }
     call->reply_size = reply_size;
     if (corrupt_reply == 1u) ++reply->header.transaction_id;
     if (corrupt_reply == 2u) reply->reserved = 1u;
-    if (corrupt_reply == 3u) reply->subscription = 9u;
+    if (corrupt_reply == 3u) reply->header.operation = ASTRA_VOLUME_QUERY;
     if (corrupt_reply == 4u) reply->header.flags = 1u;
     return ASTRA_OK;
 }
-AstraResult astra_port_receive_try(AstraHandle receive, void *out, uint32_t capacity,
-    AstraHandle *handles, uint32_t handle_capacity, uint32_t *size, uint32_t *count)
+AstraResult astra_messaging_subscribe(AstraHandle broker, uint32_t kind,
+    const char *name, uint32_t process_id, const char *topic,
+    AstraHandle *event_send, uint64_t *id)
 {
-    assert(owned[receive] && capacity == sizeof(notification) && handles == NULL && handle_capacity == 0u);
+    assert(broker == 77u && kind == ASTRA_MESSAGING_SERVICE &&
+        strcmp(name, "hostfs") == 0 && process_id == 0u &&
+        strcmp(topic, "volumes") == 0 && event_send != NULL &&
+        owned[*event_send]);
+    if (transport_failure != ASTRA_OK) return transport_failure;
+    assert(astra_handle_close(event_send) == ASTRA_OK);
+    *id = ++subscription;
+    notification = (AstraMessagingEvent){0};
+    notification.kind = ASTRA_MESSAGING_SERVICE;
+    notification.subscription = *id;
+    notification.payload_size = sizeof(AstraVolumeChange);
+    memcpy(notification.name, "hostfs", 7u);
+    memcpy(notification.topic, "volumes", 8u);
+    const AstraVolumeChange change = {25u, 3u, 0u, 0u};
+    memcpy(notification.payload, &change, sizeof(change));
+    queued = 0u;
+    return ASTRA_OK;
+}
+AstraResult astra_messaging_unsubscribe(AstraHandle broker, uint64_t id)
+{
+    assert(broker == 77u && id != 0u);
+    return transport_failure;
+}
+AstraResult astra_messaging_event_try(AstraHandle receive,
+    AstraMessagingEvent *event, AstraHandle *response_send)
+{
+    assert(owned[receive] && response_send == NULL);
     if (!queued) return ASTRA_ERROR_WOULD_BLOCK;
-    queued = 0u; memcpy(out, &notification, sizeof(notification)); *size = sizeof(notification); *count = 0u;
+    queued = 0u;
+    *event = notification;
     return ASTRA_OK;
 }
 static void removal_lifecycle(void)
@@ -540,6 +564,8 @@ int main(void)
     AstraVolumeChange change;
     assert(astra_volume_watch_open(77u, &watch) == ASTRA_OK && watch.id != 0u);
     assert(astra_volume_watch_open(77u, &watch) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_volume_watch_receive(&watch, &change) == ASTRA_ERROR_WOULD_BLOCK);
+    queued = 1u;
     assert(astra_volume_watch_receive(&watch, &change) == ASTRA_OK && change.sequence == 3u);
     assert(astra_volume_watch_receive(&watch, &change) == ASTRA_ERROR_WOULD_BLOCK);
     queued = 1u; ++notification.subscription;

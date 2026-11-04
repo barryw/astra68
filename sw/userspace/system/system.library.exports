@@ -81,6 +81,16 @@ ASTRA_SYSTEM_4.0 {
         astra_manifest_text_valid;
         astra_manifest_words;
         astra_message_header_init;
+        astra_messaging_event_try;
+        astra_messaging_identify;
+        astra_messaging_list;
+        astra_messaging_lookup;
+        astra_messaging_post;
+        astra_messaging_publish;
+        astra_messaging_register;
+        astra_messaging_subscribe;
+        astra_messaging_unregister;
+        astra_messaging_unsubscribe;
         astra_pointer_event_try;
         astra_pointer_event_wait;
         astra_pointer_observer_close;

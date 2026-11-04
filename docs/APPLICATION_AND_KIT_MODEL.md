@@ -147,11 +147,14 @@ messages. C++ and other language wrappers may provide move-only ownership,
 RAII, containers, and UI classes without exposing compiler object layouts,
 exceptions, RTTI, or name mangling across a process or Kit boundary.
 
-The Messaging API group exposes the existing bounded ports, timed send and
-receive, handle duplication, and capability-transfer primitives. It is direct
-process messaging, not an in-process substitute for system event publication.
-A future event broker can build pub/sub on these primitives when there is a
-real system service to own subscriptions, filtering, and backpressure.
+The Messaging API group exposes bounded ports, timed send and receive, handle
+transfer, and a supervisor-owned process directory and event broker. Programs
+publish a direct endpoint under their authenticated launch identity; clients
+look it up and use the endpoint's own request/reply protocol. Named topics
+route bounded events to subscribers. Publisher identity comes from the kernel
+sender ID and supervisor launch record, never from message text. Sequence gaps
+report dropped events, and an optional transferred reply endpoint lets each
+subscriber answer a publication directly.
 
 The Events API group exposes the existing diagnostic event emitter, log, trace
 reader, and event catalog through `runtime.library`. It records observable

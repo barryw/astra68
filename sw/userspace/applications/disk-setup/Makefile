@@ -25,7 +25,7 @@ $(OBJECT): main.c
 	$(CC) $(CPPFLAGS) $(FLAGS) -MMD -MP -c $< -o $@
 
 test: all
-	@$(READELF) --dyn-syms -W $(TARGET) | grep -q 'astra_volume_snapshot_ancestor@ASTRA_FILESYSTEM_15.0'
+	@$(READELF) --dyn-syms -W $(TARGET) | grep -q 'astra_volume_snapshot_ancestor@ASTRA_FILESYSTEM_16.0'
 	@$(READELF) --dyn-syms -W $(TARGET) | grep -q 'astra_dos_disk_snapshot_open@ASTRA_DOS_1.0'
 	@$(READELF) --dyn-syms -W $(TARGET) | grep -q 'astra_dos_disk_submit@ASTRA_DOS_1.0'
 

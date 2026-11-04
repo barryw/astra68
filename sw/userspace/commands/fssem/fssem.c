@@ -26,6 +26,7 @@
 #include <astra/vfs_process.h>
 #include <astra/vfs_service.h>
 #include <astra/volume.h>
+#include <astra/messaging_abi.h>
 
 #include <dirent.h>
 #include <errno.h>
@@ -2188,16 +2189,14 @@ static int case_volume_catalog(const char *directory)
     (void)directory;
     const AstraStartupCapability *capability = astra_startup_capability(
         astra_posix_startup(), ASTRA_CAPABILITY_VOLUMES);
+    const AstraStartupCapability *messaging = astra_startup_capability(
+        astra_posix_startup(), ASTRA_CAPABILITY_MESSAGING);
     CHECK(capability != NULL, "missing native VOLUMES capability");
+    CHECK(messaging != NULL, "missing native MESSAGING capability");
     AstraVolumeCatalogPage *page = malloc(sizeof(*page));
     CHECK(page != NULL, "catalog page allocation");
     AstraVolumeWatch watch = ASTRA_VOLUME_WATCH_INIT;
-    AstraVolumeChange change = {0};
-    AstraResult result = astra_volume_watch_open(capability->handle, &watch);
-    if (result == ASTRA_OK)
-        result = astra_volume_watch_receive(&watch, &change);
-    if (result == ASTRA_OK && (change.status != ASTRA_STATUS_OK ||
-        change.epoch == 0u || change.sequence == 0u)) result = ASTRA_ERROR_IO;
+    AstraResult result = astra_volume_watch_open(messaging->handle, &watch);
     AstraVolumeCatalogQuery query = {ASTRA_VOLUME_CATALOG_VERSION, sizeof(query), 0u, 0u, 0u};
     uint32_t mounts = 0u, bindings = 0u, system = 0u, present = 0u;
     uint64_t last = 0u;
@@ -2234,15 +2233,14 @@ static int case_volume_catalog(const char *directory)
         if (astra_volume_catalog(capability->handle, &query, page) != ASTRA_ERROR_INVALID_HANDLE ||
             page->count != 0u || page->epoch != 0u) result = ASTRA_ERROR_IO;
     }
-    AstraResult closed = astra_volume_watch_close(capability->handle, &watch);
+    AstraResult closed = astra_volume_watch_close(messaging->handle, &watch);
     if (result == ASTRA_OK) result = closed;
     if (result == ASTRA_OK && (watch.id != 0u || watch.receive != ASTRA_INVALID_HANDLE))
         result = ASTRA_ERROR_IO;
     /* Repeated construction must return each native port/subscription resource. */
     for (uint32_t at = 0u; at < 32u && result == ASTRA_OK; ++at) {
-        result = astra_volume_watch_open(capability->handle, &watch);
-        if (result == ASTRA_OK) result = astra_volume_watch_receive(&watch, &change);
-        closed = astra_volume_watch_close(capability->handle, &watch);
+        result = astra_volume_watch_open(messaging->handle, &watch);
+        closed = astra_volume_watch_close(messaging->handle, &watch);
         if (result == ASTRA_OK) result = closed;
     }
     free(page);

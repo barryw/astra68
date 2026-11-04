@@ -1,7 +1,7 @@
 # Filesystem Kit
 
 Include `astra/filesystem_kit.h` for the complete API. Link against
-`filesystem.library.15` and declare the minimum compatible version in the
+`filesystem.library.16` and declare the minimum compatible version in the
 bundle manifest. The process loader resolves that dependency before `main`;
 applications call the declared `astra_filesystem_*` functions directly.
 
@@ -11,6 +11,12 @@ metadata, mutation, and bounded union-directory enumeration. It also exports
 the underlying VFS client operations for filesystem and compatibility tools.
 The ABI has no dependency on lwext4 or any other on-disk implementation; RAM
 drives and other filesystem services use the same protocol and API.
+
+ABI 16.0 moves volume change delivery onto generic Messaging. Volume protocol
+6 removes its private subscription operations. Pass the `MESSAGING` startup
+capability to `astra_volume_watch_open` and `astra_volume_watch_close`; keep
+using `VOLUMES` for snapshots. All in-tree clients require the single
+`ASTRA_FILESYSTEM_16.0` symbol namespace.
 
 `astra_volume_reference_equal` compares the full provider epoch, volume ID,
 and generation. Use it when matching a selected or retained volume against a
@@ -90,8 +96,7 @@ Components accept 255 UTF-8 bytes and native paths accept 4095 bytes, excluding
 the terminating zero. Longer components or paths return
 `ASTRA_VFS_ERR_NAME_TOO_LONG` (native status 23); POSIX maps it to
 `ENAMETOOLONG`. Metadata and continuation payloads retain full-width volume
-references. Existing clients retain their ABI 15.0 or 15.1 minimum; Disk Setup
-requires 15.2.
+references. Clients on the current image require ABI 16.0.
 
 ABI 14.0 adds the native volume catalog, complete owned snapshots, subscriptions
 and exact-incarnation root grants. `VOLUMES` conveys metadata only; distinct

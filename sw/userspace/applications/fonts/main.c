@@ -16,6 +16,7 @@
 #include <astra/utf8.h>
 #include <astra/vfs_process.h>
 #include <astra/volume.h>
+#include <astra/messaging_abi.h>
 #include <astra/window.h>
 
 #include "../../common/directory_snapshot.h"
@@ -109,6 +110,7 @@ static AstraScrollModel browser_scroll = ASTRA_SCROLL_MODEL_INIT;
 static const AstraSurface **browser_grid_icons;
 static uint32_t browser_grid_capacity;
 static AstraHandle volumes_metadata;
+static AstraHandle volumes_messaging;
 static AstraVolumeWatch volumes_watch = ASTRA_VOLUME_WATCH_INIT;
 static uint32_t browsing;
 static uint32_t amiga_encoding;
@@ -1248,7 +1250,7 @@ static uint32_t run(AstraHandle gui)
                     if (present(NULL) != ASTRA_STATUS_OK) return FONTS_FAIL_WINDOW;
                 }
             } else {
-                AstraResult closed = astra_volume_watch_close(volumes_metadata,
+                AstraResult closed = astra_volume_watch_close(volumes_messaging,
                     &volumes_watch);
                 (void)closed;
                 message = "Volume service unavailable; reopen Fonts after restart";
@@ -1307,10 +1309,12 @@ int astra_main(const AstraStartupInfo *startup)
     admin = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_ADMIN);
     clipboard = astra_startup_capability(startup, ASTRA_CAPABILITY_CLIPBOARD);
     volumes = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUMES);
+    const AstraStartupCapability *messaging = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_MESSAGING);
     bootstrap = astra_startup_capability(startup,
                                          ASTRA_CAPABILITY_SERVICE_READY);
     if (gui == NULL || fonts == NULL || admin == NULL || clipboard == NULL ||
-        volumes == NULL || astra_startup_capability(startup,
+        volumes == NULL || messaging == NULL || astra_startup_capability(startup,
             ASTRA_CAPABILITY_VOLUME_READ) == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     fonts_read = fonts->handle;
@@ -1318,12 +1322,13 @@ int astra_main(const AstraStartupInfo *startup)
     fonts_gui = gui->handle;
     fonts_clipboard = clipboard->handle;
     volumes_metadata = volumes->handle;
+    volumes_messaging = messaging->handle;
     if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
         return FONTS_FAIL_CATALOG;
     if (astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK)
         status = FONTS_FAIL_FILESYSTEM;
     if (status == ASTRA_STATUS_OK &&
-        astra_volume_watch_open(volumes_metadata, &volumes_watch) != ASTRA_OK)
+        astra_volume_watch_open(volumes_messaging, &volumes_watch) != ASTRA_OK)
         status = FONTS_FAIL_FILESYSTEM;
     if (status == ASTRA_STATUS_OK &&
         (astra_fonts_catalog_open(fonts_read, &catalog) != ASTRA_OK ||
@@ -1409,7 +1414,7 @@ int astra_main(const AstraStartupInfo *startup)
     astra_runtime_deallocate(details);
     document_dispose(&information_document);
     if (volumes_watch.receive != ASTRA_INVALID_HANDLE) {
-        AstraResult closed = astra_volume_watch_close(volumes_metadata,
+        AstraResult closed = astra_volume_watch_close(volumes_messaging,
             &volumes_watch);
         (void)closed;
     }

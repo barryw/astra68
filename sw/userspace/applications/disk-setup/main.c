@@ -13,6 +13,7 @@
 #include <astra/text_model.h>
 #include <astra/theme.h>
 #include <astra/volume.h>
+#include <astra/messaging_abi.h>
 #include <astra/window.h>
 
 #include <stdint.h>
@@ -844,13 +845,16 @@ int astra_main(const AstraStartupInfo *startup)
         ASTRA_CAPABILITY_GUI);
     const AstraStartupCapability *metadata = astra_startup_capability(startup,
         ASTRA_CAPABILITY_VOLUMES);
+    const AstraStartupCapability *messaging = astra_startup_capability(startup,
+        ASTRA_CAPABILITY_MESSAGING);
     const AstraStartupCapability *holders = astra_startup_capability(startup,
         ASTRA_CAPABILITY_VOLUME_USAGE);
     const AstraStartupCapability *administrator = astra_startup_capability(startup,
         ASTRA_CAPABILITY_DISK_ADMIN);
     const AstraStartupCapability *ready = astra_startup_capability(startup,
         ASTRA_CAPABILITY_SERVICE_READY);
-    if (gui == NULL || metadata == NULL || holders == NULL || administrator == NULL)
+    if (gui == NULL || metadata == NULL || messaging == NULL ||
+        holders == NULL || administrator == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     volumes = metadata->handle;
     usage_service = holders->handle;
@@ -863,7 +867,7 @@ int astra_main(const AstraStartupInfo *startup)
         astra_scroll_init(&scroll, &scroll_info) != ASTRA_OK)
         status = DISK_FAIL_CONTROL;
     if (status == ASTRA_STATUS_OK &&
-        astra_volume_watch_open(volumes, &watch) != ASTRA_OK)
+        astra_volume_watch_open(messaging->handle, &watch) != ASTRA_OK)
         status = DISK_FAIL_CATALOG;
     if (status == ASTRA_STATUS_OK &&
         (field_start(&label_model, "ASTRA", label_content, sizeof(label_content),
@@ -911,7 +915,7 @@ int astra_main(const AstraStartupInfo *startup)
         status == ASTRA_STATUS_OK)
         status = DISK_FAIL_SURFACE;
     if (watch.receive != ASTRA_INVALID_HANDLE &&
-        astra_volume_watch_close(volumes, &watch) != ASTRA_OK &&
+        astra_volume_watch_close(messaging->handle, &watch) != ASTRA_OK &&
         status == ASTRA_STATUS_OK)
         status = DISK_FAIL_CATALOG;
     dispose_rows();

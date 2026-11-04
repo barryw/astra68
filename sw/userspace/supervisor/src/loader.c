@@ -1,4 +1,5 @@
 #include <loader.h>
+#include <messaging.h>
 #include <launch_report.h>
 #include <proc_tree.h>
 #include <service_definition_store.h>
@@ -24,6 +25,7 @@
 #include <astra/host.h>
 #include <astra/event_control.h>
 #include <astra/log_ring.h>
+#include <astra/messaging_abi.h>
 #include <astra/posix_process.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
@@ -100,6 +102,8 @@ static uint32_t proc_control_send;
 static uint32_t launch_send;
 static uint32_t manager_receive;
 static uint32_t manager_send;
+static uint32_t messaging_receive;
+static uint32_t messaging_send;
 static AstraServiceDefinition definition_scratch[2];
 /*
  * The boot launch list, resolved in full before the first launch so the
@@ -1142,6 +1146,19 @@ static uint32_t narrowed_grant(const AstraAssign *held, uint32_t rights,
     memcpy(root, held->root, root_size);
     status = astra_vfs_grant_derive(client, held->root, wanted, handle);
     if (status != ASTRA_VFS_OK) {
+        if (status == ASTRA_VFS_ERR_PEER) {
+            for (uint32_t at = 0u; at < process_count; ++at) {
+                if (strcmp(process_table.records[at].service_name,
+                           "hostfs") != 0) continue;
+                uint32_t exit_status = 0u;
+                uint32_t wait_status = astra_process_wait(
+                    process_table.records[at].handle, 0u, &exit_status);
+                (void)astra_log_failure("hostfs wait", wait_status);
+                if (wait_status == ASTRA_SYSCALL_OK)
+                    (void)astra_log_failure("hostfs exit", exit_status);
+                break;
+            }
+        }
         *handle = 0u;
         astra_runtime_deallocate(root);
         return status == ASTRA_VFS_ERR_LIMIT ? ASTRA_STATUS_LIMIT :
@@ -1305,8 +1322,10 @@ static uint32_t add_namespace_grant(AstraLaunchGrant *out, uint32_t *count,
      * resulting cached grant owns its own exact root string. */
     source.root = (char *)root;
     status = narrowed_grant(&source, rights, delegates, &handle);
-    if (status != ASTRA_STATUS_OK)
+    if (status != ASTRA_STATUS_OK) {
+        (void)astra_log_failure(name, status);
         return status;
+    }
     return add_grant(out, count, name, handle,
         ASTRA_RIGHT_SIGNAL | (delegates ? ASTRA_RIGHT_TRANSFER : 0u),
         ASTRA_CAPABILITY_FLAG_NAMESPACE |
@@ -1335,6 +1354,11 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                        ASTRA_RIGHT_SIGNAL, 0u, NULL);
     if (status != ASTRA_STATUS_OK)
         return status;
+    if (messaging_send != 0u) {
+        status = add_grant(out, count, ASTRA_CAPABILITY_MESSAGING,
+            messaging_send, ASTRA_RIGHT_SIGNAL | delegated, 0u, NULL);
+        if (status != ASTRA_STATUS_OK) return status;
+    }
     for (uint32_t index = 0u; index < entry->grant_count; ++index) {
         const SupervisorManifestGrant *wanted = &entry->grants[index];
 
@@ -1681,11 +1705,16 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
     return ASTRA_STATUS_OK;
 }
 
+static void launch_log(const char *prefix, const char *path,
+                       const SupervisorLaunchReportField *fields,
+                       uint32_t field_count);
+
 static uint32_t receive_ready(uint32_t receive, uint32_t child,
                               uint32_t expected_handles,
                               uint32_t published[ASTRA_MESSAGE_HANDLES_MAX],
                               uint32_t *ready_flags,
-                              uint32_t *shutdown_send)
+                              uint32_t *shutdown_send,
+                              const SupervisorProcessRecord *pending)
 {
     AstraServiceReady message;
     uint32_t handles[ASTRA_MESSAGE_HANDLES_MAX] = {0u};
@@ -1704,20 +1733,48 @@ static uint32_t receive_ready(uint32_t receive, uint32_t child,
                                     &size, &handle_count);
         if (status == ASTRA_SYSCALL_OK)
             break;
-        if (status != ASTRA_SYSCALL_WOULD_BLOCK)
+        if (status != ASTRA_SYSCALL_WOULD_BLOCK) {
+            uint32_t child_status = 0u;
+            if (astra_process_wait(child, 0u, &child_status) ==
+                ASTRA_SYSCALL_OK) {
+                const SupervisorLaunchReportField fields[] = {
+                    {" status=", status}, {" exit=", child_status}};
+                launch_log("ready-receive ", pending->service_name, fields, 2u);
+                return supervisor_loader_child_status(child_status);
+            }
+            const SupervisorLaunchReportField fields[] = {{" status=", status}};
+            launch_log("ready-receive ", pending->service_name, fields, 1u);
             return ASTRA_STATUS_PEER_DEAD;
+        }
         if (astra_process_wait(child, 0u, &exit_status) !=
-            ASTRA_SYSCALL_TIMED_OUT)
+            ASTRA_SYSCALL_TIMED_OUT) {
+            const SupervisorLaunchReportField fields[] = {{" exit=", exit_status}};
+            launch_log("ready-child ", pending->service_name, fields, 1u);
             return supervisor_loader_child_status(exit_status);
+        }
         /*
          * Required service recovery is bounded by its media and stored state,
          * not by a guessed wall-clock number.  The ready port still wakes if
          * the child exits, so waiting forever does not hide a crashed service;
          * receive_ready() reports that child's actual status below.
          */
-        status = astra_wait_one(receive, ASTRA_DEADLINE_FOREVER, NULL);
+        const uint32_t waits[] = {receive, messaging_receive, child};
+        uint32_t selected = ASTRA_WAIT_INDEX_NONE;
+        status = astra_wait_multiple(waits, 3u, ASTRA_DEADLINE_FOREVER,
+            &selected, NULL);
+        if (selected == 1u && status == ASTRA_SYSCALL_OK) {
+            SupervisorProcessTable visible = process_table;
+            process_table.records[process_count] = *pending;
+            visible.count = process_count + 1u;
+            supervisor_messaging_pump(messaging_receive, &visible);
+            continue;
+        }
+        if (selected == 2u) continue;
         if (status != ASTRA_SYSCALL_OK) {
             uint32_t child_status = 0u;
+            const SupervisorLaunchReportField fields[] = {
+                {" status=", status}, {" selected=", selected}};
+            launch_log("ready-wait ", pending->service_name, fields, 2u);
 
             /*
              * The child dying is the usual reason this wait ends, and its exit
@@ -1745,6 +1802,9 @@ static uint32_t receive_ready(uint32_t receive, uint32_t child,
         return ASTRA_STATUS_PROTOCOL;
     }
     if (message.status != ASTRA_STATUS_OK) {
+        const SupervisorLaunchReportField fields[] =
+            {{" status=", message.status}};
+        launch_log("ready-status ", pending->service_name, fields, 1u);
         for (uint32_t index = 0u; index < handle_count; ++index)
             (void)astra_close(handles[index]);
         return message.status;
@@ -2104,8 +2164,15 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
         return status;
     }
     ready_start = astra_clock_monotonic();
+    SupervisorProcessRecord pending = {.id = child_id};
+    if (service != NULL)
+        (void)astra_string_concat(pending.service_name,
+            sizeof(pending.service_name), service->name);
+    if (astra_string_has_suffix(entry->path, ".app"))
+        (void)astra_string_concat(pending.bundle,
+            sizeof(pending.bundle), entry->path);
     status = receive_ready(receive, child, expected_handles, published,
-                           &ready_flags, &shutdown_send);
+                           &ready_flags, &shutdown_send, &pending);
     launch_report(entry->path, image_length, open_us,
                   astra_elapsed_microseconds(
                       0u, profile.executable_probe_ns),
@@ -2117,6 +2184,7 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
                   status, &profile.transaction);
     (void)astra_close(receive);
     if (status != ASTRA_STATUS_OK) {
+        supervisor_messaging_remove(child_id);
         (void)astra_close(shutdown_send);
         if (child_wait != 0u)
             (void)astra_close(child_wait);
@@ -2138,6 +2206,7 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
     if (status != ASTRA_STATUS_OK) {
         if (service != NULL)
             unpublish_owner(service->name);
+        supervisor_messaging_remove(child_id);
         (void)astra_close(shutdown_send);
         for (uint32_t index = 0u; index < expected_handles; ++index)
             if (published[index] != 0u)
@@ -2297,6 +2366,7 @@ static void unpublish_owner(const char *owner)
 
 static void remove_process_slot(uint32_t slot)
 {
+    supervisor_messaging_remove(process_table.records[slot].id);
     volume_lease_close(&process_table.records[slot].volume);
     astra_runtime_deallocate(process_table.records[slot].namespace_names);
     if (process_table.records[slot].gui_session != 0u)
@@ -3656,6 +3726,8 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
         return SUPERVISOR_LOADER_FAIL_MANIFEST;
     if (strcmp(manifest->entries[0].path, "/services/hostfs") != 0)
         return SUPERVISOR_LOADER_FAIL_ORDER;
+    status = supervisor_messaging_start(&messaging_receive, &messaging_send);
+    if (status != ASTRA_STATUS_OK) return status;
     if (astra_rt_port_create(1u, ASTRA_EVENT_CONTROL_REQUEST_SIZE,
                           &event_target_receive, &event_target_send) !=
         ASTRA_SYSCALL_OK)
@@ -3816,11 +3888,12 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
         /* A machine without PROC:rw waits on the read port twice. */
         waits[4] = proc_control_receive != 0u ? proc_control_receive :
                                                 proc_receive;
-        if (process_count > ASTRA_WAIT_MULTIPLE_MAX - 5u)
+        if (process_count > ASTRA_WAIT_MULTIPLE_MAX - 6u)
             return ASTRA_STATUS_LIMIT;
         for (uint32_t at = 0u; at < process_count; ++at)
             waits[at + 5u] = process_table.records[at].handle;
-        status = astra_wait_multiple(waits, process_count + 5u,
+        waits[process_count + 5u] = messaging_receive;
+        status = astra_wait_multiple(waits, process_count + 6u,
                                      next_service_retry(), &index, NULL);
         if (status == ASTRA_SYSCALL_TIMED_OUT) {
             retry_failed_services(startup);
@@ -3860,7 +3933,7 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
                 supervisor_loader_pump_proc();
             continue;
         }
-        if (index > 4u && index <= process_count + 4u) {
+        if (index > 4u && index < process_count + 5u) {
             uint32_t exit_status = 0u;
             uint32_t slot = index - 5u;
             uint32_t wait_status = astra_process_wait(
@@ -3948,6 +4021,12 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
                 }
                 continue;
             }
+        }
+        if (index == process_count + 5u) {
+            if (status != ASTRA_SYSCALL_OK)
+                return ASTRA_STATUS_PEER_DEAD;
+            supervisor_messaging_pump(messaging_receive, &process_table);
+            continue;
         }
         if (status != ASTRA_SYSCALL_OK)
             return ASTRA_STATUS_PEER_DEAD;

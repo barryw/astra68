@@ -19,6 +19,7 @@
 #include <astra/recent_items.h>
 #include <astra/service.h>
 #include <astra/status.h>
+#include <astra/messaging_abi.h>
 #include <astra/string.h>
 #include <astra/system_panels.h>
 #include <astra/theme.h>
@@ -154,7 +155,7 @@ static AstraVolumeReference navigation_history_volumes[NAVIGATION_HISTORY_MAX];
 static uint32_t navigation_count, navigation_index;
 static AstraVolumeReference viewed_volume;
 static AstraVolumeWatch volume_watch = ASTRA_VOLUME_WATCH_INIT;
-static AstraHandle volume_metadata, volume_grant;
+static AstraHandle volume_metadata, volume_messaging, volume_grant;
 static AstraHandle volume_administrator, volume_inspector;
 static AstraHandle volume_gui;
 static AstraHandle volume_read_broker, volume_write_broker;
@@ -564,7 +565,7 @@ static void close_grant(AstraHandle *grant)
 static void volume_close(void)
 {
     if (volume_watch.receive != ASTRA_INVALID_HANDLE) {
-        AstraResult ignored = astra_volume_watch_close(volume_metadata,
+        AstraResult ignored = astra_volume_watch_close(volume_messaging,
             &volume_watch);
         (void)ignored;
     }
@@ -594,9 +595,13 @@ static AstraResult volume_open(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *metadata = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUMES);
     const AstraStartupCapability *broker = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUME_READ);
-    if (metadata == NULL || broker == NULL) return ASTRA_ERROR_PERMISSION;
+    const AstraStartupCapability *messaging = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_MESSAGING);
+    if (metadata == NULL || broker == NULL || messaging == NULL)
+        return ASTRA_ERROR_PERMISSION;
     volume_metadata = metadata->handle;
-    AstraResult result = astra_volume_watch_open(volume_metadata, &volume_watch);
+    volume_messaging = messaging->handle;
+    AstraResult result = astra_volume_watch_open(volume_messaging, &volume_watch);
     AstraVolumeRecord record = {0};
     if (result == ASTRA_OK) result = volume_observe(&record);
     if (result == ASTRA_OK && record.name[0] != '/') result = ASTRA_ERROR_IO;
@@ -4435,7 +4440,7 @@ static AstraResult run(AstraHandle gui)
                 if (viewed_volume.id != 0u) volume_lost = 1u;
                 else {
                     AstraResult ignored = astra_volume_watch_close(
-                        volume_metadata, &volume_watch);
+                        volume_messaging, &volume_watch);
                     (void)ignored;
                 }
             }
@@ -4454,7 +4459,7 @@ static AstraResult run(AstraHandle gui)
         if (volume_refresh && astra_clock_monotonic() >= volume_retry) {
             if (viewed_volume.id == 0u &&
                 volume_watch.receive == ASTRA_INVALID_HANDLE)
-                result = astra_volume_watch_open(volume_metadata,
+                result = astra_volume_watch_open(volume_messaging,
                     &volume_watch);
             else result = ASTRA_OK;
             if (result == ASTRA_OK && viewed_volume.id != 0u && !volume_lost) {
@@ -5131,6 +5136,10 @@ int astra_main(const AstraStartupInfo *startup)
         ASTRA_INVALID_HANDLE;
     const AstraStartupCapability *clipboard = astra_startup_capability(startup,
         ASTRA_CAPABILITY_CLIPBOARD);
+    const AstraStartupCapability *messaging = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_MESSAGING);
+    volume_messaging = messaging != NULL ? messaging->handle :
+        ASTRA_INVALID_HANDLE;
     clipboard_service = clipboard != NULL ? clipboard->handle :
         ASTRA_INVALID_HANDLE;
     if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
@@ -5155,7 +5164,7 @@ int astra_main(const AstraStartupInfo *startup)
                 startup, ASTRA_CAPABILITY_VOLUMES);
             if (metadata != NULL) {
                 volume_metadata = metadata->handle;
-                if (astra_volume_watch_open(volume_metadata, &volume_watch) == ASTRA_OK) {
+                if (astra_volume_watch_open(volume_messaging, &volume_watch) == ASTRA_OK) {
                     volume_refresh = 1u;
                     volume_retry = 0u;
                 }

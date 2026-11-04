@@ -22,6 +22,7 @@ HIDE_IN_BODY_DOCS      = NO
 
 INPUT                  = include/astra ../sw/include/astra/gui.h \
                          ../sw/include/astra/message_abi.h \
+                         ../sw/include/astra/messaging_abi.h \
                          ../sw/include/astra/pcm_format.h \
                          ../sw/include/astra/object_abi.h \
                          ../sw/include/astra/address_space.h \

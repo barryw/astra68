@@ -147,8 +147,9 @@ medium and require new partition admission. Per-partition write-protection
 changes retire that source before it can mount again.
 Filesystem Kit now exposes exact snapshot record/ancestor lookup, so Disk Setup
 can group the native device, medium, partition source and mount records without
-duplicating graph traversal. The catalog/record ABI is 15 and its exported
-symbol namespace is coherently `ASTRA_FILESYSTEM_15.0`.
+duplicating graph traversal. Current Filesystem Kit ABI is 16, with one
+`ASTRA_FILESYSTEM_16.0` symbol namespace; Volume protocol 6 delivers changes
+through generic Messaging.
 Desktop retains the full volume graph while indexing visible icons; this keeps
 physical source ancestry available for mounted-volume actions. The provider
 publishes observed block-device write protection on devices and sources and

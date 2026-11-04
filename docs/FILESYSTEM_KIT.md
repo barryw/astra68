@@ -1,6 +1,6 @@
 # Filesystem Kit
 
-Status: `filesystem.library` ABI 15.0 is the shared, backend-neutral client layer
+Status: `filesystem.library` ABI 16.0 is the shared, backend-neutral client layer
 over Astra's VFS protocol, assign namespaces, and union policy. It does not
 create a second filesystem stack.
 
@@ -16,11 +16,11 @@ remains accounted by the `host.fs.*` provider metrics.
 `astra/volume.h` exposes metadata through the `VOLUMES` capability. Catalog
 pages carry an exact provider epoch and snapshot sequence; pagination refuses
 changed snapshots instead of mixing generations. Subscribe before reading:
-`astra_volume_watch_open` creates a one-message notification endpoint, and
-`astra_volume_watch_receive` returns coalesced invalidations. Refresh the whole
-catalog after each invalidation. Closing the endpoint retires its subscription;
-explicit `astra_volume_watch_close` also requests immediate owner-checked
-retirement. Subscriptions share HostFS's configured per-owner session budget.
+`astra_volume_watch_open` uses the generic `MESSAGING` broker to create a
+one-message notification endpoint. `astra_volume_watch_receive` returns
+invalidations; refresh the whole catalog after each. `astra_volume_watch_close`
+retires the owner-checked broker subscription. A full queue may drop an event,
+so consumers also refresh after detected loss or a stale view.
 Metadata conveys no data grant, host path, Linux descriptor or mount authority.
 `VOLUME_READ` and `VOLUME_WRITE` capabilities admit an exact public mount
 reference through `astra_volume_root`. The selected receive endpoint limits
@@ -40,7 +40,7 @@ sources. `astra_volume_source_issue` gives clients the shared NDOS, unsupported,
 ambiguous and probe-error classification. These are inventory metadata, not
 permission to edit a disk.
 `DISK_ADMIN` grants separate asynchronous format and partition-map operations.
-ABI 15.2 accepts exact device references and byte geometry for MBR/GPT
+ABI 16.0 retains exact device references and byte geometry for MBR/GPT
 initialize, partition create and delete. `astra_volume_partition_find_free`
 plans a MiB-aligned extent from one coherent snapshot. Poll the original
 device generation until worker completion, source retirement and kernel reread
@@ -103,7 +103,7 @@ their nondelegable policy.
 ## Native application contract
 
 Applications link the direct symbols declared by the NDK. Their executable has
-an eager `DT_NEEDED` dependency on `filesystem.library.15`; launch fails before
+an eager `DT_NEEDED` dependency on `filesystem.library.16`; launch fails before
 `main()` with a precise diagnostic when the required ABI is unavailable. An
 `AstraFilesystem` attaches to the process namespace already built from its
 startup grants; it borrows those assign and client objects and cannot expand

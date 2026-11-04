@@ -2,6 +2,7 @@
 #include <astra/config_document.h>
 #include <astra/metrics.h>
 #include <astra/metrics_vfs.h>
+#include <astra/messaging.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/secret_memory.h>
@@ -1302,6 +1303,7 @@ int astra_main(const AstraStartupInfo *startup)
     AstraVolumeReference config_store;
     AstraVfsHostBackend system_backend;
     uint32_t config_session = 0u;
+    AstraVolumeChange published_change = {0};
 
     if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
@@ -1309,7 +1311,10 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *secrets = astra_startup_capability(
         startup, ASTRA_CAPABILITY_HOST_CONFIG_SECRETS);
     bootstrap = astra_startup_capability(startup, ASTRA_CAPABILITY_SERVICE_READY);
-    if (device == NULL || secrets == NULL || bootstrap == NULL)
+    const AstraStartupCapability *messaging = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_MESSAGING);
+    if (device == NULL || secrets == NULL || bootstrap == NULL ||
+        messaging == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     device_handle = device->handle;
     secret_device_handle = secrets->handle;
@@ -1366,7 +1371,7 @@ int astra_main(const AstraStartupInfo *startup)
     if (status == ASTRA_STATUS_OK &&
         (astra_rt_port_create(queue_messages, queue_messages * ASTRA_MESSAGE_SIZE_MAX,
             &volume_receive, &volume_send) != ASTRA_SYSCALL_OK ||
-         !astra_volume_port_init(&volume_port, volume_receive, owner_sessions,
+         !astra_volume_port_init(&volume_port, volume_receive,
             read_volume_catalog, &transport)))
         status = ASTRA_STATUS_LIMIT;
     if (status == ASTRA_STATUS_OK &&
@@ -1422,6 +1427,14 @@ int astra_main(const AstraStartupInfo *startup)
         uint64_t now = astra_clock_monotonic();
         if (now >= catalog_deadline) {
             astra_volume_port_poll(&volume_port);
+            if (memcmp(&volume_port.observed, &published_change,
+                       sizeof(published_change)) != 0) {
+                AstraResult posted = astra_messaging_post(messaging->handle,
+                    "volumes", &volume_port.observed,
+                    sizeof(volume_port.observed), 1u);
+                if (posted == ASTRA_OK)
+                    published_change = volume_port.observed;
+            }
             retire_orphans();
             catalog_deadline = now + UINT64_C(1000000000);
         }

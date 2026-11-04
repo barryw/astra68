@@ -2,6 +2,34 @@
 
 Status: active continuation map, 2026-11-04
 
+Generic messaging and Volume lifecycle gate, 2026-11-04: supervisor now owns a
+native messaging directory and broker. Services, applications, and commands
+receive the same `MESSAGING` startup capability; Terminal delegates it to
+commands. Clients can enumerate and identify live processes, register and
+resolve direct port endpoints, send normal one-to-one port requests and
+replies, and publish named one-to-many topics with optional reply endpoints.
+The broker authenticates sender process IDs, limits payloads and queues,
+reports delivery drops, and retires registrations and subscriptions on exit.
+HostFS publishes `volumes` changes through the broker; Filesystem Kit's Volume
+watch consumes that topic, replacing the private Volume subscribe protocol.
+Protocol/ABI changes are coherent across in-tree clients, manifests, and NDK.
+Haiku references: `src/servers/registrar/TRoster.cpp`,
+`src/kits/storage/VolumeRoster.cpp`, and `src/kits/app/Messenger.cpp`.
+
+Selected DE25 release
+`de4d77a544e3123ec70cd2620c64ae2107df5fe10db5162a2b26a7cf4ec5077a`
+passed preserved-state deployment, kernel identity, stage 8, Desktop, Atlas,
+and native `volumes --all`. Desktop showed DH0, RAM0, CLIEXFAT, and CLIFAT;
+Atlas enumerated 22 installed apps. CLI unmounted `/usb2` and its CLIFAT
+desktop icon disappeared; `mount 13` restored `/usb2` writable and its icon
+reappeared. Supervisor/VFS host tests and `make -C ndk dist-check` passed on
+Beast. A preceding 120-second private DE25 trial exited cleanly and restored
+the prior release before promotion. Raw RFB and console evidence is archived
+under `build/messaging-fixed-evidence-20261104/` on Beast with matching board
+hashes. The `fssem` stress command is absent from the production image, so its
+32-cycle watch construction case was covered by host tests, not that selected
+runtime. See `docs/MESSAGING.md` for protocol and limits.
+
 Network-volume presentation and NFS outage gate, 2026-11-04: Desktop uses a
 dedicated network-volume `.aicon` for `ASTRA_VOLUME_NETWORK`; Atlas' shared
 Collection glyph uses the same server shape. Local disk and RAM glyphs retain

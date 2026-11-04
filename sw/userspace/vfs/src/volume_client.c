@@ -1,6 +1,7 @@
 #include <astra/volume_port.h>
 #include <astra/area.h>
 #include <astra/port.h>
+#include <astra/messaging.h>
 #include <astra/result.h>
 #include <astra/runtime.h>
 #include <astra/filesystem_library.h>
@@ -49,8 +50,6 @@ static AstraResult exchange(AstraHandle service, const void *request, uint32_t s
         reply->header.operation != ASTRA_VOLUME_REPLY ||
         reply->header.transaction_id != header->transaction_id ||
         reply->reserved != 0u ||
-        (header->operation != ASTRA_VOLUME_SUBSCRIBE && reply->subscription != 0u) ||
-        (reply->status != ASTRA_STATUS_OK && reply->subscription != 0u) ||
         call.reply_handle_count != (root != NULL && reply->status == ASTRA_STATUS_OK ? 1u : 0u) ||
         ((call.reply_handle_count == 0u) != (received == ASTRA_INVALID_HANDLE))))
         result = ASTRA_ERROR_IO;
@@ -722,35 +721,30 @@ AstraResult astra_volume_snapshot_open(AstraHandle service, AstraVolumeSnapshot 
 
 AstraResult astra_volume_watch_open(AstraHandle service, AstraVolumeWatch *watch)
 {
-    AstraVolumeRequest request;
-    AstraVolumeReply reply = {0};
     AstraPort port = ASTRA_PORT_INIT;
-    AstraHandle sent = ASTRA_INVALID_HANDLE;
     if (service == ASTRA_INVALID_HANDLE || watch == NULL || watch->id != 0u ||
         watch->receive != ASTRA_INVALID_HANDLE || watch->reserved != 0u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    initialize(&request, ASTRA_VOLUME_SUBSCRIBE);
-    AstraResult result = astra_port_create(1u, sizeof(AstraVolumeNotification), &port);
+    AstraResult result = astra_port_create(1u, sizeof(AstraMessagingEvent), &port);
     if (result == ASTRA_OK)
-        result = astra_handle_duplicate(port.send,
-            ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT | ASTRA_RIGHT_TRANSFER, &sent);
-    if (result == ASTRA_OK)
-        result = exchange(service, &request, sizeof(request), &sent, &reply, sizeof(reply), NULL);
-    if (result == ASTRA_OK && reply.subscription == 0u) result = ASTRA_ERROR_IO;
+        result = astra_messaging_subscribe(service,
+            ASTRA_MESSAGING_SERVICE, "hostfs", 0u, "volumes",
+            &port.send, &watch->id);
+    if (result == ASTRA_OK && watch->id == 0u) result = ASTRA_ERROR_IO;
     if (result == ASTRA_OK) {
-        watch->id = reply.subscription;
         watch->receive = port.receive;
         port.receive = ASTRA_INVALID_HANDLE;
     }
-    if (sent != ASTRA_INVALID_HANDLE) {
-        AstraResult closed = astra_handle_close(&sent);
+    if (port.receive != ASTRA_INVALID_HANDLE ||
+        port.send != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_port_close(&port);
         if (result == ASTRA_OK) result = closed;
     }
-    AstraResult closed = astra_port_close(&port);
-    if (result == ASTRA_OK) result = closed;
-    if (result != ASTRA_OK && watch->receive != ASTRA_INVALID_HANDLE) {
-        closed = astra_handle_close(&watch->receive);
-        (void)closed;
+    if (result != ASTRA_OK) {
+        if (watch->receive != ASTRA_INVALID_HANDLE) {
+            AstraResult closed = astra_handle_close(&watch->receive);
+            (void)closed;
+        }
         *watch = (AstraVolumeWatch)ASTRA_VOLUME_WATCH_INIT;
     }
     return result;
@@ -758,42 +752,33 @@ AstraResult astra_volume_watch_open(AstraHandle service, AstraVolumeWatch *watch
 
 AstraResult astra_volume_watch_receive(const AstraVolumeWatch *watch, AstraVolumeChange *change)
 {
-    AstraVolumeNotification notification = {0};
-    uint32_t size = 0u, count = 0u;
+    AstraMessagingEvent event = {0};
     if (watch == NULL || change == NULL || watch->id == 0u ||
         watch->receive == ASTRA_INVALID_HANDLE || watch->reserved != 0u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     memset(change, 0, sizeof(*change));
-    AstraResult result = astra_port_receive_try(watch->receive, &notification,
-        sizeof(notification), NULL, 0u, &size, &count);
+    AstraResult result = astra_messaging_event_try(watch->receive, &event, NULL);
     if (result != ASTRA_OK) return result;
-    if (size != sizeof(notification) || count != 0u ||
-        notification.header.total_size != sizeof(notification) ||
-        notification.header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
-        notification.header.flags != 0u || notification.header.reserved != 0u ||
-        notification.header.protocol != ASTRA_VOLUME_PROTOCOL ||
-        notification.header.protocol_version != ASTRA_VOLUME_PROTOCOL_VERSION ||
-        notification.header.operation != ASTRA_VOLUME_CHANGED ||
-        notification.header.transaction_id != 0u || notification.subscription != watch->id ||
-        notification.change.reserved != 0u ||
-        (notification.change.status == ASTRA_STATUS_OK &&
-            (notification.change.epoch == 0u || notification.change.sequence == 0u)))
+    if (event.kind != ASTRA_MESSAGING_SERVICE ||
+        strcmp(event.name, "hostfs") != 0 ||
+        strcmp(event.topic, "volumes") != 0 ||
+        event.subscription != watch->id ||
+        event.payload_size != sizeof(*change))
         return ASTRA_ERROR_IO;
-    *change = notification.change;
+    memcpy(change, event.payload, sizeof(*change));
+    if (change->reserved != 0u ||
+        (change->status == ASTRA_STATUS_OK &&
+            (change->epoch == 0u || change->sequence == 0u)))
+        return ASTRA_ERROR_IO;
     return ASTRA_OK;
 }
 
 AstraResult astra_volume_watch_close(AstraHandle service, AstraVolumeWatch *watch)
 {
-    AstraVolumeRequest request;
-    AstraVolumeReply reply = {0};
     if (watch == NULL || watch->reserved != 0u) return ASTRA_ERROR_INVALID_ARGUMENT;
     AstraResult result = ASTRA_OK;
-    if (watch->id != 0u) {
-        initialize(&request, ASTRA_VOLUME_UNSUBSCRIBE);
-        request.subscription = watch->id;
-        result = exchange(service, &request, sizeof(request), NULL, &reply, sizeof(reply), NULL);
-    }
+    if (watch->id != 0u)
+        result = astra_messaging_unsubscribe(service, watch->id);
     if (watch->receive != ASTRA_INVALID_HANDLE) {
         AstraResult closed = astra_handle_close(&watch->receive);
         if (result == ASTRA_OK) result = closed;

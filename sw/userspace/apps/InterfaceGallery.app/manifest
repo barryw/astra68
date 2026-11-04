@@ -10,7 +10,7 @@ capability FONT_CATALOG
 capability CLIPBOARD
 capability LIBS:r
 requires compiler.library 2 2.0.0
-requires filesystem.library 15 15.1.0
+requires filesystem.library 16 16.0.0
 requires graphics.library 3 3.0.0
 requires font.library 5 5.0.0
 requires interface.library 12 12.6.0

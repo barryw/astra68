@@ -32,7 +32,7 @@ PIC_LIB := build/m68k/libastra-pic.a
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
 SYSTEM_LIBRARY := build/m68k/libraries/system.library.4
 SYSTEM_IDENTITY := build/m68k/dynamic/system_library.o
-SYSTEM_SOURCES := src/resource.c src/area.c src/port.c src/bulk_ring.c \
+SYSTEM_SOURCES := src/resource.c src/area.c src/port.c src/messaging.c src/bulk_ring.c \
 	src/application.c src/application_payload.c src/service_payload.c src/service_definition.c src/service_manager.c \
 	src/manifest.c src/bundle.c src/config_scope.c src/window.c \
 	src/input_observer.c src/pointer.c src/gamepad.c \
@@ -41,7 +41,7 @@ SYSTEM_SOURCES := src/resource.c src/area.c src/port.c src/bulk_ring.c \
 SYSTEM_OBJECTS := $(patsubst src/%.c,build/m68k/dynamic/%.o,$(SYSTEM_SOURCES))
 SYSTEM_MAP := system.library.exports
 SYSTEM_HEADERS := $(addprefix $(NDK)/include/astra/,resource.h area.h \
-	port.h bulk_ring.h application.h service_manager.h manifest.h bundle.h \
+	port.h messaging.h bulk_ring.h application.h service_manager.h manifest.h bundle.h \
 	config_library.h window.h pointer.h gamepad.h graphics.h clipboard.h keymap.h \
 	datetime.h)
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py

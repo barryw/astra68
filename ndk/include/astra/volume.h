@@ -372,8 +372,8 @@ const AstraVolumeRecord *astra_volume_snapshot_ancestor(
 ASTRA_NODISCARD AstraResult astra_volume_root(AstraHandle broker,
     const AstraVolumeReference *reference, uint32_t rights, AstraHandle *root);
 /** Subscribe before reading a snapshot, so changes cannot be missed.
- * @param service VOLUMES send capability. @param watch Empty owned subscription.
- * @return ASTRA_RESULT_*; notifications are coalesced, not an event history.
+ * @param service MESSAGING send capability. @param watch Empty owned subscription.
+ * @return ASTRA_RESULT_*; a queued invalidation means reread the current catalog.
  */
 ASTRA_NODISCARD AstraResult astra_volume_watch_open(AstraHandle service,
     AstraVolumeWatch *watch);
@@ -384,7 +384,7 @@ ASTRA_NODISCARD AstraResult astra_volume_watch_open(AstraHandle service,
 ASTRA_NODISCARD AstraResult astra_volume_watch_receive(const AstraVolumeWatch *watch,
     AstraVolumeChange *change);
 /** Retire a subscription and close its endpoint, even if the service is lost.
- * @param service Original VOLUMES capability. @param watch Owned subscription.
+ * @param service Original MESSAGING capability. @param watch Owned subscription.
  * @return First error, after attempting local cleanup.
  */
 ASTRA_NODISCARD AstraResult astra_volume_watch_close(AstraHandle service,

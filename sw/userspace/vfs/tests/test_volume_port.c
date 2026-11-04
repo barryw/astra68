@@ -16,11 +16,10 @@ static union { AstraVolumeRequest metadata; AstraVolumeRootRequest root;
     AstraVolumeUsageRequest usage; } incoming_request;
 #define request incoming_request.metadata
 static AstraVolumeReply reply;
-static AstraVolumeNotification notifications[8];
-static uint32_t queued[8], dead[8], closed[64];
+static uint32_t closed[64];
 static uint32_t sent_handles[ASTRA_MESSAGE_HANDLES_MAX], sent_count, sender = 17u;
 static uint32_t incoming_size;
-static int pending, allocation_failure, malformed_page;
+static int pending, malformed_page;
 static uint32_t catalog_status;
 static uint64_t epoch = 51u, sequence = 1u;
 static union { AstraVolumeCatalogPage catalog; AstraVolumeUsagePage usage; } output_storage;
@@ -36,16 +35,7 @@ static AstraVolumeBrokerInfo broker_info;
 static const AstraVolumeReference *expected_source;
 static int expected_delegates;
 
-void *astra_runtime_callocate(size_t count, size_t size)
-{ return allocation_failure ? NULL : calloc(count, size); }
-void astra_runtime_deallocate(void *memory) { free(memory); }
 uint32_t astra_close(uint32_t handle) { assert(handle < 64u); ++closed[handle]; return ASTRA_SYSCALL_OK; }
-uint32_t astra_wait_one(uint32_t handle, uint64_t deadline, uint32_t *detail)
-{
-    (void)detail; assert(deadline == 0u && handle >= 10u && handle < 18u);
-    return dead[handle - 10u] ? ASTRA_SYSCALL_PEER_DEAD :
-        queued[handle - 10u] ? ASTRA_SYSCALL_TIMED_OUT : ASTRA_SYSCALL_OK;
-}
 uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
     const uint32_t *handles, uint32_t count)
 {
@@ -62,14 +52,7 @@ uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
             format_outcome = ((const AstraVolumeFormatReply *)message)->outcome;
         return ASTRA_SYSCALL_OK;
     }
-    if (handle < 10u || handle >= 18u) return ASTRA_SYSCALL_INVALID_HANDLE;
-    uint32_t at = handle - 10u;
-    if (dead[at]) return ASTRA_SYSCALL_PEER_DEAD;
-    if (queued[at]) return ASTRA_SYSCALL_WOULD_BLOCK;
-    assert(size == sizeof(notifications[at]));
-    memcpy(&notifications[at], message, size);
-    queued[at] = 1u;
-    return ASTRA_SYSCALL_OK;
+    return ASTRA_SYSCALL_INVALID_HANDLE;
 }
 uint32_t astra_port_send_rights(uint32_t handle, const void *message, uint32_t size,
     const AstraHandleDisposition *dispositions, uint32_t count)
@@ -149,11 +132,6 @@ static void pump(uint32_t expected)
 {
     assert(astra_volume_port_pump(&port, 1u) == 1u && !pending);
     assert(reply.status == expected && reply.header.transaction_id == 21u);
-}
-static uint64_t watch(uint32_t second)
-{
-    enqueue(ASTRA_VOLUME_SUBSCRIBE, second); pump(ASTRA_STATUS_OK);
-    assert(reply.subscription != 0u); return reply.subscription;
 }
 static uint32_t root_grant(void *context, uint32_t owner, const AstraVolumeReference *reference,
     uint32_t rights, const AstraVolumeReference *source, int delegates,
@@ -386,7 +364,7 @@ static void query_validation(void)
 int main(void)
 {
     query_validation(); usage_validation();
-    assert(astra_volume_port_init(&port, 1u, 2u, catalog, &epoch));
+    assert(astra_volume_port_init(&port, 1u, catalog, &epoch));
     port.root = root_grant;
     port.control = apply_control;
     port.network_source = apply_network;
@@ -524,37 +502,16 @@ int main(void)
     enqueue(ASTRA_VOLUME_QUERY, 3u); request.header.flags = 1u; pump(ASTRA_STATUS_PROTOCOL);
     enqueue(ASTRA_VOLUME_QUERY, 3u); sent_handles[2] = 4u; sent_count = 3u;
     pump(ASTRA_STATUS_PROTOCOL); assert(closed[4] == 1u);
-    uint64_t first = watch(10u), second = watch(11u);
-    assert(first != second && queued[0] && notifications[0].change.sequence == sequence);
-    enqueue(ASTRA_VOLUME_SUBSCRIBE, 12u); pump(ASTRA_STATUS_LIMIT);
-    sender = 18u; uint64_t other = watch(12u);
-    enqueue(ASTRA_VOLUME_UNSUBSCRIBE, 0u); request.subscription = first; pump(ASTRA_STATUS_ACCESS);
-    sender = 17u;
-    ++sequence; astra_volume_port_poll(&port); /* Full queues retain pending latest state. */
     ++sequence; astra_volume_port_poll(&port);
-    queued[0] = 0u; astra_volume_port_poll(&port);
-    assert(notifications[0].change.sequence == sequence);
-    catalog_status = ASTRA_STATUS_LOST; queued[0] = 0u; astra_volume_port_poll(&port);
-    assert(notifications[0].change.status == ASTRA_STATUS_LOST && notifications[0].change.epoch == 0u);
-    catalog_status = 0u; queued[0] = 0u; astra_volume_port_poll(&port);
-    assert(notifications[0].change.status == 0u && notifications[0].change.epoch == epoch);
-    dead[1] = 1u; astra_volume_port_poll(&port); assert(closed[11] == 1u);
-    enqueue(ASTRA_VOLUME_UNSUBSCRIBE, 0u); request.subscription = second; pump(ASTRA_STATUS_BAD_HANDLE);
-    enqueue(ASTRA_VOLUME_UNSUBSCRIBE, 0u); request.subscription = first; pump(ASTRA_STATUS_OK);
-    assert(closed[10] == 1u);
-    enqueue(ASTRA_VOLUME_SUBSCRIBE, 13u); allocation_failure = 1;
-    pump(ASTRA_STATUS_LIMIT); allocation_failure = 0;
-    sender = 18u; enqueue(ASTRA_VOLUME_UNSUBSCRIBE, 0u); request.subscription = other; pump(ASTRA_STATUS_OK);
-    assert(port.subscribers == NULL);
-    sender = 17u;
-    for (uint32_t at = 0u; at < 1000u; ++at) {
-        queued[0] = 0u; first = watch(10u);
-        enqueue(ASTRA_VOLUME_UNSUBSCRIBE, 0u); request.subscription = first; pump(ASTRA_STATUS_OK);
-        assert(port.subscribers == NULL);
-    }
-    port.next_subscription = UINT64_MAX;
-    enqueue(ASTRA_VOLUME_SUBSCRIBE, 13u); pump(ASTRA_STATUS_LIMIT);
+    assert(port.observed.status == ASTRA_STATUS_OK &&
+        port.observed.sequence == sequence);
+    catalog_status = ASTRA_STATUS_LOST; astra_volume_port_poll(&port);
+    assert(port.observed.status == ASTRA_STATUS_LOST &&
+        port.observed.epoch == 0u);
+    catalog_status = 0u; astra_volume_port_poll(&port);
+    assert(port.observed.status == ASTRA_STATUS_OK &&
+        port.observed.epoch == epoch);
     astra_volume_port_destroy(&port);
-    puts("Native volume catalog/subscriptions: PASS");
+    puts("Native volume catalog: PASS");
     return 0;
 }

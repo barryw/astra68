@@ -15,7 +15,7 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 LIBRARY := build/m68k/libraries/dos.library.1
 OBJECT := build/m68k/dos_library.o
 MAP := dos.library.exports
-FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.15
+FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.16
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 
@@ -38,7 +38,7 @@ $(LIBRARY): $(OBJECT) $(MAP) $(ASTRA_SHARED_LINK_INPUTS) | shared-libraries-read
 		-o $@ $(OBJECT) \
 		-L$(dir $(FILESYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) \
-		-Wl,--no-as-needed -Wl,-l:filesystem.library.15 \
+		-Wl,--no-as-needed -Wl,-l:filesystem.library.16 \
 		-Wl,-l:runtime.library.2 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
 

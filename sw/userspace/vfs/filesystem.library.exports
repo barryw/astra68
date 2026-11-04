@@ -1,5 +1,5 @@
-/* Tracked ABI source; generated linker maps remain ignored build products. */
-ASTRA_FILESYSTEM_15.0 {
+/* Filesystem Kit ABI 16 replaces the pre-alpha Volume watch wire protocol. */
+ASTRA_FILESYSTEM_16.0 {
     global:
         astra_volume_catalog;
         astra_volume_broker_info;
@@ -174,51 +174,21 @@ ASTRA_FILESYSTEM_15.0 {
         astra_process_vfs_current_acquire;
         astra_process_vfs_current_release;
         astra_process_vfs_current_qualify;
-    local:
-        *;
-};
-
-ASTRA_FILESYSTEM_15.1 {
-    global:
         astra_volume_format;
         astra_volume_format_status;
-} ASTRA_FILESYSTEM_15.0;
-
-ASTRA_FILESYSTEM_15.2 {
-    global:
         astra_volume_partition;
         astra_volume_partition_status;
         astra_volume_partition_find_free;
-} ASTRA_FILESYSTEM_15.1;
-
-ASTRA_FILESYSTEM_15.3 {
-    global:
         astra_filesystem_copy_tree;
         astra_filesystem_copy_tree_between;
         astra_file_type_identify;
         astra_application_supports_type;
         astra_application_catalog_handlers;
-} ASTRA_FILESYSTEM_15.2;
-
-ASTRA_FILESYSTEM_15.4 {
-    global:
         astra_application_catalog_extension_type;
         astra_file_type_resolve;
-} ASTRA_FILESYSTEM_15.3;
-
-ASTRA_FILESYSTEM_15.6 {
-    global:
         astra_vfs_clipboard_selection_size;
         astra_vfs_clipboard_selection_validate;
-} ASTRA_FILESYSTEM_15.4;
-
-ASTRA_FILESYSTEM_15.7 {
-    global:
         astra_filesystem_move_tree_between;
-} ASTRA_FILESYSTEM_15.6;
-
-ASTRA_FILESYSTEM_15.8 {
-    global:
         astra_saved_query_save;
         astra_saved_query_set_label;
         astra_saved_query_load;
@@ -227,43 +197,21 @@ ASTRA_FILESYSTEM_15.8 {
         astra_recent_item_record;
         astra_recent_item_snapshot_open;
         astra_recent_item_snapshot_close;
-} ASTRA_FILESYSTEM_15.7;
-
-ASTRA_FILESYSTEM_15.10 {
-    global:
         astra_filesystem_rename_noreplace;
         astra_vfs_rename_noreplace;
         astra_vfs_rename_noreplace_at;
-astra_vfs_try_lock;
-} ASTRA_FILESYSTEM_15.8;
-
-ASTRA_FILESYSTEM_15.11 {
-    global:
+        astra_vfs_try_lock;
         astra_trash_path_kind;
         astra_trash_move;
         astra_trash_origin;
         astra_trash_restore;
         astra_trash_empty;
-} ASTRA_FILESYSTEM_15.10;
-
-ASTRA_FILESYSTEM_15.12 {
-    global:
         astra_application_entry_load;
         astra_application_entry_destroy;
-} ASTRA_FILESYSTEM_15.11;
-
-ASTRA_FILESYSTEM_15.13 {
-    global:
         astra_vfs_port_transport;
         astra_vfs_port_wipe_area;
-} ASTRA_FILESYSTEM_15.12;
-
-ASTRA_FILESYSTEM_15.14 {
-    global:
         astra_volume_managed_network_source;
-} ASTRA_FILESYSTEM_15.13;
-
-ASTRA_FILESYSTEM_15.15 {
-    global:
         astra_volume_managed_network_source_lookup;
-} ASTRA_FILESYSTEM_15.14;
+    local:
+        *;
+};
