@@ -3875,6 +3875,7 @@ void supervisor_loader_pump_event_control(void)
 uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
 {
     uint32_t waits[ASTRA_WAIT_MULTIPLE_MAX];
+    uint64_t messaging_retry_at = 0u;
 
     for (;;) {
         restart_namespace_holders();
@@ -3893,8 +3894,19 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
         for (uint32_t at = 0u; at < process_count; ++at)
             waits[at + 5u] = process_table.records[at].handle;
         waits[process_count + 5u] = messaging_receive;
+        uint64_t deadline = next_service_retry();
+        if (supervisor_messaging_needs_retry()) {
+            uint64_t now = astra_clock_monotonic();
+            if (messaging_retry_at == 0u || now >= messaging_retry_at) {
+                supervisor_messaging_retry();
+                messaging_retry_at = now + UINT64_C(100000000);
+            }
+            if (supervisor_messaging_needs_retry() &&
+                messaging_retry_at < deadline)
+                deadline = messaging_retry_at;
+        } else messaging_retry_at = 0u;
         status = astra_wait_multiple(waits, process_count + 6u,
-                                     next_service_retry(), &index, NULL);
+                                     deadline, &index, NULL);
         if (status == ASTRA_SYSCALL_TIMED_OUT) {
             retry_failed_services(startup);
             continue;

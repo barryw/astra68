@@ -20,6 +20,9 @@
 #include <astra/service.h>
 #include <astra/status.h>
 #include <astra/messaging_abi.h>
+#include <astra/messaging.h>
+#include <astra/filesystem_change.h>
+#include <astra/port.h>
 #include <astra/string.h>
 #include <astra/system_panels.h>
 #include <astra/theme.h>
@@ -155,6 +158,10 @@ static AstraVolumeReference navigation_history_volumes[NAVIGATION_HISTORY_MAX];
 static uint32_t navigation_count, navigation_index;
 static AstraVolumeReference viewed_volume;
 static AstraVolumeWatch volume_watch = ASTRA_VOLUME_WATCH_INIT;
+static AstraPort filesystem_events = ASTRA_PORT_INIT;
+static uint64_t filesystem_subscription, filesystem_event_sequence;
+static uint64_t filesystem_retry;
+static uint32_t filesystem_skip_refresh;
 static AstraHandle volume_metadata, volume_messaging, volume_grant;
 static AstraHandle volume_administrator, volume_inspector;
 static AstraHandle volume_gui;
@@ -564,6 +571,17 @@ static void close_grant(AstraHandle *grant)
 
 static void volume_close(void)
 {
+    if (filesystem_subscription != 0u) {
+        AstraResult ignored = astra_messaging_unsubscribe(
+            volume_messaging, filesystem_subscription);
+        (void)ignored;
+        filesystem_subscription = 0u;
+    }
+    if (filesystem_events.receive != ASTRA_INVALID_HANDLE ||
+        filesystem_events.send != ASTRA_INVALID_HANDLE) {
+        AstraResult ignored = astra_port_close(&filesystem_events);
+        (void)ignored;
+    }
     if (volume_watch.receive != ASTRA_INVALID_HANDLE) {
         AstraResult ignored = astra_volume_watch_close(volume_messaging,
             &volume_watch);
@@ -4395,12 +4413,17 @@ static AstraResult run(AstraHandle gui)
     };
     open_with_menu.scope.parent = &atlas_command_scope;
     for (;;) {
-        uint32_t waits[4] = {astra_window_event_wait_handle(&window)};
+        uint32_t waits[5] = {astra_window_event_wait_handle(&window)};
         uint32_t wait_count = 1u, worker_slot = UINT32_MAX;
         uint32_t volume_slot = UINT32_MAX, busy_slot = UINT32_MAX;
+        uint32_t filesystem_slot = UINT32_MAX;
         if (worker != 0u) { worker_slot = wait_count; waits[wait_count++] = worker; }
         if (volume_watch.receive != ASTRA_INVALID_HANDLE && !volume_lost) {
             volume_slot = wait_count; waits[wait_count++] = volume_watch.receive;
+        }
+        if (filesystem_events.receive != ASTRA_INVALID_HANDLE) {
+            filesystem_slot = wait_count;
+            waits[wait_count++] = filesystem_events.receive;
         }
         AstraHandle busy_wait = astra_window_event_wait_handle(
             &busy_dialog->window);
@@ -4418,12 +4441,44 @@ static AstraResult run(AstraHandle gui)
             ASTRA_DEADLINE_FOREVER;
         if (removal_active && removal_retry < deadline)
             deadline = removal_retry;
+        if (filesystem_event_sequence != 0u && filesystem_retry < deadline)
+            deadline = filesystem_retry;
         uint32_t waited = astra_wait_multiple(waits, wait_count,
             deadline, &selected, NULL);
         if (waited != ASTRA_SYSCALL_OK && waited != ASTRA_SYSCALL_TIMED_OUT &&
             !(selected == volume_slot && waited == ASTRA_SYSCALL_PEER_DEAD) &&
+            !(selected == filesystem_slot && waited == ASTRA_SYSCALL_PEER_DEAD) &&
             !(selected == busy_slot && waited == ASTRA_SYSCALL_PEER_DEAD))
             return ASTRA_ERROR_IO;
+        if (selected == filesystem_slot && waited != ASTRA_SYSCALL_TIMED_OUT) {
+            if (waited == ASTRA_SYSCALL_PEER_DEAD) {
+                AstraResult ignored = astra_port_close(&filesystem_events);
+                (void)ignored;
+                filesystem_subscription = 0u;
+                filesystem_event_sequence = 0u;
+            } else {
+                AstraMessagingEvent notice = {0};
+                AstraFilesystemChange change = {0};
+                result = astra_messaging_event_try(filesystem_events.receive,
+                    &notice, NULL);
+                if (result != ASTRA_OK || notice.header.operation !=
+                        ASTRA_MESSAGING_RELIABLE_EVENT ||
+                    notice.subscription != filesystem_subscription ||
+                    notice.kind != ASTRA_MESSAGING_SERVICE ||
+                    strcmp(notice.name, "hostfs") != 0 ||
+                    strcmp(notice.topic, ASTRA_FILESYSTEM_CHANGE_TOPIC) != 0 ||
+                    notice.payload_size != sizeof(change))
+                    return ASTRA_ERROR_IO;
+                memcpy(&change, notice.payload, sizeof(change));
+                if (change.version != ASTRA_FILESYSTEM_CHANGE_VERSION ||
+                    change.size != sizeof(change)) return ASTRA_ERROR_IO;
+                filesystem_event_sequence = notice.sequence;
+                filesystem_retry = 0u;
+                filesystem_skip_refresh = viewed_volume.id != 0u &&
+                    !astra_volume_reference_equal(&change.volume,
+                        &viewed_volume);
+            }
+        }
         if (selected == busy_slot && waited != ASTRA_SYSCALL_TIMED_OUT) {
             if (waited == ASTRA_SYSCALL_PEER_DEAD)
                 astra_volume_usage_dialog_close(busy_dialog);
@@ -4455,6 +4510,24 @@ static AstraResult run(AstraHandle gui)
             volume_refresh = volume_refresh || viewed_volume.id != 0u;
             volume_retry = 0u;
             visible_data = !volume_refresh;
+        }
+        if (filesystem_event_sequence != 0u && worker == 0u &&
+            astra_clock_monotonic() >= filesystem_retry) {
+            result = filesystem_skip_refresh || volume_lost ?
+                ASTRA_OK : reload_directory();
+            if (result == ASTRA_OK) {
+                AstraResult acknowledged = astra_messaging_ack(
+                    volume_messaging, filesystem_subscription,
+                    filesystem_event_sequence,
+                    astra_clock_monotonic() + UINT64_C(20000000));
+                if (acknowledged == ASTRA_OK) {
+                    filesystem_event_sequence = 0u;
+                    filesystem_skip_refresh = 0u;
+                }
+            }
+            if (filesystem_event_sequence != 0u)
+                filesystem_retry = astra_clock_monotonic() +
+                    UINT64_C(50000000);
         }
         if (volume_refresh && astra_clock_monotonic() >= volume_retry) {
             if (viewed_volume.id == 0u &&
@@ -5185,6 +5258,24 @@ int astra_main(const AstraStartupInfo *startup)
             if (navigation_append(root, &viewed_volume) != ASTRA_OK)
                 status = ASTRA_VFS_ERR_LIMIT;
         }
+    }
+    if (status == ASTRA_VFS_OK &&
+        volume_messaging != ASTRA_INVALID_HANDLE) {
+        AstraResult watching = astra_port_create(1u,
+            sizeof(AstraMessagingEvent), &filesystem_events);
+        if (watching != ASTRA_OK)
+            (void)astra_log_failure("atlas filesystem event port",
+                (uint32_t)(-watching));
+        if (watching == ASTRA_OK) {
+            watching = astra_messaging_subscribe(volume_messaging,
+                ASTRA_MESSAGING_SERVICE, "hostfs", 0u,
+                ASTRA_FILESYSTEM_CHANGE_TOPIC, &filesystem_events.send,
+                &filesystem_subscription);
+            if (watching != ASTRA_OK)
+                (void)astra_log_failure("atlas filesystem subscribe",
+                    (uint32_t)(-watching));
+        }
+        if (watching != ASTRA_OK) status = ASTRA_VFS_ERR_IO;
     }
     const char *step = "filesystem";
 

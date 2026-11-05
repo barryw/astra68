@@ -15,7 +15,7 @@ static AstraMessagingReply reply;
 static AstraMessagingEvent event;
 static uint32_t incoming_handles[3], incoming_count, sender;
 static uint32_t event_count, event_reply, lookup_handle, closed[512];
-static uint32_t blocked_send, next_handle = 300u;
+static uint32_t blocked_send, dead_send, next_handle = 300u;
 static uint32_t command_live = 1u;
 static SupervisorProcessRecord records[] = {
     {.id = 10u, .service_name = "hostfs"},
@@ -54,7 +54,8 @@ uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
         assert(size == sizeof(reply) && count == 0u);
         memcpy(&reply, message, size);
     } else {
-        assert(handle == 201u && size == sizeof(event) && count <= 1u);
+        assert((handle == 201u || handle == 203u) &&
+            size == sizeof(event) && count <= 1u);
         memcpy(&event, message, size);
         event_reply = count == 1u ? handles[0] : 0u;
         ++event_count;
@@ -87,8 +88,10 @@ uint32_t astra_close(uint32_t handle)
 }
 uint32_t astra_wait_one(uint32_t handle, uint64_t deadline, uint32_t *detail)
 {
-    assert((handle == 200u || handle == 202u) && deadline == 0u &&
+    assert((handle == 200u || handle == 201u || handle == 202u ||
+        handle == 203u) && deadline == 0u &&
         detail == NULL);
+    if (handle == dead_send) return ASTRA_SYSCALL_PEER_DEAD;
     return ASTRA_SYSCALL_TIMED_OUT;
 }
 uint32_t astra_process_snapshot(uint32_t observer, AstraProcSnapshot *records,
@@ -180,17 +183,115 @@ int main(void)
     blocked_send = 0u;
     pump();
     assert(reply.delivered == 1u && event.sequence == 3u);
+
+    request(10u, ASTRA_MESSAGING_PUBLISH, 0u);
+    memcpy(incoming.topic, "volumes", 8u);
+    incoming.qos = ASTRA_MESSAGING_QOS_RELIABLE;
+    pump();
+    assert(reply.status == ASTRA_STATUS_OK && reply.delivered == 1u &&
+        event.sequence == 4u &&
+        event.header.operation == ASTRA_MESSAGING_RELIABLE_EVENT);
+    uint32_t before = event_count;
+    pump();
+    assert(reply.status == ASTRA_STATUS_OK && reply.delivered == 1u &&
+        event_count == before);
+    request(30u, ASTRA_MESSAGING_ACK, 0u);
+    incoming.subscription = subscription;
+    incoming.cursor = 4u;
+    pump();
+    assert(reply.status == ASTRA_STATUS_ACCESS);
+    request(20u, ASTRA_MESSAGING_ACK, 0u);
+    incoming.subscription = subscription;
+    incoming.cursor = 5u;
+    pump();
+    assert(reply.status == ASTRA_STATUS_INVALID);
+    incoming.cursor = 4u;
+    pump();
+    assert(reply.status == ASTRA_STATUS_OK && event.sequence == 5u);
+    pump();
+    assert(reply.status == ASTRA_STATUS_OK);
+    incoming.cursor = 5u;
+    pump();
+    assert(reply.status == ASTRA_STATUS_OK);
+
+    blocked_send = 201u;
+    request(10u, ASTRA_MESSAGING_PUBLISH, 0u);
+    memcpy(incoming.topic, "volumes", 8u);
+    incoming.qos = ASTRA_MESSAGING_QOS_RELIABLE;
+    pump();
+    assert(reply.status == ASTRA_STATUS_OK && reply.delivered == 1u &&
+        supervisor_messaging_needs_retry());
+    blocked_send = 0u;
+    supervisor_messaging_retry();
+    assert(event.sequence == 6u && !supervisor_messaging_needs_retry());
+    request(20u, ASTRA_MESSAGING_ACK, 0u);
+    incoming.subscription = subscription;
+    incoming.cursor = 6u;
+    pump();
+    assert(reply.status == ASTRA_STATUS_OK);
+
+    for (uint32_t at = 0u; at < ASTRA_MESSAGING_RELIABLE_BACKLOG_MAX; ++at) {
+        request(10u, ASTRA_MESSAGING_PUBLISH, 0u);
+        memcpy(incoming.topic, "volumes", 8u);
+        incoming.qos = ASTRA_MESSAGING_QOS_RELIABLE;
+        pump();
+        assert(reply.status == ASTRA_STATUS_OK && reply.delivered == 1u);
+    }
+    pump();
+    assert(reply.status == ASTRA_STATUS_BUSY && reply.delivered == 0u);
+    request(20u, ASTRA_MESSAGING_ACK, 0u);
+    incoming.subscription = subscription;
+    incoming.cursor = 7u;
+    pump();
+    assert(reply.status == ASTRA_STATUS_OK && event.sequence == 8u);
+    request(10u, ASTRA_MESSAGING_PUBLISH, 0u);
+    memcpy(incoming.topic, "volumes", 8u);
+    incoming.qos = ASTRA_MESSAGING_QOS_RELIABLE;
+    pump();
+    assert(reply.status == ASTRA_STATUS_OK && reply.delivered == 1u);
+    request(30u, ASTRA_MESSAGING_SUBSCRIBE, 203u);
+    incoming.kind = ASTRA_MESSAGING_SERVICE;
+    memcpy(incoming.name, "hostfs", 7u);
+    memcpy(incoming.topic, "volumes", 8u);
+    pump();
+    assert(reply.status == ASTRA_STATUS_OK && reply.subscription != 0u);
+    before = event_count;
+    request(10u, ASTRA_MESSAGING_PUBLISH, 0u);
+    memcpy(incoming.topic, "volumes", 8u);
+    incoming.qos = ASTRA_MESSAGING_QOS_RELIABLE;
+    pump();
+    assert(reply.status == ASTRA_STATUS_BUSY && event_count == before);
+    request(20u, ASTRA_MESSAGING_ACK, 0u);
+    incoming.subscription = subscription;
+    incoming.cursor = 8u;
+    pump();
+    assert(reply.status == ASTRA_STATUS_OK);
+    request(10u, ASTRA_MESSAGING_PUBLISH, 0u);
+    memcpy(incoming.topic, "volumes", 8u);
+    incoming.qos = ASTRA_MESSAGING_QOS_RELIABLE;
+    pump();
+    assert(reply.status == ASTRA_STATUS_OK && reply.delivered == 2u &&
+        event_count == before + 2u);
     request(30u, ASTRA_MESSAGING_UNSUBSCRIBE, 0u);
     incoming.subscription = subscription;
     pump();
     assert(reply.status == ASTRA_STATUS_ACCESS);
     supervisor_messaging_remove(20u);
     assert(closed[201u] == 1u);
+    dead_send = 203u;
+    request(10u, ASTRA_MESSAGING_PUBLISH, 0u);
+    memcpy(incoming.topic, "volumes", 8u);
+    incoming.qos = ASTRA_MESSAGING_QOS_RELIABLE;
+    pump();
+    assert(reply.status == ASTRA_STATUS_OK && reply.delivered == 0u &&
+        closed[203u] == 1u);
+    dead_send = 0u;
     supervisor_messaging_remove(10u);
     command_live = 0u;
     request(20u, ASTRA_MESSAGING_LIST, 0u);
     pump();
-    assert(closed[200u] == 1u && closed[202u] == 1u && closed[204u] == 3u);
+    assert(closed[200u] == 1u && closed[202u] == 1u &&
+        closed[203u] == 1u && closed[204u] == 3u);
     puts("Messaging directory and fanout: PASS");
     return 0;
 }

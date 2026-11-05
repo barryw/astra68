@@ -1,6 +1,29 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-11-04
+Status: active continuation map, 2026-11-05
+
+Messaging QoS and filesystem invalidation gate, 2026-11-05: broker keeps
+best-effort fanout as default and adds bounded, opt-in reliable delivery with
+atomic subscriber admission, ordered retries, and authenticated ACKs. A full
+reliable backlog returns `BUSY`; delivery is at least once while the broker
+and subscription live, without reboot durability. HostFS coalesces successful
+VFS mutations into volume-generation notifications; Atlas subscribes before
+initial enumeration, refreshes matching views, and ACKs after reconciliation.
+The shared Messaging client aligns port-call buffers and transferred handles
+to four bytes; DE25 testing exposed the MC68040 alignment requirement when
+Atlas used a global event port. The wire layout and version remain 1 for
+existing clients. Supervisor messaging and VFS service-core host tests and
+`make -C ndk dist-check` pass on Beast.
+Selected DE25 development release
+`165a50dcfd328b1c0205afeeaf34f8179f9b08f412ead61238c3a4af3666eb55`
+booted to Desktop with runtime, audio, and remote-desktop services active.
+Atlas opened `/dh0` and `/usb0`; creating then deleting `Folder1` on the
+disposable USB volume caused automatic rereads and left `/usb0` empty. Final
+RFB captures and matching board/archive SHA-256 hashes are under
+`/mnt/Documents/astra68/qos-filesystem-20261104/` on Beast. Boot ROM SHA-256
+is `3457cd7e8d94657b15ef100165009d801facf04ffa183e0f92633f330b0320d8`.
+Board has 7.8 GiB free, one selected development release, and no trial RFB
+files. See `docs/MESSAGING.md` for QoS bounds and semantics.
 
 Generic messaging and Volume lifecycle gate, 2026-11-04: supervisor now owns a
 native messaging directory and broker. Services, applications, and commands

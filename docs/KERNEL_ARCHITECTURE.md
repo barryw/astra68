@@ -129,7 +129,7 @@ The OS-facing machine must provide the following bounded facilities:
 | bus timeout | PARTIAL | every target times out to BERR and latches target/address/cycle class |
 | interrupt controller | CURRENT | 32 pending/mask/config sources with stable vectored IACK |
 | graphics IRQs | CURRENT SIM | vblank, raster, blit, draw, and fence completion remain bounded |
-| engine recovery | MISSING | per-engine timeout/reset without resetting CPU or unrelated engines |
+| engine recovery | PARTIAL: device lease reset covers display, block, input, network, and host transports; renderer has command deadlines and soft reset | qualify every stuck-engine path and bound failed reset without resetting CPU or unrelated engines |
 | early console | CURRENT | FTDI UART works before PMMU/scheduler; ESP runtime remains SPI-only |
 | retained trace | PARTIAL | reserved SDRAM log exists; add allocation-free trace storage outside ordinary heap corruption |
 | memory bursts | PARTIAL | current caches/line fill are retained; benchmark and qualify Motorola-compatible burst behavior |
@@ -412,6 +412,29 @@ These limits are the initial sizing contract and must be charged in
 
 Exhaustion returns an explicit bounded error. System services may receive a
 different quota through a resource-account handle; they do not bypass limits.
+
+## Haiku foundation comparison (2026-11-04)
+
+Astra already has isolated processes, demand-zero and copy-on-write memory,
+native handles and ports, waitable threads, and a userspace VFS. Haiku's
+corresponding mechanisms show six remaining gaps that matter to Astra. These
+are capability gaps, not instructions to move Astra's services into the kernel.
+
+| Gap | Astra's existing owner | Haiku reference and contract to adapt |
+|---|---|---|
+| Hang detection and recovery | `astra.service` restarts exited QEMU; Vesta supplies deadlines and bus timeout; device leases reset several transports and render commands have deadline recovery. No independent runtime watchdog exists | This is Astra hardware-specific: its HPS supervisor needs a heartbeat that distinguishes idle from hung and a reset reason preserved across restart; each existing engine recovery path needs a stuck-engine gate. |
+| Coordinated memory pressure | `sw/kernel/memory.c` reserves emergency, protected, and DMA frames; idle library mappings can be reclaimed | `src/system/kernel/low_resource_manager.cpp` classifies pressure and calls ordered handlers. Astra needs a single pressure state and reclaim order before exhausting protected reserves. No swap is required. |
+| General file cache and file-backed mappings | `sw/kernel/vm.c` supports anonymous, shared, copy-on-write, and library mappings; POSIX `mmap` is absent | `src/system/kernel/cache/file_cache.cpp`, `vm/VMCache.cpp`, and `vm/vm_page_writer.cpp` coordinate vnode identity, cached pages, mapped pages, and writeback. Astra's canonical VFS must supply identity and invalidation; Linux-side cache alone cannot back guest mappings. |
+| Priority inversion control | `sw/kernel/thread.c` has base and effective priority fields, currently always set together | Haiku's scheduler and lock paths show bounded priority changes. Astra needs inheritance for kernel locks and donation across blocking native RPC, withdrawn on reply, timeout, cancellation, and peer death; media CPU budgets need their own bound. |
+| File and directory change events | VFS records successful mutation generations; HostFS publishes coalesced volume invalidations through broker QoS and Atlas refreshes its view. Per-node identity and host-originated changes remain open | `src/system/kernel/fs/node_monitor.cpp` identifies changed node and parent directory and emits creation, removal, move, stat, and unmount events. Astra should extend its VFS mutation records with exact node identity and use existing broker delivery and generation recovery. |
+| User crash capture | `sw/kernel/process.c` records fault PC, address, vector, and status before retirement; trace and console retain a brief report | `src/system/kernel/debug/user_debugger.cpp` and `debug/core_dump.cpp` preserve inspectable thread context and selected mappings. Astra needs bounded, permission-scoped crash snapshots before a dead process loses its address space. |
+
+Implementation order follows dependencies: node events and crash snapshots can
+use existing broker and trace seams; pressure handling must precede a general
+reclaimable file cache; scheduler donation and watchdog recovery require
+target-cycle and failure-injection gates before release. SMP scheduling,
+loadable kernel modules, and swap are deliberate non-goals for this single
+MC68040, service-oriented system.
 
 ## Development discipline
 

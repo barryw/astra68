@@ -84,6 +84,13 @@ typedef struct AstraVfsServiceStats {
     uint32_t last_failed_owner;
 } AstraVfsServiceStats;
 
+/* Monotonic per-service mutation generations. A consumer that sees a change
+ * or a broker sequence gap refreshes its own file/directory view. */
+typedef struct AstraVfsChangeSnapshot {
+    uint64_t nodes;
+    uint64_t entries;
+} AstraVfsChangeSnapshot;
+
 typedef int (*AstraVfsStateAcquire)(void *context);
 typedef void (*AstraVfsStateRelease)(void *context);
 /* Called with the state lock held and returns with it held. */
@@ -116,6 +123,7 @@ typedef struct AstraVfsService {
     uint32_t file_capacity;
     uint32_t file_high_water;
     AstraVfsServiceStats stats;
+    AstraVfsChangeSnapshot changes;
     uint32_t next_session;
     uint16_t open_sessions;
     uint32_t open_files;
@@ -149,6 +157,9 @@ int astra_vfs_service_set_state_wait(AstraVfsService *service,
 /* Configure before the service admits sessions. */
 int astra_vfs_service_set_session_changed(AstraVfsService *service,
     AstraVfsSessionChanged changed, void *context);
+/* Snapshots committed mutation generations under the service state lock. */
+int astra_vfs_service_change_snapshot(AstraVfsService *service,
+    AstraVfsChangeSnapshot *snapshot);
 /* Per-owner sessions in this service; zero disables the bound. */
 int astra_vfs_service_set_owner_sessions(AstraVfsService *service,
                                          uint32_t sessions);

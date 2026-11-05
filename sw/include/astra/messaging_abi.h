@@ -17,6 +17,13 @@
 #define ASTRA_MESSAGING_TOPIC_MAX 64u
 /** Maximum inline event payload bytes. */
 #define ASTRA_MESSAGING_PAYLOAD_MAX 384u
+/** Maximum unacknowledged reliable events held for one subscriber. */
+#define ASTRA_MESSAGING_RELIABLE_BACKLOG_MAX 8u
+
+/** Deliver only if subscriber port accepts event immediately. */
+#define ASTRA_MESSAGING_QOS_BEST_EFFORT 0u
+/** Retain event in bounded broker backlog until subscriber acknowledges it. */
+#define ASTRA_MESSAGING_QOS_RELIABLE    1u
 
 enum {
     ASTRA_MESSAGING_IDENTIFY = 1u,
@@ -28,7 +35,9 @@ enum {
     ASTRA_MESSAGING_UNSUBSCRIBE,
     ASTRA_MESSAGING_PUBLISH,
     ASTRA_MESSAGING_REPLY,
-    ASTRA_MESSAGING_EVENT
+    ASTRA_MESSAGING_EVENT,
+    ASTRA_MESSAGING_ACK,
+    ASTRA_MESSAGING_RELIABLE_EVENT
 };
 
 enum {
@@ -47,7 +56,7 @@ typedef struct AstraMessagingRequest {
     uint32_t kind;
     /** Optional exact target process ID. */
     uint32_t process_id;
-    /** Previous process ID for directory enumeration. */
+    /** Previous process ID for enumeration, or event sequence for ACK. */
     uint64_t cursor;
     /** Caller-owned subscription for removal. */
     uint64_t subscription;
@@ -57,8 +66,8 @@ typedef struct AstraMessagingRequest {
     char topic[ASTRA_MESSAGING_TOPIC_MAX];
     /** Valid payload bytes. */
     uint32_t payload_size;
-    /** Must be zero. */
-    uint32_t reserved;
+    /** Publication QoS; zero for other requests. */
+    uint32_t qos;
     /** Opaque publisher-defined event bytes. */
     uint8_t payload[ASTRA_MESSAGING_PAYLOAD_MAX];
 } AstraMessagingRequest;
@@ -79,7 +88,7 @@ typedef struct AstraMessagingReply {
     uint64_t cursor;
     /** New subscription ID. */
     uint64_t subscription;
-    /** Successful event deliveries. */
+    /** Best-effort deliveries, or reliable backlog admissions. */
     uint32_t delivered;
     /** Failed event deliveries. */
     uint32_t dropped;
@@ -114,6 +123,12 @@ _Static_assert(sizeof(AstraMessagingRequest) <= ASTRA_MESSAGE_SIZE_MAX,
     "messaging request fits port");
 _Static_assert(sizeof(AstraMessagingEvent) <= ASTRA_MESSAGE_SIZE_MAX,
     "messaging event fits port");
+#if defined(__m68k__)
+_Static_assert(sizeof(AstraMessagingRequest) == 760u &&
+    sizeof(AstraMessagingReply) == 320u &&
+    sizeof(AstraMessagingEvent) == 756u,
+    "messaging QoS must preserve version 1 wire sizes");
+#endif
 /** @endcond */
 
 #endif

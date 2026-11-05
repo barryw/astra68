@@ -14,16 +14,41 @@ normal port protocol and `astra_port_call` for one-to-one requests and replies.
 The broker routes only discovery, not direct request payloads.
 
 `SUBSCRIBE` selects a publisher kind/name, optional exact process ID, and local
-topic. `PUBLISH` stamps the event with the authenticated sender's identity and
-fans it out without waiting on subscribers. Each subscription has its own
-monotonic sequence. A full queue drops that delivery and leaves a sequence
-gap at the next delivered event. A publish reply gives delivered and dropped
-counts. A publisher may attach a reply send endpoint; every delivered recipient
-gets a copy and may answer directly. Events are transient, not state snapshots.
-Subscribers obtain an initial state from the owning service after subscribing.
+topic. Best-effort `PUBLISH` stamps the event with the authenticated sender's
+identity and fans it out without waiting on subscribers. Each subscription has
+its own monotonic sequence. A full port drops a best-effort delivery and leaves
+a sequence gap at the next delivered event. A publish reply gives delivered and
+dropped counts. A publisher may attach a reply send endpoint; every delivered
+recipient gets a copy and may answer directly.
+
+Reliable publication is opt-in. Broker admission reserves one event for every
+current matching subscriber atomically, up to eight unacknowledged events per
+subscriber; a full backlog returns `BUSY` without partial delivery. Wire sizes
+stay at version 1; existing publishers send zero QoS and retain best-effort
+behavior. Reliable events and ACKs are additive operations. Broker sends each
+subscriber's head event in order, retries a full port every 100 ms,
+and keeps it until that subscriber acknowledges its sequence. Duplicate ACKs
+succeed. Reliable events use `ASTRA_MESSAGING_RELIABLE_EVENT`; best-effort
+events use `ASTRA_MESSAGING_EVENT`. Reply `delivered` counts backlog admissions
+for reliable publication. Publisher uses a finite call deadline and retries `BUSY`; a timed-out
+call may have been accepted, so consumers must tolerate duplicate transactions.
+Admission confirms broker custody, not application-level completion; use a
+direct port request/reply when publisher needs the subscriber's result.
+With no matching subscribers, admission succeeds with zero recipients and
+stores nothing.
+Reliable delivery is at least once within a live supervisor/subscription, not
+durable across reboot or subscriber death. A subscriber that never acknowledges
+backpressures its publisher. Best-effort `POST` remains one-way and cannot
+request reliable admission. `ACK` is authenticated to the subscribing process.
+
+Events are transient, not state snapshots. Subscribers obtain initial state
+from the owning service after subscribing. For state-change topics, publishers
+can coalesce pending changes and retry a reliable publication outside the
+mutation path, so a slow observer cannot stall filesystem writes.
 
 Limits: 8 broker requests queued; 128 direct registrations; 128 subscriptions;
-384 payload bytes per event. Larger data travels through shared Areas or rings.
+384 payload bytes per event; 8 unacknowledged reliable events per subscriber.
+Larger data travels through shared Areas or rings.
 Process exit retires supervisor-owned registrations and subscriptions. Broker
 never trusts caller-supplied service or application names. A command outside
 supervisor's launch table is identified by its authenticated PID and checked

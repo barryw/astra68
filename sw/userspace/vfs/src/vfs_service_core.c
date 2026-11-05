@@ -580,6 +580,17 @@ astra_vfs_service_set_session_changed(AstraVfsService *service,
 }
 
 int
+astra_vfs_service_change_snapshot(AstraVfsService *service,
+                                  AstraVfsChangeSnapshot *snapshot)
+{
+    if (service == NULL || snapshot == NULL || !state_acquire(service))
+        return 0;
+    *snapshot = service->changes;
+    state_release(service);
+    return 1;
+}
+
+int
 astra_vfs_service_set_state_wait(AstraVfsService *service,
                                  AstraVfsStateWait wait,
                                  AstraVfsStateWake wake)
@@ -1114,6 +1125,8 @@ write_file(AstraVfsService *service, AstraVfsOpenFile *file, uint64_t offset,
     file_release(service, file);
     if (status == ASTRA_VFS_OK && *moved > length)
         *moved = length;
+    if (status == ASTRA_VFS_OK && *moved != 0u)
+        ++service->changes.nodes;
     return status;
 }
 
@@ -1681,6 +1694,35 @@ dispatch_unlocked(AstraVfsService *service, uint32_t owner, uint32_t grant,
     }
 
 done:
+    if (reserved && reply->status == ASTRA_VFS_OK) {
+        switch (operation) {
+        case ASTRA_VFS_OP_OPEN:
+        case ASTRA_VFS_OP_OPEN_AT:
+            /* shortcut: CREATE may open an existing file; invalidate its
+             * directory until backends report whether creation occurred. */
+            if ((request->flags & ASTRA_VFS_OPEN_CREATE) != 0u)
+                ++service->changes.entries;
+            if ((request->flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u)
+                ++service->changes.nodes;
+            break;
+        case ASTRA_VFS_OP_MKDIR:
+        case ASTRA_VFS_OP_UNLINK:
+        case ASTRA_VFS_OP_UNLINK_AT:
+        case ASTRA_VFS_OP_RENAME:
+        case ASTRA_VFS_OP_LINK:
+        case ASTRA_VFS_OP_SYMLINK:
+            ++service->changes.entries;
+            break;
+        case ASTRA_VFS_OP_TRUNCATE:
+        case ASTRA_VFS_OP_CHMOD:
+        case ASTRA_VFS_OP_CHMOD_FILE:
+        case ASTRA_VFS_OP_CHMOD_AT:
+            ++service->changes.nodes;
+            break;
+        default:
+            break;
+        }
+    }
     test_transition(service, ASTRA_VFS_TEST_BEFORE_REPLY);
     if (reply->status != ASTRA_VFS_OK) {
         ++service->stats.replies_failed;

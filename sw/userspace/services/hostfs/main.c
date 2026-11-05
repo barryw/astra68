@@ -1,4 +1,5 @@
 #include <astra/host.h>
+#include <astra/filesystem_change.h>
 #include <astra/config_document.h>
 #include <astra/metrics.h>
 #include <astra/metrics_vfs.h>
@@ -95,12 +96,14 @@ typedef struct HostfsVolume {
     char metric_group[ASTRA_METRIC_NAME_MAX];
     AstraVfsHostBackend backend;
     AstraVfsService service;
+    AstraVfsChangeSnapshot published_changes;
     AstraVfsSessionSlot sessions[ASTRA_VFS_SESSION_MAX];
     AstraVfsPortService port;
     AstraArea storage;
 } HostfsVolume;
 
 static HostfsVolume *volumes;
+static uint32_t filesystem_transaction = 1u;
 static AstraVfsPortWorker worker;
 static AstraHostMetricsSnapshot host_metrics;
 static AstraMetricVfs metrics_backend;
@@ -937,6 +940,36 @@ static uint32_t read_volume_catalog(void *context, const AstraVolumeCatalogQuery
     return astra_vfs_host_catalog(host, host->generation, query, page);
 }
 
+static void publish_filesystem_changes(uint32_t messaging)
+{
+    for (HostfsVolume *volume = volumes; volume != NULL;
+         volume = volume->next) {
+        AstraVfsChangeSnapshot snapshot;
+        uint32_t queued = 0u;
+        if (!volume->service_ready || volume->config_store ||
+            !astra_vfs_service_change_snapshot(&volume->service, &snapshot) ||
+            (snapshot.nodes == volume->published_changes.nodes &&
+             snapshot.entries == volume->published_changes.entries))
+            continue;
+        AstraFilesystemChange change = {
+            ASTRA_FILESYSTEM_CHANGE_VERSION, sizeof(change),
+            volume->reference, snapshot.nodes, snapshot.entries
+        };
+        /* Publication is outside VFS locks and writes. BUSY leaves latest
+         * generation pending here for retry; intermediates can coalesce. */
+        AstraResult result = astra_messaging_publish_reliable(messaging,
+            ASTRA_FILESYSTEM_CHANGE_TOPIC, &change, sizeof(change),
+            filesystem_transaction,
+            (AstraMonotonicDeadline)(astra_clock_monotonic() +
+                UINT64_C(20000000)), &queued);
+        if (result == ASTRA_OK) {
+            volume->published_changes = snapshot;
+            ++filesystem_transaction;
+            if (filesystem_transaction == 0u) filesystem_transaction = 1u;
+        }
+    }
+}
+
 /* All mounted volumes use one owner shape. Ports, sessions and grants stay
  * tied to their exact native reference; no fixed WORK/SOUND dispatch exists. */
 static uint32_t volume_add(const AstraVolumeReference *reference, const char *name,
@@ -1436,6 +1469,7 @@ int astra_main(const AstraStartupInfo *startup)
                     published_change = volume_port.observed;
             }
             retire_orphans();
+            publish_filesystem_changes(messaging->handle);
             catalog_deadline = now + UINT64_C(1000000000);
         }
 

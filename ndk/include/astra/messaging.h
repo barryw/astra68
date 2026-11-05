@@ -71,14 +71,14 @@ ASTRA_NODISCARD AstraResult astra_messaging_subscribe(
 ASTRA_NODISCARD AstraResult astra_messaging_unsubscribe(
     AstraHandle broker, uint64_t subscription);
 
-/** Fan out an event, optionally copying response send to each recipient.
+/** Fan out a best-effort event, optionally copying response send.
  * @param broker MESSAGING startup capability.
  * @param topic Publisher-local topic.
  * @param payload Opaque event bytes.
  * @param payload_size Byte count, at most ASTRA_MESSAGING_PAYLOAD_MAX.
  * @param transaction_id Nonzero caller transaction ID.
- * @param response_send Optional owned response send; consumed on transfer.
- * @param delivered Receives successful recipient count.
+ * @param response_send Optional owned response send.
+ * @param delivered Receives events placed in recipient ports.
  * @param dropped Receives full or dead recipient count.
  * @return Astra result.
  */
@@ -86,6 +86,32 @@ ASTRA_NODISCARD AstraResult astra_messaging_publish(
     AstraHandle broker, const char *topic, const void *payload,
     uint32_t payload_size, uint32_t transaction_id,
     AstraHandle *response_send, uint32_t *delivered, uint32_t *dropped);
+/** Atomically enqueue a reliable event for every current observer.
+ * A full per-observer backlog returns BUSY without delivery. Publisher must
+ * retry; observer acknowledges each received sequence after handling it.
+ * @param broker MESSAGING startup capability.
+ * @param topic Publisher-local topic.
+ * @param payload Opaque event bytes.
+ * @param payload_size Byte count, at most ASTRA_MESSAGING_PAYLOAD_MAX.
+ * @param transaction_id Nonzero caller transaction ID.
+ * @param deadline Absolute monotonic deadline for broker admission.
+ * @param queued Number of observer backlogs that accepted the event.
+ * @return Astra result; BUSY means no observer accepted this event.
+ */
+ASTRA_NODISCARD AstraResult astra_messaging_publish_reliable(
+    AstraHandle broker, const char *topic, const void *payload,
+    uint32_t payload_size, uint32_t transaction_id,
+    AstraMonotonicDeadline deadline, uint32_t *queued);
+/** Acknowledge one reliable event after handling it. Duplicate ACK succeeds.
+ * @param broker MESSAGING startup capability.
+ * @param subscription Owner-bound subscription ID from received event.
+ * @param sequence Received event sequence.
+ * @param deadline Absolute monotonic deadline for broker ACK.
+ * @return Astra result; INVALID_ARGUMENT for out-of-order or unsent sequence.
+ */
+ASTRA_NODISCARD AstraResult astra_messaging_ack(AstraHandle broker,
+    uint64_t subscription, uint64_t sequence,
+    AstraMonotonicDeadline deadline);
 /** Post without waiting; retry WOULD_BLOCK when state change matters.
  * @param broker MESSAGING startup capability.
  * @param topic Publisher-local topic.
@@ -98,6 +124,7 @@ ASTRA_NODISCARD AstraResult astra_messaging_post(
     AstraHandle broker, const char *topic, const void *payload,
     uint32_t payload_size, uint32_t transaction_id);
 /** Try one event receive; caller owns optional transferred reply send.
+ * Reliable events remain in broker backlog until astra_messaging_ack.
  * @param event_receive Subscriber's receive endpoint.
  * @param event Receives validated broker event.
  * @param response_send Optional output for owned reply send capability.

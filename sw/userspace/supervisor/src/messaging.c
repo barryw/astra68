@@ -17,6 +17,13 @@ typedef struct MessagingEndpoint {
     uint32_t send;
 } MessagingEndpoint;
 
+typedef struct MessagingPending {
+    struct MessagingPending *next;
+    struct MessagingSubscription *target;
+    AstraMessagingEvent event;
+    uint8_t sent;
+} MessagingPending;
+
 typedef struct MessagingSubscription {
     struct MessagingSubscription *next;
     uint32_t process_id;
@@ -25,6 +32,10 @@ typedef struct MessagingSubscription {
     uint32_t publisher_id;
     uint64_t id;
     uint64_t sequence;
+    uint64_t acknowledged;
+    MessagingPending *pending_head;
+    MessagingPending *pending_tail;
+    uint8_t pending_count;
     char name[ASTRA_MESSAGING_NAME_MAX];
     char topic[ASTRA_MESSAGING_TOPIC_MAX];
 } MessagingSubscription;
@@ -185,6 +196,19 @@ static uint32_t subscribe(uint32_t owner, const AstraMessagingRequest *request,
     return ASTRA_STATUS_OK;
 }
 
+static void subscription_destroy(MessagingSubscription *entry)
+{
+    MessagingPending *pending = entry->pending_head;
+    while (pending != NULL) {
+        MessagingPending *next = pending->next;
+        astra_runtime_deallocate(pending);
+        pending = next;
+    }
+    (void)astra_close(entry->send);
+    astra_runtime_deallocate(entry);
+    --subscription_count;
+}
+
 static uint32_t unsubscribe(uint32_t owner, uint64_t id)
 {
     MessagingSubscription **at = &subscriptions;
@@ -193,9 +217,7 @@ static uint32_t unsubscribe(uint32_t owner, uint64_t id)
         if (entry->id == id) {
             if (entry->process_id != owner) return ASTRA_STATUS_ACCESS;
             *at = entry->next;
-            (void)astra_close(entry->send);
-            astra_runtime_deallocate(entry);
-            --subscription_count;
+            subscription_destroy(entry);
             return ASTRA_STATUS_OK;
         }
         at = &entry->next;
@@ -211,9 +233,7 @@ void supervisor_messaging_remove(uint32_t process_id)
         MessagingSubscription *entry = *at;
         if (entry->process_id == process_id) {
             *at = entry->next;
-            (void)astra_close(entry->send);
-            astra_runtime_deallocate(entry);
-            --subscription_count;
+            subscription_destroy(entry);
         } else at = &entry->next;
     }
 }
@@ -231,43 +251,177 @@ static void prune_commands(const SupervisorProcessTable *processes)
     }
     for (MessagingSubscription *at = subscriptions; at != NULL;) {
         uint32_t id = at->process_id;
-        if (process_record(processes, id) == NULL &&
-            live_process(id, NULL) == ASTRA_STATUS_PEER_DEAD) {
+        if (astra_wait_one(at->send, 0u, NULL) == ASTRA_SYSCALL_PEER_DEAD ||
+            (process_record(processes, id) == NULL &&
+             live_process(id, NULL) == ASTRA_STATUS_PEER_DEAD)) {
             supervisor_messaging_remove(id);
             at = subscriptions;
         } else at = at->next;
     }
 }
 
-static uint32_t publish(uint32_t owner, uint32_t kind, const char *name,
-    const AstraMessagingRequest *request, uint32_t response,
-    AstraMessagingReply *reply)
+static int subscription_matches(const MessagingSubscription *entry,
+    uint32_t owner, uint32_t kind, const char *name, const char *topic)
+{
+    return entry->kind == kind &&
+        (entry->publisher_id == 0u || entry->publisher_id == owner) &&
+        (kind == ASTRA_MESSAGING_COMMAND && entry->name[0] == '\0' ?
+            1 : strcmp(entry->name, name) == 0) &&
+        strcmp(entry->topic, topic) == 0;
+}
+
+static void build_event(AstraMessagingEvent *event,
+    const MessagingSubscription *entry, uint32_t owner, uint32_t kind,
+    const char *name, const AstraMessagingRequest *request)
+{
+    memset(event, 0, sizeof(*event));
+    astra_message_header_set(&event->header, sizeof(*event),
+        ASTRA_MESSAGING_PROTOCOL, ASTRA_MESSAGING_VERSION,
+        request->qos == ASTRA_MESSAGING_QOS_RELIABLE ?
+            ASTRA_MESSAGING_RELIABLE_EVENT : ASTRA_MESSAGING_EVENT,
+        request->header.transaction_id);
+    event->kind = kind;
+    event->process_id = owner;
+    event->subscription = entry->id;
+    event->sequence = entry->sequence + 1u;
+    memcpy(event->name, name, strlen(name) + 1u);
+    memcpy(event->topic, request->topic, strlen(request->topic) + 1u);
+    event->payload_size = request->payload_size;
+    memcpy(event->payload, request->payload, request->payload_size);
+}
+
+static uint32_t send_pending(MessagingSubscription *entry)
+{
+    MessagingPending *pending = entry->pending_head;
+    if (pending == NULL || pending->sent != 0u)
+        return ASTRA_SYSCALL_OK;
+    uint32_t status = astra_port_send(entry->send, &pending->event,
+        sizeof(pending->event), NULL, 0u);
+    if (status == ASTRA_SYSCALL_OK)
+        pending->sent = 1u;
+    return status;
+}
+
+static uint32_t acknowledge(uint32_t owner, uint64_t subscription,
+    uint64_t sequence)
+{
+    if (sequence == 0u) return ASTRA_STATUS_INVALID;
+    for (MessagingSubscription *entry = subscriptions; entry != NULL;
+         entry = entry->next) {
+        if (entry->id != subscription) continue;
+        if (entry->process_id != owner) return ASTRA_STATUS_ACCESS;
+        if (sequence <= entry->acknowledged) return ASTRA_STATUS_OK;
+        MessagingPending *pending = entry->pending_head;
+        if (pending == NULL || pending->sent == 0u ||
+            pending->event.sequence != sequence)
+            return ASTRA_STATUS_INVALID;
+        entry->pending_head = pending->next;
+        if (entry->pending_head == NULL) entry->pending_tail = NULL;
+        --entry->pending_count;
+        entry->acknowledged = sequence;
+        astra_runtime_deallocate(pending);
+        (void)send_pending(entry);
+        return ASTRA_STATUS_OK;
+    }
+    return ASTRA_STATUS_NOT_FOUND;
+}
+
+int supervisor_messaging_needs_retry(void)
+{
+    for (MessagingSubscription *entry = subscriptions; entry != NULL;
+         entry = entry->next)
+        if (entry->pending_head != NULL && entry->pending_head->sent == 0u)
+            return 1;
+    return 0;
+}
+
+void supervisor_messaging_retry(void)
 {
     MessagingSubscription **at = &subscriptions;
     while (*at != NULL) {
         MessagingSubscription *entry = *at;
-        if (entry->kind != kind ||
-            (entry->publisher_id != 0u && entry->publisher_id != owner) ||
-            ((kind != ASTRA_MESSAGING_COMMAND || entry->name[0] != '\0') &&
-                strcmp(entry->name, name) != 0) ||
-            strcmp(entry->topic, request->topic) != 0) {
+        uint32_t status = send_pending(entry);
+        if (status == ASTRA_SYSCALL_PEER_DEAD ||
+            status == ASTRA_SYSCALL_INVALID_HANDLE) {
+            *at = entry->next;
+            subscription_destroy(entry);
+        } else at = &entry->next;
+    }
+}
+
+static uint32_t publish_reliable(uint32_t owner, uint32_t kind,
+    const char *name, const AstraMessagingRequest *request,
+    AstraMessagingReply *reply)
+{
+    MessagingPending *staged = NULL;
+    uint32_t status = ASTRA_STATUS_OK;
+
+    for (MessagingSubscription *entry = subscriptions; entry != NULL;
+         entry = entry->next) {
+        if (!subscription_matches(entry, owner, kind, name, request->topic))
+            continue;
+        if (entry->pending_count == ASTRA_MESSAGING_RELIABLE_BACKLOG_MAX ||
+            entry->sequence == UINT64_MAX) {
+            status = ASTRA_STATUS_BUSY;
+            break;
+        }
+        MessagingPending *pending = astra_runtime_callocate(1u,
+            sizeof(*pending));
+        if (pending == NULL) {
+            status = ASTRA_STATUS_LIMIT;
+            break;
+        }
+        pending->target = entry;
+        build_event(&pending->event, entry, owner, kind, name, request);
+        pending->next = staged;
+        staged = pending;
+    }
+    if (status != ASTRA_STATUS_OK) {
+        while (staged != NULL) {
+            MessagingPending *next = staged->next;
+            astra_runtime_deallocate(staged);
+            staged = next;
+        }
+        return status;
+    }
+    while (staged != NULL) {
+        MessagingPending *pending = staged;
+        MessagingSubscription *entry = pending->target;
+        staged = staged->next;
+        pending->next = NULL;
+        ++entry->sequence;
+        if (entry->pending_tail != NULL)
+            entry->pending_tail->next = pending;
+        else entry->pending_head = pending;
+        entry->pending_tail = pending;
+        ++entry->pending_count;
+        ++reply->delivered;
+        if (entry->pending_head == pending) (void)send_pending(entry);
+    }
+    return ASTRA_STATUS_OK;
+}
+
+static uint32_t publish_best_effort(uint32_t owner, uint32_t kind,
+    const char *name, const AstraMessagingRequest *request,
+    uint32_t response, AstraMessagingReply *reply)
+{
+    MessagingSubscription **at = &subscriptions;
+    while (*at != NULL) {
+        MessagingSubscription *entry = *at;
+        if (!subscription_matches(entry, owner, kind, name,
+                                  request->topic)) {
             at = &entry->next;
             continue;
         }
         AstraMessagingEvent event = {0};
         uint32_t response_copy = 0u;
+        if (entry->sequence == UINT64_MAX) {
+            ++reply->dropped;
+            at = &entry->next;
+            continue;
+        }
+        build_event(&event, entry, owner, kind, name, request);
         ++entry->sequence;
-        astra_message_header_set(&event.header, sizeof(event),
-            ASTRA_MESSAGING_PROTOCOL, ASTRA_MESSAGING_VERSION,
-            ASTRA_MESSAGING_EVENT, request->header.transaction_id);
-        event.kind = kind;
-        event.process_id = owner;
-        event.subscription = entry->id;
-        event.sequence = entry->sequence;
-        memcpy(event.name, name, strlen(name) + 1u);
-        memcpy(event.topic, request->topic, strlen(request->topic) + 1u);
-        event.payload_size = request->payload_size;
-        memcpy(event.payload, request->payload, request->payload_size);
         if (response != 0u &&
             astra_rt_handle_duplicate(response,
                 ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_TRANSFER,
@@ -286,9 +440,7 @@ static uint32_t publish(uint32_t owner, uint32_t kind, const char *name,
         } else if (sent == ASTRA_SYSCALL_PEER_DEAD ||
                    sent == ASTRA_SYSCALL_INVALID_HANDLE) {
             *at = entry->next;
-            (void)astra_close(entry->send);
-            astra_runtime_deallocate(entry);
-            --subscription_count;
+            subscription_destroy(entry);
             ++reply->dropped;
         } else {
             ++reply->dropped;
@@ -296,6 +448,17 @@ static uint32_t publish(uint32_t owner, uint32_t kind, const char *name,
         }
     }
     return ASTRA_STATUS_OK;
+}
+
+static uint32_t publish(uint32_t owner, uint32_t kind, const char *name,
+    const AstraMessagingRequest *request, uint32_t response,
+    AstraMessagingReply *reply)
+{
+    if (request->qos == ASTRA_MESSAGING_QOS_RELIABLE)
+        return response == 0u ?
+            publish_reliable(owner, kind, name, request, reply) :
+            ASTRA_STATUS_INVALID;
+    return publish_best_effort(owner, kind, name, request, response, reply);
 }
 
 uint32_t supervisor_messaging_start(uint32_t *receive, uint32_t *send)
@@ -331,9 +494,12 @@ void supervisor_messaging_pump(uint32_t receive,
         request.header.protocol != ASTRA_MESSAGING_PROTOCOL ||
         request.header.protocol_version != ASTRA_MESSAGING_VERSION ||
         request.header.flags != 0u || request.header.reserved != 0u ||
-        request.header.transaction_id == 0u || request.reserved != 0u ||
+        request.header.transaction_id == 0u ||
         request.header.operation < ASTRA_MESSAGING_IDENTIFY ||
-        request.header.operation > ASTRA_MESSAGING_PUBLISH ||
+        request.header.operation > ASTRA_MESSAGING_ACK ||
+        request.qos > ASTRA_MESSAGING_QOS_RELIABLE ||
+        (request.header.operation != ASTRA_MESSAGING_PUBLISH &&
+         request.qos != ASTRA_MESSAGING_QOS_BEST_EFFORT) ||
         request.payload_size > ASTRA_MESSAGING_PAYLOAD_MAX ||
         !terminated(request.name, sizeof(request.name)) ||
         !terminated(request.topic, sizeof(request.topic)) ||
@@ -343,13 +509,15 @@ void supervisor_messaging_pump(uint32_t receive,
           request.header.operation == ASTRA_MESSAGING_SUBSCRIBE) ?
             count != 2u :
           request.header.operation == ASTRA_MESSAGING_PUBLISH ?
-            count > 2u : count != 1u))
+            (request.qos == ASTRA_MESSAGING_QOS_RELIABLE ?
+                count != 1u : count > 2u) : count != 1u))
         reply.status = ASTRA_STATUS_PROTOCOL;
     if (reply.status == ASTRA_STATUS_OK) {
         if (request.header.operation == ASTRA_MESSAGING_LIST ||
             request.header.operation == ASTRA_MESSAGING_LOOKUP ||
             request.header.operation == ASTRA_MESSAGING_REGISTER ||
-            request.header.operation == ASTRA_MESSAGING_SUBSCRIBE)
+            request.header.operation == ASTRA_MESSAGING_SUBSCRIBE ||
+            request.header.operation == ASTRA_MESSAGING_PUBLISH)
             prune_commands(processes);
         switch (request.header.operation) {
         case ASTRA_MESSAGING_IDENTIFY:
@@ -437,6 +605,10 @@ void supervisor_messaging_pump(uint32_t receive,
             if (request.topic[0] == '\0') reply.status = ASTRA_STATUS_INVALID;
             else reply.status = publish(owner, own_kind, own_name,
                 &request, count == 2u ? handles[1] : 0u, &reply);
+            break;
+        case ASTRA_MESSAGING_ACK:
+            reply.status = acknowledge(owner, request.subscription,
+                request.cursor);
             break;
         default:
             reply.status = ASTRA_STATUS_PROTOCOL;

@@ -1675,6 +1675,77 @@ test_file_round_trip(void)
     assert(reply.status == ASTRA_VFS_OK);
 }
 
+static void
+test_mutation_generations(void)
+{
+    AstraVfsChangeSnapshot changes;
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    uint32_t session;
+    uint32_t moved = 0u;
+    AstraVfsFile file;
+
+    reset();
+    assert(astra_vfs_service_change_snapshot(&service, &changes));
+    assert(changes.nodes == 0u && changes.entries == 0u);
+    session = open_session();
+
+    begin_request(&request, session, "/changed.txt");
+    request.flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
+                    ASTRA_VFS_OPEN_CREATE;
+    fixture_dispatch(&service, ASTRA_VFS_OP_OPEN, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    file = reply.file;
+    assert(astra_vfs_service_change_snapshot(&service, &changes));
+    assert(changes.nodes == 0u && changes.entries == 1u);
+
+    begin_request(&request, session, NULL);
+    request.file = file;
+    request.length = 1u;
+    request.body.payload[0] = 'x';
+    fixture_dispatch(&service, ASTRA_VFS_OP_WRITE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && reply.count == 1u);
+    assert(astra_vfs_service_change_snapshot(&service, &changes));
+    assert(changes.nodes == 1u && changes.entries == 1u);
+
+    begin_request(&request, session, NULL);
+    request.file = file;
+    request.length = 1u;
+    fixture_dispatch(&service, ASTRA_VFS_OP_READ, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    assert(astra_vfs_service_change_snapshot(&service, &changes));
+    assert(changes.nodes == 1u && changes.entries == 1u);
+
+    assert(astra_vfs_service_write_from(&service, session, file, 1u,
+        UINT64_MAX, "y", 1u, &moved) == ASTRA_VFS_OK && moved == 1u);
+    assert(astra_vfs_service_change_snapshot(&service, &changes));
+    assert(changes.nodes == 2u && changes.entries == 1u);
+
+    begin_request(&request, session, NULL);
+    request.file = file;
+    request.offset = 0u;
+    fixture_dispatch(&service, ASTRA_VFS_OP_TRUNCATE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    assert(astra_vfs_service_change_snapshot(&service, &changes));
+    assert(changes.nodes == 3u && changes.entries == 1u);
+
+    begin_request(&request, session, "/newdir");
+    fixture_dispatch(&service, ASTRA_VFS_OP_MKDIR, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    fixture_dispatch(&service, ASTRA_VFS_OP_MKDIR, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_EXISTS);
+    assert(astra_vfs_service_change_snapshot(&service, &changes));
+    assert(changes.nodes == 3u && changes.entries == 2u);
+
+    fixture_dispatch(&service, ASTRA_VFS_OP_UNLINK, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_IS_DIR);
+    request.flags = ASTRA_VFS_UNLINK_DIRECTORY;
+    fixture_dispatch(&service, ASTRA_VFS_OP_UNLINK, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    assert(astra_vfs_service_change_snapshot(&service, &changes));
+    assert(changes.nodes == 3u && changes.entries == 3u);
+}
+
 /*
  * The properties the core exists for. A backend cannot enforce any of these
  * because it never sees a session or a handle.
@@ -2410,6 +2481,7 @@ main(void)
     test_transport_owner_isolation_and_resource_exhaustion();
     test_sessions_are_bound_to_their_grant();
     test_file_round_trip();
+    test_mutation_generations();
     test_handle_discipline();
     test_session_release_frees_files();
     test_malformed_records();
