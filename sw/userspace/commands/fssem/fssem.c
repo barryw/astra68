@@ -2285,6 +2285,7 @@ static int case_volume_root(const char *directory)
     AstraVolumeReference stale = ram; ++stale.generation;
     CHECK(astra_volume_root(reader->handle, &stale, ASTRA_RIGHT_READ, &root) == ASTRA_ERROR_INVALID_HANDLE,
         "stale root reference accepted");
+    uint64_t root_inode = 0u;
     for (uint32_t attempt = 0u; attempt < 2u; ++attempt) {
         uint32_t rights = ASTRA_RIGHT_READ | (attempt != 0u ? ASTRA_RIGHT_WRITE : 0u);
         CHECK(astra_volume_root(attempt == 0u ? reader->handle : writer->handle, &ram, rights, &root) == ASTRA_OK,
@@ -2295,13 +2296,27 @@ static int case_volume_root(const char *directory)
         AstraVfsDirEntry info = {0};
         if (status == ASTRA_VFS_OK) status = astra_vfs_stat_meta(client, "/", &info);
         if (status == ASTRA_VFS_OK && info.kind != ASTRA_VFS_KIND_DIRECTORY) status = ASTRA_VFS_ERR_INVALID;
+        if (status == ASTRA_VFS_OK &&
+            (!(info.meta.valid & ASTRA_VFS_META_INODE) || info.meta.inode == 0u ||
+             (root_inode != 0u && info.meta.inode != root_inode)))
+            status = ASTRA_VFS_ERR_PROTOCOL;
+        if (status == ASTRA_VFS_OK) root_inode = info.meta.inode;
         char path[64]; snprintf(path, sizeof(path), "/volume-root-%ld", (long)getpid());
         if (status == ASTRA_VFS_OK && attempt == 0u) {
             uint32_t refused = astra_vfs_mkdir(client, path);
             if (refused != ASTRA_VFS_ERR_READ_ONLY && refused != ASTRA_VFS_ERR_ACCESS) status = ASTRA_VFS_ERR_ACCESS;
         } else if (status == ASTRA_VFS_OK) {
             status = astra_vfs_mkdir(client, path);
-            if (status == ASTRA_VFS_OK) status = astra_vfs_unlink(client, path, ASTRA_VFS_UNLINK_DIRECTORY);
+            if (status == ASTRA_VFS_OK) {
+                status = astra_vfs_stat_meta(client, path, &info);
+                if (status == ASTRA_VFS_OK &&
+                    (!(info.meta.valid & ASTRA_VFS_META_INODE) ||
+                     info.meta.inode == root_inode))
+                    status = ASTRA_VFS_ERR_PROTOCOL;
+                uint32_t removed = astra_vfs_unlink(client, path,
+                    ASTRA_VFS_UNLINK_DIRECTORY);
+                if (status == ASTRA_VFS_OK) status = removed;
+            }
         }
         uint32_t disconnected = astra_vfs_disconnect(client);
         free(client);

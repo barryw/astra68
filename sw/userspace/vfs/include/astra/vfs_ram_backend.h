@@ -18,6 +18,7 @@ typedef struct AstraVfsRamBackend {
     uint64_t max_bytes;
     uint64_t used_bytes;
     uint64_t node_count;
+    uint64_t next_inode; /* Never reused within this mount incarnation. */
     AstraVfsRamAllocate allocate;
     AstraVfsRamFree deallocate;
     AstraVfsRamLock lock;

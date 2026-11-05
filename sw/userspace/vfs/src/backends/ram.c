@@ -13,6 +13,7 @@ struct AstraVfsRamNode {
     uint8_t **pages;
     char *target;
     uint64_t size;
+    uint64_t inode;
     uint32_t slots;
     uint32_t opens;
     uint32_t links;
@@ -170,6 +171,8 @@ static void info_of(const AstraVfsRamNode *node, AstraVfsNodeInfo *info)
     memset(info, 0, sizeof(*info));
     info->size = node->size;
     info->kind = node->kind;
+    info->meta.valid = ASTRA_VFS_META_INODE;
+    info->meta.inode = node->inode;
     astra_vfs_node_info_mode_links(info, node->mode, node->links);
 }
 
@@ -198,6 +201,8 @@ static uint32_t create(AstraVfsRamBackend *fs, AstraVfsRamNode *parent,
         return ASTRA_VFS_ERR_NOT_DIR;
     if (child(parent, name, length) != NULL)
         return ASTRA_VFS_ERR_EXISTS;
+    if (fs->next_inode == 0u)
+        return ASTRA_VFS_ERR_LIMIT;
     node = charged(fs, sizeof(*node));
     if (node == NULL)
         return ASTRA_VFS_ERR_NO_SPACE;
@@ -219,6 +224,7 @@ static uint32_t create(AstraVfsRamBackend *fs, AstraVfsRamNode *parent,
         node->size = bytes - 1u;
     }
     node->kind = kind;
+    node->inode = fs->next_inode++;
     node->mode = mode;
     node->links = 1u;
     node->parent = parent;
@@ -252,6 +258,8 @@ int astra_vfs_ram_init(AstraVfsRamBackend *fs, uint64_t max_bytes,
     if (fs->root == NULL)
         return 0;
     fs->root->kind = ASTRA_VFS_KIND_DIRECTORY;
+    fs->root->inode = 1u;
+    fs->next_inode = 2u;
     fs->root->mode = 0777u;
     fs->root->links = 1u;
     fs->node_count = 1u;

@@ -2,6 +2,22 @@
 
 Status: active continuation map, 2026-11-05
 
+RAM0 identity gate, 2026-11-05: RAM backend now assigns stable, non-reused
+inode IDs within each mount incarnation. The root, open handles, hard links,
+renames, and directory listings carry the same identity; allocation
+exhaustion refuses creation without changing the tree. Haiku reference:
+`src/system/kernel/fs/node_monitor.cpp` uses stable node and parent IDs for
+entry notifications. VFS host tests and target HostFS/`fssem` builds passed on
+Beast. Updated HostFS and a temporary `fssem` command were installed in the
+DE25 development release; native `fssem volume-root` passed its RAM0 root and
+new-directory inode checks. Raw RFB evidence, with matching board and Beast
+SHA-256 `09a358a543f77f49369158b6394dc154b4a8f562765ed9924cfea12648ae29d9`,
+is under `/mnt/Documents/astra68/ram-inode-20261105/` on Beast. Temporary
+command and board captures were removed. Astra reached stage 8; runtime,
+audio host, and remote desktop are active; one development release remains
+with 8.0 GiB free. Exact mutation events and their performance gate remain
+open.
+
 User crash snapshot gate, 2026-11-05: Axiom retains a bounded 96-byte faulting
 thread register and selected mapping snapshot before retiring its address
 space. A process `CRASH` capability gates access; launch and clone parents

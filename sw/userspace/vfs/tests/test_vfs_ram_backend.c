@@ -21,20 +21,30 @@ static void test_tree(void)
     uint32_t length = 0u;
     uint64_t position = 0u;
     uint64_t cookie = 0u;
+    uint64_t docs_inode;
+    uint64_t note_inode;
 
     assert(astra_vfs_ram_init(&fs, 32768u, malloc, free,
                               NULL, NULL, NULL));
     assert(ops->mkdir(&fs, "/docs", 0750u) == ASTRA_VFS_OK);
     assert(ops->mkdir(&fs, "/docs", 0750u) == ASTRA_VFS_ERR_EXISTS);
     assert(ops->stat(&fs, "/docs", &info) == ASTRA_VFS_OK &&
-           info.kind == ASTRA_VFS_KIND_DIRECTORY && info.mode == 0750u);
+           info.kind == ASTRA_VFS_KIND_DIRECTORY && info.mode == 0750u &&
+           (info.meta.valid & ASTRA_VFS_META_INODE));
+    docs_inode = info.meta.inode;
     assert(ops->open(&fs, "/", ASTRA_VFS_OPEN_DIRECTORY, 0u,
                      &root, &info) == ASTRA_VFS_OK);
+    assert((info.meta.valid & ASTRA_VFS_META_INODE) &&
+           info.meta.inode != docs_inode);
     assert(ops->open_at(&fs, root, "docs", ASTRA_VFS_OPEN_DIRECTORY,
                         0u, &directory, &info) == ASTRA_VFS_OK);
+    assert(info.meta.inode == docs_inode);
     assert(ops->open_at(&fs, directory, "note",
                         ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_WRITE,
                         0640u, &file, &info) == ASTRA_VFS_OK);
+    note_inode = info.meta.inode;
+    assert((info.meta.valid & ASTRA_VFS_META_INODE) &&
+           note_inode != docs_inode);
     assert(ops->unlink(&fs, "/docs/note", ASTRA_VFS_UNLINK_DIRECTORY) ==
            ASTRA_VFS_ERR_NOT_DIR);
     assert(ops->unlink(&fs, "/docs", 0u) == ASTRA_VFS_ERR_IS_DIR);
@@ -70,7 +80,7 @@ static void test_tree(void)
            info.mode == 0u && (info.meta.valid & ASTRA_VFS_META_MODE));
     assert(ops->link(&fs, "/docs/note", "/docs/hard") == ASTRA_VFS_OK);
     assert(ops->stat(&fs, "/docs/hard", &info) == ASTRA_VFS_OK &&
-           info.nlink == 2u);
+           info.nlink == 2u && info.meta.inode == note_inode);
     assert(ops->symlink(&fs, "note", "/docs/soft") == ASTRA_VFS_OK);
     assert(ops->readlink(&fs, "/docs/soft", text, 3u, &length) ==
            ASTRA_VFS_ERR_BUFFER_TOO_SMALL && length == 4u);
@@ -88,6 +98,8 @@ static void test_tree(void)
     assert(ops->rename_noreplace(&fs, "/docs/note", "/docs/renamed") ==
            ASTRA_VFS_OK);
     assert(ops->stat(&fs, "/docs/note", &info) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(ops->stat(&fs, "/docs/renamed", &info) == ASTRA_VFS_OK &&
+           info.meta.inode == note_inode);
     assert(ops->open(&fs, "/docs/hard", ASTRA_VFS_OPEN_READ, 0u,
                      &alias, &info) == ASTRA_VFS_OK);
     assert(ops->read(&fs, alias, 0u, text, 3u, &moved) == ASTRA_VFS_OK &&
@@ -96,11 +108,18 @@ static void test_tree(void)
     assert(ops->unlink(&fs, "/docs/renamed", 0u) == ASTRA_VFS_OK);
     assert(ops->stat_node(&fs, alias, &info) == ASTRA_VFS_OK &&
            info.nlink == 0u && info.meta.nlink == 0u &&
-           (info.meta.valid & ASTRA_VFS_META_NLINK));
+           (info.meta.valid & ASTRA_VFS_META_NLINK) &&
+           info.meta.inode == note_inode);
     assert(ops->read(&fs, alias, 8192u, text, 1u, &moved) == ASTRA_VFS_OK &&
            moved == 1u && text[0] == 'z');
     assert(ops->close(&fs, alias) == ASTRA_VFS_OK);
     assert(ops->close(&fs, file) == ASTRA_VFS_OK);
+    assert(ops->open_at(&fs, directory, "replacement",
+                        ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_WRITE,
+                        0600u, &file, &info) == ASTRA_VFS_OK &&
+           info.meta.inode > note_inode);
+    assert(ops->close(&fs, file) == ASTRA_VFS_OK);
+    assert(ops->unlink(&fs, "/docs/replacement", 0u) == ASTRA_VFS_OK);
     assert(ops->unlink_at(&fs, directory, "soft", 0u) == ASTRA_VFS_OK);
     assert(ops->mkdir(&fs, "/empty", 0700u) == ASTRA_VFS_OK);
     assert(ops->unlink(&fs, "/empty/", ASTRA_VFS_UNLINK_DIRECTORY) ==
@@ -156,7 +175,11 @@ static void test_refusals(void)
     assert(ops->write(&fs, file, 8192u, 0u, UINT64_MAX, "x", 1u, &moved,
                       &position) == ASTRA_VFS_OK && moved == 1u);
     assert(ops->close(&fs, file) == ASTRA_VFS_OK);
+    fs.next_inode = 0u;
+    assert(ops->mkdir(&fs, "/x", 0700u) == ASTRA_VFS_ERR_EXISTS);
     assert(ops->unlink(&fs, "/x", 0u) == ASTRA_VFS_OK);
+    assert(ops->mkdir(&fs, "/no-reused-id", 0700u) == ASTRA_VFS_ERR_LIMIT);
+    assert(ops->stat(&fs, "/no-reused-id", &info) == ASTRA_VFS_ERR_NOT_FOUND);
     astra_vfs_ram_destroy(&fs);
     assert(fs.used_bytes == 0u);
 }
