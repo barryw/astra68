@@ -426,7 +426,7 @@ are capability gaps, not instructions to move Astra's services into the kernel.
 | Coordinated memory pressure | `sw/kernel/memory.c` reserves emergency, protected, and DMA frames and classifies ordinary headroom against those floors. Threshold crossing and later physical allocation shortages signal the existing worker; idle library mappings can be reclaimed. DE25 low-memory and recovery gate passed. Service cache coordination remains open | `src/system/kernel/low_resource_manager.cpp` classifies pressure and calls ordered handlers. Astra needs one reclaim order before exhausting protected reserves. No swap is required. |
 | General file cache and file-backed mappings | `sw/kernel/vm.c` supports anonymous, shared, copy-on-write, and library mappings; POSIX `mmap` is absent | `src/system/kernel/cache/file_cache.cpp`, `vm/VMCache.cpp`, and `vm/vm_page_writer.cpp` coordinate vnode identity, cached pages, mapped pages, and writeback. Astra's canonical VFS must supply identity and invalidation; Linux-side cache alone cannot back guest mappings. |
 | Priority inversion control | `sw/kernel/thread.c` has base and effective priority fields, currently always set together | Haiku's scheduler and lock paths show bounded priority changes. Astra needs inheritance for kernel locks and donation across blocking native RPC, withdrawn on reply, timeout, cancellation, and peer death; media CPU budgets need their own bound. |
-| File and directory change events | HostFS publishes 64-entry bounded exact inode records for successful handle writes and truncates, including open-with-truncate, and confirmed descriptor chmod through the existing reliable broker. Successful ordinary and exclusive create carry exact parent inode, child inode, and leaf name when atomic exclusive creation succeeds. Successful mkdir, symlink, and hardlink carry exact destination parent inode and leaf; child inode may be unknown. Successful unlink carries exact parent inode and leaf; child inode remains unknown. Successful rename emits source removal then destination creation with both exact parents and leaves. Volume generations cover gaps and unsupported mutations. VFS protocol 40 carries node identity in directory listings; shared File Panel preserves selection through refresh and row shifts, certified on DE25 RAM0. Linux-originated changes remain open | `src/system/kernel/fs/node_monitor.cpp` identifies changed node and parent directory and emits creation, removal, move, stat, and unmount events. Astra carries exact creation, removal, and move entry identity through its existing change ring and broker; Linux-originated edits still need a bounded authority-filtered source. `src/kits/tracker/PoseView.cpp` tracks selection by node reference rather than row. |
+| File and directory change events | HostFS publishes 64-entry bounded exact inode records for successful handle writes and truncates, including open-with-truncate, and confirmed descriptor chmod through the existing reliable broker. Successful ordinary and exclusive create carry exact parent inode, child inode, and leaf name when atomic exclusive creation succeeds. Successful mkdir, symlink, and hardlink carry exact destination parent inode and leaf; child inode may be unknown. Successful unlink carries exact parent inode and leaf; child inode remains unknown. Successful rename emits source removal then destination creation with both exact parents and leaves. Volume generations cover gaps and unsupported mutations. VFS protocol 40 carries node identity in directory listings; shared File Panel preserves selection through refresh and row shifts, certified on DE25 RAM0. Root provider filters Linux-originated FID events by mounted-root authority and inserts them into the same bounded ring; DE25 Atlas updated on DH0, RAM0, and FAT without Refresh. Private exFAT mounts cannot use the filesystem FID watch, so canonical Astra mutation records remain their event source. | `src/system/kernel/fs/node_monitor.cpp` identifies changed node and parent directory and emits creation, removal, move, stat, and unmount events. Astra carries exact creation, removal, and move entry identity through its existing change ring and broker. `src/kits/tracker/PoseView.cpp` tracks selection by node reference rather than row. |
 | User crash capture | CLOSED: `sw/kernel/process.c` retains a 96-byte faulting-thread register and selected mapping snapshot while a process handle lives; launcher and clone-parent handles carry `CRASH`, while query-only handles cannot read it. Supervisor emits a compact fault summary. Beast kernel, runtime, supervisor, and NDK tests and the DE25 native fault/readback gate passed; evidence is under `/mnt/Documents/astra68/crash-snapshot-20261105/` on Beast. | `src/system/kernel/debug/user_debugger.cpp` and `debug/core_dump.cpp` preserve inspectable thread context and selected mappings. Astra retains the bounded native snapshot before the address space is retired, without collecting arbitrary process memory. |
 
 Exact entry events require mutation identity from the backend's own operation.
@@ -445,15 +445,20 @@ parent records and one outside record were classified correctly on each
 backing filesystem. Create/delete carry parent FIDs, rename carries both
 parents, and modify carries only a target FID. Evidence is under
 `/mnt/Documents/astra68/fsnotify-authority-20261105/` on Beast.
-That can observe Linux-local edits through the provider, but Linux fanotify
-does not report remote changes or mmap writes. Astra's canonical operation
-records remain necessary; both sources must publish through the existing
-broker, with generations covering loss and unsupported sources.
+Linux-local edits now pass through the root provider into the existing QEMU
+ring and broker. The provider suppresses its own worker and QEMU events, uses
+`FAN_ONDIR` for directory entry changes, and reports a GAP on overflow or
+uncertain identity. Linux fanotify does not report remote changes or mmap
+writes. Astra's canonical operation records remain necessary, with
+generations covering loss and unsupported sources.
 `FAN_MARK_FILESYSTEM` on a host-directory binding observes the whole backing
 filesystem, not Astra's granted subtree. Raw events or the monitoring FD must
 never cross into the guest; the root-owned provider must filter with exact
 mount/subtree authority or omit external exact events for that binding. The
-current generation path only covers Astra-originated mutations.
+DE25 ext4, tmpfs, and FAT watches pass exact-event hardware gates. DE25 exFAT
+rejects the filesystem FID watch with `EOPNOTSUPP`; its private mount is
+changed through Astra's canonical operation path. A future host-shared exFAT
+binding needs a separate external-event source before promising live updates.
 
 Implementation order follows dependencies: node events use the existing broker;
 crash snapshots use the process-handle and trace seams. Pressure handling must

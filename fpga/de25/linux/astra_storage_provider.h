@@ -26,13 +26,17 @@ typedef struct AstraStorageProvider {
     uint32_t workers;
     uint32_t worker_limit;
     int lease_signal;
+    int watch_fd;
+    pid_t peer_pid;
+    uint64_t watch_sequence;
+    AstraStorageChangeRecord watch_records[64];
     sigset_t previous_signals;
     uint64_t epoch;
     uint64_t system_source;
     struct AstraStorageDiscovery *discovery;
 } AstraStorageProvider;
 
-#define ASTRA_STORAGE_PROVIDER_INIT { .domain = {.directory = -1}, .lease_signal = -1 }
+#define ASTRA_STORAGE_PROVIDER_INIT { .domain = {.directory = -1}, .lease_signal = -1, .watch_fd = -1 }
 
 /* Enter the private mount namespace and consume the precreated domain only
  * after successful admission. The caller retains it on every failure. */
@@ -113,6 +117,10 @@ int astra_storage_provider_path(AstraStorageProvider *provider, int socket,
                                  pid_t peer, uid_t uid, gid_t gid);
 int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
                                     pid_t peer, uid_t uid, gid_t gid);
+/* Read one filtered Linux-originated change after cursor, or a bounded gap.
+ * NONE returns the latest cursor without fabricating a mutation. */
+int astra_storage_provider_change_next(AstraStorageProvider *provider,
+    uint64_t cursor, AstraStorageChangeRecord *change, uint64_t *next);
 /* Serve the inherited peer endpoints, wake for actual child exit/lease breaks,
  * and enforce probe deadlines without polling a cancelled uninterruptible job. */
 int astra_storage_provider_serve(AstraStorageProvider *provider, int control,

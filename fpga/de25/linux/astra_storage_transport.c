@@ -193,6 +193,30 @@ int astra_storage_control_call(int socket, const AstraStorageControlRequest *req
         for (unsigned at = 0u; at < count; ++at) close(fds[at]);
         return EPROTO;
     }
+    if (reply->error == 0 && request->operation == ASTRA_STORAGE_CONTROL_CHANGE_NEXT) {
+        const AstraHostFsChangeRecord *change = &reply->change.change;
+        int exact = change->kind == ASTRA_HOST_FS_CHANGE_NODE ||
+            change->kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ||
+            change->kind == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED;
+        if (reply->count != 0u || change->kind > ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED ||
+            change->nodes != 0u || change->entries != 0u || change->reserved != 0u ||
+            change->name[sizeof(change->name) - 1u] != '\0' ||
+            (exact && (reply->change.mount == 0u || reply->change.generation == 0u ||
+                change->sequence != reply->next ||
+                (change->kind == ASTRA_HOST_FS_CHANGE_NODE ?
+                    change->inode == 0u || change->parent_inode != 0u ||
+                    change->name[0] != '\0' :
+                    change->inode != 0u || change->parent_inode == 0u ||
+                    change->name[0] == '\0'))) ||
+            (!exact && (reply->change.mount != 0u ||
+                reply->change.generation != 0u || change->inode != 0u ||
+                change->parent_inode != 0u || change->name[0] != '\0')) ||
+            (change->kind == ASTRA_HOST_FS_CHANGE_NONE &&
+                reply->next != request->sequence)) {
+            for (unsigned at = 0u; at < count; ++at) close(fds[at]);
+            return EPROTO;
+        }
+    }
     if (count != 0u)
         *root = fds[0];
     return 0;

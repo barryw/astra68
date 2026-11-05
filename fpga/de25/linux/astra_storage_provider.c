@@ -2,12 +2,14 @@
 #include "astra_storage_provider.h"
 #include "astra_storage_discovery.h"
 #include "astra68-resolve.h"
+#include <astra/utf8.h>
 #include <astra/volume_network.h>
 
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,11 +18,24 @@
 #include <sys/signalfd.h>
 #include <sys/random.h>
 #include <sys/syscall.h>
+#include <sys/fanotify.h>
+#include <sys/vfs.h>
 #include <linux/openat2.h>
+#include <linux/fanotify.h>
 #include <poll.h>
 #include <limits.h>
 #include <time.h>
 #include <unistd.h>
+
+/* Jammy cross sysroot predates these UAPI values; DE25 kernel supports them. */
+#ifndef FAN_RENAME
+#define FAN_RENAME 0x10000000
+#define FAN_REPORT_TARGET_FID 0x00001000
+#define FAN_REPORT_DFID_NAME_TARGET \
+    (FAN_REPORT_DFID_NAME | FAN_REPORT_FID | FAN_REPORT_TARGET_FID)
+#define FAN_EVENT_INFO_TYPE_OLD_DFID_NAME 10
+#define FAN_EVENT_INFO_TYPE_NEW_DFID_NAME 12
+#endif
 
 enum { PARTITION_IDLE, PARTITION_RETIRE, PARTITION_REREAD };
 
@@ -49,6 +64,9 @@ struct AstraStorageResource {
     AstraStorageMounted mounted;
     AstraVolumeNetworkSource network;
     uint32_t managed_network_id;
+    uint64_t watch_generation;
+    fsid_t watch_fsid;
+    uint8_t watch_state;
     AstraStorageWork work;
     struct AstraStorageResource *next;
 };
@@ -124,6 +142,233 @@ static AstraStorageResource *reserve(AstraStorageProvider *provider, uint64_t id
     return entry;
 }
 
+static void watch_mount(AstraStorageProvider *provider,
+                        AstraStorageResource *entry)
+{
+    const AstraStorageRecord *record = astra_storage_find(&provider->catalog,
+        entry->id);
+    if (record == NULL || (record->kind != ASTRA_VOLUME_MOUNT &&
+        record->kind != ASTRA_VOLUME_BINDING) ||
+        record->state != ASTRA_VOLUME_MOUNTED ||
+        record->origin == ASTRA_VOLUME_ORIGIN_NETWORK ||
+        entry->mounted.root < 0 || provider->watch_fd < 0)
+        return;
+    if (entry->watch_generation != record->generation) {
+        entry->watch_generation = record->generation;
+        entry->watch_state = 0u;
+    }
+    if (entry->watch_state != 0u) return;
+    struct statfs filesystem;
+    if (fstatfs(entry->mounted.root, &filesystem) != 0) {
+        entry->watch_state = 2u;
+        return;
+    }
+    if (fanotify_mark(provider->watch_fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM,
+        FAN_CREATE | FAN_DELETE | FAN_RENAME | FAN_MODIFY | FAN_ATTRIB | FAN_ONDIR,
+        AT_FDCWD, entry->mounted.target) == 0) {
+        entry->watch_fsid = filesystem.f_fsid;
+        entry->watch_state = 1u;
+    } else {
+        entry->watch_state = 2u;
+        fprintf(stderr, "astra-storage watch mount id=%" PRIu64 " error=%d\n",
+            entry->id, errno);
+    }
+}
+
+static void watch_append(AstraStorageProvider *provider, uint64_t mount,
+    uint64_t generation, uint32_t kind, uint64_t inode,
+    uint64_t parent_inode, const char *name)
+{
+    if (provider->watch_sequence == UINT64_MAX)
+        provider->watch_sequence = 0u;
+    uint64_t sequence = ++provider->watch_sequence;
+    AstraStorageChangeRecord change = {.mount = mount, .generation = generation,
+        .change = {.sequence = sequence, .kind = kind, .inode = inode,
+                   .parent_inode = parent_inode}};
+    if (name != NULL) memcpy(change.change.name, name, strlen(name) + 1u);
+    provider->watch_records[(sequence - 1u) %
+        (sizeof(provider->watch_records) / sizeof(provider->watch_records[0]))] = change;
+}
+
+typedef struct WatchFid {
+    const struct fanotify_event_info_fid *info;
+    const struct file_handle *handle;
+    const char *name;
+} WatchFid;
+
+static int watch_fid(const struct fanotify_event_info_header *info,
+                     int named, WatchFid *view)
+{
+    size_t start = offsetof(struct fanotify_event_info_fid, handle);
+    if (info == NULL || view == NULL || info->len < start + sizeof(struct file_handle))
+        return EPROTO;
+    const struct fanotify_event_info_fid *fid = (const void *)info;
+    const struct file_handle *handle = (const void *)((const char *)info + start);
+    size_t end = start + sizeof(*handle) + handle->handle_bytes;
+    if (end > info->len || handle->handle_bytes == 0u)
+        return EPROTO;
+    const char *name = NULL;
+    if (named) {
+        size_t capacity = info->len - end;
+        name = (const char *)info + end;
+        const char *terminator = memchr(name, '\0', capacity);
+        size_t length = terminator == NULL ? 0u : (size_t)(terminator - name);
+        if (length == 0u || length > 255u || memchr(name, '/', length) != NULL ||
+            !astra_utf8_validate(name, (uint32_t)length, 0u))
+            return EPROTO;
+    }
+    *view = (WatchFid){.info = fid, .handle = handle, .name = name};
+    return 0;
+}
+
+static void watch_emit(AstraStorageProvider *provider, const WatchFid *fid,
+                       uint32_t kind)
+{
+    for (AstraStorageResource *entry = provider->resources; entry != NULL;
+         entry = entry->next) {
+        const AstraStorageRecord *record = astra_storage_find(&provider->catalog,
+            entry->id);
+        if (entry->watch_state != 1u || entry->mounted.root < 0 ||
+            record == NULL || record->generation != entry->watch_generation ||
+            record->state != ASTRA_VOLUME_MOUNTED ||
+            memcmp(&entry->watch_fsid, &fid->info->fsid,
+                sizeof(fid->info->fsid)) != 0)
+            continue;
+        int mount = openat(entry->mounted.root, ".",
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (mount < 0) {
+            watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP,
+                0u, 0u, NULL);
+            continue;
+        }
+        int object = open_by_handle_at(mount, (struct file_handle *)fid->handle,
+            O_PATH | O_CLOEXEC |
+            (kind == ASTRA_HOST_FS_CHANGE_NODE ? 0 : O_DIRECTORY));
+        int opened_error = errno;
+        close(mount);
+        if (object < 0) {
+            if (opened_error != EXDEV && opened_error != EINVAL)
+                watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP,
+                    0u, 0u, NULL);
+            continue;
+        }
+        int rooted = astra_resolve_rooted(entry->mounted.root, object);
+        struct stat info;
+        int stated = fstat(object, &info);
+        close(object);
+        if (rooted != 0) continue;
+        if (stated != 0) {
+            watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP,
+                0u, 0u, NULL);
+            continue;
+        }
+        watch_append(provider, record->id, record->generation, kind,
+            kind == ASTRA_HOST_FS_CHANGE_NODE ? (uint64_t)info.st_ino : 0u,
+            kind == ASTRA_HOST_FS_CHANGE_NODE ? 0u : (uint64_t)info.st_ino,
+            fid->name);
+    }
+}
+
+static void watch_event(AstraStorageProvider *provider,
+                        const struct fanotify_event_metadata *meta,
+                        pid_t completed_worker)
+{
+    const struct fanotify_event_info_header *target = NULL, *parent = NULL;
+    const struct fanotify_event_info_header *old = NULL, *new_parent = NULL;
+    if ((meta->mask & FAN_Q_OVERFLOW) != 0u) {
+        watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP, 0u, 0u, NULL);
+        return;
+    }
+    if ((provider->peer_pid != 0 &&
+         (meta->pid == getpid() || meta->pid == provider->peer_pid)) ||
+        (completed_worker != 0 && meta->pid == completed_worker))
+        return;
+    for (AstraStorageResource *entry = provider->resources; entry != NULL;
+         entry = entry->next)
+        if (entry->work.pid == meta->pid)
+            return;
+    for (size_t offset = meta->metadata_len;
+         offset + sizeof(struct fanotify_event_info_header) <= meta->event_len;) {
+        const struct fanotify_event_info_header *info =
+            (const void *)((const char *)meta + offset);
+        if (info->len < sizeof(*info) || info->len > meta->event_len - offset) {
+            watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP, 0u, 0u, NULL);
+            return;
+        }
+        if (info->info_type == FAN_EVENT_INFO_TYPE_FID) target = info;
+        if (info->info_type == FAN_EVENT_INFO_TYPE_DFID_NAME) parent = info;
+        if (info->info_type == FAN_EVENT_INFO_TYPE_OLD_DFID_NAME) old = info;
+        if (info->info_type == FAN_EVENT_INFO_TYPE_NEW_DFID_NAME) new_parent = info;
+        offset += info->len;
+    }
+    WatchFid fid;
+    if ((meta->mask & FAN_RENAME) != 0u) {
+        if (watch_fid(old, 1, &fid) != 0) goto gap;
+        watch_emit(provider, &fid, ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED);
+        if (watch_fid(new_parent, 1, &fid) != 0) goto gap;
+        watch_emit(provider, &fid, ASTRA_HOST_FS_CHANGE_ENTRY_CREATED);
+        return;
+    }
+    if ((meta->mask & (FAN_CREATE | FAN_DELETE)) != 0u) {
+        if (watch_fid(parent, 1, &fid) != 0) goto gap;
+        watch_emit(provider, &fid, (meta->mask & FAN_DELETE) != 0u ?
+            ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED :
+            ASTRA_HOST_FS_CHANGE_ENTRY_CREATED);
+    }
+    if ((meta->mask & (FAN_MODIFY | FAN_ATTRIB)) != 0u) {
+        if (watch_fid(target, 0, &fid) != 0) goto gap;
+        watch_emit(provider, &fid, ASTRA_HOST_FS_CHANGE_NODE);
+    }
+    return;
+gap:
+    watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP, 0u, 0u, NULL);
+}
+
+static void watch_drain(AstraStorageProvider *provider, pid_t completed_worker)
+{
+    if (provider->watch_fd < 0) return;
+    for (unsigned batch = 0u; batch < 32u; ++batch) {
+        char buffer[8192];
+        ssize_t length = read(provider->watch_fd, buffer, sizeof(buffer));
+        if (length < 0 && errno == EINTR) continue;
+        if (length < 0 && errno == EAGAIN) return;
+        if (length <= 0) {
+            watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP,
+                0u, 0u, NULL);
+            close(provider->watch_fd);
+            provider->watch_fd = -1;
+            return;
+        }
+        for (struct fanotify_event_metadata *meta = (void *)buffer;
+             FAN_EVENT_OK(meta, length); meta = FAN_EVENT_NEXT(meta, length))
+            watch_event(provider, meta, completed_worker);
+        if (length != 0)
+            watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP,
+                0u, 0u, NULL);
+    }
+}
+
+int astra_storage_provider_change_next(AstraStorageProvider *provider,
+    uint64_t cursor, AstraStorageChangeRecord *change, uint64_t *next)
+{
+    if (provider == NULL || change == NULL || next == NULL) return EINVAL;
+    watch_drain(provider, 0);
+    *change = (AstraStorageChangeRecord){0};
+    uint64_t latest = provider->watch_sequence;
+    size_t capacity = sizeof(provider->watch_records) /
+                      sizeof(provider->watch_records[0]);
+    if (cursor > latest || latest - cursor > capacity) {
+        change->change.kind = ASTRA_HOST_FS_CHANGE_GAP;
+        *next = latest;
+    } else if (cursor < latest) {
+        *change = provider->watch_records[cursor % capacity];
+        *next = cursor + 1u;
+    } else {
+        *next = latest;
+    }
+    return 0;
+}
+
 static void remove_resource(AstraStorageProvider *provider, AstraStorageResource *entry)
 {
     AstraStorageResource **link = &provider->resources;
@@ -178,6 +423,7 @@ int astra_storage_provider_open(AstraStorageProvider *provider, AstraStorageDoma
         resource_limit < sizeof(AstraStorageResource) || ram_bytes == 0u || ram_inodes == 0u)
         return EINVAL;
     *provider = (AstraStorageProvider){.domain = {.directory = -1}, .lease_signal = -1,
+        .watch_fd = -1,
         .resource_limit = resource_limit, .probe_limit = probes, .worker_limit = workers,
         .probe_timeout_ms = timeout_ms, .ram_byte_limit = ram_bytes,
         .ram_inode_limit = ram_inodes};
@@ -213,6 +459,11 @@ int astra_storage_provider_open(AstraStorageProvider *provider, AstraStorageDoma
     } else {
         provider->domain = *domain;
         *domain = (AstraStorageDomain){.directory = -1};
+        provider->watch_fd = fanotify_init(FAN_CLASS_NOTIF | FAN_CLOEXEC |
+            FAN_NONBLOCK | FAN_REPORT_DFID_NAME_TARGET, O_RDONLY | O_LARGEFILE);
+        if (provider->watch_fd < 0)
+            fprintf(stderr, "astra-storage filesystem watch unavailable: %s\n",
+                strerror(errno));
     }
     return error;
 }
@@ -226,6 +477,8 @@ int astra_storage_provider_close(AstraStorageProvider *provider)
         return EBUSY;
     error = astra_storage_domain_close(&provider->domain);
     if (error == 0) {
+        if (provider->watch_fd >= 0) close(provider->watch_fd);
+        provider->watch_fd = -1;
         astra_storage_catalog_destroy(&provider->catalog);
         struct signalfd_siginfo signal;
         while (read(provider->lease_signal, &signal, sizeof(signal)) == sizeof(signal)) {}
@@ -417,11 +670,13 @@ int astra_storage_provider_poll(AstraStorageProvider *provider)
             AstraStoragePathReply result;
             int fd = -1;
             uint64_t generation = entry->work.generation;
+            pid_t worker = entry->work.pid;
             int ready = astra_storage_work_path_poll(&entry->work, &result, &fd);
             if (ready < 0)
                 return ready;
             if (ready == 0)
                 continue;
+            watch_drain(provider, worker);
             --provider->workers;
             const AstraStorageRecord *mounted = astra_storage_find(&provider->catalog, entry->id);
             if (mounted == NULL || mounted->generation != generation ||
@@ -587,6 +842,9 @@ int astra_storage_provider_poll(AstraStorageProvider *provider)
         entry->partition_stage = PARTITION_IDLE;
         ++completed;
     }
+    for (AstraStorageResource *entry = provider->resources; entry != NULL;
+         entry = entry->next)
+        watch_mount(provider, entry);
     return completed;
 }
 
@@ -1048,6 +1306,15 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
                 }
             }
             break;
+        case ASTRA_STORAGE_CONTROL_CHANGE_NEXT:
+            if (request.target || request.generation || request.after ||
+                request.flags || request.byte_limit || request.inode_limit ||
+                request.backing_object)
+                error = EINVAL;
+            else
+                error = astra_storage_provider_change_next(provider,
+                    request.sequence, &reply.change, &reply.next);
+            break;
         case ASTRA_STORAGE_CONTROL_MOUNT:
             if (request.sequence || request.after || request.backing_object ||
                 (request.flags & ASTRA_VOLUME_SYSTEM))
@@ -1314,6 +1581,7 @@ int astra_storage_provider_serve(AstraStorageProvider *provider, int control,
     if (provider == NULL || peer <= 0 || provider->lease_signal < 0 ||
         provider->domain.path[0] == '\0')
         return EINVAL;
+    provider->peer_pid = peer;
     for (unsigned at = 0u; at < 3u; ++at) {
         int type = 0;
         socklen_t bytes = sizeof(type);

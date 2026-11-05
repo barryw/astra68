@@ -1058,7 +1058,7 @@ def claims_and_sessions(qtest, root):
     print("PASS claims-and-sessions")
 
 
-def run(qtest, root, outside):
+def run(qtest, root, outside, external=False):
     qtest.detect_endian()
     assert qtest.read32(HACC_VERSION) == 0x00030000
     caps = qtest.read32(HACC_CAPS)
@@ -1434,8 +1434,6 @@ def run(qtest, root, outside):
         if last_kind == CHANGE_NONE:
             break
         last_sequence = next_sequence
-        if last_kind == CHANGE_GAP:
-            break
     root_stat = execute(qtest, [Command(generation, FS_STAT, "/",
         session=work)])[0]
     assert status(root_stat) == STATUS_OK
@@ -1461,7 +1459,8 @@ def run(qtest, root, outside):
         get32(removed.raw, 56))
     assert changes() == (before_remove[0], before_remove[1] + 1)
     removed_sequence, kind, record = next_change(created_sequence)
-    assert removed_sequence == created_sequence + 1 and kind == CHANGE_ENTRY_REMOVED
+    assert removed_sequence == created_sequence + 1 and kind == CHANGE_ENTRY_REMOVED, \
+        (removed_sequence, created_sequence, kind, record)
     assert record == (removed_sequence, before_remove[0],
         before_remove[1] + 1, 0, get64(root_stat.raw, NODE_INODE),
         CHANGE_ENTRY_REMOVED, 0, b"exclusive-entry")
@@ -1494,7 +1493,8 @@ def run(qtest, root, outside):
     assert changes() == (before_write[0] + 1, before_write[1]), \
         "successful write was invisible to filesystem change watchers"
     sequence, kind, record = next_change(last_sequence)
-    assert sequence == last_sequence + 1 and kind == CHANGE_NODE
+    assert sequence == last_sequence + 1 and kind == CHANGE_NODE, \
+        (sequence, last_sequence, kind, record)
     assert record == (sequence, before_write[0] + 1, before_write[1],
                       get64(opened.raw, NODE_INODE), 0, CHANGE_NODE, 0, b"")
     empty_write = execute(qtest, [Command(
@@ -1520,7 +1520,8 @@ def run(qtest, root, outside):
         truncated = execute(qtest, [Command(generation, FS_TRUNCATE,
             handle=handle, value=len(payload), session=work)])[0]
         assert status(truncated) == STATUS_OK
-    assert next_change(last_sequence) == (sequence + 64, CHANGE_GAP, None)
+    gap_sequence, kind, record = next_change(last_sequence)
+    assert gap_sequence >= sequence + 64 and kind == CHANGE_GAP and record is None
 
     before_open_truncate = changes()
     truncate_open = execute(qtest, [Command(generation, FS_OPEN, "/data",
@@ -1528,8 +1529,8 @@ def run(qtest, root, outside):
     assert status(truncate_open) == STATUS_OK
     assert changes() == (before_open_truncate[0] + 1,
                          before_open_truncate[1])
-    open_sequence, kind, record = next_change(sequence + 64)
-    assert open_sequence == sequence + 65 and kind == CHANGE_NODE and record == (
+    open_sequence, kind, record = next_change(gap_sequence)
+    assert open_sequence == gap_sequence + 1 and kind == CHANGE_NODE and record == (
         open_sequence, before_open_truncate[0] + 1, before_open_truncate[1],
         get64(truncate_open.raw, NODE_INODE), 0, CHANGE_NODE, 0, b"")
     assert status(execute(qtest, [Command(generation, FS_CLOSE,
@@ -1541,7 +1542,8 @@ def run(qtest, root, outside):
     assert status(chmod) == STATUS_OK
     assert changes() == (before_chmod[0] + 1, before_chmod[1])
     chmod_sequence, kind, record = next_change(open_sequence)
-    assert chmod_sequence == open_sequence + 1 and kind == CHANGE_NODE
+    assert chmod_sequence == open_sequence + 1 and kind == CHANGE_NODE, \
+        (chmod_sequence, open_sequence, kind, record)
     assert record == (chmod_sequence, before_chmod[0] + 1,
                       before_chmod[1], get64(opened.raw, NODE_INODE), 0,
                       CHANGE_NODE, 0, b"")
@@ -1581,6 +1583,12 @@ def run(qtest, root, outside):
         assert not os.path.exists(os.path.join(root, "absent"))
     os.mkdir(os.path.join(root, "dir-target"))
     os.symlink("dir-target", os.path.join(root, "dir-link"))
+    if external:
+        while True:
+            next_sequence, kind, _ = next_change(link_sequence)
+            if kind == CHANGE_NONE:
+                break
+            link_sequence = next_sequence
     made = execute(qtest, [Command(generation, FS_MKDIR, "/dir-link/",
         value=0o755, session=work)])[0]
     assert status(made) == STATUS_EXISTS
@@ -2330,7 +2338,7 @@ def main():
     # Every protocol oracle runs through the real privilege-separated provider.
     provider_main = runpy.run_path(os.path.join(os.path.dirname(__file__),
         "test-storage-provider.py"))["main"]
-    for scenario in ("full", "serial", "budgets"):
+    for scenario in ("full", "serial", "budgets", "external"):
         provider_main([args.qemu, args.provider, "--uid", str(args.uid),
             "--gid", str(args.gid), "--scenario", scenario])
     if args.budget_out:

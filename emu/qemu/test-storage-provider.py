@@ -6,6 +6,7 @@ The existing protocol behavioral oracle is reused without a second FS engine.
 """
 
 import argparse
+from contextlib import contextmanager
 import importlib.util
 import os
 from pathlib import Path
@@ -16,13 +17,120 @@ import tempfile
 import time
 
 
+@contextmanager
+def isolated_scratch():
+    with tempfile.TemporaryDirectory(prefix="astra-provider-qemu-") as scratch:
+        work = Path(scratch)
+        work.chmod(0o755)
+        image = work / "work.img"
+        with image.open("wb") as stream:
+            stream.truncate(128 * 1024 * 1024)
+        subprocess.run(["mkfs.ext4", "-q", "-F", str(image)], check=True)
+        root = work / "root"
+        root.mkdir()
+        subprocess.run(["mount", "-o", "loop", str(image), str(root)], check=True)
+        try:
+            yield work
+        finally:
+            subprocess.run(["umount", str(root)], check=True)
+
+
+def external_change_gate(gate, qtest, root, outside):
+    qtest.write32(gate.HACC_RESET, 1)
+    generation = qtest.read32(gate.HACC_GENERATION)
+    assert gate.claim(qtest, generation) == gate.STATUS_OK
+    session = gate.open_session(qtest, generation)
+
+    def call(operation, **kwargs):
+        answer = gate.execute(qtest, [gate.Command(
+            generation, operation, session=session, **kwargs)])[0]
+        assert gate.status(answer) == gate.STATUS_OK
+        return answer
+
+    def next_change(cursor):
+        answer = call(gate.FS_CHANGE_NEXT, offset=cursor, value=1,
+                      capacity=gate.CHANGE_RECORD_SIZE)
+        kind = gate.get32(answer.raw, 56)
+        data = gate.output(qtest, answer, gate.CHANGE_RECORD_SIZE) if kind in (
+            gate.CHANGE_NODE, gate.CHANGE_ENTRY_CREATED,
+            gate.CHANGE_ENTRY_REMOVED) else None
+        return gate.get64(answer.raw, 24), kind, data
+
+    cursor = 0
+    while True:
+        cursor, kind, _ = next_change(cursor)
+        if kind == gate.CHANGE_NONE:
+            break
+
+    def await_change(expected, name=None):
+        nonlocal cursor
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            cursor, kind, data = next_change(cursor)
+            if kind == expected and data is not None and (
+                    name is None or data[48:].split(b"\0", 1)[0] == name):
+                return data
+            if kind == gate.CHANGE_NONE:
+                time.sleep(0.01)
+        raise AssertionError((expected, name, cursor))
+
+    root_stat = call(gate.FS_STAT, path="/")
+    parent_inode = gate.get64(root_stat.raw, gate.NODE_INODE)
+    directory = root / "work" / "linux-origin"
+    outsider = outside / "unrelated"
+    try:
+        directory.mkdir()
+        data = await_change(gate.CHANGE_ENTRY_CREATED, b"linux-origin")
+        assert gate.get64(data, 32) == parent_inode
+        assert data[48:].split(b"\0", 1)[0] == b"linux-origin"
+
+        outsider.write_bytes(b"outside")
+        for _ in range(10):
+            cursor, kind, data = next_change(cursor)
+            assert data is None or data[48:].split(b"\0", 1)[0] != b"unrelated"
+            time.sleep(0.01)
+
+        target = root / "work" / "data"
+        with target.open("ab") as stream:
+            stream.write(b"linux-origin")
+        data = await_change(gate.CHANGE_NODE)
+        assert gate.get64(data, 24) == target.stat().st_ino
+        nested = directory / "nested"
+        nested.write_bytes(b"x")
+        data = await_change(gate.CHANGE_ENTRY_CREATED, b"nested")
+        assert gate.get64(data, 32) == directory.stat().st_ino
+        moved = directory / "moved"
+        nested.rename(moved)
+        await_change(gate.CHANGE_ENTRY_REMOVED, b"nested")
+        await_change(gate.CHANGE_ENTRY_CREATED, b"moved")
+        moved.unlink()
+        await_change(gate.CHANGE_ENTRY_REMOVED, b"moved")
+
+        overflow = [directory / f"overflow-{index}" for index in range(80)]
+        for entry in overflow:
+            entry.mkdir()
+        cursor, kind, data = next_change(cursor)
+        assert kind == gate.CHANGE_GAP and data is None
+        marker = directory / "after-gap"
+        marker.mkdir()
+        await_change(gate.CHANGE_ENTRY_CREATED, b"after-gap")
+        marker.rmdir()
+        for entry in overflow:
+            entry.rmdir()
+        print("PASS Linux-originated entry/node/rename/delete, sibling exclusion and overflow recovery")
+    finally:
+        directory.rmdir()
+        outsider.unlink(missing_ok=True)
+        call(gate.FS_SESSION_CLOSE)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("qemu", type=Path)
     parser.add_argument("provider", type=Path)
     parser.add_argument("--uid", type=int, required=True)
     parser.add_argument("--gid", type=int, required=True)
-    parser.add_argument("--scenario", choices=("full", "serial", "budgets", "memory", "provider_loss"), default="full")
+    parser.add_argument("--scenario", choices=("full", "serial", "budgets", "memory", "provider_loss", "external"), default="full")
     parser.add_argument("--budget-out", type=Path)
     args = parser.parse_args(argv)
     if args.scenario == "memory" and args.budget_out is None:
@@ -36,9 +144,7 @@ def main(argv=None):
     assert os.geteuid() == 0 and uid != 0 and gid != 0
     uuid = "e1f97188-8405-4bd3-9f3b-3b8bb123dd1f"
     before = set(Path("/var/tmp").glob("astra-storage.*"))
-    with tempfile.TemporaryDirectory(prefix="astra-provider-qemu-") as scratch:
-        work = Path(scratch)
-        work.chmod(0o755)
+    with isolated_scratch() as work:
         control = work / "control"
         control.mkdir()
         os.chown(control, uid, gid)
@@ -51,7 +157,7 @@ def main(argv=None):
             (cost / "file").touch()
             for index in range(2000):
                 (cost / ("entry-%04d-%s" % (index, "x" * 48))).touch()
-        outside = work / "outside"
+        outside = root / "outside"
         outside.mkdir()
         (outside / "sentinel").write_bytes(b"outside")
         seed = work / "seed"
@@ -125,8 +231,10 @@ def main(argv=None):
                     gate.measure_objects(qtest, str(root), qmp_path, str(args.budget_out))
                 elif args.scenario == "provider_loss":
                     gate.provider_loss(qtest, str(root), qmp_path)
+                elif args.scenario == "external":
+                    external_change_gate(gate, qtest, root, outside)
                 else:
-                    gate.run(qtest, str(root / "work"), str(outside))
+                    gate.run(qtest, str(root / "work"), str(outside), external=True)
                     qtest.write32(gate.HACC_RESET, 1)
                     gate.system_volume(qtest)
                     # Metadata is visible without becoming file or admin authority.

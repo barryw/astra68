@@ -713,9 +713,11 @@ typedef struct AstraHostState {
     bool provider_network_path_broken;
     uint64_t provider_epoch;
     uint64_t provider_control_serial;
+    uint64_t external_change_cursor;
     uint64_t provider_path_serial;
     uint64_t provider_network_path_serial;
     QemuMutex provider_control_lock;
+    QemuMutex external_change_lock;
     QemuMutex provider_path_lock;
     QemuMutex provider_network_path_lock;
     uint32_t next_handle;
@@ -6825,6 +6827,81 @@ static bool astra_host_lost_share(Astra68State *s, uint32_t session_id,
     return lost;
 }
 
+/* Canonical and Linux-originated mutations share one bounded native ring. */
+static void astra_host_change_record_locked(AstraHostNamespace *namespace,
+    uint32_t kind, uint64_t inode, uint64_t parent_inode, const char *name)
+{
+    if (namespace->change_sequence == UINT64_MAX)
+        namespace->change_sequence = 0u;
+    uint64_t sequence = ++namespace->change_sequence;
+    AstraHostFsChangeRecord record = {.sequence = sequence,
+        .nodes = qatomic_read(&namespace->changes_nodes),
+        .entries = qatomic_read(&namespace->changes_entries),
+        .inode = inode, .parent_inode = parent_inode, .kind = kind};
+    if (name != NULL) memcpy(record.name, name, sizeof(record.name));
+    namespace->change_records[(sequence - 1u) %
+        G_N_ELEMENTS(namespace->change_records)] = record;
+}
+
+static void astra_host_external_change(Astra68State *s,
+    const AstraStorageChangeRecord *change)
+{
+    qemu_mutex_lock(&s->host.files_lock);
+    if (change->change.kind == ASTRA_HOST_FS_CHANGE_GAP) {
+        GHashTableIter iterator;
+        gpointer value;
+        g_hash_table_iter_init(&iterator, s->host.namespaces);
+        while (g_hash_table_iter_next(&iterator, NULL, &value)) {
+            AstraHostNamespace *namespace = value;
+            qemu_mutex_lock(&namespace->changes_lock);
+            qatomic_inc(&namespace->changes_nodes);
+            qatomic_inc(&namespace->changes_entries);
+            astra_host_change_record_locked(namespace,
+                ASTRA_HOST_FS_CHANGE_GAP, 0u, 0u, NULL);
+            qemu_mutex_unlock(&namespace->changes_lock);
+        }
+    } else {
+        AstraHostNamespace *namespace = g_hash_table_lookup(s->host.namespaces,
+            &change->mount);
+        if (namespace != NULL && namespace->generation == change->generation) {
+            qemu_mutex_lock(&namespace->changes_lock);
+            if (change->change.kind == ASTRA_HOST_FS_CHANGE_NODE)
+                qatomic_inc(&namespace->changes_nodes);
+            else
+                qatomic_inc(&namespace->changes_entries);
+            astra_host_change_record_locked(namespace, change->change.kind,
+                change->change.inode, change->change.parent_inode,
+                change->change.name);
+            qemu_mutex_unlock(&namespace->changes_lock);
+        }
+    }
+    qemu_mutex_unlock(&s->host.files_lock);
+}
+
+static void astra_host_external_poll(Astra68State *s)
+{
+    if (s->host.provider_control < 0 ||
+        qemu_mutex_trylock(&s->host.external_change_lock) != 0)
+        return;
+    for (unsigned at = 0u; at < 8u; ++at) {
+        AstraStorageControlRequest request = {
+            .version = ASTRA_STORAGE_PROVIDER_VERSION,
+            .operation = ASTRA_STORAGE_CONTROL_CHANGE_NEXT,
+            .epoch = s->host.provider_epoch,
+            .sequence = s->host.external_change_cursor};
+        AstraStorageControlReply reply;
+        int output = -1;
+        int error = astra_host_storage_control(s, &request, -1, &reply, &output);
+        if (output >= 0) close(output);
+        if (error != 0) break;
+        s->host.external_change_cursor = reply.next;
+        if (reply.change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
+        astra_host_external_change(s, &reply.change);
+        if (reply.change.change.kind == ASTRA_HOST_FS_CHANGE_GAP) break;
+    }
+    qemu_mutex_unlock(&s->host.external_change_lock);
+}
+
 /* The parent directory and leaf of `path`: relative beneath the open
  * directory `base`, or absolute beneath the session root when base < 0. */
 static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
@@ -7133,6 +7210,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             ldl_be_p(command + HOST_FIELD(data_length)) ||
             capacity < sizeof(AstraHostFsChangeRecord) || data == NULL)
             break;
+        astra_host_external_poll(s);
         qemu_mutex_lock(&namespace->changes_lock);
         uint64_t latest = namespace->change_sequence;
         if (cursor > latest || latest - cursor > G_N_ELEMENTS(namespace->change_records)) {
@@ -7140,16 +7218,18 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         } else if (cursor < latest) {
             AstraHostFsChangeRecord *record = &namespace->change_records[
                 cursor % G_N_ELEMENTS(namespace->change_records)];
-            stq_be_p(data, record->sequence);
-            stq_be_p(data + 8u, record->nodes);
-            stq_be_p(data + 16u, record->entries);
-            stq_be_p(data + 24u, record->inode);
-            stq_be_p(data + 32u, record->parent_inode);
-            stl_be_p(data + 40u, record->kind);
-            stl_be_p(data + 44u, 0u);
-            memcpy(data + 48u, record->name, sizeof(record->name));
-            stl_be_p(command + HOST_FIELD(result_length), sizeof(*record));
             outcome = record->kind;
+            if (outcome != ASTRA_HOST_FS_CHANGE_GAP) {
+                stq_be_p(data, record->sequence);
+                stq_be_p(data + 8u, record->nodes);
+                stq_be_p(data + 16u, record->entries);
+                stq_be_p(data + 24u, record->inode);
+                stq_be_p(data + 32u, record->parent_inode);
+                stl_be_p(data + 40u, record->kind);
+                stl_be_p(data + 44u, 0u);
+                memcpy(data + 48u, record->name, sizeof(record->name));
+                stl_be_p(command + HOST_FIELD(result_length), sizeof(*record));
+            }
         }
         astra_host_put64(command, HOST_FIELD(offset_hi),
             outcome == ASTRA_HOST_FS_CHANGE_NODE ||
@@ -7880,27 +7960,16 @@ done:
              (changed_inode != 0u || changed_kind != 0u))) {
             for (uint32_t at = 0u; at < (changed_source_parent_inode ? 2u : 1u);
                  ++at) {
-                if (namespace->change_sequence == UINT64_MAX)
-                    namespace->change_sequence = 0u;
-                uint64_t sequence = ++namespace->change_sequence;
                 bool source = changed_source_parent_inode != 0u && at == 0u;
-                AstraHostFsChangeRecord record = {
-                    .sequence = sequence,
-                    .nodes = qatomic_read(&namespace->changes_nodes),
-                    .entries = qatomic_read(&namespace->changes_entries),
-                    .inode = changed_inode,
-                    .parent_inode = source ? changed_source_parent_inode :
-                        changed_parent_inode,
-                    .kind = source ? ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED :
+                astra_host_change_record_locked(namespace,
+                    source ? ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED :
                         changed_kind != 0u ? changed_kind :
                         changed_parent_inode != 0u ?
                         ASTRA_HOST_FS_CHANGE_ENTRY_CREATED :
-                        ASTRA_HOST_FS_CHANGE_NODE
-                };
-                memcpy(record.name, source ? changed_source_name : changed_name,
-                       sizeof(record.name));
-                namespace->change_records[(sequence - 1u) %
-                    G_N_ELEMENTS(namespace->change_records)] = record;
+                        ASTRA_HOST_FS_CHANGE_NODE,
+                    changed_inode,
+                    source ? changed_source_parent_inode : changed_parent_inode,
+                    source ? changed_source_name : changed_name);
             }
         }
         qemu_mutex_unlock(&namespace->changes_lock);
@@ -10459,6 +10528,7 @@ static void astra68_init(MachineState *machine)
     s->host.provider_path = -1;
     s->host.provider_network_path = -1;
     qemu_mutex_init(&s->host.provider_control_lock);
+    qemu_mutex_init(&s->host.external_change_lock);
     qemu_mutex_init(&s->host.provider_path_lock);
     qemu_mutex_init(&s->host.provider_network_path_lock);
     qemu_mutex_init(&s->host.files_lock);

@@ -2,6 +2,32 @@
 
 Status: active continuation map, 2026-11-05
 
+Linux-originated filesystem event checkpoint, 2026-11-05: private storage
+protocol 13 bridges root-provider fanotify events into QEMU's existing bounded
+HostFS change ring and native reliable Messaging topic. Provider resolves FID
+handles through each mounted root and applies `astra_resolve_rooted` before
+publishing exact entry or node identity. It suppresses its own workers and
+QEMU's canonical mutations, emits GAP on queue overflow or uncertain identity,
+and never gives guest raw host paths or the monitoring FD. `FAN_ONDIR` is
+required for directory entry changes. Haiku reference:
+`src/system/kernel/fs/node_monitor.cpp:1190-1265` reports node and parent
+identity at mutation time and treats loss as an invalidation. Beast provider
+unit test and full confined HostFS gate passed, including same-filesystem
+sibling exclusion and overflow recovery. DE25 development shadow
+`cef9066768bae9862e3e7a4ca53c01281649ebe85e6c4d2ba0e9abedec95ffb7`
+runs QEMU SHA-256
+`eb2d64da4c5c4a026a34c1a1a86504901b019b88d37610270ea4f96b59fb2421`
+and provider SHA-256
+`a00bf52cfab6373f54f4cf7267d5d3a37658f5f92f543750497693463a25e2a1`.
+Linux-created disposable folders appeared in Atlas DH0, RAM0, and USB FAT
+views without Refresh, then disappeared after removal. Astra, audio, and RFB
+stayed active with zero Astra restarts. SHA-checked screenshots and logs are
+under `/mnt/Documents/astra68/fsnotify-external-20261105/` on Beast. DE25
+exFAT reports `EOPNOTSUPP` for filesystem-wide FID watch; Astra-originated
+exFAT writes still use canonical mutation records. Linux-originated edits to
+private exFAT mounts remain outside this exact-event source. Notification
+performance qualification follows correctness and loss recovery.
+
 External filesystem event authority probe, 2026-11-05: DE25's
 `FAN_REPORT_DFID_NAME_TARGET` reports parent FIDs for create/delete and both
 old/new parent FIDs for rename; modify reports only target FID. The repeatable

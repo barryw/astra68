@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include <astra/host.h>
 #include <astra/volume_abi.h>
 
 /* No host path, descriptor, client pointer or claimed application owner. */
@@ -34,7 +35,7 @@ typedef struct AstraStorageRecord {
 
 /* Private Linux protocol. Only the launched QEMU peer receives its socket;
  * application authority remains in the native rooted scopes. */
-#define ASTRA_STORAGE_PROVIDER_VERSION 12u
+#define ASTRA_STORAGE_PROVIDER_VERSION 13u
 #define ASTRA_STORAGE_PROVIDER_PATH_MAX 4096u
 #define ASTRA_STORAGE_PROVIDER_FDS 3u
 #define ASTRA_STORAGE_PROVIDER_PAGE 16u
@@ -57,8 +58,17 @@ enum AstraStorageControlOperation {
     ASTRA_STORAGE_CONTROL_NETWORK_SOURCE,
     ASTRA_STORAGE_CONTROL_RELEASE_NETWORK_SOURCE,
     ASTRA_STORAGE_CONTROL_MOUNT_AUTH,
-    ASTRA_STORAGE_CONTROL_NETWORK_LOOKUP
+    ASTRA_STORAGE_CONTROL_NETWORK_LOOKUP,
+    ASTRA_STORAGE_CONTROL_CHANGE_NEXT
 };
+
+/* Root provider filters host events before this private QEMU-only record.
+ * A zero mount with GAP invalidates every active native volume namespace. */
+typedef struct AstraStorageChangeRecord {
+    uint64_t mount;
+    uint64_t generation;
+    AstraHostFsChangeRecord change;
+} AstraStorageChangeRecord;
 
 /* Account is mount policy, never catalog metadata. Password arrives only as
  * a sealed one-use descriptor and is read by the selected mount worker. */
@@ -101,6 +111,7 @@ typedef struct AstraStorageControlReply {
     uint32_t reserved;
     int32_t operation_error;
     uint32_t reserved2;
+    AstraStorageChangeRecord change;
     AstraStorageRecord records[ASTRA_STORAGE_PROVIDER_PAGE];
 } AstraStorageControlReply;
 
