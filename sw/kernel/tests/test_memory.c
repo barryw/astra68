@@ -1051,6 +1051,58 @@ static void test_cow_frame_changes_owner_without_changing_charge(void)
     assert(kernel_memory_release_owner(82u, NULL) == KERNEL_MEMORY_OK);
 }
 
+static void test_pressure_tracks_ordinary_headroom(void)
+{
+    static uint32_t pages[8192u];
+    static const struct {
+        uint32_t headroom;
+        KernelMemoryPressure level;
+    } steps[] = {
+        {KERNEL_MEMORY_PRESSURE_NOTE_FRAMES + 1u, KERNEL_MEMORY_PRESSURE_NORMAL},
+        {KERNEL_MEMORY_PRESSURE_NOTE_FRAMES, KERNEL_MEMORY_PRESSURE_NOTE},
+        {KERNEL_MEMORY_PRESSURE_WARNING_FRAMES + 1u, KERNEL_MEMORY_PRESSURE_NOTE},
+        {KERNEL_MEMORY_PRESSURE_WARNING_FRAMES, KERNEL_MEMORY_PRESSURE_WARNING},
+        {KERNEL_MEMORY_PRESSURE_CRITICAL_FRAMES + 1u, KERNEL_MEMORY_PRESSURE_WARNING},
+        {KERNEL_MEMORY_PRESSURE_CRITICAL_FRAMES, KERNEL_MEMORY_PRESSURE_CRITICAL},
+        {0u, KERNEL_MEMORY_PRESSURE_CRITICAL}
+    };
+    AstraBootInfo info;
+    KernelMemoryStats baseline;
+    KernelMemoryPressure level;
+    uint32_t headroom;
+    uint32_t used = 0u;
+    uint32_t released = 0u;
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&baseline));
+    assert(!kernel_memory_pressure(NULL, &headroom));
+    assert(!kernel_memory_pressure(&level, NULL));
+    assert(kernel_memory_pressure(&level, &headroom));
+    assert(headroom > KERNEL_MEMORY_PRESSURE_NOTE_FRAMES + 1u);
+    assert(level == KERNEL_MEMORY_PRESSURE_NORMAL);
+    for (uint32_t index = 0u; index < sizeof(steps) / sizeof(steps[0]);
+         ++index) {
+        uint32_t count = headroom - steps[index].headroom;
+
+        assert(kernel_memory_alloc_pages_unfilled_tagged(
+                   KERNEL_ALLOCATION_SITE_MEMORY_GENERIC, count,
+                   KERNEL_FRAME_PROCESS, 84u, pages + used) ==
+               KERNEL_MEMORY_OK);
+        used += count;
+        assert(kernel_memory_pressure(&level, &headroom));
+        assert(headroom == steps[index].headroom);
+        assert(level == steps[index].level);
+    }
+    assert(kernel_memory_release_owner(84u, &released) == KERNEL_MEMORY_OK);
+    assert(released == used);
+    assert(kernel_memory_pressure(&level, &headroom));
+    assert(level == KERNEL_MEMORY_PRESSURE_NORMAL);
+    assert(headroom == baseline.free_frames - baseline.core_reserve_frames -
+                       baseline.protected_reserve_frames -
+                       baseline.dma_zone_frames);
+}
+
 int main(void)
 {
     test_zeroed_allocation_initializes_physical_memory();
@@ -1076,6 +1128,7 @@ int main(void)
     test_contiguous_demand_survives_a_combed_frame_map();
     test_frame_tables_scale_past_the_old_ceiling();
     test_cow_frame_changes_owner_without_changing_charge();
+    test_pressure_tracks_ordinary_headroom();
     test_tagged_failure_injection_and_boot_retirement();
     puts("KERNEL MEMORY PASS");
     return 0;

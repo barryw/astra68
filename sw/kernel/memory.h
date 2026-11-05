@@ -67,6 +67,10 @@
 /* Essential userspace and kernel control each retain one recovery transaction. */
 #define KERNEL_PROTECTED_RESERVE_FRAME_MAX KERNEL_CONTROL_RECOVERY_FRAME_MAX
 #define KERNEL_CORE_RESERVE_FRAME_MAX KERNEL_CONTROL_RECOVERY_FRAME_MAX
+/* Ordinary allocation headroom above the protected, core, and DMA floors. */
+#define KERNEL_MEMORY_PRESSURE_CRITICAL_FRAMES KERNEL_CONTROL_RECOVERY_FRAME_MAX
+#define KERNEL_MEMORY_PRESSURE_WARNING_FRAMES (2u * KERNEL_CONTROL_RECOVERY_FRAME_MAX)
+#define KERNEL_MEMORY_PRESSURE_NOTE_FRAMES (4u * KERNEL_CONTROL_RECOVERY_FRAME_MAX)
 /*
  * Frames set aside at boot that only DMA may take.
  *
@@ -129,6 +133,13 @@ typedef enum KernelMemoryStatus {
     KERNEL_MEMORY_BUSY,
     KERNEL_MEMORY_OVERFLOW
 } KernelMemoryStatus;
+
+typedef enum KernelMemoryPressure {
+    KERNEL_MEMORY_PRESSURE_NORMAL = 0,
+    KERNEL_MEMORY_PRESSURE_NOTE,
+    KERNEL_MEMORY_PRESSURE_WARNING,
+    KERNEL_MEMORY_PRESSURE_CRITICAL
+} KernelMemoryPressure;
 
 typedef struct KernelFrameInfo {
     uint32_t owner;
@@ -238,6 +249,8 @@ uint32_t kernel_memory_metadata_bytes(uint32_t frame_count);
 /* Whether a physical span overlaps any device aperture. */
 bool kernel_memory_span_has_device(uint32_t base, uint32_t size);
 bool kernel_memory_stats(KernelMemoryStats *stats);
+bool kernel_memory_pressure(KernelMemoryPressure *level,
+                            uint32_t *ordinary_headroom_frames);
 
 /*
  * Returns the supervisor's direct view of an owned RAM span. Kernel

@@ -2,6 +2,20 @@
 
 Status: active continuation map, 2026-11-05
 
+Coordinated memory pressure prerequisite, 2026-11-05: `kernel_memory_pressure`
+now classifies ordinary allocation headroom after subtracting the existing
+core, protected-service, and DMA floors. Note, warning, and critical
+thresholds are four, two, and one maximum recovery transactions above that
+floor. Haiku reference: `src/system/kernel/low_resource_manager.cpp` computes
+free-page pressure and runs reclaim handlers in priority order outside its
+manager lock. Beast's full kernel host test suite passes, including exact
+threshold, reserve, and recovery checks; target kernel build passes. Baseline
+and current linked kernel images are both 217,940 bytes because no runtime
+consumer is wired yet. Next: use the existing kernel worker to reclaim idle
+library mappings at pressure before adding the general file cache, then expose
+state to service caches and certify recovery on DE25. This classification is
+not yet a complete pressure manager or hardware gate.
+
 Filesystem change producer correction, 2026-11-05: production HostFS now
 publishes per-volume generations from QEMU's canonical filesystem namespace,
 which sees both VFS service requests and direct client lanes. The old VFS

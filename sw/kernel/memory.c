@@ -1755,3 +1755,24 @@ bool kernel_memory_stats(KernelMemoryStats *result)
     result->dma_zone_frames = stats.dma_zone_frames;
     return true;
 }
+
+bool kernel_memory_pressure(KernelMemoryPressure *level,
+                            uint32_t *ordinary_headroom_frames)
+{
+    uint32_t floor;
+    uint32_t headroom;
+
+    if (!initialized || level == NULL || ordinary_headroom_frames == NULL)
+        return false;
+    floor = stats.core_reserve_frames + stats.protected_reserve_frames +
+            stats.dma_zone_frames;
+    headroom = stats.free_frames > floor ? stats.free_frames - floor : 0u;
+    *ordinary_headroom_frames = headroom;
+    *level = headroom <= KERNEL_MEMORY_PRESSURE_CRITICAL_FRAMES ?
+        KERNEL_MEMORY_PRESSURE_CRITICAL :
+        headroom <= KERNEL_MEMORY_PRESSURE_WARNING_FRAMES ?
+        KERNEL_MEMORY_PRESSURE_WARNING :
+        headroom <= KERNEL_MEMORY_PRESSURE_NOTE_FRAMES ?
+        KERNEL_MEMORY_PRESSURE_NOTE : KERNEL_MEMORY_PRESSURE_NORMAL;
+    return true;
+}
