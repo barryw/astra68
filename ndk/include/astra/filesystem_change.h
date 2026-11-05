@@ -14,7 +14,7 @@
 #define ASTRA_FILESYSTEM_CHANGE_INVALIDATE 0u
 /** Exact changed inode is available; generations still govern recovery. */
 #define ASTRA_FILESYSTEM_CHANGE_NODE 1u
-/** Exact created directory entry and its parent, child and leaf. */
+/** Exact created directory entry and its parent and leaf; child if available. */
 #define ASTRA_FILESYSTEM_CHANGE_ENTRY_CREATED 2u
 /** Exact removed directory entry; child inode is unknown. */
 #define ASTRA_FILESYSTEM_CHANGE_ENTRY_REMOVED 3u
@@ -34,7 +34,7 @@ typedef struct AstraFilesystemChange {
     uint64_t entries; /**< Directory entries changed. */
     uint32_t kind;    /**< Exact node change, or generation-only invalidation. */
     uint32_t reserved; /**< Must be zero. */
-    uint64_t inode;   /**< Exact changed inode for NODE/ENTRY_CREATED; zero otherwise. */
+    uint64_t inode;   /**< Exact changed inode for NODE; optional for ENTRY_CREATED. */
     uint64_t parent_inode; /**< Exact parent for ENTRY_*; zero otherwise. */
     char name[256]; /**< Entry leaf for ENTRY_*; empty otherwise. */
 } AstraFilesystemChange;

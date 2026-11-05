@@ -7785,6 +7785,14 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             changed_kind = ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED;
             memcpy(changed_name, reply.leaf, sizeof(changed_name));
         }
+        if (error == 0 && (operation == ASTRA_HOST_FS_MKDIR ||
+                           operation == ASTRA_HOST_FS_SYMLINK ||
+                           operation == ASTRA_HOST_FS_LINK) &&
+            reply.parent_inode != 0u && reply.leaf[0] != '\0') {
+            changed_parent_inode = reply.parent_inode;
+            changed_kind = ASTRA_HOST_FS_CHANGE_ENTRY_CREATED;
+            memcpy(changed_name, reply.leaf, sizeof(changed_name));
+        }
         astra_host_resolution(&reply, &resolved);
         status = error == ERANGE ? ASTRA_STATUS_BUFFER_TOO_SMALL :
             astra_host_path_status(error, &resolved);
@@ -7858,8 +7866,7 @@ done:
         if (changed_entries) qatomic_inc(&namespace->changes_entries);
         if ((changed_inode != 0u && changed_nodes) ||
             (changed_entries && changed_parent_inode != 0u &&
-             (changed_inode != 0u ||
-              changed_kind == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED))) {
+             (changed_inode != 0u || changed_kind != 0u))) {
             if (namespace->change_sequence == UINT64_MAX)
                 namespace->change_sequence = 0u;
             uint64_t sequence = ++namespace->change_sequence;

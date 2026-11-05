@@ -35,6 +35,7 @@ static void semantics(int root)
 {
     AstraStoragePathRequest value = request(ASTRA_STORAGE_PATH_MKDIR, "/sub");
     AstraStoragePathReply reply;
+    struct stat parent_stat;
     int fds[3] = {root, -1, -1};
     int result;
     value.resolve = ASTRA_RESOLVE_ENTRY;
@@ -43,13 +44,15 @@ static void semantics(int root)
     assert(reply.error == EROFS && result == -1);
     execute(root, 0, &value, fds, &reply, &result);
     assert(reply.error == 0 && result == -1);
+    assert(fstat(root, &parent_stat) == 0 &&
+           reply.parent_inode == (uint64_t)parent_stat.st_ino &&
+           strcmp(reply.leaf, "sub") == 0);
     value = request(ASTRA_STORAGE_PATH_OPEN, "/sub/file");
     value.flags = O_CREAT | O_EXCL | O_RDWR;
     value.mode = 0600;
     execute(root, 0, &value, fds, &reply, &result);
     assert(reply.error == 0 && result >= 0);
     int parent = openat(root, "sub", O_PATH | O_DIRECTORY | O_CLOEXEC);
-    struct stat parent_stat;
     assert(parent >= 0 && fstat(parent, &parent_stat) == 0);
     assert(reply.parent_inode == (uint64_t)parent_stat.st_ino &&
            strcmp(reply.leaf, "file") == 0);
@@ -87,7 +90,12 @@ static void semantics(int root)
     value.resolve = ASTRA_RESOLVE_ENTRY;
     strcpy(value.path2, "/sub/link");
     execute(root, 0, &value, fds, &reply, &result);
-    assert(reply.error == 0);
+    parent = openat(root, "sub", O_PATH | O_DIRECTORY | O_CLOEXEC);
+    assert(parent >= 0 && fstat(parent, &parent_stat) == 0);
+    assert(reply.error == 0 &&
+           reply.parent_inode == (uint64_t)parent_stat.st_ino &&
+           strcmp(reply.leaf, "link") == 0);
+    close(parent);
     value = request(ASTRA_STORAGE_PATH_READLINK, "/sub/link");
     value.capacity = 3;
     execute(root, 0, &value, fds, &reply, &result);
@@ -96,6 +104,16 @@ static void semantics(int root)
     execute(root, 0, &value, fds, &reply, &result);
     assert(reply.error == 0 && reply.length == 14);
     assert(memcmp(reply.data, "../sub/renamed", 14) == 0);
+    value = request(ASTRA_STORAGE_PATH_LINK, "/sub/renamed");
+    value.resolve = ASTRA_RESOLVE_ENTRY;
+    strcpy(value.path2, "/sub/hard");
+    execute(root, 0, &value, fds, &reply, &result);
+    parent = openat(root, "sub", O_PATH | O_DIRECTORY | O_CLOEXEC);
+    assert(parent >= 0 && fstat(parent, &parent_stat) == 0);
+    assert(reply.error == 0 &&
+           reply.parent_inode == (uint64_t)parent_stat.st_ino &&
+           strcmp(reply.leaf, "hard") == 0);
+    close(parent);
     value = request(ASTRA_STORAGE_PATH_OPEN, "/sub/../sub/link");
     value.resolve = ASTRA_RESOLVE_FOLLOW_FINAL;
     execute(root, 0, &value, fds, &reply, &result);
@@ -122,6 +140,7 @@ static void semantics(int root)
            reply.parent_inode == (uint64_t)parent_stat.st_ino &&
            strcmp(reply.leaf, "link") == 0);
     close(parent);
+    assert(unlinkat(root, "sub/hard", 0) == 0);
     assert(unlinkat(root, "sub/renamed", 0) == 0);
     assert(unlinkat(root, "sub/racer", 0) == 0);
     assert(unlinkat(root, "sub", AT_REMOVEDIR) == 0);

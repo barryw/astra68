@@ -2,6 +2,25 @@
 
 Status: active continuation map, 2026-11-05
 
+Exact directory-create checkpoint, 2026-11-05: successful mkdir, symlink,
+and hardlink operations now carry destination parent inode from the confined
+provider's retained parent FD and the leaf name through the existing change
+ring. Child inode is zero when the mutation reply cannot supply it atomically;
+HostFS and Atlas accept that documented entry record while retaining bounded
+generation reconciliation. No new event schema or broker service was added.
+Haiku reference: `src/system/kernel/fs/node_monitor.cpp:1196-1260` carries
+entry identity at mutation time. Beast storage-path, VFS, and full confined
+HostFS gates passed. DE25 development shadow
+`12608f87df3aa7d6344df0d20d7082cd824f6830bfecaedae6a92b52adde95ff`
+reached stage 8. Native `fssem` link and symlink cases passed; Atlas RAM0
+updated on directory create/removal without Refresh. SHA-checked screenshots
+are under `/mnt/Documents/astra68/exact-create-20261105/` on Beast.
+Disposable test paths and temporary `fssem` command were removed; only the
+selected shadow remains. After restart, DE25 reached stage 8, Astra, audio,
+and RFB services are active with zero Astra restarts and 7.8 GiB free.
+Exact move, nonexclusive create, Linux-originated edits, and notification
+performance qualification remain open. Performance work follows correctness.
+
 Exact unlink event checkpoint, 2026-11-05: confined storage provider
 reports parent inode from its retained directory FD after successful unlink.
 QEMU records parent and leaf in existing change ring with unknown child inode;

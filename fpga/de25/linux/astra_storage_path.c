@@ -382,6 +382,13 @@ void astra_storage_path_execute(int allowed_root, int readonly,
         }
         if (error == -1)
             error = -errno;
+        if (error == 0 && (request->operation == ASTRA_STORAGE_PATH_MKDIR ||
+                           request->operation == ASTRA_STORAGE_PATH_SYMLINK ||
+                           request->operation == ASTRA_STORAGE_PATH_LINK)) {
+            struct stat parent_stat;
+            if (fstat(last->parent, &parent_stat) == 0)
+                reply->parent_inode = (uint64_t)parent_stat.st_ino;
+        }
         break;
     default:
         error = -ENOTSUP;

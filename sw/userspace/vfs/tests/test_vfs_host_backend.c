@@ -27,6 +27,7 @@ typedef struct FakeHost {
     uint32_t usage_cursor;
     uint32_t change_kind;
     uint32_t change_corrupt;
+    uint32_t change_no_inode;
     AstraVolumeReference expected_volume;
 } FakeHost;
 
@@ -284,7 +285,8 @@ uint32_t astra_vfs_host_transport_submit(
             astra_store_be64((uint8_t *)output + 8u, 12u);
             astra_store_be64((uint8_t *)output + 16u, 9u);
             astra_store_be64((uint8_t *)output + 24u,
-                host->change_kind == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED ? 0u : 42u);
+                host->change_kind == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED ||
+                host->change_no_inode ? 0u : 42u);
             astra_store_be64((uint8_t *)output + 32u,
                 host->change_kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ||
                 host->change_kind == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED ? 7u : 0u);
@@ -722,6 +724,12 @@ int main(void)
         change_record.parent_inode == 7u &&
         change_record.inode == 42u && strcmp(change_record.name, "new") == 0);
     change_cursor = 4u;
+    host.change_no_inode = 1u;
+    assert(astra_vfs_host_change_next(&backend, &change_cursor,
+        &change_record, &change_kind) == ASTRA_VFS_OK);
+    assert(change_cursor == 5u && change_record.inode == 0u);
+    host.change_no_inode = 0u;
+    change_cursor = 4u;
     host.change_kind = ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED;
     assert(astra_vfs_host_change_next(&backend, &change_cursor,
         &change_record, &change_kind) == ASTRA_VFS_OK);
@@ -872,7 +880,7 @@ int main(void)
     assert(ops->close(&backend, node) == ASTRA_VFS_OK);
 #undef EXPECT
     /* Backend calls, including identity and generation boundary checks. */
-    assert(host.calls == 41u);
+    assert(host.calls == 42u);
     {
         uint8_t continuation[ASTRA_VFS_PATH_MAX];
         AstraVfsEscape escape = {.path = continuation, .capacity = ASTRA_VFS_ESCAPE_PATH_MAX};
@@ -890,7 +898,7 @@ int main(void)
         assert(ops->lookup(&backend, 0u, "/escape",
                            ASTRA_VFS_LOOKUP_ENTRY | ASTRA_VFS_LOOKUP_FOLLOW,
                            3u, &info, &escape) == ASTRA_VFS_ERR_INVALID);
-        assert(host.calls == 43u);
+        assert(host.calls == 44u);
     }
     {
         uint64_t token;

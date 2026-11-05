@@ -1528,11 +1528,33 @@ def run(qtest, root, outside):
                       before_chmod[1], get64(opened.raw, NODE_INODE), 0,
                       CHANGE_NODE, 0, b"")
 
+    before_mkdir = changes()
+    notified_dir = execute(qtest, [Command(generation, FS_MKDIR,
+        "/notifier-dir", value=0o755, session=work)])[0]
+    assert status(notified_dir) == STATUS_OK
+    mkdir_sequence, kind, record = next_change(chmod_sequence)
+    assert mkdir_sequence == chmod_sequence + 1 and kind == CHANGE_ENTRY_CREATED
+    assert record == (mkdir_sequence, before_mkdir[0], before_mkdir[1] + 1,
+        0, get64(root_stat.raw, NODE_INODE), CHANGE_ENTRY_CREATED, 0,
+        b"notifier-dir")
+    assert status(execute(qtest, [Command(generation, FS_UNLINK,
+        "/notifier-dir", flags=UNLINK_DIRECTORY, session=work)])[0]) == STATUS_OK
+    removed_dir_sequence, kind, record = next_change(mkdir_sequence)
+    assert removed_dir_sequence == mkdir_sequence + 1 and kind == CHANGE_ENTRY_REMOVED
+    assert record[3:] == (0, get64(root_stat.raw, NODE_INODE),
+                          CHANGE_ENTRY_REMOVED, 0, b"notifier-dir")
+
+    before_link = changes()
     hard_linked = execute(qtest, [Command(
         generation, FS_LINK, "/data", "/data-hard-link", session=work)])[0]
     assert status(hard_linked) == STATUS_OK
     assert os.path.samefile(os.path.join(root, "data"),
                             os.path.join(root, "data-hard-link"))
+    link_sequence, kind, record = next_change(removed_dir_sequence)
+    assert link_sequence == removed_dir_sequence + 1 and kind == CHANGE_ENTRY_CREATED
+    assert record == (link_sequence, before_link[0], before_link[1] + 1,
+        0, get64(root_stat.raw, NODE_INODE), CHANGE_ENTRY_CREATED, 0,
+        b"data-hard-link")
     for operation in (FS_RENAME, FS_LINK):
         refused = execute(qtest, [Command(generation, operation, "/data",
             "/absent/", session=work)])[0]
@@ -1562,6 +1584,10 @@ def run(qtest, root, outside):
     made_link = execute(qtest, [Command(
         generation, FS_SYMLINK, "/data", "/data-link", session=work)])[0]
     assert status(made_link) == STATUS_OK
+    symlink_sequence, kind, record = next_change(link_sequence)
+    assert symlink_sequence == link_sequence + 1 and kind == CHANGE_ENTRY_CREATED
+    assert record[3:] == (0, get64(root_stat.raw, NODE_INODE),
+                          CHANGE_ENTRY_CREATED, 0, b"data-link")
     opened_link = execute(qtest, [Command(
         generation, FS_OPEN, "/data-link", flags=OPEN_READ,
         capacity=NAME_CAPACITY, session=work)])[0]

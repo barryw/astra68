@@ -438,6 +438,10 @@ the retained parent directory inode and removed leaf are exact, while child
 inode is zero because unlink does not return it. Filesystem change payload
 version 3 maps this to ENTRY_REMOVED kind 3. Generation reconciliation still
 covers lost replies, unsupported mutations, and ring gaps.
+Successful mkdir, symlink, and hardlink report ENTRY_CREATED with the exact
+destination parent inode and leaf. Their child inode is zero when the mutation
+reply cannot supply it atomically. Consumers accept zero child inode for
+ENTRY_CREATED and reconcile using the existing volume generation.
 
 All Filesystem exports use `ASTRA_FILESYSTEM_9.0`. Filesystem.kit 6.0.0 and
 every in-tree dependent manifest require major 9. The POSIX fork prepare/
