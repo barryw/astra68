@@ -2,6 +2,20 @@
 
 Status: active continuation map, 2026-11-05
 
+exFAT external-notification capability probe, 2026-11-05: DE25's private exFAT
+mount cannot use the existing FID fanotify source (`EOPNOTSUPP`). A disposable
+legacy mount-watch probe on that same mounted volume accepted `FAN_MODIFY` and
+`FAN_CLOSE_WRITE`, but rejected create/delete/move masks with `EINVAL`, both
+alone and combined with `FAN_ONDIR`. It cannot cover directory membership
+changes. A complete exFAT external source therefore needs a bounded directory
+watch mechanism, with rooted authority and overflow invalidation, feeding the
+existing HostFS change ring and Messaging topic. This is still open; canonical
+Astra-originated exFAT changes already use that ring. Probe source, AArch64
+binary, output, and verified hashes are under
+`/mnt/Documents/astra68/exfat-notify-capability-20261105/` on Beast. Probe
+binary was removed from DE25; Astra, audio, and remote desktop remain active
+with 7.9 GiB free.
+
 Atlas filesystem event filtering checkpoint, 2026-11-05: Atlas now matches
 notification volume catalog identity before comparing exact parent or node
 inode, including the DH0 system mount behind HOME and APPS assigns. The VFS
