@@ -5,6 +5,9 @@ from pathlib import Path
 
 
 unit = Path(__file__).with_name("astra.service").read_text()
+watchdog = Path(__file__).with_name("astra-watchdog.conf").read_text()
+assert watchdog == ("[Manager]\nWatchdogDevice=/dev/watchdog0\n"
+                    "RuntimeWatchdogSec=120s\nRebootWatchdogSec=10min\n")
 for required in (
     "Wants=network-online.target time-sync.target "
     "systemd-time-wait-sync.service",

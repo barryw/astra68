@@ -23,6 +23,9 @@ assert "'$STORE/current/bin/astra-release.py'" in script
 assert "'$STORE/current'" in script
 assert "'$STORE/current/systemd/astra-remote-desktop.service'" in script
 assert "'$STORE/current/systemd/astra.service'" in script
+assert "'$STORE/current/systemd/90-astra-watchdog.conf'" in script
+assert "systemctl daemon-reexec" in script
+assert "systemctl show -p RuntimeWatchdogUSec --value" in script
 assert "runtime_unit_temporary=/etc/systemd/system/.astra.service" in script
 assert "unit_temporary=/etc/systemd/system/.astra-remote-desktop.service" in script
 assert "install -m 0644" in script

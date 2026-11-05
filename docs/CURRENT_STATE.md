@@ -2,6 +2,20 @@
 
 Status: active continuation map, 2026-11-05
 
+HPS watchdog checkpoint, 2026-11-05: DE25 systemd now owns the existing
+Synopsys DesignWare `/dev/watchdog0` hardware timer. Its versioned manager
+drop-in selects a 120-second runtime timeout and the existing 10-minute reboot
+timeout. Linux's watchdog driver and systemd 249 already provide the mechanism;
+no parallel feeder was added. Beast release-constructor, deployer, and service
+contract tests passed. DE25 `daemon-reexec` armed the timer without restarting
+Astra; kernel log reports hardware timeout of two minutes, PID 1 holds the
+device, and Astra remains at stage 8 with runtime, audio, and remote desktop
+services active and 7.9 GiB free. Config and board evidence are under
+`/mnt/Documents/astra68/hps-watchdog-20261105/` on Beast. This covers a stalled
+HPS manager, not a storage provider blocked during cleanup; bounded cleanup
+recovery and a controlled hardware-expiry gate remain open. Haiku has no HPS
+hardware-watchdog equivalent in `src/system/kernel`; Astra uses Linux's owner.
+
 Guest watchdog checkpoint, 2026-11-05: the initial-image supervisor now sends
 one authenticated `PROGRESS` heartbeat per second from its existing timed wait
 loop. The kernel writes a dedicated Vesta heartbeat register; QEMU exposes its
@@ -27,9 +41,9 @@ QMP pause stopped pulses, caused one recorded watchdog restart, then the new
 guest reached stage 8 with pulses `4, 7, 10`. Astra, audio host, and remote
 desktop are active; one development release remains with 7.9 GiB free.
 Board and Beast watchdog/console hashes match under
-`/mnt/Documents/astra68/guest-watchdog-20261105/`. HPS hardware watchdog
-arming, a bounded response when provider cleanup itself cannot finish, and
-stuck-engine fault gates remain open. This is not complete hang recovery.
+`/mnt/Documents/astra68/guest-watchdog-20261105/`. The separate HPS hardware
+watchdog checkpoint above now covers host manager liveness; bounded provider
+cleanup and stuck-engine fault gates remain open. This is not complete hang recovery.
 Final source-equivalent host script shadow `d1aa5b72f39dceef4ec5fb676da3c7ea3fde13be25b7249debe8de1f6e57ec56`
 booted through the same incremental installer after the watchdog state check
 was simplified; its unit gate passed on Beast.

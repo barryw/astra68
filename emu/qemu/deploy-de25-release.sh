@@ -68,6 +68,14 @@ python3 '$STORE/releases/$PREVIOUS_ID/bin/astra-release.py' \
 for unit in astra.service astra-audio-host.service astra-remote-desktop.service; do
     install -m 0644 '$STORE/current/systemd/'\"\$unit\" /etc/systemd/system/\"\$unit\"
 done
+if [ -f '$STORE/current/systemd/90-astra-watchdog.conf' ]; then
+    install -d -m 0755 /etc/systemd/system.conf.d
+    install -m 0644 '$STORE/current/systemd/90-astra-watchdog.conf' \
+        /etc/systemd/system.conf.d/90-astra-watchdog.conf
+else
+    rm -f /etc/systemd/system.conf.d/90-astra-watchdog.conf
+fi
+systemctl daemon-reexec
 systemctl daemon-reload
 systemctl start '$SERVICE' astra-audio-host.service astra-remote-desktop.service
 " || echo "Astra rollback failed; inspect board services and selector" >&2
@@ -211,6 +219,17 @@ trap 'rm -f \"\$audio_unit_temporary\"' EXIT HUP INT TERM
 install -m 0644 \"\$audio_unit_source\" \"\$audio_unit_temporary\"
 mv -f \"\$audio_unit_temporary\" \"\$audio_unit_target\"
 trap - EXIT HUP INT TERM
+install -d -m 0755 /etc/systemd/system.conf.d
+watchdog_source='$STORE/current/systemd/90-astra-watchdog.conf'
+watchdog_target=/etc/systemd/system.conf.d/90-astra-watchdog.conf
+watchdog_temporary=/etc/systemd/system.conf.d/.90-astra-watchdog.conf.\$\$
+trap 'rm -f \"\$watchdog_temporary\"' EXIT HUP INT TERM
+install -m 0644 \"\$watchdog_source\" \"\$watchdog_temporary\"
+mv -f \"\$watchdog_temporary\" \"\$watchdog_target\"
+trap - EXIT HUP INT TERM
+systemctl daemon-reexec
+test -c /dev/watchdog0
+test \"\$(systemctl show -p RuntimeWatchdogUSec --value)\" = 2min
 # Development overrides belong to the old iteration, not this promoted image.
 for unit in astra.service astra-audio-host.service astra-remote-desktop.service; do
     rm -f /etc/systemd/system/\"\$unit\".d/90-astra-dev.conf

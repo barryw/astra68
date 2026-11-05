@@ -34,6 +34,7 @@ for required in (
     "systemd/astra-remote-desktop.service=",
     "systemd/astra-audio-host.service=",
     "systemd/astra.service=",
+    "systemd/90-astra-watchdog.conf=",
     "getconf _NPROCESSORS_ONLN",
     "qemu/lib/libpixman-1.so.0=",
     "qemu/lib/libpcre.so.3=",
@@ -96,7 +97,8 @@ for stale_provider in (False, True):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(repository / name, target)
         for name in (
-            "fpga/de25/astra.service", "fpga/de25/astra-audio-host.service",
+            "fpga/de25/astra.service", "fpga/de25/astra-watchdog.conf",
+            "fpga/de25/astra-audio-host.service",
             "fpga/de25/astra-remote-desktop.service", "fpga/de25/99-astra-qemu.rules",
             "fpga/de25/linux/kernel/install-production-storage.py",
             "emu/qemu/storage_image.py", "emu/qemu/migrate-system-image.py",
@@ -216,6 +218,8 @@ for product in products:
                 b"fresh astra-codec-worker-aarch64\n"
             assert (output / "bin/astra-network-manager").read_bytes() == \
                 b"fresh astra-network-manager-aarch64\n"
+            assert (output / "systemd/90-astra-watchdog.conf").read_text() == \
+                "fixture fpga/de25/astra-watchdog.conf\n"
             subprocess.run(["python3", str(tree / "tools/astra_release.py"),
                             "verify", str(output)], check=True, stdout=subprocess.DEVNULL)
         finally:
