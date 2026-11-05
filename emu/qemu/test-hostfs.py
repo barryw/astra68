@@ -347,11 +347,12 @@ def output(qtest, answer, length):
 def directory_names(data):
     names = []
     while data:
-        assert len(data) >= 33 and data[7] == 0
+        assert len(data) >= 65 and data[7] == 0
         length = data[6]
-        assert length and len(data) >= 32 + length
-        names.append(data[32:32 + length])
-        data = data[32 + length:]
+        assert length and len(data) >= 64 + length
+        assert get32(data, 32) & 2 and get64(data, 48) != 0
+        names.append(data[64:64 + length])
+        data = data[64 + length:]
     return names
 
 
@@ -1907,11 +1908,11 @@ def descriptions(qtest, root):
     assert {first, second, third} == expected
     assert status(child(FS_SEEK, handle=child_directory, offset=0)) == STATUS_OK
     too_small = parent(FS_READDIR, handle=directory, offset=CURSOR_CURRENT,
-                       capacity=33)
+                       capacity=65)
     assert status(too_small) == 15
     assert parent_names() == [first], "small buffer consumed directory entry"
     assert status(parent(FS_SEEK, handle=directory, offset=0)) == STATUS_OK
-    assert parent_names(capacity=32 + len(first) + 32, limit=2) == [first]
+    assert parent_names(capacity=64 + len(first) + 64, limit=2) == [first]
     assert parent_names() == [second], "partial batch consumed next entry"
     assert parent_names() == [third]
     assert status(parent(FS_CLOSE, handle=directory)) == STATUS_OK

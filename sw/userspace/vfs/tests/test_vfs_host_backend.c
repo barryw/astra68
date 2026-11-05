@@ -448,15 +448,18 @@ uint32_t astra_vfs_host_transport_submit(
         assert(command->value_lo == 1u ? command->offset_lo == 5u :
                command->offset_hi == UINT32_MAX &&
                command->offset_lo == UINT32_MAX);
-        assert(output_capacity >= 37u * command->value_lo);
+        assert(output_capacity >= (ASTRA_VFS_DIRENT_HEADER + 5u) * command->value_lo);
         for (uint32_t index = 0u; index < command->value_lo; ++index) {
-            uint8_t *record = (uint8_t *)output + index * 37u;
-            memset(record, 0, 37u);
+            uint8_t *record = (uint8_t *)output + index * (ASTRA_VFS_DIRENT_HEADER + 5u);
+            memset(record, 0, ASTRA_VFS_DIRENT_HEADER + 5u);
             astra_store_be16(record, ASTRA_VFS_KIND_FILE);
             record[6] = 5u;
+            astra_store_be32(record + 32u, ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_INODE);
+            astra_store_be64(record + 40u, 7u);
+            astra_store_be64(record + 48u, 100u + index);
             memcpy(record + ASTRA_VFS_DIRENT_HEADER, "entry", 5u);
         }
-        command->result_length = 37u * command->value_lo;
+        command->result_length = (ASTRA_VFS_DIRENT_HEADER + 5u) * command->value_lo;
         command->value_lo = 6u;
         command->node.kind = ASTRA_VFS_KIND_FILE;
         break;
@@ -761,16 +764,19 @@ int main(void)
     EXPECT(ASTRA_HOST_FS_READDIR);
     assert(ops->readdir(&backend, node, "/", 5u, name, sizeof(name), &info,
                         &next) == ASTRA_VFS_OK);
-    assert(strcmp(name, "entry") == 0 && next == 6u);
+    assert(strcmp(name, "entry") == 0 && next == 6u &&
+           info.meta.valid == (ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_INODE) &&
+           info.meta.volume == 7u && info.meta.inode == 100u);
     {
-        uint8_t batch[74];
+        uint8_t batch[2u * (ASTRA_VFS_DIRENT_HEADER + 5u)];
         EXPECT(ASTRA_HOST_FS_READDIR);
         assert(ops->readdir_batch(&backend, node, "",
                                    ASTRA_VFS_CURSOR_CURRENT, 2u, batch,
                                    sizeof(batch), &moved, &next) ==
                ASTRA_VFS_OK);
         assert(moved == sizeof(batch) && next == 6u &&
-               batch[6] == 5u && batch[43] == 5u);
+               batch[6] == 5u &&
+               batch[ASTRA_VFS_DIRENT_HEADER + 11u] == 5u);
     }
     EXPECT(ASTRA_HOST_FS_MKDIR);
     assert(ops->mkdir(&backend, "/dir", 0750u) == ASTRA_VFS_OK);

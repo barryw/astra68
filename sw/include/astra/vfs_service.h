@@ -42,13 +42,14 @@
 /** Native-big-endian `STOR` storage-protocol signature. */
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
 /** Current storage-protocol wire-format version. */
-#define ASTRA_VFS_VERSION  UINT16_C(39)
+#define ASTRA_VFS_VERSION  UINT16_C(40)
 
 /** Current version only: in-tree clients and providers change together.
+ * Version 40 carries directory-entry node identity alongside metadata.
  * Version 38 carries complete pathname operands in the bound transfer area.
  * Version 37 carried full-width native volume identity. A mismatch
  * fails closed; no rolling-upgrade or obsolete request format is supported. */
-#define ASTRA_VFS_VERSION_MIN UINT16_C(39)
+#define ASTRA_VFS_VERSION_MIN UINT16_C(40)
 
 /** Maximum byte length of a path, including its terminating NUL, on the wire. */
 #define ASTRA_VFS_PATH_MAX 4096u
@@ -83,14 +84,17 @@
  *   12  u32  gid
  *   16  u64  size
  *   24  i64  mtime, seconds since the epoch
- *   32  ..   name, not terminated
+ *   32  u32  identity validity (VOLUME, INODE, GENERATION only)
+ *   36  u32  reserved, zero
+ *   40  u64  native volume identity
+ *   48  u64  inode
+ *   56  u64  inode birth generation
+ *   64  ..   name, not terminated
  *
- * ponytail: an entry is 32 bytes plus a name, so a 208-byte payload carries
- * about four of them. When a listing of a large directory measures badly, the
- * fix is READDIR into the bound transfer area the way READ_PATH already does,
- * not a smaller record.
+ * The complete record travels in the bound transfer area; no per-entry stat
+ * round trip is needed to keep selection attached to a node across refresh.
  */
-#define ASTRA_VFS_DIRENT_HEADER 32u
+#define ASTRA_VFS_DIRENT_HEADER 64u
 
 /* Operations. Values are frozen once published; new ones append. */
 /** Open a session and negotiate a protocol version. */

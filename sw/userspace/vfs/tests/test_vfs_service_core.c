@@ -316,6 +316,8 @@ terminal_readdir(void *context, uintptr_t directory, const char *path,
     assert(strlen(entry) + 1u <= capacity);
     strcpy(name, entry);
     info->kind = ASTRA_VFS_KIND_FILE;
+    info->meta.valid = ASTRA_VFS_META_INODE;
+    info->meta.inode = cookie == 0u ? 42u : 43u;
     return ASTRA_VFS_OK;
 }
 
@@ -339,6 +341,8 @@ test_terminal_readdir_cookie(void)
                &next) == ASTRA_VFS_OK);
     assert(terminal_readdir_calls == 1u);
     assert(used == ASTRA_VFS_DIRENT_HEADER + 5u);
+    assert(astra_load_be32(buffer + 32u) == ASTRA_VFS_META_INODE);
+    assert(astra_load_be64(buffer + 48u) == 42u);
     assert(next == 7u);
 
     /* Positive: the terminal entry is returned once, never replayed. */
@@ -348,6 +352,8 @@ test_terminal_readdir_cookie(void)
                &next) == ASTRA_VFS_OK);
     assert(terminal_readdir_calls == 1u);
     assert(used == ASTRA_VFS_DIRENT_HEADER + 4u);
+    assert(astra_load_be32(buffer + 32u) == ASTRA_VFS_META_INODE);
+    assert(astra_load_be64(buffer + 48u) == 43u);
     assert(next == 0u);
 }
 

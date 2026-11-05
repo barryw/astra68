@@ -7656,6 +7656,31 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             memcpy(record + 12, command + NODE_FIELD(gid), 4);
             memcpy(record + 16, command + NODE_FIELD(size_hi), 8);
             memcpy(record + 24, command + NODE_FIELD(mtime), 8);
+            uint32_t node_valid = ldl_be_p(command + NODE_FIELD(valid));
+            uint32_t identity_valid = 0u;
+            uint64_t volume = 0u, inode = 0u, generation = 0u;
+            if (node_valid & ASTRA_HOST_NODE_DEVICE) {
+                volume = astra_host_get64(command, NODE_FIELD(device_hi));
+                if (volume != 0u) identity_valid |= ASTRA_VFS_META_VOLUME;
+            }
+            if (node_valid & ASTRA_HOST_NODE_INODE) {
+                inode = astra_host_get64(command, NODE_FIELD(inode_hi));
+                if (inode != 0u) identity_valid |= ASTRA_VFS_META_INODE;
+            }
+            if (node_valid & ASTRA_HOST_NODE_BTIME) {
+                uint64_t seconds = astra_host_get64(command, NODE_FIELD(btime));
+                uint32_t nanos = ldl_be_p(command + NODE_FIELD(btime) + 8u);
+                if (nanos < 1000000000u &&
+                    seconds <= (UINT64_MAX - nanos) / UINT64_C(1000000000)) {
+                    generation = seconds * UINT64_C(1000000000) + nanos;
+                    identity_valid |= ASTRA_VFS_META_GENERATION;
+                }
+            }
+            stl_be_p(record + 32u, identity_valid);
+            stl_be_p(record + 36u, 0u);
+            stq_be_p(record + 40u, identity_valid & ASTRA_VFS_META_VOLUME ? volume : 0u);
+            stq_be_p(record + 48u, identity_valid & ASTRA_VFS_META_INODE ? inode : 0u);
+            stq_be_p(record + 56u, generation);
             memcpy(record + ASTRA_VFS_DIRENT_HEADER, entry->d_name, length);
             used += ASTRA_VFS_DIRENT_HEADER + length;
             cookie = after;

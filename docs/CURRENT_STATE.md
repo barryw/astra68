@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-11-05
 
+Directory-identity and Atlas selection checkpoint, 2026-11-05: VFS storage
+protocol 40 extends each batched directory record to carry validity-tagged
+volume, inode, and birth generation. The existing HostFS statx result and RAM
+backend identity supply these fields; client and host backend reject malformed
+records. Shared File Panel remaps selection by node identity on same-directory
+refresh, including rows shifted by insertion and unambiguous renames; Atlas
+updates its selected path from the remapped row and clears old-volume selection
+on remount. Haiku reference: `src/kits/tracker/PoseView.cpp` near 5688 tracks
+selection by node reference across pose changes, not row number. Beast VFS and
+Interface tests, full userspace build, confined HostFS gate, and focused SDL
+TestDraw2 boot/render/quit gate passed. Full five-app QEMU desktop gate still
+times out on its final SDLTestDraw2 launch; that sequence needs diagnosis.
+Complete DE25 release `43a368147e12aecaccac9ae5fcca5bdb640a9a33093f467a120f23c43b656b76`
+was built, verified, installed through state migration, and reached stage 8.
+On DE25, Atlas RAM0 selection survived Refresh and insertion of a preceding
+folder; the selected folder's preview and status remained correct. Both test
+folders and RAM0 Trash were emptied. SDLTestDraw2 also launched and rendered
+through Atlas on DE25. Astra, audio, and remote desktop remain active with
+zero Astra restarts and 7.9 GiB free. SHA-checked screenshots and logs are
+under `/mnt/Documents/astra68/vfs40-selection-evidence-20261105/`; board
+captures were removed. Exact removal/move/other creation, Linux-originated
+changes, and notification performance qualification remain open. Performance
+qualification follows completion of notification correctness.
+
 Exact exclusive-create entry checkpoint, 2026-11-05: confined storage provider
 ABI 11 now returns the parent inode from the retained parent directory FD on a
 successful `O_CREAT|O_EXCL` open. QEMU pairs it with the opened child's inode

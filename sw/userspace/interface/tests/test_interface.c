@@ -6449,6 +6449,96 @@ static void test_file_panel_outline(void)
     astra_interface_file_panel_dispose(&panel);
 }
 
+static void test_file_panel_refresh_selection(void)
+{
+    const uint32_t identity = ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_INODE;
+    AstraDirectoryEntry original[2] = {
+        {.name = "alpha", .kind = ASTRA_VFS_KIND_FILE,
+         .meta = {.valid = identity, .volume = 3u, .inode = 10u}},
+        {.name = "beta", .kind = ASTRA_VFS_KIND_FILE,
+         .meta = {.valid = identity, .volume = 3u, .inode = 20u}}
+    };
+    AstraDirectoryEntry inserted[3] = {
+        {.name = "aardvark", .kind = ASTRA_VFS_KIND_FILE,
+         .meta = {.valid = identity, .volume = 3u, .inode = 30u}},
+        {.name = "alpha", .kind = ASTRA_VFS_KIND_FILE,
+         .meta = {.valid = identity, .volume = 3u, .inode = 10u}},
+        {.name = "beta", .kind = ASTRA_VFS_KIND_FILE,
+         .meta = {.valid = identity, .volume = 3u, .inode = 20u}}
+    };
+    AstraDirectoryEntry renamed[3];
+    AstraDirectoryEntry replaced[3];
+    AstraCollectionItem items[4], spare[4];
+    const AstraSurface *icons[4] = {0};
+    AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
+    uint64_t selected_ids[4] = {0};
+    AstraSelectionSet selection = ASTRA_SELECTION_SET_INIT;
+    AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraFilePanelInfo info = ASTRA_FILE_PANEL_INFO_INIT;
+    AstraFilePanel panel = ASTRA_FILE_PANEL_INIT;
+    AstraControl controls[ASTRA_FILE_PANEL_CONTROL_COUNT];
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+
+    scroll_info.line_height = 16u;
+    assert(astra_scroll_init(&scroll, &scroll_info) == ASTRA_OK);
+    info.first_id = 900u;
+    info.mode = ASTRA_FILE_PANEL_BROWSE;
+    info.directory = "/dh0";
+    info.item_storage = items;
+    info.item_capacity = 4u;
+    info.spare_item_storage = spare;
+    info.spare_item_capacity = 4u;
+    info.grid_icons = icons;
+    info.grid_icon_capacity = 4u;
+    info.collection = &collection;
+    info.scroll = &scroll;
+    assert(astra_interface_file_panel_init(&panel, controls, &info) == ASTRA_OK);
+    assert(astra_interface_selection_init(&selection, selected_ids, 4u) == ASTRA_OK);
+    assert(astra_interface_collection_multi_bind(&collection,
+        &selection) == ASTRA_OK);
+    assert(astra_interface_collection_multi_bind(&panel.grid_collection,
+        &selection) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, controls,
+        ASTRA_FILE_PANEL_CONTROL_COUNT, 640u, 480u) == ASTRA_OK);
+    assert(astra_interface_file_panel_set_directory(&panel, &context,
+        controls, "/dh0", original, 2u, panel.spare_items,
+        panel.spare_capacity) == ASTRA_OK);
+    assert(astra_interface_control_set_value(&context,
+        &controls[ASTRA_FILE_PANEL_LIST], 1) == ASTRA_OK);
+    selection.ids[0] = 1u;
+    selection.ids[1] = 2u;
+    selection.count = 2u;
+    selection.anchor_id = 1u;
+    assert(astra_interface_file_panel_set_directory(&panel, &context,
+        controls, "/dh0", inserted, 3u, panel.spare_items,
+        panel.spare_capacity) == ASTRA_OK);
+    assert(selection.count == 2u && selection.ids[0] == 2u &&
+        selection.ids[1] == 3u && selection.anchor_id == 2u &&
+        collection.selected_id == 3u && panel.grid_collection.selected_id == 3u);
+
+    memcpy(renamed, inserted, sizeof(renamed));
+    strcpy(renamed[2].name, "gamma");
+    assert(astra_interface_file_panel_set_directory(&panel, &context,
+        controls, "/dh0", renamed, 3u, panel.spare_items,
+        panel.spare_capacity) == ASTRA_OK);
+    assert(selection.count == 2u && selection.ids[0] == 2u &&
+        selection.ids[1] == 3u && collection.selected_id == 3u);
+
+    memcpy(replaced, renamed, sizeof(replaced));
+    replaced[2].meta.inode = 40u;
+    assert(astra_interface_file_panel_set_directory(&panel, &context,
+        controls, "/dh0", replaced, 3u, panel.spare_items,
+        panel.spare_capacity) == ASTRA_OK);
+    assert(selection.count == 1u && selection.ids[0] == 2u &&
+        collection.selected_id == 2u);
+    assert(astra_interface_file_panel_set_directory(&panel, &context,
+        controls, "/dh0/other", replaced, 3u, panel.spare_items,
+        panel.spare_capacity) == ASTRA_OK);
+    assert(selection.count == 0u && collection.selected_id == 0u);
+    astra_interface_file_panel_dispose(&panel);
+}
+
 int main(void)
 {
     static const char malformed_utf8[] = {(char)0xed, (char)0xa0, (char)0x80};
@@ -6557,6 +6647,7 @@ int main(void)
     test_breadcrumb_long_path();
     test_shared_file_panel();
     test_file_panel_outline();
+    test_file_panel_refresh_selection();
     test_shared_font_panel();
     test_text_field_rejections();
     test_text_view();

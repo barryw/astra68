@@ -366,6 +366,17 @@ astra_vfs_backend_readdir_into(const AstraVfsBackend *backend,
         astra_store_be32(&buffer[used + 12u], info.gid);
         astra_store_be64(&buffer[used + 16u], info.size);
         astra_store_be64(&buffer[used + 24u], (uint64_t)info.mtime);
+        astra_store_be32(&buffer[used + 32u], info.meta.valid &
+            (ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_INODE |
+             ASTRA_VFS_META_GENERATION));
+        astra_store_be32(&buffer[used + 36u], 0u);
+        astra_store_be64(&buffer[used + 40u],
+            (info.meta.valid & ASTRA_VFS_META_VOLUME) ? info.meta.volume : 0u);
+        astra_store_be64(&buffer[used + 48u],
+            (info.meta.valid & ASTRA_VFS_META_INODE) ? info.meta.inode : 0u);
+        astra_store_be64(&buffer[used + 56u],
+            (info.meta.valid & ASTRA_VFS_META_GENERATION) ?
+                info.meta.generation : 0u);
         used += ASTRA_VFS_DIRENT_HEADER;
         for (uint32_t index = 0u; index < length; ++index)
             buffer[used++] = (uint8_t)name[index];

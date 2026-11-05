@@ -1087,6 +1087,21 @@ readdir_batch(AstraVfsClient *client, AstraVfsFile directory,
         entries[found].gid = astra_load_be32(record + 12u);
         entries[found].size = astra_load_be64(record + 16u);
         entries[found].mtime = (int64_t)astra_load_be64(record + 24u);
+        entries[found].meta.valid = astra_load_be32(record + 32u);
+        entries[found].meta.identity_reserved = astra_load_be32(record + 36u);
+        entries[found].meta.volume = astra_load_be64(record + 40u);
+        entries[found].meta.inode = astra_load_be64(record + 48u);
+        entries[found].meta.generation = astra_load_be64(record + 56u);
+        if ((entries[found].meta.valid & ~(ASTRA_VFS_META_VOLUME |
+                ASTRA_VFS_META_INODE | ASTRA_VFS_META_GENERATION)) != 0u ||
+            entries[found].meta.identity_reserved != 0u ||
+            (!(entries[found].meta.valid & ASTRA_VFS_META_VOLUME) &&
+             entries[found].meta.volume != 0u) ||
+            (!(entries[found].meta.valid & ASTRA_VFS_META_INODE) &&
+             entries[found].meta.inode != 0u) ||
+            (!(entries[found].meta.valid & ASTRA_VFS_META_GENERATION) &&
+             entries[found].meta.generation != 0u))
+            return ASTRA_VFS_ERR_PROTOCOL;
         entries[found].reserved = 0u;
         at += ASTRA_VFS_DIRENT_HEADER;
         if (length == 0u || length >= ASTRA_VFS_NAME_MAX ||

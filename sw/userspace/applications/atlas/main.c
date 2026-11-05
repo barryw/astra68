@@ -1372,6 +1372,14 @@ static AstraResult browser_set_directory(const AstraDirectorySnapshot *next,
         browser.spare_items, browser.spare_capacity);
     if (result != ASTRA_OK) return result;
     browser_clear_children();
+    uint64_t selected_id = browser_collection.selected_id;
+    if (selected_id == 0u || selected_id > count)
+        selection_clear();
+    else {
+        result = selection_set(path, next->entries, count,
+            (uint32_t)selected_id - 1u, 0u);
+        if (result != ASTRA_OK) return result;
+    }
     astra_runtime_deallocate(browser_entry_icons);
     browser_entry_icons = NULL;
     result = fit_toolbar();
@@ -2040,6 +2048,23 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
         }
         memcpy(history_copy, target, length + 1u);
     }
+    if (strcmp(target, root) == 0 &&
+        !astra_volume_reference_equal(&candidate, &viewed_volume)) {
+        result = astra_interface_control_set_value(&ui,
+            BROWSER_CONTROL(ASTRA_FILE_PANEL_LIST), -1);
+        if (result == ASTRA_OK)
+            result = astra_interface_control_set_value(&ui,
+                BROWSER_CONTROL(ASTRA_FILE_PANEL_GRID), -1);
+        if (result == ASTRA_OK && browser.column_count != 0u)
+            result = astra_interface_control_set_value(&ui,
+                BROWSER_CONTROL(ASTRA_FILE_PANEL_CONTROL_COUNT + 2u), -1);
+        if (result != ASTRA_OK) {
+            astra_runtime_deallocate(history_copy);
+            astra_directory_snapshot_dispose(&next);
+            close_grant(&next_grant);
+            return result;
+        }
+    }
     result = browser_set_directory(&next, target);
     if (result != ASTRA_OK) {
         astra_runtime_deallocate(history_copy);
@@ -2074,7 +2099,6 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
     root = current_path;
     result = recent_leave();
     if (result != ASTRA_OK) return result;
-    selection_clear();
     visible_data = 1u;
     model.line_height = CELL_HEIGHT + GRID_GAP_Y;
     result = astra_scroll_init(&scroll, &model);

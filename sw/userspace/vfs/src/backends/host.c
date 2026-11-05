@@ -553,6 +553,20 @@ static uint32_t host_readdir(void *context, uintptr_t directory,
     info->gid = astra_load_be32(wire + 12u);
     info->size = astra_load_be64(wire + 16u);
     info->mtime = (int64_t)astra_load_be64(wire + 24u);
+    info->meta.valid = astra_load_be32(wire + 32u);
+    info->meta.volume = astra_load_be64(wire + 40u);
+    info->meta.inode = astra_load_be64(wire + 48u);
+    info->meta.generation = astra_load_be64(wire + 56u);
+    if ((info->meta.valid & ~(ASTRA_VFS_META_VOLUME |
+            ASTRA_VFS_META_INODE | ASTRA_VFS_META_GENERATION)) != 0u ||
+        astra_load_be32(wire + 36u) != 0u ||
+        (!(info->meta.valid & ASTRA_VFS_META_VOLUME) &&
+         info->meta.volume != 0u) ||
+        (!(info->meta.valid & ASTRA_VFS_META_INODE) &&
+         info->meta.inode != 0u) ||
+        (!(info->meta.valid & ASTRA_VFS_META_GENERATION) &&
+         info->meta.generation != 0u))
+        return ASTRA_VFS_ERR_PROTOCOL;
     return ASTRA_VFS_OK;
 }
 

@@ -430,6 +430,9 @@ the description lock for its complete batch, and a record that does not fit
 is rolled back before the lock is released. `ASTRA_VFS_CURSOR_CURRENT` reads
 the shared stream without replaying a caller's cached cookie. An explicit
 rewind uses SEEK, so every owner sees the rewind.
+Storage protocol version 40 extends each directory record header from 32 to
+64 bytes with validity-tagged volume, inode, and birth generation fields.
+Clients can preserve selection across a refreshed snapshot by node identity.
 
 All Filesystem exports use `ASTRA_FILESYSTEM_9.0`. Filesystem.kit 6.0.0 and
 every in-tree dependent manifest require major 9. The POSIX fork prepare/

@@ -938,6 +938,8 @@ backend_readdir(void *context, uintptr_t directory, const char *path,
     info->kind = ASTRA_VFS_KIND_FILE;
     info->mode = 0100644u;
     info->nlink = 1u;
+    info->meta.valid = ASTRA_VFS_META_INODE;
+    info->meta.inode = 1000u + cookie;
     *next = cookie + 1u;
     return ASTRA_VFS_OK;
 }
@@ -2077,6 +2079,9 @@ test_bulk_readdir_crosses_once_through_a_shared_area(void)
     assert(strcmp(entries[0].name, "entry00") == 0);
     assert(strcmp(entries[11].name, "entry11") == 0);
     assert(entries[11].size == 111u && entries[11].mode == 0100644u);
+    assert(entries[0].meta.valid == ASTRA_VFS_META_INODE &&
+           entries[0].meta.inode == 1000u &&
+           entries[11].meta.inode == 1011u);
     assert(host.area_addresses[0] == current_lane(&remote)->area_address);
 
     before = host.requests;

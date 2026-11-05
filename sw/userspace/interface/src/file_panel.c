@@ -828,6 +828,37 @@ static AstraResult file_panel_items(const AstraFilePanel *panel,
     return ASTRA_OK;
 }
 
+/* Snapshot row IDs change when entries are inserted or sorted. */
+static uint64_t file_panel_remap_id(const AstraFilePanel *panel,
+    uint64_t old_id, const AstraDirectoryEntry *entries,
+    const AstraCollectionItem *items, uint32_t count)
+{
+    if (old_id == 0u || old_id > panel->entry_count ||
+        panel->entries == NULL) return 0u;
+    const AstraDirectoryEntry *old = &panel->entries[old_id - 1u];
+    if (!(old->meta.valid & ASTRA_VFS_META_INODE) ||
+        old->meta.inode == 0u) return 0u;
+    uint64_t renamed = 0u;
+    for (uint32_t at = 0u; at < count; ++at) {
+        const AstraDirectoryEntry *entry = &entries[items[at].id - 1u];
+        uint32_t identity = ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_GENERATION;
+        if (!(entry->meta.valid & ASTRA_VFS_META_INODE) ||
+            entry->meta.inode != old->meta.inode ||
+            entry->kind != old->kind ||
+            ((entry->meta.valid ^ old->meta.valid) & identity) != 0u ||
+            ((entry->meta.valid & ASTRA_VFS_META_VOLUME) &&
+             entry->meta.volume != old->meta.volume) ||
+            ((entry->meta.valid & ASTRA_VFS_META_GENERATION) &&
+             entry->meta.generation != old->meta.generation))
+            continue;
+        if (strcmp(entry->name, old->name) == 0)
+            return items[at].id;
+        if (renamed != 0u) renamed = UINT64_MAX;
+        else renamed = items[at].id;
+    }
+    return renamed == UINT64_MAX ? 0u : renamed;
+}
+
 static AstraResult file_panel_label(AstraControl *control, uint32_t id,
     const char *text, uint32_t length, uint32_t state, uint32_t parent)
 {
@@ -1527,6 +1558,10 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
     void *next_rows = NULL;
     AstraResult result;
     uint32_t visible_count = 0u;
+    AstraSelectionSet *selection;
+    uint64_t *remapped = NULL;
+    uint64_t primary = 0u, anchor = 0u;
+    uint32_t remapped_count = 0u;
 
     if (panel == NULL || panel->size < sizeof(*panel) || context == NULL ||
         panel->first_id == 0u || panel->active_directory > 1u ||
@@ -1540,13 +1575,50 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
     result = file_panel_items(panel, entries, entry_count, item_storage,
         item_capacity, &visible_count);
     if (result != ASTRA_OK) return result;
+    selection = panel->collection->selection;
+    if (strcmp(directory, panel->directory) == 0) {
+        uint64_t selected = panel->view_mode == ASTRA_FILE_PANEL_VIEW_GRID ?
+            panel->grid_collection.selected_id : panel->collection->selected_id;
+        primary = file_panel_remap_id(panel, selected, entries,
+            item_storage, visible_count);
+        if (selection != NULL && selection->count != 0u) {
+#if SIZE_MAX <= UINT32_MAX
+            if (selection->count > SIZE_MAX / sizeof(*remapped))
+                return ASTRA_ERROR_NO_RESOURCES;
+#endif
+            remapped = astra_runtime_allocate(selection->count *
+                sizeof(*remapped));
+            if (remapped == NULL) return ASTRA_ERROR_NO_RESOURCES;
+            for (uint32_t at = 0u; at < selection->count; ++at) {
+                uint64_t id = file_panel_remap_id(panel, selection->ids[at],
+                    entries, item_storage, visible_count);
+                if (id == 0u) continue;
+                uint32_t slot = remapped_count;
+                while (slot != 0u && remapped[slot - 1u] > id) {
+                    remapped[slot] = remapped[slot - 1u];
+                    --slot;
+                }
+                remapped[slot] = id;
+                ++remapped_count;
+            }
+            anchor = file_panel_remap_id(panel, selection->anchor_id,
+                entries, item_storage, visible_count);
+            if (primary == 0u && remapped_count != 0u)
+                primary = remapped[0];
+            if (remapped_count == 0u) primary = 0u;
+        }
+    }
     if (visible_count > panel->grid_icon_capacity)
-        return ASTRA_ERROR_BUFFER_TOO_SMALL;
-    result = controls[ASTRA_FILE_PANEL_LIST]._private_control_kind ==
-        ASTRA_CONTROL_OUTLINE_TABLE ? ASTRA_OK :
-        file_panel_table_rows(entries, item_storage, visible_count,
-            &next_rows);
-    if (result != ASTRA_OK) return result;
+        result = ASTRA_ERROR_BUFFER_TOO_SMALL;
+    else
+        result = controls[ASTRA_FILE_PANEL_LIST]._private_control_kind ==
+            ASTRA_CONTROL_OUTLINE_TABLE ? ASTRA_OK :
+            file_panel_table_rows(entries, item_storage, visible_count,
+                &next_rows);
+    if (result != ASTRA_OK) {
+        astra_runtime_deallocate(remapped);
+        return result;
+    }
     file_panel_fill_icons(panel, item_storage, visible_count, NULL);
     previous = panel->directory;
     result = astra_interface_breadcrumb_set_path(&panel->breadcrumb,
@@ -1578,6 +1650,28 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
                 &controls[file_panel_column_list_index(depth)], NULL, 0u);
             if (result != ASTRA_OK) goto rollback;
         }
+    }
+    if (primary != 0u) {
+        uint32_t row = 0u;
+        while (row < visible_count && item_storage[row].id != primary) ++row;
+        if (row == visible_count) { result = ASTRA_ERROR_INVALID_ARGUMENT; goto rollback; }
+        result = astra_interface_control_set_value(context,
+            &controls[ASTRA_FILE_PANEL_LIST], row);
+        if (result != ASTRA_OK) goto rollback;
+        result = astra_interface_control_set_value(context,
+            &controls[ASTRA_FILE_PANEL_GRID], row);
+        if (result != ASTRA_OK) goto rollback;
+        if (panel->column_count != 0u) {
+            result = astra_interface_control_set_value(context,
+                &controls[file_panel_column_list_index(0u)], row);
+            if (result != ASTRA_OK) goto rollback;
+        }
+    }
+    if (selection != NULL && remapped != NULL) {
+        memcpy(selection->ids, remapped, remapped_count * sizeof(*remapped));
+        selection->count = remapped_count;
+        selection->anchor_id = remapped_count == 0u ? 0u :
+            anchor != 0u ? anchor : primary;
     }
     int64_t selected_place = -1;
     if (strcmp(next, panel->directory) != 0 ||
@@ -1614,6 +1708,7 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
     }
     panel->leaf[0] = '\0';
     panel->target[0] = '\0';
+    astra_runtime_deallocate(remapped);
     return ASTRA_OK;
 
 rollback:
@@ -1633,6 +1728,7 @@ rollback:
     (void)astra_interface_breadcrumb_set_path(&panel->breadcrumb,
         context, &controls[ASTRA_FILE_PANEL_CRUMB0], previous);
     astra_runtime_deallocate(next_rows);
+    astra_runtime_deallocate(remapped);
     return result;
 }
 
