@@ -1055,11 +1055,6 @@ static uint32_t pressure_notifications;
 
 static void on_pressure_note(void)
 {
-    KernelMemoryPressure level;
-    uint32_t headroom;
-
-    assert(kernel_memory_pressure(&level, &headroom));
-    assert(level >= KERNEL_MEMORY_PRESSURE_NOTE);
     ++pressure_notifications;
 }
 
@@ -1111,6 +1106,12 @@ static void test_pressure_tracks_ordinary_headroom(void)
         assert(level == steps[index].level);
         assert(pressure_notifications == (index == 0u ? 0u : 1u));
     }
+    uint32_t denied = 0u;
+
+    assert(kernel_memory_alloc_tagged(KERNEL_ALLOCATION_SITE_MEMORY_GENERIC,
+               1u, 1u, KERNEL_FRAME_PROCESS, 84u, &denied) ==
+           KERNEL_MEMORY_OUT_OF_MEMORY);
+    assert(pressure_notifications == 2u);
     assert(kernel_memory_release_owner(84u, &released) == KERNEL_MEMORY_OK);
     assert(released == used);
     assert(kernel_memory_pressure(&level, &headroom));
@@ -1122,7 +1123,7 @@ static void test_pressure_tracks_ordinary_headroom(void)
                KERNEL_ALLOCATION_SITE_MEMORY_GENERIC,
                headroom - KERNEL_MEMORY_PRESSURE_NOTE_FRAMES,
                KERNEL_FRAME_PROCESS, 84u, pages) == KERNEL_MEMORY_OK);
-    assert(pressure_notifications == 2u);
+    assert(pressure_notifications == 3u);
     assert(kernel_memory_release_owner(84u, NULL) == KERNEL_MEMORY_OK);
 }
 

@@ -251,7 +251,7 @@ bool kernel_memory_span_has_device(uint32_t base, uint32_t size);
 bool kernel_memory_stats(KernelMemoryStats *stats);
 bool kernel_memory_pressure(KernelMemoryPressure *level,
                             uint32_t *ordinary_headroom_frames);
-/* Signal one deferred reclaim when ordinary headroom enters note pressure. */
+/* Signal deferred reclaim on note entry or physical allocation shortage. */
 bool kernel_memory_set_pressure_notifier(void (*notify)(void));
 
 /*

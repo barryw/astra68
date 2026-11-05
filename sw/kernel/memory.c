@@ -197,6 +197,13 @@ static void notify_pressure_transition(uint32_t previous_free_frames)
         pressure_notifier();
 }
 
+static void notify_pressure_shortage(void)
+{
+    /* A later allocation can fail while pressure stays below note headroom. */
+    if (pressure_notifier != NULL)
+        pressure_notifier();
+}
+
 #if defined(KERNEL_MEMORY_HOST_TEST)
 static uint8_t *host_memory;
 static uint32_t host_memory_base;
@@ -1133,6 +1140,7 @@ static KernelMemoryStatus allocate_frames(uint32_t frame_count,
         ++stats.allocation_failures;
         ++stats.protected_reserve_denials;
         kernel_allocation_fail(site, owner);
+        notify_pressure_shortage();
         return KERNEL_MEMORY_OUT_OF_MEMORY;
     }
     if (available) {
@@ -1168,6 +1176,7 @@ static KernelMemoryStatus allocate_frames(uint32_t frame_count,
 
     ++stats.allocation_failures;
     kernel_allocation_fail(site, owner);
+    notify_pressure_shortage();
     return KERNEL_MEMORY_OUT_OF_MEMORY;
 }
 
@@ -1279,6 +1288,7 @@ static KernelMemoryStatus allocate_pages(
         ++stats.allocation_failures;
         ++stats.protected_reserve_denials;
         kernel_allocation_fail(site, owner);
+        notify_pressure_shortage();
         return KERNEL_MEMORY_OUT_OF_MEMORY;
     }
 
@@ -1314,6 +1324,7 @@ static KernelMemoryStatus allocate_pages(
             physical_pages[index] = 0u;
         ++stats.allocation_failures;
         kernel_allocation_fail(site, owner);
+        notify_pressure_shortage();
         return KERNEL_MEMORY_OUT_OF_MEMORY;
     }
 

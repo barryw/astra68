@@ -28,6 +28,22 @@ command and disposable board captures were removed; one development release
 remains, Astra/audio/remote-desktop services are active, and board has 7.9 GiB
 free. Service cache coordination and general file-cache reclaim remain open.
 
+Physical-shortage followup, 2026-11-05: an ordinary allocation can fail while
+headroom remains below note after the first reclaim pass. Physical search and
+protected-reserve denials now signal that same worker again; per-owner quota
+failures do not. The memory host test covers a second signal after threshold
+entry, and Beast's full kernel suite and 12-marker K1 qualification pass (timer
+676/50,000 cycles, syscall 1,656/50,000). ROM SHA-256
+`5b6272e704c25e37be168b3a5c0e7f52ac74c82e43d8d287f44add9840c32d4b`
+booted DE25 to stage 8. Native `mempressure 512` held 428 MiB plus 1,728 KiB
+tail until out-of-memory, then released all handles and passed fresh-allocation
+recovery. RFB evidence and build/qualification logs are under
+`/mnt/Documents/astra68/memory-pressure-shortage-20261105/` on Beast; final
+RFB SHA-256 matches board hash
+`85ce719eb1bb8a6dc154bae34894c79f63cc52e36fc98499d2037a008e1bba19`.
+The disposable command and board captures were removed. One development
+release remains; Astra, audio, and remote desktop are active with 7.9 GiB free.
+
 Filesystem change producer correction, 2026-11-05: production HostFS now
 publishes per-volume generations from QEMU's canonical filesystem namespace,
 which sees both VFS service requests and direct client lanes. The old VFS
