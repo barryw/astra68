@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-11-05
 
+Storage worker hang checkpoint, 2026-11-05: Linux attach, detach, eject,
+and path workers now carry a 120-second monotonic deadline, using the same
+provider cancellation and actual-mount reconciliation already used for format
+and partition workers. Timeout logging includes operation, volume ID,
+generation, and child PID. A finished child is left for normal reap even if
+its deadline has passed. Beast's full storage-provider test passed, including
+expired and already-finished child cases. AArch64 provider SHA-256
+`bd4f94b1ba6fddb0abc2a79272556b3f82a8dc1433c918d04a18a52494c8b990`
+was installed via DE25 development shadow
+`6fdc5ae5afb4bc932fcc215552c705c7e46c1eb304974359dbfb0e524e971ab1`.
+DE25 reached stage 8; Astra, audio, and remote desktop are active, with zero
+service restarts and 7.9 GiB free. Journal/state and provider-test evidence
+are SHA-checked under
+`/mnt/Documents/astra68/storage-worker-timeout-20261105/` on Beast. Haiku
+reference: `src/system/kernel/fs/vfs.cpp` keeps mount/unmount under one
+serialized lifecycle and refuses busy vnode retirement. Astra retains its
+provider-owned mount/reconciliation lifecycle; Linux worker deadlines are
+host-specific. An uninterruptible Linux I/O wait can still prevent worker
+reap and keep provider shutdown open. Hardware-expiry and forced-cleanup
+failure gates remain open. Notification performance qualification remains
+deferred until correctness gates close.
+
 Exact HostFS node-event checkpoint, 2026-11-05: QEMU's canonical mount
 namespace now retains 64 exact inode records for successful handle writes and
 truncates. `CHANGE_NEXT` reads them without waiting for provider I/O; stale

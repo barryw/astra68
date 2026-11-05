@@ -47,6 +47,15 @@ static void retain(const int *originals, unsigned count, pid_t parent)
         _exit(1);
 }
 
+static int work_deadline(uint64_t *deadline)
+{
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return errno;
+    *deadline = (uint64_t)now.tv_sec * UINT64_C(1000000000) +
+        (uint64_t)now.tv_nsec + UINT64_C(120000000000);
+    return 0;
+}
+
 static void child(AstraStorageDomain domain, AstraStorageRecord record,
                     AstraStorageMounted mounted, int source, int output, uint32_t operation,
                     int secret, const AstraStorageMountAuth *auth, pid_t parent)
@@ -112,7 +121,10 @@ int astra_storage_work_start(AstraStorageWork *work, const AstraStorageDomain *d
             record->id != mounted->id || !mounted->directory ||
             (operation != ASTRA_STORAGE_WORK_ATTACH && operation != ASTRA_STORAGE_WORK_DETACH)))
         return EINVAL;
-    int error = endpoints(sockets);
+    uint64_t deadline = 0u;
+    int error = work_deadline(&deadline);
+    if (error != 0) return error;
+    error = endpoints(sockets);
     if (error != 0)
         return error;
     pid_t parent = getpid();
@@ -128,7 +140,8 @@ int astra_storage_work_start(AstraStorageWork *work, const AstraStorageDomain *d
             secret, auth, parent);
     close(sockets[1]);
     *work = (AstraStorageWork){.pid = pid, .result = sockets[0], .id = record->id,
-        .generation = record->generation, .operation = operation};
+        .generation = record->generation, .operation = operation,
+        .deadline_ns = deadline};
     return 0;
 }
 
@@ -142,7 +155,10 @@ int astra_storage_work_path_start(AstraStorageWork *work, const AstraStorageReco
         work->pid != 0 || allowed_root < 0 || record->id != request->mount ||
         record->generation != request->generation || record->state != ASTRA_VOLUME_MOUNTED)
         return EINVAL;
-    int error = endpoints(sockets);
+    uint64_t deadline = 0u;
+    int error = work_deadline(&deadline);
+    if (error != 0) return error;
+    error = endpoints(sockets);
     if (error != 0)
         return error;
     pid_t parent = getpid();
@@ -176,7 +192,8 @@ int astra_storage_work_path_start(AstraStorageWork *work, const AstraStorageReco
     close(sockets[1]);
     *work = (AstraStorageWork){.pid = pid, .result = sockets[0], .id = record->id,
         .generation = record->generation, .operation = ASTRA_STORAGE_WORK_PATH,
-        .serial = request->serial, .epoch = request->epoch, .path_operation = request->operation};
+        .serial = request->serial, .epoch = request->epoch,
+        .path_operation = request->operation, .deadline_ns = deadline};
     return 0;
 }
 
@@ -457,6 +474,20 @@ void astra_storage_work_cancel(AstraStorageWork *work)
         work->cancelled = ECANCELED;
         (void)kill(work->pid, SIGKILL);
     }
+}
+
+int astra_storage_work_expire(AstraStorageWork *work, uint64_t current_ns)
+{
+    if (work == NULL || work->pid <= 0 || work->deadline_ns == 0u ||
+        work->cancelled != 0 || current_ns < work->deadline_ns)
+        return 0;
+    siginfo_t status = {0};
+    if (waitid(P_PID, (id_t)work->pid, &status, WEXITED | WNOHANG | WNOWAIT) != 0 ||
+        status.si_pid == work->pid)
+        return 0;
+    astra_storage_work_cancel(work);
+    work->cancelled = ETIMEDOUT;
+    return 1;
 }
 
 static int receive(AstraStorageWork *work, void *reply, size_t bytes,

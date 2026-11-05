@@ -61,6 +61,8 @@ int astra_storage_work_partition_start(AstraStorageWork *work,
     const AstraStorageRecord *record, int device, int executable,
     const AstraVolumePartitionEdit *edit);
 void astra_storage_work_cancel(AstraStorageWork *work);
+/* Returns 1 when a live worker crossed its deadline and was cancelled. */
+int astra_storage_work_expire(AstraStorageWork *work, uint64_t current_ns);
 /* 0 pending; 1 reaped (reply.error may be nonzero); negative invalid job. */
 int astra_storage_work_poll(AstraStorageWork *work, AstraStorageWorkReply *reply, int *root);
 int astra_storage_work_path_poll(AstraStorageWork *work, AstraStoragePathReply *reply, int *result);

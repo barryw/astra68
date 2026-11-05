@@ -349,12 +349,10 @@ int astra_storage_provider_poll(AstraStorageProvider *provider)
         (uint64_t)now.tv_nsec;
     for (AstraStorageResource *entry = provider->resources; entry != NULL;
          entry = entry->next)
-        if (entry->work.pid != 0 &&
-            (entry->work.operation == ASTRA_STORAGE_WORK_FORMAT ||
-             entry->work.operation == ASTRA_STORAGE_WORK_PARTITION) &&
-            entry->work.cancelled == 0 && current_ns >= entry->work.deadline_ns) {
-            astra_storage_work_cancel(&entry->work);
-            entry->work.cancelled = ETIMEDOUT;
+        if (astra_storage_work_expire(&entry->work, current_ns)) {
+            fprintf(stderr, "astra-storage worker timeout operation=%u id=%" PRIu64
+                " generation=%" PRIu64 " pid=%ld\n", entry->work.operation,
+                entry->work.id, entry->work.generation, (long)entry->work.pid);
         }
     for (AstraStorageResource *entry = provider->resources; entry != NULL; entry = entry->next) {
         const AstraStorageRecord *record = astra_storage_find(&provider->catalog, entry->id);
@@ -1225,9 +1223,7 @@ static int next_storage_timeout(AstraStorageProvider *provider)
         if (entry->probe.pid != 0 && entry->probe.cancelled == 0 && entry->probe.deadline_ns < deadline)
             deadline = entry->probe.deadline_ns;
     for (AstraStorageResource *entry = provider->resources; entry != NULL; entry = entry->next)
-        if (entry->work.pid != 0 &&
-            (entry->work.operation == ASTRA_STORAGE_WORK_FORMAT ||
-             entry->work.operation == ASTRA_STORAGE_WORK_PARTITION) &&
+        if (entry->work.pid != 0 && entry->work.deadline_ns != 0u &&
             entry->work.cancelled == 0 && entry->work.deadline_ns < deadline)
             deadline = entry->work.deadline_ns;
     int partition_pending = 0;

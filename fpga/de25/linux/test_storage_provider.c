@@ -788,6 +788,7 @@ static void lost_worker_reply(AstraStorageProvider *provider)
     assert(astra_storage_work_start(&work, &provider->domain, record, -1,
                                       &mounted, ASTRA_STORAGE_WORK_ATTACH,
                                       -1, NULL) == 0);
+    assert(work.deadline_ns != 0u);
     for (unsigned at = 0u; !mounted.attached && at < 5000u; ++at) {
         assert(astra_storage_linux_reconcile(&provider->domain, &mounted) == 0);
         usleep(1000);
@@ -814,6 +815,40 @@ static void lost_worker_reply(AstraStorageProvider *provider)
     assert(astra_storage_forget(&provider->catalog, mount) == 0);
     assert(astra_storage_loss(&provider->catalog, source, 1u) == 0);
     assert(astra_storage_forget(&provider->catalog, source) == 0);
+}
+
+static void expired_worker(void)
+{
+    pid_t finished = fork();
+    assert(finished >= 0);
+    if (finished == 0) _exit(0);
+    siginfo_t status = {0};
+    assert(waitid(P_PID, (id_t)finished, &status, WEXITED | WNOWAIT) == 0);
+    AstraStorageWork completed = {.pid = finished, .result = -1,
+        .operation = ASTRA_STORAGE_WORK_ATTACH, .deadline_ns = 10u};
+    assert(astra_storage_work_expire(&completed, 11u) == 0 && completed.cancelled == 0);
+    assert(waitpid(finished, NULL, 0) == finished);
+    assert(astra_storage_work_expire(&completed, 11u) == 0 && completed.cancelled == 0);
+
+    pid_t child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        for (;;) pause();
+    }
+    AstraStorageWork work = {.pid = child, .result = -1,
+        .operation = ASTRA_STORAGE_WORK_ATTACH, .deadline_ns = 10u};
+    assert(astra_storage_work_expire(&work, 9u) == 0);
+    assert(astra_storage_work_expire(&work, 10u) == 1);
+    assert(work.cancelled == ETIMEDOUT);
+    assert(astra_storage_work_expire(&work, 11u) == 0);
+    AstraStorageWorkReply reply;
+    int root, ready = 0;
+    for (unsigned at = 0u; ready == 0 && at < 5000u; ++at) {
+        ready = astra_storage_work_poll(&work, &reply, &root);
+        assert(ready >= 0);
+        usleep(1000);
+    }
+    assert(ready == 1 && reply.error == ETIMEDOUT && root == -1 && work.pid == 0);
 }
 
 static void image(AstraStorageProvider *provider, int export_root, uint64_t binding,
@@ -1261,6 +1296,7 @@ int main(int argc, char **argv)
         usb_format(&provider, argv[9], ASTRA_VOLUME_EXFAT, "ASTRA_EXFAT");
     loss_during_mount(&provider);
     lost_worker_reply(&provider);
+    expired_worker();
     discovered_media(&provider, argv[1]);
     exclusive_format_target(&provider, argv[6], format_gate);
     exclusive_partition_target(&provider);
