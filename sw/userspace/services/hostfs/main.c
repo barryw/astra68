@@ -956,7 +956,8 @@ static void publish_filesystem_changes(uint32_t messaging)
                     &cursor, &record, &kind) != ASTRA_VFS_OK)
                 break;
             if (kind == ASTRA_HOST_FS_CHANGE_NODE ||
-                kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED) {
+                kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ||
+                kind == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED) {
                 snapshot.nodes = record.nodes;
                 snapshot.entries = record.entries;
             } else if (astra_vfs_host_change_snapshot(&volume->backend,
@@ -983,13 +984,17 @@ static void publish_filesystem_changes(uint32_t messaging)
                     ASTRA_FILESYSTEM_CHANGE_NODE :
                     kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ?
                     ASTRA_FILESYSTEM_CHANGE_ENTRY_CREATED :
+                    kind == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED ?
+                    ASTRA_FILESYSTEM_CHANGE_ENTRY_REMOVED :
                     ASTRA_FILESYSTEM_CHANGE_INVALIDATE,
                 .inode = kind == ASTRA_HOST_FS_CHANGE_NODE ||
                     kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ? record.inode : 0u,
-                .parent_inode = kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ?
+                .parent_inode = kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ||
+                    kind == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED ?
                     record.parent_inode : 0u
             };
-            if (kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED)
+            if (kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ||
+                kind == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED)
                 memcpy(change.name, record.name, sizeof(change.name));
             /* BUSY leaves both sequence and generation pending for retry. */
             AstraResult result = astra_messaging_publish_reliable(messaging,
@@ -1003,7 +1008,8 @@ static void publish_filesystem_changes(uint32_t messaging)
             ++filesystem_transaction;
             if (filesystem_transaction == 0u) filesystem_transaction = 1u;
             if (kind != ASTRA_HOST_FS_CHANGE_NODE &&
-                kind != ASTRA_HOST_FS_CHANGE_ENTRY_CREATED) break;
+                kind != ASTRA_HOST_FS_CHANGE_ENTRY_CREATED &&
+                kind != ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED) break;
         }
     }
 }

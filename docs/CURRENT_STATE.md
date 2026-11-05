@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-11-05
 
+Exact unlink event checkpoint, 2026-11-05: confined storage provider
+reports parent inode from its retained directory FD after successful unlink.
+QEMU records parent and leaf in existing change ring with unknown child inode;
+HostFS maps it through existing reliable Messaging topic and Atlas validates
+it. This extends existing record schema 1 and payload version 3 without
+changing wire sizes. Haiku reference:
+`src/system/kernel/fs/node_monitor.cpp:610-643,1196-1240` reports parent,
+leaf, and child at mutation time; Astra omits child when unlink cannot supply
+it atomically. Beast storage-path and VFS tests and full confined HostFS gate
+passed. DE25 development shadow
+`4aa6f5b4e33c6558da6e2769c06719322a764454fb99e1efd13a7e4d59e1c94c`
+reached stage 8 with Astra, audio, and RFB services active and zero Astra
+restarts. Terminal created and removed a disposable RAM0 directory while
+Atlas showed RAM0; Atlas updated from one item to empty without Refresh.
+Target QEMU SHA-256 is
+`50bc886f0c93092a02696d5f0771c21ce0dd635c84d5ee0c03b193fc87ecd38c`;
+provider SHA-256 is
+`c3d3366f976efd9c56f9cd2d8288c4d3c5067d240923f87042f94c2eb7a8cd60`.
+SHA-checked captures are under
+`/mnt/Documents/astra68/exact-removal-20261105/` on Beast; board captures
+were removed and root has 7.9 GiB free.
+Exact move, other creation paths, Linux-originated edits, and notification
+performance qualification remain open.
+
 Directory-identity and Atlas selection checkpoint, 2026-11-05: VFS storage
 protocol 40 extends each batched directory record to carry validity-tagged
 volume, inode, and birth generation. The existing HostFS statx result and RAM

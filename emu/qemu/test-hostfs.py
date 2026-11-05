@@ -96,6 +96,7 @@ CHANGE_NONE = 0
 CHANGE_NODE = 1
 CHANGE_GAP = 2
 CHANGE_ENTRY_CREATED = 3
+CHANGE_ENTRY_REMOVED = 4
 CHANGE_RECORD_SIZE = 304
 IO_SEQUENTIAL = 1 << 14
 ADOPT_DISCARD = 1
@@ -1118,7 +1119,7 @@ def run(qtest, root, outside):
         assert status(answer) == STATUS_OK
         kind = get32(answer.raw, 56)
         record = output(qtest, answer, CHANGE_RECORD_SIZE) if kind in (
-            CHANGE_NODE, CHANGE_ENTRY_CREATED) else None
+            CHANGE_NODE, CHANGE_ENTRY_CREATED, CHANGE_ENTRY_REMOVED) else None
         assert get32(answer.raw, 52) == (CHANGE_RECORD_SIZE if record is not None else 0)
         return get64(answer.raw, 24), kind, \
             (*struct.unpack_from(">QQQQQII", record),
@@ -1452,7 +1453,19 @@ def run(qtest, root, outside):
         b"exclusive-entry")
     assert status(execute(qtest, [Command(generation, FS_CLOSE,
         handle=get32(created.raw, 16), session=work)])[0]) == STATUS_OK
-    last_sequence = created_sequence
+    before_remove = changes()
+    removed = execute(qtest, [Command(generation, FS_UNLINK,
+        "/exclusive-entry", session=work)])[0]
+    assert status(removed) == STATUS_OK, (status(removed),
+        os.path.exists(os.path.join(root, "exclusive-entry")),
+        get32(removed.raw, 56))
+    assert changes() == (before_remove[0], before_remove[1] + 1)
+    removed_sequence, kind, record = next_change(created_sequence)
+    assert removed_sequence == created_sequence + 1 and kind == CHANGE_ENTRY_REMOVED
+    assert record == (removed_sequence, before_remove[0],
+        before_remove[1] + 1, 0, get64(root_stat.raw, NODE_INODE),
+        CHANGE_ENTRY_REMOVED, 0, b"exclusive-entry")
+    last_sequence = removed_sequence
     before_write = changes()
     payload = b"host transport data integrity\x00\xff"
     written = execute(qtest, [Command(

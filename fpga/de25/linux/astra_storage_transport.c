@@ -131,8 +131,10 @@ int astra_storage_path_call(int socket, const AstraStoragePathRequest *request,
             (unsigned)(request->operation == ASTRA_STORAGE_PATH_OPEN ||
                        request->operation == ASTRA_STORAGE_PATH_RESOLVE)) ||
         (reply->parent_inode != 0u &&
-         (reply->error != 0 || request->operation != ASTRA_STORAGE_PATH_OPEN ||
-          (request->flags & (O_CREAT | O_EXCL)) != (O_CREAT | O_EXCL))) ||
+         (reply->error != 0 ||
+          (request->operation != ASTRA_STORAGE_PATH_UNLINK &&
+           (request->operation != ASTRA_STORAGE_PATH_OPEN ||
+            (request->flags & (O_CREAT | O_EXCL)) != (O_CREAT | O_EXCL))))) ||
         reply->leaf[sizeof(reply->leaf) - 1u] != '\0' ||
         reply->continuation[sizeof(reply->continuation) - 1u] != '\0') {
         close_fds(packed, received);

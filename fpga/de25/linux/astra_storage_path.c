@@ -343,9 +343,15 @@ void astra_storage_path_execute(int allowed_root, int readonly,
         }
         if (request->operation == ASTRA_STORAGE_PATH_MKDIR)
             error = mkdirat(left.parent, left.leaf, request->mode);
-        else if (request->operation == ASTRA_STORAGE_PATH_UNLINK)
+        else if (request->operation == ASTRA_STORAGE_PATH_UNLINK) {
             error = request->flags & ~AT_REMOVEDIR ? -EINVAL :
                 unlinkat(left.parent, left.leaf, request->flags);
+            if (error == 0) {
+                struct stat parent_stat;
+                if (fstat(left.parent, &parent_stat) == 0)
+                    reply->parent_inode = (uint64_t)parent_stat.st_ino;
+            }
+        }
         else if (request->operation == ASTRA_STORAGE_PATH_READLINK) {
             char bytes[ASTRA_STORAGE_PROVIDER_PATH_MAX + 1u];
             ssize_t length = readlinkat(left.parent, left.leaf, bytes,

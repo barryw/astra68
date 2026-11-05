@@ -433,6 +433,11 @@ rewind uses SEEK, so every owner sees the rewind.
 Storage protocol version 40 extends each directory record header from 32 to
 64 bytes with validity-tagged volume, inode, and birth generation fields.
 Clients can preserve selection across a refreshed snapshot by node identity.
+HostFS change record schema 1 now reports successful unlink with kind 4:
+the retained parent directory inode and removed leaf are exact, while child
+inode is zero because unlink does not return it. Filesystem change payload
+version 3 maps this to ENTRY_REMOVED kind 3. Generation reconciliation still
+covers lost replies, unsupported mutations, and ring gaps.
 
 All Filesystem exports use `ASTRA_FILESYSTEM_9.0`. Filesystem.kit 6.0.0 and
 every in-tree dependent manifest require major 9. The POSIX fork prepare/

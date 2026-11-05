@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <astra/volume_abi.h>
 
-/** HostFS messaging topic for exact node changes and volume invalidations. */
+/** HostFS messaging topic for exact changes and volume invalidations. */
 #define ASTRA_FILESYSTEM_CHANGE_TOPIC "filesystem"
 /** Current filesystem change payload format. */
 #define ASTRA_FILESYSTEM_CHANGE_VERSION 3u
@@ -16,6 +16,8 @@
 #define ASTRA_FILESYSTEM_CHANGE_NODE 1u
 /** Exact created directory entry and its parent, child and leaf. */
 #define ASTRA_FILESYSTEM_CHANGE_ENTRY_CREATED 2u
+/** Exact removed directory entry; child inode is unknown. */
+#define ASTRA_FILESYSTEM_CHANGE_ENTRY_REMOVED 3u
 
 /* Subscribe through MESSAGING, then enumerate before consuming events.
  * Generations remain authoritative after queue loss or unsupported mutations;
@@ -32,9 +34,9 @@ typedef struct AstraFilesystemChange {
     uint64_t entries; /**< Directory entries changed. */
     uint32_t kind;    /**< Exact node change, or generation-only invalidation. */
     uint32_t reserved; /**< Must be zero. */
-    uint64_t inode;   /**< Exact changed inode for NODE; zero for INVALIDATE. */
-    uint64_t parent_inode; /**< Exact parent for ENTRY_CREATED; zero otherwise. */
-    char name[256]; /**< Entry leaf for ENTRY_CREATED; empty otherwise. */
+    uint64_t inode;   /**< Exact changed inode for NODE/ENTRY_CREATED; zero otherwise. */
+    uint64_t parent_inode; /**< Exact parent for ENTRY_*; zero otherwise. */
+    char name[256]; /**< Entry leaf for ENTRY_*; empty otherwise. */
 } AstraFilesystemChange;
 
 /** @cond ASTRA_INTERNAL */

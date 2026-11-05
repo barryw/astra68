@@ -6861,6 +6861,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     bool changed_entries = false;
     uint64_t changed_inode = 0u;
     uint64_t changed_parent_inode = 0u;
+    uint32_t changed_kind = 0u;
     char changed_name[256] = {0};
     AstraResolution resolved = { .parent = -1 };
 
@@ -7150,7 +7151,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         }
         astra_host_put64(command, HOST_FIELD(offset_hi),
             outcome == ASTRA_HOST_FS_CHANGE_NODE ||
-            outcome == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ? cursor + 1u : latest);
+            outcome == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ||
+            outcome == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED ? cursor + 1u : latest);
         stl_be_p(command + HOST_FIELD(result_value), outcome);
         qemu_mutex_unlock(&namespace->changes_lock);
         status = ASTRA_STATUS_OK;
@@ -7777,6 +7779,12 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             } else if (operation != ASTRA_HOST_FS_READLINK)
                 changed_entries = true;
         }
+        if (error == 0 && operation == ASTRA_HOST_FS_UNLINK &&
+            reply.parent_inode != 0u && reply.leaf[0] != '\0') {
+            changed_parent_inode = reply.parent_inode;
+            changed_kind = ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED;
+            memcpy(changed_name, reply.leaf, sizeof(changed_name));
+        }
         astra_host_resolution(&reply, &resolved);
         status = error == ERANGE ? ASTRA_STATUS_BUFFER_TOO_SMALL :
             astra_host_path_status(error, &resolved);
@@ -7848,10 +7856,10 @@ done:
         qemu_mutex_lock(&namespace->changes_lock);
         if (changed_nodes) qatomic_inc(&namespace->changes_nodes);
         if (changed_entries) qatomic_inc(&namespace->changes_entries);
-        if (changed_inode != 0u && (changed_nodes ||
-            (changed_entries && changed_parent_inode != 0u))) {
-            /* shortcut: exact entry records cover exclusive create; other
-             * entry mutations still invalidate by generation. */
+        if ((changed_inode != 0u && changed_nodes) ||
+            (changed_entries && changed_parent_inode != 0u &&
+             (changed_inode != 0u ||
+              changed_kind == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED))) {
             if (namespace->change_sequence == UINT64_MAX)
                 namespace->change_sequence = 0u;
             uint64_t sequence = ++namespace->change_sequence;
@@ -7861,7 +7869,8 @@ done:
                 .entries = qatomic_read(&namespace->changes_entries),
                 .inode = changed_inode,
                 .parent_inode = changed_parent_inode,
-                .kind = changed_parent_inode != 0u ?
+                .kind = changed_kind != 0u ? changed_kind :
+                    changed_parent_inode != 0u ?
                     ASTRA_HOST_FS_CHANGE_ENTRY_CREATED :
                     ASTRA_HOST_FS_CHANGE_NODE
             };

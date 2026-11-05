@@ -112,7 +112,16 @@ static void semantics(int root)
     execute(root, 0, &value, fds, &reply, &result);
     assert(reply.error != 0 && result == -1);
     close(outside);
-    assert(unlinkat(root, "sub/link", 0) == 0);
+    fds[0] = root;
+    value = request(ASTRA_STORAGE_PATH_UNLINK, "/sub/link");
+    value.resolve = ASTRA_RESOLVE_ENTRY;
+    execute(root, 0, &value, fds, &reply, &result);
+    parent = openat(root, "sub", O_PATH | O_DIRECTORY | O_CLOEXEC);
+    assert(parent >= 0 && fstat(parent, &parent_stat) == 0);
+    assert(reply.error == 0 &&
+           reply.parent_inode == (uint64_t)parent_stat.st_ino &&
+           strcmp(reply.leaf, "link") == 0);
+    close(parent);
     assert(unlinkat(root, "sub/renamed", 0) == 0);
     assert(unlinkat(root, "sub/racer", 0) == 0);
     assert(unlinkat(root, "sub", AT_REMOVEDIR) == 0);
