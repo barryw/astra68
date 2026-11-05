@@ -11,6 +11,7 @@
 #include <sys/fanotify.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "astra68-resolve.h"
 
 int main(int argc, char **argv)
 {
@@ -30,25 +31,40 @@ int main(int argc, char **argv)
             close(fd);
             return 1;
         }
-        char directory[PATH_MAX], before[PATH_MAX] = "", after[PATH_MAX] = "";
+        char directory[PATH_MAX], outside[PATH_MAX] = "";
+        char before[PATH_MAX] = "", after[PATH_MAX] = "";
+        char external_file[PATH_MAX] = "";
+        int root_fd = -1, mount_fd = -1, success = 0;
         if (snprintf(directory, sizeof(directory), "%s/astra-fanotify.XXXXXX",
                      argv[at]) >= (int)sizeof(directory) || mkdtemp(directory) == NULL) {
             close(fd);
             return 1;
         }
-        int success = 0;
+        if (snprintf(outside, sizeof(outside), "%s/astra-fanotify-outside.XXXXXX",
+                     argv[at]) >= (int)sizeof(outside) || mkdtemp(outside) == NULL) {
+            outside[0] = '\0';
+            goto cleanup;
+        }
+        root_fd = open(directory, O_PATH | O_DIRECTORY | O_CLOEXEC);
+        mount_fd = open(argv[at], O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (root_fd < 0 || mount_fd < 0) goto cleanup;
         if (snprintf(before, sizeof(before), "%s/before", directory) >=
                 (int)sizeof(before) ||
             snprintf(after, sizeof(after), "%s/after", directory) >=
-                (int)sizeof(after)) goto cleanup;
+                (int)sizeof(after) ||
+            snprintf(external_file, sizeof(external_file), "%s/outside", outside) >=
+                (int)sizeof(external_file)) goto cleanup;
         int file = open(before, O_CREAT | O_EXCL | O_RDWR, 0600);
         if (file < 0) goto cleanup;
         ssize_t written = write(file, "x", 1);
         int closed = close(file);
         if (written != 1 || closed != 0 || rename(before, after) != 0 ||
             unlink(after) != 0) goto cleanup;
+        file = open(external_file, O_CREAT | O_EXCL | O_RDWR, 0600);
+        if (file < 0 || close(file) != 0) goto cleanup;
         uint64_t seen = 0;
         unsigned targets = 0, parents = 0, old_names = 0, new_names = 0;
+        unsigned inside_parents = 0, outside_parents = 0;
         for (int probe = 0; probe < 10 &&
              (seen & (FAN_CREATE | FAN_RENAME | FAN_DELETE)) !=
                  (FAN_CREATE | FAN_RENAME | FAN_DELETE); ++probe) {
@@ -73,17 +89,41 @@ int main(int argc, char **argv)
                     if (info->info_type == FAN_EVENT_INFO_TYPE_DFID_NAME) ++parents;
                     if (info->info_type == FAN_EVENT_INFO_TYPE_OLD_DFID_NAME) ++old_names;
                     if (info->info_type == FAN_EVENT_INFO_TYPE_NEW_DFID_NAME) ++new_names;
+                    if (info->info_type == FAN_EVENT_INFO_TYPE_DFID_NAME ||
+                        info->info_type == FAN_EVENT_INFO_TYPE_OLD_DFID_NAME ||
+                        info->info_type == FAN_EVENT_INFO_TYPE_NEW_DFID_NAME) {
+                        struct fanotify_event_info_fid *fid = (void *)info;
+                        if (info->len < sizeof(*fid) + sizeof(struct file_handle))
+                            goto cleanup;
+                        struct file_handle *handle = (void *)fid->handle;
+                        if (handle->handle_bytes > info->len - sizeof(*fid) -
+                            sizeof(*handle)) goto cleanup;
+                        int parent_fd = open_by_handle_at(mount_fd, handle,
+                            O_PATH | O_DIRECTORY | O_CLOEXEC);
+                        if (parent_fd < 0) goto cleanup;
+                        if (astra_resolve_rooted(root_fd, parent_fd) == 0)
+                            ++inside_parents;
+                        else
+                            ++outside_parents;
+                        close(parent_fd);
+                    }
                     offset += info->len;
                 }
             }
         }
-        printf("%s masks=%llx target=%u parent=%u old=%u new=%u\n", argv[at],
-               (unsigned long long)seen, targets, parents, old_names, new_names);
+        printf("%s masks=%llx target=%u parent=%u old=%u new=%u inside=%u outside=%u\n",
+               argv[at], (unsigned long long)seen, targets, parents, old_names,
+               new_names, inside_parents, outside_parents);
         success = (seen & (FAN_CREATE | FAN_RENAME | FAN_DELETE)) ==
                       (FAN_CREATE | FAN_RENAME | FAN_DELETE) &&
-                  targets >= 3u && parents >= 2u && old_names == 1u &&
-                  new_names == 1u;
+                  targets >= 3u && parents >= 3u && old_names == 1u &&
+                  new_names == 1u && inside_parents >= 4u &&
+                  outside_parents == 1u;
 cleanup:
+        if (root_fd >= 0) close(root_fd);
+        if (mount_fd >= 0) close(mount_fd);
+        if (external_file[0] != '\0') (void)unlink(external_file);
+        if (outside[0] != '\0' && rmdir(outside) != 0) success = 0;
         if (before[0] != '\0') (void)unlink(before);
         if (after[0] != '\0') (void)unlink(after);
         if (rmdir(directory) != 0) success = 0;

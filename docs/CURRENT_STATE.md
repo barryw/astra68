@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-11-05
 
+External filesystem event authority probe, 2026-11-05: DE25's
+`FAN_REPORT_DFID_NAME_TARGET` reports parent FIDs for create/delete and both
+old/new parent FIDs for rename; modify reports only target FID. The repeatable
+probe now opens each parent handle through the root provider's filesystem FD
+and applies the existing `astra_resolve_rooted` confinement check to a
+disposable allowed directory and sibling outside it. DE25 ext4 and tmpfs
+each classified four inside parent records and one outside parent record;
+the outside record was rejected. `open_by_handle_at` needs an ordinary readable
+mount FD here; an `O_PATH` mount FD returned `EBADF` on Beast. Target binary
+SHA-256 matched Beast and DE25 at
+`942dc41add16655874dc5f5c7e08541820d05edc723d7c0f64b69c067e1eae47`.
+Output and source hashes are under
+`/mnt/Documents/astra68/fsnotify-authority-20261105/` on Beast. The
+disposable board binary was removed; Astra, audio, and RFB remain active with
+7.8 GiB free. This establishes the confined source for entry events; it does
+not yet bridge Linux-originated changes into QEMU's existing ring or handle
+target-only modify events and loss recovery.
+
 Ordinary-create event checkpoint, 2026-11-05: rooted resolver probes
 nonexclusive `O_CREAT` with atomic exclusive creation, then retries the
 requested flags if the probe fails. Successful exclusive probe supplies exact

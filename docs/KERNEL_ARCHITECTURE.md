@@ -439,6 +439,12 @@ another writer. VFS keeps generation
 invalidation when an event queue overflows or identity is unavailable.
 DE25 host ext4 and tmpfs passed a filesystem-wide fanotify
 `FAN_REPORT_DFID_NAME_TARGET` create/write/rename/delete capability probe.
+The DE25 parent-FID authority probe reused `astra_resolve_rooted` against
+an allowed directory and a sibling on the same filesystem: four allowed
+parent records and one outside record were classified correctly on each
+backing filesystem. Create/delete carry parent FIDs, rename carries both
+parents, and modify carries only a target FID. Evidence is under
+`/mnt/Documents/astra68/fsnotify-authority-20261105/` on Beast.
 That can observe Linux-local edits through the provider, but Linux fanotify
 does not report remote changes or mmap writes. Astra's canonical operation
 records remain necessary; both sources must publish through the existing

@@ -85,9 +85,11 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 .PHONY: codec-provider-test
 .PHONY: fanotify-capability-target
 
-$(OUT)/test-fanotify-capability-aarch64: test_fanotify_capability.c Makefile
+$(OUT)/test-fanotify-capability-aarch64: test_fanotify_capability.c \
+		$(STORAGE_RESOLVER)/astra68-resolve.c $(STORAGE_RESOLVER)/astra68-resolve.h Makefile
 	@mkdir -p $(OUT)
-	$(FONT_AARCH64_CC) -std=gnu11 -O2 -Wall -Wextra -Werror $< -o $@
+	$(FONT_AARCH64_CC) -std=gnu11 -O2 -Wall -Wextra -Werror \
+		-I$(STORAGE_RESOLVER) $< $(STORAGE_RESOLVER)/astra68-resolve.c -o $@
 
 fanotify-capability-target: $(OUT)/test-fanotify-capability-aarch64
 
