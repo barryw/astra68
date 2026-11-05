@@ -667,6 +667,104 @@ static void queued_probes(AstraStorageProvider *provider, const char *path)
     }
 }
 
+static void exfat_external_changes(AstraStorageProvider *provider,
+    uint64_t mount, int root)
+{
+    int fallback = provider->watch_count != 0u;
+    size_t baseline_watches = provider->watch_count;
+    puts(fallback ? "storage provider: exFAT inotify fallback active" :
+        "storage provider: exFAT FID watch active");
+    struct stat parent, child;
+    assert(fstat(root, &parent) == 0);
+    uint64_t cursor = provider->watch_sequence;
+    assert(mkdirat(root, "astra-notify-dir", 0700) == 0);
+    int found = 0;
+    for (unsigned at = 0u; at < 64u; ++at) {
+        AstraStorageChangeRecord change;
+        uint64_t next;
+        assert(astra_storage_provider_change_next(provider, cursor, &change,
+            &next) == 0);
+        if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
+        if (change.change.kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED &&
+            change.mount == mount &&
+            change.change.parent_inode == (uint64_t)parent.st_ino &&
+            strcmp(change.change.name, "astra-notify-dir") == 0)
+            ++found;
+        cursor = next;
+    }
+    assert(found == 1);
+    int directory = openat(root, "astra-notify-dir",
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    assert(directory >= 0 && fstat(directory, &child) == 0);
+    if (fallback) assert(provider->watch_count >= 2u);
+    int file = openat(directory, "first", O_CREAT | O_EXCL | O_RDWR, 0600);
+    assert(file >= 0 && write(file, "x", 1u) == 1 && close(file) == 0);
+    assert(renameat(directory, "first", directory, "second") == 0);
+    assert(unlinkat(directory, "second", 0) == 0);
+    unsigned created = 0u, removed = 0u, moved = 0u;
+    for (unsigned at = 0u; at < 64u; ++at) {
+        AstraStorageChangeRecord change;
+        uint64_t next;
+        assert(astra_storage_provider_change_next(provider, cursor, &change,
+            &next) == 0);
+        if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
+        if (change.mount == mount &&
+            change.change.parent_inode == (uint64_t)child.st_ino) {
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED &&
+                strcmp(change.change.name, "first") == 0) ++created;
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED &&
+                strcmp(change.change.name, "first") == 0) ++moved;
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED &&
+                strcmp(change.change.name, "second") == 0) ++moved;
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED &&
+                strcmp(change.change.name, "second") == 0) ++removed;
+        }
+        cursor = next;
+    }
+    assert(created == 1u && moved == 2u && removed == 1u);
+    close(directory);
+    assert(unlinkat(root, "astra-notify-dir", AT_REMOVEDIR) == 0);
+    assert(astra_storage_provider_change_next(provider, cursor,
+        &(AstraStorageChangeRecord){0}, &(uint64_t){0}) == 0);
+    if (fallback) {
+        assert(astra_storage_provider_poll(provider) >= 0 &&
+            provider->watch_count == baseline_watches);
+        size_t limit = provider->resource_limit;
+        provider->resource_limit = provider->resource_bytes;
+        cursor = provider->watch_sequence;
+        assert(mkdirat(root, "astra-watch-cap", 0700) == 0);
+        int gap = 0;
+        for (unsigned at = 0u; at < 64u; ++at) {
+            AstraStorageChangeRecord change;
+            uint64_t next;
+            assert(astra_storage_provider_change_next(provider, cursor,
+                &change, &next) == 0);
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_GAP &&
+                change.mount == 0u && change.generation == 0u) ++gap;
+            cursor = next;
+        }
+        assert(gap >= 1);
+        provider->resource_limit = limit;
+        for (unsigned at = 0u; at < 64u; ++at) {
+            AstraStorageChangeRecord change;
+            uint64_t next;
+            assert(astra_storage_provider_change_next(provider, cursor,
+                &change, &next) == 0);
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
+            cursor = next;
+        }
+        sleep(1);
+        AstraStorageChangeRecord change;
+        uint64_t next;
+        assert(astra_storage_provider_change_next(provider, cursor,
+            &change, &next) == 0 &&
+            change.change.kind == ASTRA_HOST_FS_CHANGE_GAP &&
+            change.mount == 0u && change.generation == 0u);
+        assert(unlinkat(root, "astra-watch-cap", AT_REMOVEDIR) == 0);
+    }
+}
+
 static void usb_format(AstraStorageProvider *provider, const char *path,
                        uint32_t format, const char *label)
 {
@@ -715,6 +813,8 @@ static void usb_format(AstraStorageProvider *provider, const char *path,
         assert(openat(root, "forbidden", O_CREAT | O_WRONLY, 0600) == -1 && errno == EROFS);
     if (format == ASTRA_VOLUME_ISO9660 || format == ASTRA_VOLUME_UDF)
         assert(faccessat(root, "Folder/café.txt", R_OK, 0) == 0);
+    if (format == ASTRA_VOLUME_EXFAT)
+        exfat_external_changes(provider, mount, root);
     close(root);
     assert(unmount_wait(provider, mount, 1u) == 0);
     if (writable) {

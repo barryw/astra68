@@ -2,6 +2,33 @@
 
 Status: active continuation map, 2026-11-05
 
+exFAT external notification integration, 2026-11-05: DE25's private exFAT
+mount rejects filesystem FID fanotify (`EOPNOTSUPP`), so the root provider now
+uses bounded recursive inotify there. Each watch retains a rooted directory FD;
+new directories gain watches, and loss or coverage exhaustion emits a GAP
+through the existing HostFS change ring. Haiku reference:
+`src/system/kernel/fs/node_monitor.cpp:1185-1225` separates watched node
+identity from listener delivery; Astra keeps its native ring and broker.
+Initial DE25 trials lost all volume access because the fallback emitted GAP
+records with mount/generation set. Storage protocol 13 requires both zero for
+every GAP and rejected those replies with `EPROTO`. Isolation ruled out idle
+inotify reads and aligned fanotify parsing; the provider now centralizes the
+global GAP encoding. Host provider exFAT and ASan/UBSan tests pass, including
+recursive create/rename/delete, bounded-watch loss, and deleted-watch cleanup.
+Provider SHA-256 `d47d581d6ce08361c68dc249ee8ae71201771582a3b7cae01919ea3449dc2691`
+on DE25 passed dev install, boot, and Atlas live root create/delete. Its prior
+candidate passed a two-minute mounted-volume soak and live
+create/rename/delete at `/usb0` root and in
+`/usb0/ZZNEST` without Refresh. A hardware gate found deleted-directory watch
+FDs retained on exFAT; the final candidate resets and rescans watches on
+directory delete/move. DE25 watch count returned from five to five after a
+create/delete trial, with no deleted provider FDs. All test paths were removed;
+Astra, audio host, and remote desktop remain active with 7.8 GiB free.
+Captures and trial logs are under
+`/mnt/Documents/astra68/exfat-inotify-provider-20261105/` on Beast. Physical
+detach/remount gate remains; notification performance
+qualification follows correctness.
+
 exFAT external-notification fallback probe, 2026-11-05: On DE25's live
 private exFAT mount, a disposable inotify watch on a newly created directory
 reported create, modify, paired rename, and delete (`seen=0x3c2`, every

@@ -9,6 +9,7 @@
 #include <signal.h>
 
 typedef struct AstraStorageResource AstraStorageResource;
+typedef struct AstraStorageWatch AstraStorageWatch;
 struct AstraStorageDiscovery;
 typedef struct AstraStorageProvider {
     AstraStorageCatalog catalog;
@@ -27,6 +28,9 @@ typedef struct AstraStorageProvider {
     uint32_t worker_limit;
     int lease_signal;
     int watch_fd;
+    int inotify_fd;
+    AstraStorageWatch *watches;
+    size_t watch_count;
     pid_t peer_pid;
     uint64_t watch_sequence;
     AstraStorageChangeRecord watch_records[64];
@@ -36,7 +40,7 @@ typedef struct AstraStorageProvider {
     struct AstraStorageDiscovery *discovery;
 } AstraStorageProvider;
 
-#define ASTRA_STORAGE_PROVIDER_INIT { .domain = {.directory = -1}, .lease_signal = -1, .watch_fd = -1 }
+#define ASTRA_STORAGE_PROVIDER_INIT { .domain = {.directory = -1}, .lease_signal = -1, .watch_fd = -1, .inotify_fd = -1 }
 
 /* Enter the private mount namespace and consume the precreated domain only
  * after successful admission. The caller retains it on every failure. */

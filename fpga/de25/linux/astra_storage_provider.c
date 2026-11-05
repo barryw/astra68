@@ -6,6 +6,7 @@
 #include <astra/volume_network.h>
 
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <stdbool.h>
@@ -19,6 +20,7 @@
 #include <sys/random.h>
 #include <sys/syscall.h>
 #include <sys/fanotify.h>
+#include <sys/inotify.h>
 #include <sys/vfs.h>
 #include <linux/openat2.h>
 #include <linux/fanotify.h>
@@ -38,6 +40,20 @@
 #endif
 
 enum { PARTITION_IDLE, PARTITION_RETIRE, PARTITION_REREAD };
+enum { WATCH_UNTRIED, WATCH_FID, WATCH_UNAVAILABLE, WATCH_INOTIFY,
+       WATCH_DEGRADED };
+enum { WATCH_DIRECTORY_MAX = 1024u, WATCH_SCAN_ENTRY_MAX = 8192u };
+
+struct AstraStorageWatch {
+    struct AstraStorageWatch *next;
+    uint64_t mount;
+    uint64_t generation;
+    uint64_t inode;
+    dev_t device;
+    int directory;
+    int descriptor;
+    uint8_t scanned;
+};
 
 /* Provider-only Linux resources. Native descriptions/owners stay in QEMU. */
 struct AstraStorageResource {
@@ -65,6 +81,7 @@ struct AstraStorageResource {
     AstraVolumeNetworkSource network;
     uint32_t managed_network_id;
     uint64_t watch_generation;
+    uint64_t watch_gap_deadline_ns;
     fsid_t watch_fsid;
     uint8_t watch_state;
     AstraStorageWork work;
@@ -142,6 +159,14 @@ static AstraStorageResource *reserve(AstraStorageProvider *provider, uint64_t id
     return entry;
 }
 
+static int watch_scan(AstraStorageProvider *provider, AstraStorageResource *entry);
+static int watch_add_directory(AstraStorageProvider *provider,
+    AstraStorageResource *entry, int directory);
+static void watch_reset_inotify(AstraStorageProvider *provider);
+static void watch_append(AstraStorageProvider *provider, uint64_t mount,
+    uint64_t generation, uint32_t kind, uint64_t inode,
+    uint64_t parent_inode, const char *name);
+
 static void watch_mount(AstraStorageProvider *provider,
                         AstraStorageResource *entry)
 {
@@ -151,27 +176,47 @@ static void watch_mount(AstraStorageProvider *provider,
         record->kind != ASTRA_VOLUME_BINDING) ||
         record->state != ASTRA_VOLUME_MOUNTED ||
         record->origin == ASTRA_VOLUME_ORIGIN_NETWORK ||
-        entry->mounted.root < 0 || provider->watch_fd < 0)
+        entry->mounted.root < 0)
         return;
     if (entry->watch_generation != record->generation) {
+        if (entry->watch_state == WATCH_INOTIFY ||
+            entry->watch_state == WATCH_DEGRADED)
+            watch_reset_inotify(provider);
         entry->watch_generation = record->generation;
-        entry->watch_state = 0u;
+        entry->watch_state = WATCH_UNTRIED;
     }
-    if (entry->watch_state != 0u) return;
+    if (entry->watch_state != WATCH_UNTRIED) return;
     struct statfs filesystem;
     if (fstatfs(entry->mounted.root, &filesystem) != 0) {
-        entry->watch_state = 2u;
+        entry->watch_state = WATCH_UNAVAILABLE;
         return;
     }
-    if (fanotify_mark(provider->watch_fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM,
+    if (provider->watch_fd >= 0 &&
+        fanotify_mark(provider->watch_fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM,
         FAN_CREATE | FAN_DELETE | FAN_RENAME | FAN_MODIFY | FAN_ATTRIB | FAN_ONDIR,
         AT_FDCWD, entry->mounted.target) == 0) {
         entry->watch_fsid = filesystem.f_fsid;
-        entry->watch_state = 1u;
+        entry->watch_state = WATCH_FID;
     } else {
-        entry->watch_state = 2u;
+        int error = provider->watch_fd < 0 ? ENOTSUP : errno;
+        if (error == EOPNOTSUPP && record->kind == ASTRA_VOLUME_MOUNT) {
+            int directory = provider->inotify_fd < 0 ? -1 :
+                openat(entry->mounted.root, ".",
+                    O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+            int result = directory < 0 ?
+                (provider->inotify_fd < 0 ? ENOTSUP : errno) :
+                watch_add_directory(provider, entry, directory);
+            if (result == 0) result = watch_scan(provider, entry);
+            entry->watch_state = result == 0 ? WATCH_INOTIFY : WATCH_DEGRADED;
+            entry->watch_gap_deadline_ns = 0u;
+            if (result != 0)
+                fprintf(stderr, "astra-storage inotify coverage id=%" PRIu64
+                    " error=%d\n", entry->id, result);
+            return;
+        }
+        entry->watch_state = WATCH_UNAVAILABLE;
         fprintf(stderr, "astra-storage watch mount id=%" PRIu64 " error=%d\n",
-            entry->id, errno);
+            entry->id, error);
     }
 }
 
@@ -188,6 +233,234 @@ static void watch_append(AstraStorageProvider *provider, uint64_t mount,
     if (name != NULL) memcpy(change.change.name, name, strlen(name) + 1u);
     provider->watch_records[(sequence - 1u) %
         (sizeof(provider->watch_records) / sizeof(provider->watch_records[0]))] = change;
+}
+
+/* Protocol 13 defines GAP as global; scoped GAP is rejected by transport. */
+static void watch_gap(AstraStorageProvider *provider)
+{
+    watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP, 0u, 0u, NULL);
+}
+
+static void watch_reset_inotify(AstraStorageProvider *provider)
+{
+    if (provider->inotify_fd >= 0) close(provider->inotify_fd);
+    provider->inotify_fd = -1;
+    while (provider->watches != NULL) {
+        AstraStorageWatch *watch = provider->watches;
+        provider->watches = watch->next;
+        close(watch->directory);
+        free(watch);
+        provider->resource_bytes -= sizeof(*watch);
+    }
+    provider->watch_count = 0u;
+    provider->inotify_fd = inotify_init1(IN_CLOEXEC | IN_NONBLOCK);
+    for (AstraStorageResource *entry = provider->resources; entry != NULL;
+         entry = entry->next)
+        if (entry->watch_state == WATCH_INOTIFY ||
+            entry->watch_state == WATCH_DEGRADED) {
+            watch_gap(provider);
+            entry->watch_state = provider->inotify_fd < 0 ?
+                WATCH_DEGRADED : WATCH_UNTRIED;
+            entry->watch_gap_deadline_ns = 0u;
+        }
+}
+
+static int watch_add_directory(AstraStorageProvider *provider,
+    AstraStorageResource *entry, int directory)
+{
+    struct stat info;
+    int error = fstat(directory, &info) != 0 ? errno : 0;
+    if (error == 0 && astra_resolve_rooted(entry->mounted.root, directory) != 0)
+        error = ESTALE;
+    if (error != 0) { close(directory); return error; }
+    for (AstraStorageWatch *existing = provider->watches; existing != NULL;
+         existing = existing->next)
+        if (existing->mount == entry->id && existing->device == info.st_dev &&
+            existing->inode == (uint64_t)info.st_ino) {
+            close(directory);
+            return 0;
+        }
+    if (provider->inotify_fd < 0 ||
+        provider->watch_count >= WATCH_DIRECTORY_MAX ||
+        provider->watch_count >= provider->resource_limit / (4u * sizeof(AstraStorageWatch)) ||
+        provider->resource_bytes > provider->resource_limit ||
+        sizeof(AstraStorageWatch) > provider->resource_limit - provider->resource_bytes) {
+        close(directory);
+        return ENOSPC;
+    }
+    AstraStorageWatch *watch = calloc(1u, sizeof(*watch));
+    if (watch == NULL) { close(directory); return ENOMEM; }
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", directory);
+    int descriptor = inotify_add_watch(provider->inotify_fd, path,
+        IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO |
+        IN_MODIFY | IN_ATTRIB | IN_DELETE_SELF | IN_MOVE_SELF |
+        IN_ONLYDIR | IN_EXCL_UNLINK);
+    if (descriptor < 0) {
+        error = errno;
+        free(watch);
+        close(directory);
+        return error;
+    }
+    *watch = (AstraStorageWatch){.next = provider->watches, .mount = entry->id,
+        .generation = entry->watch_generation, .inode = (uint64_t)info.st_ino,
+        .device = info.st_dev, .directory = directory, .descriptor = descriptor};
+    provider->watches = watch;
+    provider->resource_bytes += sizeof(*watch);
+    ++provider->watch_count;
+    return 0;
+}
+
+static int watch_scan(AstraStorageProvider *provider, AstraStorageResource *entry)
+{
+    unsigned visited = 0u;
+    for (;;) {
+        AstraStorageWatch *watch = NULL;
+        for (AstraStorageWatch *candidate = provider->watches; candidate != NULL;
+             candidate = candidate->next)
+            if (candidate->mount == entry->id && !candidate->scanned) {
+                watch = candidate;
+                break;
+            }
+        if (watch == NULL) return 0;
+        watch->scanned = 1u;
+        int copy = openat(watch->directory, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (copy < 0) return errno;
+        DIR *stream = fdopendir(copy);
+        if (stream == NULL) { int error = errno; close(copy); return error; }
+        int error = 0;
+        for (;;) {
+            errno = 0;
+            struct dirent *item = readdir(stream);
+            if (item == NULL) { error = errno; break; }
+            if (strcmp(item->d_name, ".") == 0 ||
+                strcmp(item->d_name, "..") == 0) continue;
+            if (++visited > WATCH_SCAN_ENTRY_MAX) { error = E2BIG; break; }
+            if (item->d_type != DT_DIR && item->d_type != DT_UNKNOWN) continue;
+            int child = openat(watch->directory, item->d_name,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            if (child < 0) {
+                if (errno == ENOENT || errno == ENOTDIR || errno == ELOOP) continue;
+                error = errno;
+                break;
+            }
+            error = watch_add_directory(provider, entry, child);
+            if (error != 0) break;
+        }
+        closedir(stream);
+        if (error != 0) return error;
+    }
+}
+
+static void watch_inotify_event(AstraStorageProvider *provider,
+    const struct inotify_event *event)
+{
+    if ((event->mask & (IN_Q_OVERFLOW | IN_IGNORED | IN_DELETE_SELF |
+                        IN_MOVE_SELF)) != 0u) {
+        watch_reset_inotify(provider);
+        return;
+    }
+    AstraStorageWatch *watch = provider->watches;
+    while (watch != NULL && watch->descriptor != event->wd) watch = watch->next;
+    if (watch == NULL) return;
+    AstraStorageResource *entry = resource(provider, watch->mount);
+    const AstraStorageRecord *record = astra_storage_find(&provider->catalog,
+        watch->mount);
+    if (entry == NULL || record == NULL ||
+        (entry->watch_state != WATCH_INOTIFY &&
+         entry->watch_state != WATCH_DEGRADED) ||
+        record->generation != watch->generation ||
+        record->state != ASTRA_VOLUME_MOUNTED ||
+        astra_resolve_rooted(entry->mounted.root, watch->directory) != 0)
+        return;
+    const char *name = NULL;
+    if (event->len != 0u) {
+        name = memchr(event->name, '\0', event->len);
+        size_t length = name == NULL ? 0u :
+            (size_t)(name - event->name);
+        if (length == 0u || length > 255u ||
+            memchr(event->name, '/', length) != NULL ||
+            !astra_utf8_validate(event->name, (uint32_t)length, 0u)) {
+            watch_gap(provider);
+            return;
+        }
+        name = event->name;
+    }
+    if ((event->mask & (IN_CREATE | IN_MOVED_TO | IN_DELETE |
+                        IN_MOVED_FROM)) != 0u) {
+        uint32_t kind = (event->mask & (IN_DELETE | IN_MOVED_FROM)) != 0u ?
+            ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED :
+            ASTRA_HOST_FS_CHANGE_ENTRY_CREATED;
+        if (name == NULL) {
+            watch_gap(provider);
+            return;
+        }
+        watch_append(provider, record->id, record->generation, kind,
+            0u, watch->inode, name);
+        /* exFAT retains removed directory watches while our FD stays open. */
+        if ((event->mask & (IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO)) != 0u &&
+            (event->mask & IN_ISDIR) != 0u) {
+            watch_reset_inotify(provider);
+            return;
+        }
+        if ((event->mask & (IN_CREATE | IN_MOVED_TO)) != 0u &&
+            (event->mask & IN_ISDIR) != 0u) {
+            int child = openat(watch->directory, name,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            int error = child < 0 ? errno :
+                watch_add_directory(provider, entry, child);
+            if (error == 0) error = watch_scan(provider, entry);
+            if (error != 0) {
+                entry->watch_state = WATCH_DEGRADED;
+                entry->watch_gap_deadline_ns = 0u;
+            }
+            watch_gap(provider);
+        }
+    }
+    if ((event->mask & (IN_MODIFY | IN_ATTRIB)) != 0u) {
+        uint64_t inode = watch->inode;
+        if (name != NULL) {
+            int child = openat(watch->directory, name,
+                O_PATH | O_NOFOLLOW | O_CLOEXEC);
+            struct stat info;
+            if (child < 0 || fstat(child, &info) != 0 ||
+                astra_resolve_rooted(entry->mounted.root, child) != 0) {
+                if (child >= 0) close(child);
+                watch_gap(provider);
+                return;
+            }
+            inode = (uint64_t)info.st_ino;
+            close(child);
+        }
+        watch_append(provider, record->id, record->generation,
+            ASTRA_HOST_FS_CHANGE_NODE, inode, 0u, NULL);
+    }
+}
+
+static void watch_inotify_drain(AstraStorageProvider *provider)
+{
+    if (provider->inotify_fd < 0) return;
+    for (unsigned batch = 0u; batch < 32u; ++batch) {
+        _Alignas(struct inotify_event) char buffer[8192];
+        ssize_t length = read(provider->inotify_fd, buffer, sizeof(buffer));
+        if (length < 0 && errno == EINTR) continue;
+        if (length < 0 && errno == EAGAIN) return;
+        if (length <= 0) goto reset;
+        int descriptor = provider->inotify_fd;
+        size_t offset = 0u;
+        while (offset + sizeof(struct inotify_event) <= (size_t)length) {
+            const struct inotify_event *event = (const void *)(buffer + offset);
+            size_t size = sizeof(*event) + event->len;
+            if (size > (size_t)length - offset) goto reset;
+            watch_inotify_event(provider, event);
+            if (provider->inotify_fd != descriptor) return;
+            offset += size;
+        }
+        if (offset != (size_t)length) goto reset;
+    }
+    return;
+reset:
+    watch_reset_inotify(provider);
 }
 
 typedef struct WatchFid {
@@ -237,8 +510,7 @@ static void watch_emit(AstraStorageProvider *provider, const WatchFid *fid,
         int mount = openat(entry->mounted.root, ".",
             O_RDONLY | O_DIRECTORY | O_CLOEXEC);
         if (mount < 0) {
-            watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP,
-                0u, 0u, NULL);
+            watch_gap(provider);
             continue;
         }
         int object = open_by_handle_at(mount, (struct file_handle *)fid->handle,
@@ -248,8 +520,7 @@ static void watch_emit(AstraStorageProvider *provider, const WatchFid *fid,
         close(mount);
         if (object < 0) {
             if (opened_error != EXDEV && opened_error != EINVAL)
-                watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP,
-                    0u, 0u, NULL);
+                watch_gap(provider);
             continue;
         }
         int rooted = astra_resolve_rooted(entry->mounted.root, object);
@@ -258,8 +529,7 @@ static void watch_emit(AstraStorageProvider *provider, const WatchFid *fid,
         close(object);
         if (rooted != 0) continue;
         if (stated != 0) {
-            watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP,
-                0u, 0u, NULL);
+            watch_gap(provider);
             continue;
         }
         watch_append(provider, record->id, record->generation, kind,
@@ -276,7 +546,7 @@ static void watch_event(AstraStorageProvider *provider,
     const struct fanotify_event_info_header *target = NULL, *parent = NULL;
     const struct fanotify_event_info_header *old = NULL, *new_parent = NULL;
     if ((meta->mask & FAN_Q_OVERFLOW) != 0u) {
-        watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP, 0u, 0u, NULL);
+        watch_gap(provider);
         return;
     }
     if ((provider->peer_pid != 0 &&
@@ -292,7 +562,7 @@ static void watch_event(AstraStorageProvider *provider,
         const struct fanotify_event_info_header *info =
             (const void *)((const char *)meta + offset);
         if (info->len < sizeof(*info) || info->len > meta->event_len - offset) {
-            watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP, 0u, 0u, NULL);
+            watch_gap(provider);
             return;
         }
         if (info->info_type == FAN_EVENT_INFO_TYPE_FID) target = info;
@@ -321,30 +591,38 @@ static void watch_event(AstraStorageProvider *provider,
     }
     return;
 gap:
-    watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP, 0u, 0u, NULL);
+    watch_gap(provider);
 }
 
 static void watch_drain(AstraStorageProvider *provider, pid_t completed_worker)
 {
     if (provider->watch_fd < 0) return;
     for (unsigned batch = 0u; batch < 32u; ++batch) {
-        char buffer[8192];
+        _Alignas(struct fanotify_event_metadata) char buffer[8192];
         ssize_t length = read(provider->watch_fd, buffer, sizeof(buffer));
         if (length < 0 && errno == EINTR) continue;
         if (length < 0 && errno == EAGAIN) return;
         if (length <= 0) {
-            watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP,
-                0u, 0u, NULL);
+            watch_gap(provider);
             close(provider->watch_fd);
             provider->watch_fd = -1;
             return;
         }
-        for (struct fanotify_event_metadata *meta = (void *)buffer;
-             FAN_EVENT_OK(meta, length); meta = FAN_EVENT_NEXT(meta, length))
-            watch_event(provider, meta, completed_worker);
-        if (length != 0)
-            watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP,
-                0u, 0u, NULL);
+        size_t offset = 0u;
+        while (offset + sizeof(struct fanotify_event_metadata) <= (size_t)length) {
+            struct fanotify_event_metadata header;
+            memcpy(&header, buffer + offset, sizeof(header));
+            if (header.event_len < sizeof(header) ||
+                header.metadata_len < sizeof(header) ||
+                header.metadata_len > header.event_len ||
+                header.event_len > (size_t)length - offset) break;
+            _Alignas(struct fanotify_event_metadata) char event[8192];
+            memcpy(event, buffer + offset, header.event_len);
+            watch_event(provider, (const void *)event, completed_worker);
+            offset += header.event_len;
+        }
+        if (offset != (size_t)length)
+            watch_gap(provider);
     }
 }
 
@@ -353,6 +631,19 @@ int astra_storage_provider_change_next(AstraStorageProvider *provider,
 {
     if (provider == NULL || change == NULL || next == NULL) return EINVAL;
     watch_drain(provider, 0);
+    watch_inotify_drain(provider);
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
+        uint64_t current = (uint64_t)now.tv_sec * UINT64_C(1000000000) +
+            (uint64_t)now.tv_nsec;
+        for (AstraStorageResource *entry = provider->resources; entry != NULL;
+             entry = entry->next)
+            if (entry->watch_state == WATCH_DEGRADED &&
+                current >= entry->watch_gap_deadline_ns) {
+                watch_gap(provider);
+                entry->watch_gap_deadline_ns = current + UINT64_C(1000000000);
+            }
+    }
     *change = (AstraStorageChangeRecord){0};
     uint64_t latest = provider->watch_sequence;
     size_t capacity = sizeof(provider->watch_records) /
@@ -423,7 +714,7 @@ int astra_storage_provider_open(AstraStorageProvider *provider, AstraStorageDoma
         resource_limit < sizeof(AstraStorageResource) || ram_bytes == 0u || ram_inodes == 0u)
         return EINVAL;
     *provider = (AstraStorageProvider){.domain = {.directory = -1}, .lease_signal = -1,
-        .watch_fd = -1,
+        .watch_fd = -1, .inotify_fd = -1,
         .resource_limit = resource_limit, .probe_limit = probes, .worker_limit = workers,
         .probe_timeout_ms = timeout_ms, .ram_byte_limit = ram_bytes,
         .ram_inode_limit = ram_inodes};
@@ -464,6 +755,10 @@ int astra_storage_provider_open(AstraStorageProvider *provider, AstraStorageDoma
         if (provider->watch_fd < 0)
             fprintf(stderr, "astra-storage filesystem watch unavailable: %s\n",
                 strerror(errno));
+        provider->inotify_fd = inotify_init1(IN_CLOEXEC | IN_NONBLOCK);
+        if (provider->inotify_fd < 0)
+            fprintf(stderr, "astra-storage directory watch unavailable: %s\n",
+                strerror(errno));
     }
     return error;
 }
@@ -473,10 +768,13 @@ int astra_storage_provider_close(AstraStorageProvider *provider)
     int error;
     if (provider == NULL)
         return EINVAL;
-    if (provider->resources != NULL || provider->probes != 0u || provider->workers != 0u)
+    if (provider->resources != NULL || provider->watches != NULL ||
+        provider->probes != 0u || provider->workers != 0u)
         return EBUSY;
     error = astra_storage_domain_close(&provider->domain);
     if (error == 0) {
+        if (provider->inotify_fd >= 0) close(provider->inotify_fd);
+        provider->inotify_fd = -1;
         if (provider->watch_fd >= 0) close(provider->watch_fd);
         provider->watch_fd = -1;
         astra_storage_catalog_destroy(&provider->catalog);
@@ -1709,6 +2007,9 @@ int astra_storage_provider_unmount(AstraStorageProvider *provider, uint64_t moun
         if (error != 0)
             return error;
     }
+    if (entry->watch_state == WATCH_INOTIFY ||
+        entry->watch_state == WATCH_DEGRADED)
+        watch_reset_inotify(provider);
     if (!entry->mounted.attached) {
         return cleanup_mount_resource(provider, entry, 0);
     }
