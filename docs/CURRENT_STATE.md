@@ -2,6 +2,21 @@
 
 Status: active continuation map, 2026-11-05
 
+Notification performance probe, 2026-11-05: after external-event gate, DE25
+`astra-top` measured 20-second idle windows with zero, one, and three Atlas
+instances. Guest idle was 95.0%, 51.1%, and 31.2%; HostFS CPU was 0.71%,
+3.25%, and 4.34%; supervisor CPU was 1.06%, 2.00%, and 2.25%. Three settled
+Atlas processes each consumed 11.6-12.6% guest CPU and 148-163 syscalls/s.
+A ten-second provider control trace returned 43 `CHANGE_NEXT` NONE replies
+and no external change or GAP replies while the windows remained open, so
+external fanotify delivery does not explain this idle cost. Closing all three
+windows restored 94.9% idle, 0.71% HostFS CPU, and zero Astra restarts.
+Measurements are under
+`/mnt/Documents/astra68/fsnotify-external-20261105/` on Beast. This is a
+preliminary audit: isolate Atlas/UI idle wakeups and native broker delivery,
+then qualify zero/one/multiple lightweight subscribers, mutation latency,
+reliable backlog, and host/provider CPU before setting a performance verdict.
+
 Linux-originated filesystem event checkpoint, 2026-11-05: private storage
 protocol 13 bridges root-provider fanotify events into QEMU's existing bounded
 HostFS change ring and native reliable Messaging topic. Provider resolves FID
