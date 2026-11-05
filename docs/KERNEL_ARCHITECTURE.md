@@ -426,13 +426,15 @@ are capability gaps, not instructions to move Astra's services into the kernel.
 | Coordinated memory pressure | `sw/kernel/memory.c` reserves emergency, protected, and DMA frames and classifies ordinary headroom against those floors. Threshold crossing and later physical allocation shortages signal the existing worker; idle library mappings can be reclaimed. DE25 low-memory and recovery gate passed. Service cache coordination remains open | `src/system/kernel/low_resource_manager.cpp` classifies pressure and calls ordered handlers. Astra needs one reclaim order before exhausting protected reserves. No swap is required. |
 | General file cache and file-backed mappings | `sw/kernel/vm.c` supports anonymous, shared, copy-on-write, and library mappings; POSIX `mmap` is absent | `src/system/kernel/cache/file_cache.cpp`, `vm/VMCache.cpp`, and `vm/vm_page_writer.cpp` coordinate vnode identity, cached pages, mapped pages, and writeback. Astra's canonical VFS must supply identity and invalidation; Linux-side cache alone cannot back guest mappings. |
 | Priority inversion control | `sw/kernel/thread.c` has base and effective priority fields, currently always set together | Haiku's scheduler and lock paths show bounded priority changes. Astra needs inheritance for kernel locks and donation across blocking native RPC, withdrawn on reply, timeout, cancellation, and peer death; media CPU budgets need their own bound. |
-| File and directory change events | HostFS publishes 64-entry bounded exact inode records for successful handle writes and truncates, including open-with-truncate, and confirmed descriptor chmod through the existing reliable broker, with volume generations for gaps and unsupported mutations. Reads and empty writes do not announce changes. Atlas refreshes matching views; DE25 RAM0 copy, overwrite, and removal refreshed open windows. Exact directory-entry identities and Linux-originated changes remain open. Shared File Panel currently clears selection on same-directory refresh | `src/system/kernel/fs/node_monitor.cpp` identifies changed node and parent directory and emits creation, removal, move, stat, and unmount events. Astra has adopted exact handle inode identity and existing broker delivery; entry records still need mutation-time parent/child identity. |
+| File and directory change events | HostFS publishes 64-entry bounded exact inode records for successful handle writes and truncates, including open-with-truncate, and confirmed descriptor chmod through the existing reliable broker. Successful exclusive create now carries exact parent inode, child inode, and leaf name from the confined provider and open handle. Volume generations cover gaps and unsupported mutations. Atlas refreshed an open RAM0 view on DE25. Exact removal, move, other creation paths, and Linux-originated changes remain open. Shared File Panel currently clears selection on same-directory refresh | `src/system/kernel/fs/node_monitor.cpp` identifies changed node and parent directory and emits creation, removal, move, stat, and unmount events. Astra carries exact create identity through its existing change ring and broker; remaining entry operations still need mutation-time identity. |
 | User crash capture | CURRENT: `sw/kernel/process.c` retains a 96-byte faulting-thread register and selected mapping snapshot while a process handle lives; launcher and clone-parent handles carry `CRASH`, while query-only handles cannot read it. Supervisor emits a compact fault summary | `src/system/kernel/debug/user_debugger.cpp` and `debug/core_dump.cpp` preserve inspectable thread context and selected mappings. Astra retains the bounded native snapshot before the address space is retired, without collecting arbitrary process memory. |
 
 Exact entry events require mutation identity from the backend's own operation.
-`OPEN_CREATE` can open an existing file, and a later `stat` races another
-writer. VFS must keep the current generation invalidation fallback when an
-event queue overflows; it must not claim an exact event from a guess.
+`OPEN_CREATE` can open an existing file, so only successful exclusive create
+currently emits an exact create record. The provider captures parent identity
+from its retained directory FD, and QEMU captures child identity from the open
+handle. A later `stat` would race another writer. VFS keeps generation
+invalidation when an event queue overflows or identity is unavailable.
 DE25 host ext4 and tmpfs passed a filesystem-wide fanotify
 `FAN_REPORT_DFID_NAME_TARGET` create/write/rename/delete capability probe.
 That can observe Linux-local edits through the provider, but Linux fanotify
@@ -453,7 +455,7 @@ target-cycle and failure-injection gates before release. SMP scheduling,
 loadable kernel modules, and swap are deliberate non-goals for this single
 MC68040, service-oriented system.
 
-After exact node events pass correctness and loss-recovery gates, qualify their
+After notification correctness and loss-recovery gates close, qualify their
 cost on DE25 with zero, one, and multiple subscribers. Compare mutation latency,
 broker CPU time, idle wakeups, and reliable backlog occupancy against the
 pre-event baseline before declaring notification work performance-complete.

@@ -269,17 +269,25 @@ enum {
 #define ASTRA_HOST_FS_CHANGE_NODE 1u
 /** Exact records were lost; offset answers latest sequence, so reconcile by generation. */
 #define ASTRA_HOST_FS_CHANGE_GAP 2u
+/** Exact created entry, including parent and child inode and leaf name. */
+#define ASTRA_HOST_FS_CHANGE_ENTRY_CREATED 3u
+/** CHANGE_NEXT record schema; request value_lo must match. */
+#define ASTRA_HOST_FS_CHANGE_RECORD_VERSION 1u
 
-/** Big-endian data span returned by CHANGE_NEXT when result_value is NODE. */
+/** Big-endian data span returned by CHANGE_NEXT for an exact mutation. */
 typedef struct AstraHostFsChangeRecord {
     uint64_t sequence; /**< Monotonic exact-record sequence within mount incarnation. */
     uint64_t nodes;    /**< Node generation after mutation. */
     uint64_t entries;  /**< Entry generation after mutation. */
     uint64_t inode;    /**< Changed inode, from retained open handle. */
+    uint64_t parent_inode; /**< Parent directory inode for an entry mutation. */
+    uint32_t kind; /**< ASTRA_HOST_FS_CHANGE_NODE or ENTRY_CREATED. */
+    uint32_t reserved; /**< Must be zero. */
+    char name[256]; /**< NUL-terminated leaf for an entry mutation. */
 } AstraHostFsChangeRecord;
 
 /** @cond ASTRA_INTERNAL */
-_Static_assert(sizeof(AstraHostFsChangeRecord) == 32u,
+_Static_assert(sizeof(AstraHostFsChangeRecord) == 304u,
     "host filesystem change record ABI changed");
 /** @endcond */
 

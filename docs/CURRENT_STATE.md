@@ -2,6 +2,36 @@
 
 Status: active continuation map, 2026-11-05
 
+Exact exclusive-create entry checkpoint, 2026-11-05: confined storage provider
+ABI 11 now returns the parent inode from the retained parent directory FD on a
+successful `O_CREAT|O_EXCL` open. QEMU pairs it with the opened child's inode
+and leaf name in the existing bounded change ring. `CHANGE_NEXT` requests
+explicitly select record schema 1; the VFS backend validates record kind,
+sequence, identities, and terminated name. HostFS publishes the exact create
+on filesystem payload version 3 through the existing reliable Messaging topic,
+and Atlas accepts it while continuing generation reconciliation. Nonexclusive
+create, unsupported entry mutations, and uncertain provider replies still
+invalidate by generation. Haiku reference:
+`src/system/kernel/fs/node_monitor.cpp:1196-1260` carries parent, child, and
+leaf at mutation time; Astra uses its provider's confined parent FD and the
+existing open handle rather than a later path lookup. Beast's storage-path,
+storage-provider, VFS backend, full confined HostFS, target builds, and NDK
+`dist-check` gates passed. AArch64 QEMU SHA-256
+`133701baf38feaa5957b2297e0f1bdc5d171ee5fe0be6a772ddf5e131a01dd02`
+and provider SHA-256
+`2a5a2894443ab432f1919712504137b87d47946b99f0dd09875c356dd4f294cb`
+are installed with HostFS and Atlas in DE25 development shadow
+`da485538b0a5ddb822bd2b854ab26e012f868f373b79109395d8c906fbc191e7`.
+DE25 reached stage 8; RFB opened Atlas's RAM0 view, Terminal created a file
+with shell noclobber enabled while that view stayed open, and Atlas refreshed
+from one to two items without navigation or manual refresh. Removing both
+disposable files returned Atlas to empty. Astra, audio, and remote desktop
+remain active with zero Astra restarts and 7.9 GiB free. SHA-checked evidence
+is under `/mnt/Documents/astra68/exact-entry-20261105/`; board captures were
+removed and only the selected development release remains. Exact removal,
+move, other creation paths, Linux-originated edits, and notification
+performance qualification remain open.
+
 Handle-chmod exact-event checkpoint, 2026-11-05: successful descriptor-based
 chmod now uses the retained open handle's inode for the existing exact NODE
 record. Path-based chmod and a lost provider reply still invalidate by

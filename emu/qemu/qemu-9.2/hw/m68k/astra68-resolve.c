@@ -547,6 +547,11 @@ int astra_resolve_open_path(int root, int base, const char *path, int flags,
     fd = astra_resolve_open(root, out, flags, mode);
     if (fd == -ENOENT)
         out->missing = 1u;
+    if (fd >= 0 && (flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) {
+        struct stat parent;
+        if (fstat(out->parent, &parent) == 0)
+            out->parent_inode = parent.st_ino;
+    }
     close(out->parent);
     out->parent = -1;
     return fd;

@@ -48,7 +48,17 @@ static void semantics(int root)
     value.mode = 0600;
     execute(root, 0, &value, fds, &reply, &result);
     assert(reply.error == 0 && result >= 0);
+    int parent = openat(root, "sub", O_PATH | O_DIRECTORY | O_CLOEXEC);
+    struct stat parent_stat;
+    assert(parent >= 0 && fstat(parent, &parent_stat) == 0);
+    assert(reply.parent_inode == (uint64_t)parent_stat.st_ino &&
+           strcmp(reply.leaf, "file") == 0);
+    close(parent);
     assert(write(result, "old", 3) == 3);
+    close(result);
+    value.flags = O_RDWR;
+    execute(root, 0, &value, fds, &reply, &result);
+    assert(reply.error == 0 && result >= 0 && reply.parent_inode == 0u);
     close(result);
     value = request(ASTRA_STORAGE_PATH_RENAME, "/sub/file");
     value.resolve = ASTRA_RESOLVE_ENTRY;

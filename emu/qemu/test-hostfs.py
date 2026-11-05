@@ -95,6 +95,8 @@ FS_CHANGE_NEXT = 27
 CHANGE_NONE = 0
 CHANGE_NODE = 1
 CHANGE_GAP = 2
+CHANGE_ENTRY_CREATED = 3
+CHANGE_RECORD_SIZE = 304
 IO_SEQUENTIAL = 1 << 14
 ADOPT_DISCARD = 1
 UNLINK_DIRECTORY = 1
@@ -1110,13 +1112,16 @@ def run(qtest, root, outside):
 
     def next_change(cursor):
         answer = execute(qtest, [Command(generation, FS_CHANGE_NEXT,
-            offset=cursor, capacity=32, session=work)])[0]
+            offset=cursor, value=1, capacity=CHANGE_RECORD_SIZE,
+            session=work)])[0]
         assert status(answer) == STATUS_OK
         kind = get32(answer.raw, 56)
-        record = output(qtest, answer, 32) if kind == CHANGE_NODE else None
-        assert get32(answer.raw, 52) == (32 if record is not None else 0)
+        record = output(qtest, answer, CHANGE_RECORD_SIZE) if kind in (
+            CHANGE_NODE, CHANGE_ENTRY_CREATED) else None
+        assert get32(answer.raw, 52) == (CHANGE_RECORD_SIZE if record is not None else 0)
         return get64(answer.raw, 24), kind, \
-            struct.unpack(">QQQQ", record) if record is not None else None
+            (*struct.unpack_from(">QQQQQII", record),
+             record[48:].split(b"\0", 1)[0]) if record is not None else None
 
     baseline_changes = changes()
 
@@ -1421,7 +1426,6 @@ def run(qtest, root, outside):
         generation, FS_CLOSE, handle=read_only_handle,
         session=work)])[0]) == STATUS_OK
 
-    before_write = changes()
     last_sequence = 0
     while True:
         next_sequence, last_kind, _ = next_change(last_sequence)
@@ -1430,6 +1434,25 @@ def run(qtest, root, outside):
         last_sequence = next_sequence
         if last_kind == CHANGE_GAP:
             break
+    root_stat = execute(qtest, [Command(generation, FS_STAT, "/",
+        session=work)])[0]
+    assert status(root_stat) == STATUS_OK
+    before_create = changes()
+    created = execute(qtest, [Command(generation, FS_OPEN,
+        "/exclusive-entry", flags=OPEN_WRITE | OPEN_CREATE | OPEN_EXCLUSIVE,
+        value=0o600, session=work)])[0]
+    assert status(created) == STATUS_OK
+    assert changes() == (before_create[0], before_create[1] + 1)
+    created_sequence, kind, record = next_change(last_sequence)
+    assert created_sequence == last_sequence + 1 and kind == CHANGE_ENTRY_CREATED
+    assert record == (created_sequence, before_create[0],
+        before_create[1] + 1, get64(created.raw, NODE_INODE),
+        get64(root_stat.raw, NODE_INODE), CHANGE_ENTRY_CREATED, 0,
+        b"exclusive-entry")
+    assert status(execute(qtest, [Command(generation, FS_CLOSE,
+        handle=get32(created.raw, 16), session=work)])[0]) == STATUS_OK
+    last_sequence = created_sequence
+    before_write = changes()
     payload = b"host transport data integrity\x00\xff"
     written = execute(qtest, [Command(
         generation, FS_WRITE, handle=handle, data=payload,
@@ -1441,7 +1464,7 @@ def run(qtest, root, outside):
     sequence, kind, record = next_change(last_sequence)
     assert sequence == last_sequence + 1 and kind == CHANGE_NODE
     assert record == (sequence, before_write[0] + 1, before_write[1],
-                      get64(opened.raw, NODE_INODE))
+                      get64(opened.raw, NODE_INODE), 0, CHANGE_NODE, 0, b"")
     empty_write = execute(qtest, [Command(
         generation, FS_WRITE, handle=handle, data=b"",
         session=work)])[0]
@@ -1476,7 +1499,7 @@ def run(qtest, root, outside):
     open_sequence, kind, record = next_change(sequence + 64)
     assert open_sequence == sequence + 65 and kind == CHANGE_NODE and record == (
         open_sequence, before_open_truncate[0] + 1, before_open_truncate[1],
-        get64(truncate_open.raw, NODE_INODE))
+        get64(truncate_open.raw, NODE_INODE), 0, CHANGE_NODE, 0, b"")
     assert status(execute(qtest, [Command(generation, FS_CLOSE,
         handle=get32(truncate_open.raw, 16), session=work)])[0]) == STATUS_OK
 
@@ -1488,7 +1511,8 @@ def run(qtest, root, outside):
     chmod_sequence, kind, record = next_change(open_sequence)
     assert chmod_sequence == open_sequence + 1 and kind == CHANGE_NODE
     assert record == (chmod_sequence, before_chmod[0] + 1,
-                      before_chmod[1], get64(opened.raw, NODE_INODE))
+                      before_chmod[1], get64(opened.raw, NODE_INODE), 0,
+                      CHANGE_NODE, 0, b"")
 
     hard_linked = execute(qtest, [Command(
         generation, FS_LINK, "/data", "/data-hard-link", session=work)])[0]

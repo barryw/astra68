@@ -210,22 +210,37 @@ uint32_t astra_vfs_host_change_next(AstraVfsHostBackend *backend,
     if (status != ASTRA_VFS_OK) return status;
     request.command->offset_hi = (uint32_t)(*cursor >> 32);
     request.command->offset_lo = (uint32_t)*cursor;
+    request.command->value_lo = ASTRA_HOST_FS_CHANGE_RECORD_VERSION;
     status = submit(backend, &request, NULL, 0u, wire, sizeof(wire));
     if (status != ASTRA_VFS_OK) return status;
     next = ((uint64_t)request.command->offset_hi << 32) |
         request.command->offset_lo;
-    if (request.command->result_value > ASTRA_HOST_FS_CHANGE_GAP ||
-        (request.command->result_value == ASTRA_HOST_FS_CHANGE_NODE &&
+    if (request.command->result_value > ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ||
+        ((request.command->result_value == ASTRA_HOST_FS_CHANGE_NODE ||
+          request.command->result_value == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED) &&
          (request.command->result_length != sizeof(wire) || next <= *cursor)) ||
-        (request.command->result_value != ASTRA_HOST_FS_CHANGE_NODE &&
+        ((request.command->result_value == ASTRA_HOST_FS_CHANGE_NONE ||
+          request.command->result_value == ASTRA_HOST_FS_CHANGE_GAP) &&
          request.command->result_length != 0u))
         return ASTRA_VFS_ERR_PROTOCOL;
-    if (request.command->result_value == ASTRA_HOST_FS_CHANGE_NODE) {
+    if (request.command->result_value == ASTRA_HOST_FS_CHANGE_NODE ||
+        request.command->result_value == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED) {
         record->sequence = astra_load_be64(wire);
         record->nodes = astra_load_be64(wire + 8u);
         record->entries = astra_load_be64(wire + 16u);
         record->inode = astra_load_be64(wire + 24u);
-        if (record->sequence != next || record->inode == 0u)
+        record->parent_inode = astra_load_be64(wire + 32u);
+        record->kind = astra_load_be32(wire + 40u);
+        record->reserved = astra_load_be32(wire + 44u);
+        memcpy(record->name, wire + 48u, sizeof(record->name));
+        if (record->sequence != next || record->inode == 0u ||
+            record->kind != request.command->result_value ||
+            record->reserved != 0u ||
+            (record->kind == ASTRA_HOST_FS_CHANGE_NODE &&
+             (record->parent_inode != 0u || record->name[0] != '\0')) ||
+            (record->kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED &&
+             (record->parent_inode == 0u || record->name[0] == '\0' ||
+              memchr(record->name, '\0', sizeof(record->name)) == NULL)))
             return ASTRA_VFS_ERR_PROTOCOL;
     }
     *cursor = next;

@@ -273,6 +273,7 @@ void astra_storage_path_execute(int allowed_root, int readonly,
             request->flags | O_CLOEXEC, request->mode, request->resolve,
             request->links, &left);
         error = *result < 0 ? *result : 0;
+        if (error == 0) reply->parent_inode = left.parent_inode;
         break;
     case ASTRA_STORAGE_PATH_ROOTED:
         error = fds[1] < 0 ? -EINVAL : astra_resolve_rooted(root, base);

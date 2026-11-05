@@ -9,16 +9,18 @@
 /** HostFS messaging topic for exact node changes and volume invalidations. */
 #define ASTRA_FILESYSTEM_CHANGE_TOPIC "filesystem"
 /** Current filesystem change payload format. */
-#define ASTRA_FILESYSTEM_CHANGE_VERSION 2u
+#define ASTRA_FILESYSTEM_CHANGE_VERSION 3u
 /** Generation-only event: re-read watched directory or node. */
 #define ASTRA_FILESYSTEM_CHANGE_INVALIDATE 0u
 /** Exact changed inode is available; generations still govern recovery. */
 #define ASTRA_FILESYSTEM_CHANGE_NODE 1u
+/** Exact created directory entry and its parent, child and leaf. */
+#define ASTRA_FILESYSTEM_CHANGE_ENTRY_CREATED 2u
 
 /* Subscribe through MESSAGING, then enumerate before consuming events.
  * Generations remain authoritative after queue loss or unsupported mutations;
  * exact node records identify a mutation, not the node's current contents. */
-/** Volume change event with optional exact inode identity. */
+/** Volume change event with optional exact node or entry identity. */
 typedef struct AstraFilesystemChange {
     /** Payload format version. */
     uint32_t version;
@@ -31,10 +33,12 @@ typedef struct AstraFilesystemChange {
     uint32_t kind;    /**< Exact node change, or generation-only invalidation. */
     uint32_t reserved; /**< Must be zero. */
     uint64_t inode;   /**< Exact changed inode for NODE; zero for INVALIDATE. */
+    uint64_t parent_inode; /**< Exact parent for ENTRY_CREATED; zero otherwise. */
+    char name[256]; /**< Entry leaf for ENTRY_CREATED; empty otherwise. */
 } AstraFilesystemChange;
 
 /** @cond ASTRA_INTERNAL */
-_Static_assert(sizeof(AstraFilesystemChange) == 64u,
+_Static_assert(sizeof(AstraFilesystemChange) == 328u,
     "filesystem change payload ABI changed");
 /** @endcond */
 

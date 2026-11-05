@@ -955,7 +955,8 @@ static void publish_filesystem_changes(uint32_t messaging)
             if (astra_vfs_host_change_next(&volume->backend,
                     &cursor, &record, &kind) != ASTRA_VFS_OK)
                 break;
-            if (kind == ASTRA_HOST_FS_CHANGE_NODE) {
+            if (kind == ASTRA_HOST_FS_CHANGE_NODE ||
+                kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED) {
                 snapshot.nodes = record.nodes;
                 snapshot.entries = record.entries;
             } else if (astra_vfs_host_change_snapshot(&volume->backend,
@@ -973,13 +974,23 @@ static void publish_filesystem_changes(uint32_t messaging)
                 break;
             }
             AstraFilesystemChange change = {
-                ASTRA_FILESYSTEM_CHANGE_VERSION, sizeof(change),
-                volume->reference, snapshot.nodes, snapshot.entries,
-                kind == ASTRA_HOST_FS_CHANGE_NODE ?
+                .version = ASTRA_FILESYSTEM_CHANGE_VERSION,
+                .size = sizeof(change),
+                .volume = volume->reference,
+                .nodes = snapshot.nodes,
+                .entries = snapshot.entries,
+                .kind = kind == ASTRA_HOST_FS_CHANGE_NODE ?
                     ASTRA_FILESYSTEM_CHANGE_NODE :
+                    kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ?
+                    ASTRA_FILESYSTEM_CHANGE_ENTRY_CREATED :
                     ASTRA_FILESYSTEM_CHANGE_INVALIDATE,
-                0u, kind == ASTRA_HOST_FS_CHANGE_NODE ? record.inode : 0u
+                .inode = kind == ASTRA_HOST_FS_CHANGE_NODE ||
+                    kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ? record.inode : 0u,
+                .parent_inode = kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ?
+                    record.parent_inode : 0u
             };
+            if (kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED)
+                memcpy(change.name, record.name, sizeof(change.name));
             /* BUSY leaves both sequence and generation pending for retry. */
             AstraResult result = astra_messaging_publish_reliable(messaging,
                 ASTRA_FILESYSTEM_CHANGE_TOPIC, &change, sizeof(change),
@@ -991,7 +1002,8 @@ static void publish_filesystem_changes(uint32_t messaging)
             volume->published_change_sequence = cursor;
             ++filesystem_transaction;
             if (filesystem_transaction == 0u) filesystem_transaction = 1u;
-            if (kind != ASTRA_HOST_FS_CHANGE_NODE) break;
+            if (kind != ASTRA_HOST_FS_CHANGE_NODE &&
+                kind != ASTRA_HOST_FS_CHANGE_ENTRY_CREATED) break;
         }
     }
 }

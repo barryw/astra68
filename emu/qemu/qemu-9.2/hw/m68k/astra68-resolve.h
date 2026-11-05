@@ -19,6 +19,7 @@ typedef struct AstraResolution {
     uint32_t escape;
     uint32_t consumed;           /* bytes in the original request */
     uint32_t links;              /* links followed, including an escape */
+    uint64_t parent_inode;       /* exact parent of successful exclusive create */
     char continuation[4096];     /* absolute Astra namespace path on escape */
 } AstraResolution;
 

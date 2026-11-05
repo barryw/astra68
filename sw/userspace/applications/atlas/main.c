@@ -4472,11 +4472,18 @@ static AstraResult run(AstraHandle gui)
                 memcpy(&change, notice.payload, sizeof(change));
                 if (change.version != ASTRA_FILESYSTEM_CHANGE_VERSION ||
                     change.size != sizeof(change) || change.reserved != 0u ||
-                    change.kind > ASTRA_FILESYSTEM_CHANGE_NODE ||
+                    change.kind > ASTRA_FILESYSTEM_CHANGE_ENTRY_CREATED ||
                     (change.kind == ASTRA_FILESYSTEM_CHANGE_INVALIDATE &&
-                     change.inode != 0u) ||
+                     (change.inode != 0u || change.parent_inode != 0u ||
+                      change.name[0] != '\0')) ||
                     (change.kind == ASTRA_FILESYSTEM_CHANGE_NODE &&
-                     change.inode == 0u)) return ASTRA_ERROR_IO;
+                     (change.inode == 0u || change.parent_inode != 0u ||
+                      change.name[0] != '\0')) ||
+                    (change.kind == ASTRA_FILESYSTEM_CHANGE_ENTRY_CREATED &&
+                     (change.inode == 0u || change.parent_inode == 0u ||
+                      change.name[0] == '\0' ||
+                      memchr(change.name, '\0', sizeof(change.name)) == NULL)))
+                    return ASTRA_ERROR_IO;
                 filesystem_event_sequence = notice.sequence;
                 filesystem_retry = 0u;
                 filesystem_skip_refresh = viewed_volume.id != 0u &&
