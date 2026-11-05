@@ -168,6 +168,34 @@ static void place_metadata(uint8_t *arena, uint32_t frame_count)
 }
 static KernelMemoryStats stats;
 static bool initialized;
+static void (*pressure_notifier)(void);
+
+static KernelMemoryPressure pressure_for_free_frames(uint32_t free_frames,
+                                                     uint32_t *headroom_frames)
+{
+    uint32_t floor = stats.core_reserve_frames +
+                     stats.protected_reserve_frames + stats.dma_zone_frames;
+    uint32_t headroom = free_frames > floor ? free_frames - floor : 0u;
+
+    if (headroom_frames != NULL)
+        *headroom_frames = headroom;
+    return headroom <= KERNEL_MEMORY_PRESSURE_CRITICAL_FRAMES ?
+        KERNEL_MEMORY_PRESSURE_CRITICAL :
+        headroom <= KERNEL_MEMORY_PRESSURE_WARNING_FRAMES ?
+        KERNEL_MEMORY_PRESSURE_WARNING :
+        headroom <= KERNEL_MEMORY_PRESSURE_NOTE_FRAMES ?
+        KERNEL_MEMORY_PRESSURE_NOTE : KERNEL_MEMORY_PRESSURE_NORMAL;
+}
+
+static void notify_pressure_transition(uint32_t previous_free_frames)
+{
+    if (pressure_notifier != NULL &&
+        pressure_for_free_frames(previous_free_frames, NULL) ==
+            KERNEL_MEMORY_PRESSURE_NORMAL &&
+        pressure_for_free_frames(stats.free_frames, NULL) >=
+            KERNEL_MEMORY_PRESSURE_NOTE)
+        pressure_notifier();
+}
 
 #if defined(KERNEL_MEMORY_HOST_TEST)
 static uint8_t *host_memory;
@@ -736,6 +764,7 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
 
     kernel_allocation_init();
     initialized = false;
+    pressure_notifier = NULL;
     saved_range_count = 0u;
     contiguous_search_hint = 0u;
     scattered_search_hint = 0u;
@@ -1123,7 +1152,10 @@ static KernelMemoryStatus allocate_frames(uint32_t frame_count,
             frame_allocation_sites[first + index] = (uint8_t)site;
             link_owner_frame(owner_slot, first + index, owner);
         }
+        uint32_t previous_free_frames = stats.free_frames;
+
         stats.free_frames -= frame_count;
+        notify_pressure_transition(previous_free_frames);
         allocated = stats.total_frames - stats.free_frames;
         if (allocated > stats.high_water_frames)
             stats.high_water_frames = allocated;
@@ -1303,7 +1335,10 @@ static KernelMemoryStatus allocate_pages(
         frame_allocation_sites[index] = (uint8_t)site;
         link_owner_frame(owner_slot, index, owner);
     }
+    uint32_t previous_free_frames = stats.free_frames;
+
     stats.free_frames -= frame_count;
+    notify_pressure_transition(previous_free_frames);
     allocated = stats.total_frames - stats.free_frames;
     if (allocated > stats.high_water_frames)
         stats.high_water_frames = allocated;
@@ -1759,20 +1794,20 @@ bool kernel_memory_stats(KernelMemoryStats *result)
 bool kernel_memory_pressure(KernelMemoryPressure *level,
                             uint32_t *ordinary_headroom_frames)
 {
-    uint32_t floor;
-    uint32_t headroom;
-
     if (!initialized || level == NULL || ordinary_headroom_frames == NULL)
         return false;
-    floor = stats.core_reserve_frames + stats.protected_reserve_frames +
-            stats.dma_zone_frames;
-    headroom = stats.free_frames > floor ? stats.free_frames - floor : 0u;
-    *ordinary_headroom_frames = headroom;
-    *level = headroom <= KERNEL_MEMORY_PRESSURE_CRITICAL_FRAMES ?
-        KERNEL_MEMORY_PRESSURE_CRITICAL :
-        headroom <= KERNEL_MEMORY_PRESSURE_WARNING_FRAMES ?
-        KERNEL_MEMORY_PRESSURE_WARNING :
-        headroom <= KERNEL_MEMORY_PRESSURE_NOTE_FRAMES ?
-        KERNEL_MEMORY_PRESSURE_NOTE : KERNEL_MEMORY_PRESSURE_NORMAL;
+    *level = pressure_for_free_frames(stats.free_frames,
+                                     ordinary_headroom_frames);
+    return true;
+}
+
+bool kernel_memory_set_pressure_notifier(void (*notify)(void))
+{
+    if (!initialized || notify == NULL || pressure_notifier != NULL)
+        return false;
+    pressure_notifier = notify;
+    if (pressure_for_free_frames(stats.free_frames, NULL) >=
+        KERNEL_MEMORY_PRESSURE_NOTE)
+        pressure_notifier();
     return true;
 }

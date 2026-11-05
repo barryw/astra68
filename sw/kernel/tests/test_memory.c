@@ -1051,6 +1051,18 @@ static void test_cow_frame_changes_owner_without_changing_charge(void)
     assert(kernel_memory_release_owner(82u, NULL) == KERNEL_MEMORY_OK);
 }
 
+static uint32_t pressure_notifications;
+
+static void on_pressure_note(void)
+{
+    KernelMemoryPressure level;
+    uint32_t headroom;
+
+    assert(kernel_memory_pressure(&level, &headroom));
+    assert(level >= KERNEL_MEMORY_PRESSURE_NOTE);
+    ++pressure_notifications;
+}
+
 static void test_pressure_tracks_ordinary_headroom(void)
 {
     static uint32_t pages[8192u];
@@ -1081,6 +1093,10 @@ static void test_pressure_tracks_ordinary_headroom(void)
     assert(kernel_memory_pressure(&level, &headroom));
     assert(headroom > KERNEL_MEMORY_PRESSURE_NOTE_FRAMES + 1u);
     assert(level == KERNEL_MEMORY_PRESSURE_NORMAL);
+    pressure_notifications = 0u;
+    assert(!kernel_memory_set_pressure_notifier(NULL));
+    assert(kernel_memory_set_pressure_notifier(on_pressure_note));
+    assert(!kernel_memory_set_pressure_notifier(on_pressure_note));
     for (uint32_t index = 0u; index < sizeof(steps) / sizeof(steps[0]);
          ++index) {
         uint32_t count = headroom - steps[index].headroom;
@@ -1093,6 +1109,7 @@ static void test_pressure_tracks_ordinary_headroom(void)
         assert(kernel_memory_pressure(&level, &headroom));
         assert(headroom == steps[index].headroom);
         assert(level == steps[index].level);
+        assert(pressure_notifications == (index == 0u ? 0u : 1u));
     }
     assert(kernel_memory_release_owner(84u, &released) == KERNEL_MEMORY_OK);
     assert(released == used);
@@ -1101,6 +1118,12 @@ static void test_pressure_tracks_ordinary_headroom(void)
     assert(headroom == baseline.free_frames - baseline.core_reserve_frames -
                        baseline.protected_reserve_frames -
                        baseline.dma_zone_frames);
+    assert(kernel_memory_alloc_pages_unfilled_tagged(
+               KERNEL_ALLOCATION_SITE_MEMORY_GENERIC,
+               headroom - KERNEL_MEMORY_PRESSURE_NOTE_FRAMES,
+               KERNEL_FRAME_PROCESS, 84u, pages) == KERNEL_MEMORY_OK);
+    assert(pressure_notifications == 2u);
+    assert(kernel_memory_release_owner(84u, NULL) == KERNEL_MEMORY_OK);
 }
 
 int main(void)

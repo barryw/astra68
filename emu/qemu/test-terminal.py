@@ -802,7 +802,7 @@ class Machine:
     def __init__(self, qemu, rom, image, socket_directory, extra_args=(),
                  hostfs_root=None, debug_guest=False, launcher=(),
                  source_root=ROOT, socket_owner=None, environment=None,
-                 memory=MEMORY):
+                 memory=None):
         # Resolve every source-relative input before starting QEMU.  A missing
         # catalog must not leave a live emulator behind.  A launcher
         # A launcher announces observation exports before QEMU starts.
@@ -829,7 +829,8 @@ class Machine:
         self.qmp_path = os.path.join(self.runtime_directory, "qmp.sock")
         self.gdb_path = (os.path.join(self.runtime_directory, "gdb.sock")
                          if debug_guest else None)
-        command = list(launcher) + ([qemu, "-M", "astra68", "-m", memory,
+        command = list(launcher) + ([qemu, "-M", "astra68", "-m",
+                    MEMORY if memory is None else memory,
                     "-bios", launch_rom,
                     "-display", "none", "-monitor", "none", "-serial", "stdio",
                     "-no-reboot",

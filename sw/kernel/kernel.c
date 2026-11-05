@@ -1871,6 +1871,12 @@ static KernelWorkerServiceResult pressure_reclaim(uint32_t batch_limit,
         KERNEL_WORKER_SERVICE_COMPLETE : KERNEL_WORKER_SERVICE_FATAL;
 }
 
+static void pressure_signal(void)
+{
+    if (kernel_worker_signal(KERNEL_WORKER_PRESSURE) != KERNEL_WORKER_OK)
+        kernel_panic("memory pressure worker signal failed");
+}
+
 /*
  * Declared as well as defined because nothing else declares it: the only caller
  * is `jsr kernel_main` in entry.S, which the C compiler cannot check. Writing
@@ -2030,6 +2036,8 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     if (kernel_worker_register(KERNEL_WORKER_PRESSURE,
                                pressure_reclaim, NULL) != KERNEL_WORKER_OK)
         kernel_panic("memory pressure worker registration failed");
+    if (!kernel_memory_set_pressure_notifier(pressure_signal))
+        kernel_panic("memory pressure notification registration failed");
     /* Before the first launch: every process maps it, and logs read it. */
     if (!kernel_time_page_init())
         kernel_panic("time page allocation failed");

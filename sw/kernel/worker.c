@@ -1,6 +1,5 @@
 #include "worker.h"
 
-#include "memory.h"
 #include "panic.h"
 #include "performance.h"
 #include "platform.h"
@@ -47,7 +46,6 @@ static uint32_t max_dispatch_latency_cycles;
 static uint32_t class_pass_count[KERNEL_WORKER_CLASS_COUNT];
 static uint32_t class_retry_count[KERNEL_WORKER_CLASS_COUNT];
 static uint8_t ready_timed;
-static uint8_t pressure_poll_ticks;
 
 static volatile uint32_t *stack_bottom(void)
 {
@@ -85,7 +83,6 @@ static void clear_runtime_state(void)
     dispatch_latency_samples = 0u;
     max_dispatch_latency_cycles = 0u;
     ready_timed = 0u;
-    pressure_poll_ticks = 0u;
     registered_work = KERNEL_WORKER_PROCESS_REAP |
                       KERNEL_WORKER_TRACE_FLUSH;
     for (uint32_t index = 0u; index < KERNEL_WORKER_CLASS_COUNT; ++index) {
@@ -261,17 +258,6 @@ KernelWorkerStatus kernel_worker_on_timer(void)
     if (worker_state == KERNEL_WORKER_UNINITIALIZED)
         return KERNEL_WORKER_INVALID_STATE;
     retry = retry_work;
-    if ((registered_work & KERNEL_WORKER_PRESSURE) != 0u &&
-        ++pressure_poll_ticks == KERNEL_WORKER_PRESSURE_POLL_TICKS) {
-        KernelMemoryPressure level;
-        uint32_t headroom;
-
-        pressure_poll_ticks = 0u;
-        if (!kernel_memory_pressure(&level, &headroom))
-            return KERNEL_WORKER_CORRUPT;
-        if (level >= KERNEL_MEMORY_PRESSURE_NOTE)
-            retry |= KERNEL_WORKER_PRESSURE;
-    }
     if (retry == 0u)
         return KERNEL_WORKER_OK;
 

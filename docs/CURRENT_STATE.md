@@ -5,20 +5,28 @@ Status: active continuation map, 2026-11-05
 Coordinated memory pressure prerequisite, 2026-11-05: `kernel_memory_pressure`
 classifies ordinary allocation headroom after subtracting the existing core,
 protected-service, and DMA floors. Note, warning, and critical thresholds are
-four, two, and one maximum recovery transactions above that floor. The existing
-kernel worker now polls every 128 timer ticks and invokes the existing idle
-shared-library cache reclaimer when pressure reaches note level. It uses the
-library-cache cycle budget, not the device batch metric. Haiku reference:
+four, two, and one maximum recovery transactions above that floor. Successful
+allocations now signal the existing kernel worker once when ordinary headroom
+crosses the note threshold; its service invokes the existing idle shared-library
+cache reclaimer outside allocation context. The prior 128-timer-tick poll missed
+the DE25 pressure window because the timer is one-shot. Haiku reference:
 `src/system/kernel/low_resource_manager.cpp` computes free-page pressure and
 runs reclaim handlers outside its manager lock. Beast's full kernel host suite
 and K1 qualification pass. With target-representative `-icount shift=4`, the
-K1 timer maximum changed from 676 to 679 cycles against its 50,000-cycle
-budget; linked normal kernel grew from 217,940 to 218,312 bytes. Incremental
-normal-ROM SHA-256 `a13cbe4ec6f4077106c656ebc10a1d5604ce00d6604075b43a373da231ebfcc2`
-booted DE25 to stage 8 with Astra, audio, and remote desktop services active;
-board has 7.9 GiB free. The board boot did not induce low memory, so actual
-pressure recovery on DE25, service cache coordination, and general file-cache
-reclaim remain open.
+K1 timer maximum is 676 cycles against its 50,000-cycle budget (polling candidate:
+679); linked normal kernel is 218,564 bytes (polling candidate: 218,312).
+Incremental normal-ROM SHA-256
+`69bc60eabbcfc03cadf1a807f56b4ab2ac22edd2f8e493c19a8933d1dd04a2e7`
+booted DE25 to stage 8. The disposable native `mempressure 512` gate held
+428 MiB plus a 1,792 KiB tail until ordinary allocation returned out-of-memory;
+QMP snapshots showed free frames falling from 116,703 to 3,164 of 131,072,
+the pressure worker class pass count rising from zero to one, and free frames
+recovering above 114,000 after release. A fresh allocation succeeded. Evidence
+and matching board/archive hashes are under
+`/mnt/Documents/astra68/memory-pressure-event-20261105/` on Beast. The test
+command and disposable board captures were removed; one development release
+remains, Astra/audio/remote-desktop services are active, and board has 7.9 GiB
+free. Service cache coordination and general file-cache reclaim remain open.
 
 Filesystem change producer correction, 2026-11-05: production HostFS now
 publishes per-volume generations from QEMU's canonical filesystem namespace,

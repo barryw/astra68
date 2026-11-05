@@ -1,6 +1,5 @@
 #include "worker.h"
 
-#include "memory.h"
 #include "panic.h"
 #include "performance.h"
 #include "platform.h"
@@ -25,20 +24,9 @@ static uint32_t monitor_calls;
 static uint32_t monitor_last_batch;
 static uint32_t device_calls;
 static uint32_t pressure_calls;
-static uint32_t pressure_queries;
-static KernelMemoryPressure pressure_level;
 static uint32_t staged_trace_records;
 static KernelTraceEvent failure_event;
 static uint32_t failure_arguments[4];
-
-bool kernel_memory_pressure(KernelMemoryPressure *level,
-                            uint32_t *ordinary_headroom_frames)
-{
-    ++pressure_queries;
-    *level = pressure_level;
-    *ordinary_headroom_frames = 0u;
-    return true;
-}
 
 bool kernel_trace_write(KernelTraceEvent event, uint16_t flags,
                         uint32_t argument0, uint32_t argument1,
@@ -352,16 +340,7 @@ static void test_pressure_uses_existing_worker_and_library_budget(void)
     assert(kernel_worker_register(KERNEL_WORKER_PRESSURE,
                                   pressure_service, &pressure_calls) ==
            KERNEL_WORKER_OK);
-    pressure_level = KERNEL_MEMORY_PRESSURE_NORMAL;
-    for (uint32_t tick = 0u; tick < KERNEL_WORKER_PRESSURE_POLL_TICKS; ++tick)
-        assert(kernel_worker_on_timer() == KERNEL_WORKER_OK);
-    assert(pressure_queries == 1u);
-    assert(!kernel_worker_work_pending());
-
-    pressure_level = KERNEL_MEMORY_PRESSURE_NOTE;
-    for (uint32_t tick = 0u; tick < KERNEL_WORKER_PRESSURE_POLL_TICKS; ++tick)
-        assert(kernel_worker_on_timer() == KERNEL_WORKER_OK);
-    assert(pressure_queries == 2u);
+    assert(kernel_worker_signal(KERNEL_WORKER_PRESSURE) == KERNEL_WORKER_OK);
     assert(worker_stats().pending_work == KERNEL_WORKER_PRESSURE);
     assert(kernel_worker_try_select());
     assert(kernel_worker_test_service_once() == KERNEL_WORKER_OK);
@@ -397,7 +376,7 @@ int main(void)
     test_trace_flush_is_bounded_and_retried();
     test_pressure_uses_existing_worker_and_library_budget();
     test_maintenance_failure_identifies_worker_class();
-    assert(save_disable_calls == 7u);
+    assert(save_disable_calls == 8u);
     assert(restore_calls == save_disable_calls);
     puts("worker tests passed");
     return 0;
