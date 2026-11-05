@@ -474,6 +474,26 @@ RFB SHA-256 matches board hash
 The disposable command and board captures were removed. One development
 release remains; Astra, audio, and remote desktop are active with 7.9 GiB free.
 
+Memory-pressure transition correction, 2026-11-05: the allocator now signals
+the existing pressure worker on each worsening level (normal to note, note to
+warning, and warning to critical), rather than only on first entry from
+normal. A later failed allocation still signals again. This reuses the
+existing notifier and worker; Haiku reference
+`src/system/kernel/low_resource_manager.cpp` classifies pressure and invokes
+reclaim handlers outside its manager lock. The Beast kernel host suite passed;
+the memory test checks all three transitions, shortage, recovery, and re-entry.
+MC68040 disassembly shows the transition helper grew from 64 to 74 bytes;
+the normal-headroom path still calls the classifier once. Incremental ROM
+SHA-256 `a4d20eb11f2fbd9ba15a77f39f0b5a3ec73391e529ac879518e1230f8b1dbc34`
+booted DE25 to stage 8. Native `mempressure 512` held 428 MiB plus a 1,728 KiB
+tail, reached out-of-memory at the reserve floor, released its allocations,
+and passed fresh-allocation recovery. The temporary command and captures were
+removed after archiving matching RFB evidence and host logs under
+`/mnt/Documents/astra68/memory-pressure-transitions-20261105/` on Beast.
+One development release remains; Astra, audio, and remote desktop are active
+with 7.9 GiB free. The board workload confirms recovery, while the exact
+per-level wake count is covered by the host test rather than board telemetry.
+
 Filesystem change producer correction, 2026-11-05: production HostFS now
 publishes per-volume generations from QEMU's canonical filesystem namespace,
 which sees both VFS service requests and direct client lanes. The old VFS

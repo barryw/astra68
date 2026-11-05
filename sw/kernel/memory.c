@@ -189,11 +189,13 @@ static KernelMemoryPressure pressure_for_free_frames(uint32_t free_frames,
 
 static void notify_pressure_transition(uint32_t previous_free_frames)
 {
-    if (pressure_notifier != NULL &&
-        pressure_for_free_frames(previous_free_frames, NULL) ==
-            KERNEL_MEMORY_PRESSURE_NORMAL &&
-        pressure_for_free_frames(stats.free_frames, NULL) >=
-            KERNEL_MEMORY_PRESSURE_NOTE)
+    KernelMemoryPressure current;
+
+    if (pressure_notifier == NULL)
+        return;
+    current = pressure_for_free_frames(stats.free_frames, NULL);
+    if (current != KERNEL_MEMORY_PRESSURE_NORMAL &&
+        current > pressure_for_free_frames(previous_free_frames, NULL))
         pressure_notifier();
 }
 
