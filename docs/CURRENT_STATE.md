@@ -2,6 +2,25 @@
 
 Status: active continuation map, 2026-11-05
 
+Filesystem write invalidation correction, 2026-11-05: QEMU's canonical HostFS
+namespace now advances its node generation after a nonempty successful write,
+including a write whose later position report fails. The existing entry and
+node generation topic remains the single invalidation path for direct lanes and
+VFS service requests; zero-byte writes do not announce a mutation. Haiku
+reference: `src/system/kernel/fs/node_monitor.cpp` emits changes from the
+filesystem owner. Beast's full confined-provider HostFS suite passed with
+assertions for both writes. AArch64 QEMU SHA-256
+`36c35aae2cbd1623cdd499b978dd016d3e989b2d0483cce283fd6965d08fe91d`
+was installed incrementally on DE25. Atlas listed a disposable RAM0 file at
+6 B; Terminal appended through its direct filesystem lane without opening with
+truncate, and the existing Atlas window showed 22 B without Refresh. Removal
+returned RAM0 to an empty directory and 64 MiB free. Matching board/archive
+before, after, and clean RFB hashes plus test/build logs are under
+`/mnt/Documents/astra68/fs-write-notify-20261105/` on Beast. Board captures
+were removed; one development release remains, Astra/audio/remote-desktop
+services are active, and board has 7.9 GiB free. Exact per-node events and
+notification performance qualification remain open.
+
 Coordinated memory pressure prerequisite, 2026-11-05: `kernel_memory_pressure`
 classifies ordinary allocation headroom after subtracting the existing core,
 protected-service, and DMA floors. Note, warning, and critical thresholds are

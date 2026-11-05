@@ -1405,12 +1405,21 @@ def run(qtest, root, outside):
         generation, FS_CLOSE, handle=read_only_handle,
         session=work)])[0]) == STATUS_OK
 
+    before_write = changes()
     payload = b"host transport data integrity\x00\xff"
     written = execute(qtest, [Command(
         generation, FS_WRITE, handle=handle, data=payload,
         session=work)])[0]
     assert status(written) == STATUS_OK
     assert get32(written.raw, 52) == len(payload)
+    assert changes() == (before_write[0] + 1, before_write[1]), \
+        "successful write was invisible to filesystem change watchers"
+    empty_write = execute(qtest, [Command(
+        generation, FS_WRITE, handle=handle, data=b"",
+        session=work)])[0]
+    assert status(empty_write) == STATUS_OK
+    assert changes() == (before_write[0] + 1, before_write[1]), \
+        "empty write must not announce a node mutation"
 
     capacity = len(payload)
     read = execute(qtest, [Command(
