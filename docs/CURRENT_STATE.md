@@ -26,8 +26,21 @@ create/delete trial, with no deleted provider FDs. All test paths were removed;
 Astra, audio host, and remote desktop remain active with 7.8 GiB free.
 Captures and trial logs are under
 `/mnt/Documents/astra68/exfat-inotify-provider-20261105/` on Beast. Physical
-detach/remount gate remains; notification performance
+unplug/replug gate remains; notification performance
 qualification follows correctness.
+
+exFAT native lifecycle gate, 2026-11-05: On DE25, Terminal `unmount /usb0`
+retired mount 14 (source 12). Desktop icon disappeared, private exFAT mount and
+provider volume FD closed, and provider inotify watch table became empty.
+Terminal `mount 12` created mount 16 at the same `/usb0` path with write access;
+desktop icon returned and five directory watches were installed. Atlas opened
+the remounted root, then showed a Linux-originated directory create and delete
+without Refresh. The disposable directory was removed; Atlas and Terminal
+windows closed. Astra, audio host, and remote desktop stayed active; 7.8 GiB
+remained free. Screenshots `exfat-unmount.png`, `exfat-remount.png`,
+`exfat-cycle-created.png`, and `exfat-cycle-deleted.png` are archived under
+`/mnt/Documents/astra68/exfat-inotify-provider-20261105/` on Beast. Literal
+USB cable detach/replug remains untested.
 
 exFAT external-notification fallback probe, 2026-11-05: On DE25's live
 private exFAT mount, a disposable inotify watch on a newly created directory
