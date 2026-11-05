@@ -175,6 +175,23 @@ HPS manager, not a storage provider blocked during cleanup; bounded cleanup
 recovery and a controlled hardware-expiry gate remain open. Haiku has no HPS
 hardware-watchdog equivalent in `src/system/kernel`; Astra uses Linux's owner.
 
+Provider stop recovery checkpoint, 2026-11-05: the release `astra.service`
+retains `TimeoutStopSec=infinity` so systemd does not kill a provider holding
+mounted storage. Its unit job now has `JobRunningTimeoutSec=180s` and
+`JobTimeoutAction=reboot-force`: a cleanup that cannot finish escalates to an
+HPS reboot instead of leaving an unbounded stop job. DE25 systemd 249 loaded
+these settings via a development drop-in. A disposable unit with the same
+infinite service stop and a three-second job limit timed out its stop job in
+four seconds; its action was `none`, so this did not reboot the board. Normal
+`astra.service` restart retired its provider in two seconds, kept the same boot
+ID, and reached initial-image stage 8 with zero restarts. Astra, audio, and
+remote desktop remained active with 7.9 GiB free. The board drop-in and Beast
+archive SHA-256 match at `b9a66bef46bb68cd6eae97a402bc3adb5fac8704158c0674a4ce16d62235f727`;
+evidence is `/mnt/Documents/astra68/stop-recovery-20261105/`. A forced reboot
+fault injection and subsequent storage recovery check remain open. Haiku's
+kernel has no HPS storage-provider boundary; this gate uses systemd's existing
+unit job mechanism instead of a second Astra watchdog.
+
 Guest watchdog checkpoint, 2026-11-05: the initial-image supervisor now sends
 one authenticated `PROGRESS` heartbeat per second from its existing timed wait
 loop. The kernel writes a dedicated Vesta heartbeat register; QEMU exposes its

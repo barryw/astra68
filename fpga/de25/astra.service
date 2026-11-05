@@ -4,6 +4,10 @@ Wants=network-online.target time-sync.target systemd-time-wait-sync.service
 After=network-online.target time-sync.target systemd-time-wait-sync.service
 ConditionFileIsExecutable=/var/lib/astra/current/bin/run-arty.sh
 ConditionKernelCommandLine=astra.fabric=ready
+# A stuck provider cannot be killed safely while it owns mounted storage.
+# Escalate a stuck stop job to a host reboot instead of waiting forever.
+JobRunningTimeoutSec=180s
+JobTimeoutAction=reboot-force
 
 [Service]
 Type=simple
