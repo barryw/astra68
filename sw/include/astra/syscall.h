@@ -71,6 +71,8 @@
 #define ASTRA_PROGRESS_BOOT_SERVICES (ASTRA_PROGRESS_BOOT_COMMAND_PREFIX | 0x1000u)
 /** SERVICE | result: one announced boot service finished launching. */
 #define ASTRA_PROGRESS_BOOT_SERVICE  (ASTRA_PROGRESS_BOOT_COMMAND_PREFIX | 0x2000u)
+/** Initial image is alive after boot; advances the host-observed watchdog. */
+#define ASTRA_PROGRESS_BOOT_HEARTBEAT (ASTRA_PROGRESS_BOOT_COMMAND_PREFIX | 0x3000u)
 /** ::ASTRA_PROGRESS_BOOT_SERVICE result: the service is running. */
 #define ASTRA_PROGRESS_SERVICE_READY   0u
 /** ::ASTRA_PROGRESS_BOOT_SERVICE result: it failed to start; the boot is FAILED. */

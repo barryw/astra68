@@ -150,6 +150,7 @@ bool kernel_platform_copy(uint32_t list_physical);
 bool kernel_platform_bus_fault_read(KernelPlatformBusFault *fault);
 void kernel_platform_bus_fault_acknowledge(void);
 void kernel_platform_debug_marker(uint32_t value);
+void kernel_platform_guest_heartbeat(void);
 bool kernel_platform_diagnostic_putc(uint8_t value);
 bool kernel_platform_diagnostic_try_putc(uint8_t value);
 uint32_t kernel_platform_diagnostic_rx_status(void);

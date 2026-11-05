@@ -33,6 +33,7 @@
 #include <astra/service_manager.h>
 #include <astra/shutdown.h>
 #include <astra/status.h>
+#include <astra/syscall.h>
 #include <astra/vfs_path.h>
 #include <astra/vfs_host_direct.h>
 #include <astra/vfs_port_transport.h>
@@ -3877,11 +3878,19 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
 {
     uint32_t waits[ASTRA_WAIT_MULTIPLE_MAX];
     uint64_t messaging_retry_at = 0u;
+    uint64_t heartbeat_at = 0u;
 
     for (;;) {
         restart_namespace_holders();
         uint32_t index = ASTRA_WAIT_INDEX_NONE;
         uint32_t status;
+        uint64_t now = astra_clock_monotonic();
+
+        if (heartbeat_at == 0u || now >= heartbeat_at) {
+            if (astra_progress(ASTRA_PROGRESS_BOOT_HEARTBEAT) != ASTRA_SYSCALL_OK)
+                return ASTRA_STATUS_ACCESS;
+            heartbeat_at = now + UINT64_C(1000000000);
+        }
 
         waits[0] = event_target_receive;
         waits[1] = launch_receive;
@@ -3896,6 +3905,8 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
             waits[at + 5u] = process_table.records[at].handle;
         waits[process_count + 5u] = messaging_receive;
         uint64_t deadline = next_service_retry();
+        if (heartbeat_at < deadline)
+            deadline = heartbeat_at;
         if (supervisor_messaging_needs_retry()) {
             uint64_t now = astra_clock_monotonic();
             if (messaging_retry_at == 0u || now >= messaging_retry_at) {

@@ -8,11 +8,58 @@ The provider remains the only owner of storage cleanup and the QEMU peer.
 import argparse
 import os
 from pathlib import Path
+import runpy
 import shutil
 import signal
 import subprocess
 import sys
 import threading
+import time
+
+
+class GuestWatchdog:
+    """Bound guest startup and liveness without treating idle as a hang."""
+
+    def __init__(self, qmp, input_script):
+        self.qmp = qmp
+        self.input_script = input_script
+        self.started = time.monotonic()
+        self.last_advance = None
+        self.counter = 0
+        self.client_type = None
+        self.next_probe = self.started
+        self.last_error = ""
+
+    def observe(self, now, counter):
+        if counter is not None and counter != self.counter:
+            self.counter = counter
+            self.last_advance = now
+        if self.last_advance is None:
+            return "guest heartbeat did not start" if now - self.started >= 120 else None
+        return "guest heartbeat stalled" if now - self.last_advance >= 60 else None
+
+    def poll(self):
+        now = time.monotonic()
+        if now < self.next_probe:
+            return None
+        self.next_probe = now + 3
+        counter = None
+        if self.qmp.is_socket():
+            try:
+                if self.client_type is None:
+                    self.client_type = runpy.run_path(str(self.input_script))["QmpClient"]
+                client = self.client_type(str(self.qmp), timeout=2.0)
+                try:
+                    counter = client.execute("qom-get", {
+                        "path": "/machine", "property": "astra-guest-heartbeat"})
+                    if not isinstance(counter, int) or counter < 0:
+                        raise ValueError("invalid guest heartbeat")
+                    self.last_error = ""
+                finally:
+                    client.close()
+            except (OSError, RuntimeError, ValueError, KeyError) as error:
+                self.last_error = str(error)
+        return self.observe(now, counter)
 
 
 def stop(child):
@@ -25,6 +72,20 @@ def stop(child):
         except subprocess.TimeoutExpired:
             child.kill()
     child.wait()
+
+
+def record_watchdog(path, reason, counter, error):
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("w") as stream:
+        stream.write(f"{time.time():.0f} {reason}; heartbeat={counter}; qmp={error or 'ok'}\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(path)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def main():
@@ -58,6 +119,7 @@ def main():
         "--qmp", args.qmp]
     stopping = threading.Event()
     service_stop = threading.Event()
+    watchdog = GuestWatchdog(Path(args.qmp), Path(args.input))
     def request_stop(number, frame):
         del frame
         if number == signal.SIGUSR1:
@@ -87,6 +149,17 @@ def main():
             reader.start()
             input_child = subprocess.Popen(input_command, close_fds=True)
             while provider.poll() is None and not stopping.wait(0.5):
+                reason = watchdog.poll()
+                if reason is not None:
+                    try:
+                        record_watchdog(args.panic.with_name("watchdog-latest.log"),
+                                        reason, watchdog.counter, watchdog.last_error)
+                    except OSError as error:
+                        print(f"Cannot retain Astra watchdog reason: {error}", file=sys.stderr)
+                    print(f"Astra watchdog: {reason}; heartbeat={watchdog.counter}",
+                          file=sys.stderr)
+                    stopping.set()
+                    break
                 for name, child, helper in (("display", display, display_command),
                                            ("input", input_child, input_command)):
                     code = child.poll()

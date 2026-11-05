@@ -182,8 +182,9 @@ if [ -z "${STORAGE+x}" ]; then
         trap 'rm -f "$storage_temporary"' EXIT
         cp "$BASE_STORAGE" "$storage_temporary"
         chmod 0600 "$storage_temporary"
-        sync
+        sync "$storage_temporary"
         mv "$storage_temporary" "$STORAGE"
+        sync "$STATE_ROOT"
         storage_temporary=
         trap - EXIT HUP INT TERM
     fi

@@ -2,6 +2,38 @@
 
 Status: active continuation map, 2026-11-05
 
+Guest watchdog checkpoint, 2026-11-05: the initial-image supervisor now sends
+one authenticated `PROGRESS` heartbeat per second from its existing timed wait
+loop. The kernel writes a dedicated Vesta heartbeat register; QEMU exposes its
+counter read-only to the HPS runtime supervisor. The host allows 120 seconds
+for initial startup and 60 seconds without a later pulse, then retains the
+reason in `watchdog-latest.log` and restarts Astra through its existing storage
+provider lifecycle. Only the initial image can send the command. Idle guest
+activity is no longer inferred from HostFS polling: a DE25 measurement showed
+that counter advancing, but a filesystem service stall could stop it while the
+rest of Astra remained live. Haiku has no equivalent HPS/guest split or
+watchdog in `src/system/kernel`; Astra keeps the supervisor outside the guest.
+`run-arty.sh` now syncs the copied storage image and containing directory,
+instead of blocking startup on unrelated host mounts with global `sync`.
+
+Beast kernel, supervisor, HostFS, launcher, watchdog unit, and NDK distribution
+gates passed. ROM SHA-256 is
+`c542c669eda12d4aae91cbe8ea3907b566d917900255af0a5975633d325b7f73`;
+AArch64 QEMU SHA-256 is
+`503a878fd0fe6e2911c411103f867a1354934925006f502d7a5c43f3a1203a2b`.
+Both and the matching host scripts were installed incrementally on DE25.
+QMP showed guest pulses `37, 40, 43` at three-second intervals. A controlled
+QMP pause stopped pulses, caused one recorded watchdog restart, then the new
+guest reached stage 8 with pulses `4, 7, 10`. Astra, audio host, and remote
+desktop are active; one development release remains with 7.9 GiB free.
+Board and Beast watchdog/console hashes match under
+`/mnt/Documents/astra68/guest-watchdog-20261105/`. HPS hardware watchdog
+arming, a bounded response when provider cleanup itself cannot finish, and
+stuck-engine fault gates remain open. This is not complete hang recovery.
+Final source-equivalent host script shadow `d1aa5b72f39dceef4ec5fb676da3c7ea3fde13be25b7249debe8de1f6e57ec56`
+booted through the same incremental installer after the watchdog state check
+was simplified; its unit gate passed on Beast.
+
 Filesystem read invalidation correction, 2026-11-05: HostFS no longer advances
 the node generation on a successful `FS_READ`. Reads may update Linux atime,
 but volume notifications describe explicit Astra mutations, not access-time

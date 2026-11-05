@@ -789,6 +789,7 @@ struct Astra68State {
     uint32_t initial_sp;
     uint32_t initial_pc;
     uint32_t scratch;
+    uint64_t guest_heartbeat;
     uint32_t irq_enable;
     uint32_t irq_soft;
     uint32_t irq_config[32];
@@ -9167,6 +9168,7 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
                (astra_block_present(s) ? SYS_STATUS_ASTRA_HOST : 0) |
                (s->ohci.present ? SYS_STATUS_USB_READY : 0);
     case 0x018: return s->scratch;
+    case 0x0f4: return (uint32_t)s->guest_heartbeat;
     case 0x01c: return 0x00068040;
     case 0x020: return 0x51454d55; /* QEMU */
     case 0x024: return 0x0000001d;
@@ -9454,6 +9456,9 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
             value == ASTRA_KERNEL_STATUS_RESTART) {
             astra_report_status(s, value);
         }
+        break;
+    case 0x0f4:
+        if (value == 1u) ++s->guest_heartbeat;
         break;
     case 0x0d0:
         if (value & 1) {
@@ -10186,6 +10191,7 @@ static void astra_machine_reset(void *opaque)
     s->rtc_set_high = 0u;
     s->rtc_valid = true;
     s->scratch = 0u;
+    s->guest_heartbeat = 0u;
     s->irq_enable = 0u;
     s->irq_soft = 0u;
     memset(s->irq_config, 0, sizeof(s->irq_config));
@@ -10403,6 +10409,10 @@ static void astra68_init(MachineState *machine)
     object_property_add_uint64_ptr(OBJECT(machine),
                                    "astra-timer-late-count",
                                    &s->timer_late_count,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-guest-heartbeat",
+                                   &s->guest_heartbeat,
                                    OBJ_PROP_FLAG_READ);
     object_property_add_uint64_ptr(OBJECT(machine),
                                    "astra-host-slow-commands",

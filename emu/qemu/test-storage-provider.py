@@ -164,6 +164,15 @@ def main(argv=None):
                         def gauge(name):
                             return qmp.execute("qom-get", {"path": "/machine",
                                 "property": "astra-host-" + name})
+                        def heartbeat():
+                            return qmp.execute("qom-get", {"path": "/machine",
+                                "property": "astra-guest-heartbeat"})
+                        assert heartbeat() == 0
+                        qtest.write32(gate.VESTA + 0x0f4, 0)
+                        assert heartbeat() == 0
+                        qtest.write32(gate.VESTA + 0x0f4, 1)
+                        qtest.write32(gate.VESTA + 0x0f4, 1)
+                        assert heartbeat() == qtest.read32(gate.VESTA + 0x0f4) == 2
                         before_fds = gauge("fds")
                         logical = [gate.open_session(qtest, generation) for _ in range(40)]
                         assert gauge("fds") == before_fds and gauge("fs-descriptors") == 0

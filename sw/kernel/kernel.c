@@ -1545,6 +1545,10 @@ void kernel_process_initial_image_progress(uint32_t stage)
 
 uint32_t kernel_process_initial_image_boot_command(uint32_t command)
 {
+    if (command == ASTRA_PROGRESS_BOOT_HEARTBEAT) {
+        kernel_platform_guest_heartbeat();
+        return ASTRA_SYSCALL_OK;
+    }
     uint32_t result = kernel_boot_progress_command(command);
 
     if (result == ASTRA_SYSCALL_OK &&

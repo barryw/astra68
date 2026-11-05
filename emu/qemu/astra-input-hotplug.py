@@ -34,6 +34,7 @@ class QmpClient:
             try:
                 self.socket = socket.socket(socket.AF_UNIX,
                                             socket.SOCK_STREAM)
+                self.socket.settimeout(timeout)
                 self.socket.connect(path)
                 break
             except OSError:

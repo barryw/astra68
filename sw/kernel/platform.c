@@ -678,6 +678,12 @@ void kernel_platform_debug_marker(uint32_t value)
     kernel_mmio_cpu_sync();
 }
 
+void kernel_platform_guest_heartbeat(void)
+{
+    VESTA_WRITE(GUEST_HEARTBEAT, 1u);
+    kernel_mmio_cpu_sync();
+}
+
 bool kernel_platform_diagnostic_putc(uint8_t value)
 {
     uint32_t timeout = VESTA_READ(CPU_HZ) / 1000u;

@@ -191,6 +191,8 @@ static void test_typed_identity_console_and_device_queries(void)
 
     kernel_platform_debug_marker(0x4b313054u);
     assert(registers->SCRATCH == 0x4b313054u);
+    kernel_platform_guest_heartbeat();
+    assert(registers->GUEST_HEARTBEAT == 1u);
 
     registers->CPU_HZ = KERNEL_PLATFORM_CPU_HZ;
     registers->UART_STATUS = UART_TX_READY;

@@ -64,7 +64,7 @@ typedef volatile struct {
     uint32_t MEMTEST_ACTUAL;     // 0x0E8 low byte
     uint32_t CPU_CYCLES_LO;      // 0x0EC; read latches the coherent 64-bit value
     uint32_t CPU_CYCLES_HI;      // 0x0F0; upper half of the LO-read snapshot
-uint32_t RESERVED_0F4;        // 0x0F4
+uint32_t GUEST_HEARTBEAT;     // 0x0F4; initial-image watchdog pulse
 uint32_t RESERVED_0F8;        // 0x0F8
 uint32_t RESERVED_0FC;        // 0x0FC
     // MMU control 0x100
@@ -502,6 +502,8 @@ uint32_t RESERVED_110;        // 0x110
 #define SPI_CLKDIV(n) (((n) & 0xF) << 4)
 #define SPI_BUSY      (1u << 0)
 
+_Static_assert(offsetof(VestaRegs, GUEST_HEARTBEAT) == 0x0f4u,
+               "Vesta guest-heartbeat ABI offset");
 _Static_assert(offsetof(VestaRegs, BLOCK_ID) == 0x150u,
                "Vesta block-service ABI offset");
 _Static_assert(offsetof(VestaRegs, MONITOR_ID) == 0x1b4u,
