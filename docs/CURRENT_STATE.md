@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-11-05
 
+Open-truncate exact-event checkpoint, 2026-11-05: HostFS now includes the
+opened inode in its existing exact NODE change record when a successful open
+truncates a file. It reuses the fstat already needed to publish the open
+handle; no additional host filesystem call or protocol field was added.
+Beast's full confined-provider HostFS gate passed before and after the change
+(16.27 and 16.59 seconds, respectively; these single runs are not a
+performance qualification). The AArch64 QEMU SHA-256
+`2e43ea20f115b6238c017d975d95bdd94a915922ebcde45272272699f0b1672e`
+is active in DE25 development shadow
+`7ab138d2e1eda17f7145886cb115c164a7d94dd4b85d149ce65a524468fe5c6e`.
+On DE25, Terminal overwrote a disposable RAM0 file and the already-open Atlas
+view refreshed; selecting the file showed its size changed from 6 to 11
+bytes. Removal refreshed the view to empty. The shared File Panel currently
+clears selection when replacing a directory snapshot, even for the same
+directory; restoring selection requires matching entry identity, not retaining
+row numbers that may now name another file. Haiku reference:
+`src/system/kernel/fs/node_monitor.cpp` captures changed node identity at
+mutation time. SHA-checked build, test, and RFB evidence is under
+`/mnt/Documents/astra68/open-truncate-exact-20261105/` on Beast; disposable
+board captures were removed. Astra, audio, and remote desktop remain active,
+with zero Astra restarts and 7.9 GiB free. Exact entry identities,
+Linux-originated edits, selection
+preservation, and notification performance qualification remain open.
+
 Storage worker hang checkpoint, 2026-11-05: Linux attach, detach, eject,
 and path workers now carry a 120-second monotonic deadline, using the same
 provider cancellation and actual-mount reconciliation already used for format

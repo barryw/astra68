@@ -1467,6 +1467,19 @@ def run(qtest, root, outside):
         assert status(truncated) == STATUS_OK
     assert next_change(last_sequence) == (sequence + 64, CHANGE_GAP, None)
 
+    before_open_truncate = changes()
+    truncate_open = execute(qtest, [Command(generation, FS_OPEN, "/data",
+        flags=OPEN_WRITE | OPEN_TRUNCATE, session=work)])[0]
+    assert status(truncate_open) == STATUS_OK
+    assert changes() == (before_open_truncate[0] + 1,
+                         before_open_truncate[1])
+    open_sequence, kind, record = next_change(sequence + 64)
+    assert open_sequence == sequence + 65 and kind == CHANGE_NODE and record == (
+        open_sequence, before_open_truncate[0] + 1, before_open_truncate[1],
+        get64(truncate_open.raw, NODE_INODE))
+    assert status(execute(qtest, [Command(generation, FS_CLOSE,
+        handle=get32(truncate_open.raw, 16), session=work)])[0]) == STATUS_OK
+
     hard_linked = execute(qtest, [Command(
         generation, FS_LINK, "/data", "/data-hard-link", session=work)])[0]
     assert status(hard_linked) == STATUS_OK

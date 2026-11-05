@@ -6148,7 +6148,7 @@ static uint32_t astra_host_publish_open(Astra68State *s, uint32_t owner, uint32_
                                         AstraHostSession *session,
                                         uint32_t session_id,
                                         uint8_t *command, int fd,
-                                        uint16_t flags)
+                                        uint16_t flags, uint64_t *inode)
 {
     DIR *directory = NULL;
     struct stat st;
@@ -6160,6 +6160,7 @@ static uint32_t astra_host_publish_open(Astra68State *s, uint32_t owner, uint32_
         close(fd);
         return status;
     }
+    *inode = st.st_ino;
     if ((flags & ASTRA_VFS_OPEN_DIRECTORY) == 0 && S_ISDIR(st.st_mode)) {
         close(fd);
         return ASTRA_STATUS_IS_DIR;
@@ -7180,6 +7181,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     case ASTRA_HOST_FS_OPEN: {
         int native_flags;
         int fd;
+        uint64_t opened_inode = 0u;
 
         if (!astra_host_native_open_flags(flags, &native_flags))
             break;
@@ -7209,7 +7211,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         changed_entries = (flags & ASTRA_VFS_OPEN_CREATE) != 0u;
         changed_nodes = (flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u;
         status = astra_host_publish_open(s, owner, channel != NULL ? channel->process : 0u, session, session_id,
-                                         command, fd, flags);
+                                         command, fd, flags, &opened_inode);
+        if (changed_nodes) changed_inode = opened_inode;
         if (status == ASTRA_STATUS_OK)
             descriptor_reserved = directory_reserved = false;
         break;
