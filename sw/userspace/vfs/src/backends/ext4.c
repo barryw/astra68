@@ -200,6 +200,8 @@ fill_metadata(const ext4_file *file, AstraVfsNodeInfo *info, int with_size)
     uint32_t nlink = 0u;
     uint64_t size = 0u;
 
+    info->meta.valid |= ASTRA_VFS_META_INODE;
+    info->meta.inode = file->inode;
     if (ext4_meta_get_handle(file, &mode, &uid, &gid, &mtime, &nlink,
                              with_size ? &size : NULL) != EOK)
         return;
@@ -515,19 +517,22 @@ ext4_backend_stat_from(AstraVfsExt4Backend *backend,
     uint32_t mode = 0u;
     uint32_t mtime = 0u;
     uint32_t nlink = 0u;
+    uint32_t inode = 0u;
     int rc;
 
     if (parent == NULL && !build_path(backend, path, full, ASTRA_VFS_EXT4_PATH_MAX))
         return ASTRA_VFS_ERR_INVALID;
     rc = parent == NULL ?
         ext4_meta_get(full, &mode, &info->uid, &info->gid, &mtime,
-                       &nlink, &info->size) :
+                       &nlink, &info->size, &inode) :
         ext4_meta_getat(parent, path, &mode, &info->uid, &info->gid,
-                         &mtime, &nlink, &info->size);
+                         &mtime, &nlink, &info->size, &inode);
     if (rc != EOK)
         return status_of(rc);
     astra_vfs_node_info_mode_links(info, (uint16_t)mode, nlink);
-    info->meta.valid |= ASTRA_VFS_META_OWNER | ASTRA_VFS_META_MTIME;
+    info->meta.valid |= ASTRA_VFS_META_OWNER | ASTRA_VFS_META_MTIME |
+                        ASTRA_VFS_META_INODE;
+    info->meta.inode = inode;
     info->mtime = (int64_t)(uint64_t)mtime;
     switch (mode & EXT4_INODE_MODE_TYPE_MASK) {
     case EXT4_INODE_MODE_DIRECTORY:
@@ -586,7 +591,9 @@ ext4_backend_stat_node(void *context, uintptr_t node,
     if (rc != EOK)
         return status_of(rc);
     astra_vfs_node_info_mode_links(info, (uint16_t)mode, nlink);
-    info->meta.valid |= ASTRA_VFS_META_OWNER | ASTRA_VFS_META_MTIME;
+    info->meta.valid |= ASTRA_VFS_META_OWNER | ASTRA_VFS_META_MTIME |
+                        ASTRA_VFS_META_INODE;
+    info->meta.inode = file->inode;
     info->mtime = (int64_t)(uint64_t)mtime;
     info->kind = (mode & EXT4_INODE_MODE_TYPE_MASK) ==
                          EXT4_INODE_MODE_DIRECTORY ?
@@ -666,6 +673,8 @@ ext4_backend_readdir(void *context, uintptr_t directory, const char *path,
     }
     name[entry->name_length] = '\0';
     info->size = 0u;
+    info->meta.valid |= ASTRA_VFS_META_INODE;
+    info->meta.inode = entry->inode;
     info->kind = entry->inode_type == EXT4_DE_DIR ?
         ASTRA_VFS_KIND_DIRECTORY :
         entry->inode_type == EXT4_DE_SYMLINK ? ASTRA_VFS_KIND_SYMLINK :

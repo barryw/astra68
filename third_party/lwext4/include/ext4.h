@@ -483,13 +483,13 @@ int ext4_mode_setat(const ext4_dir *directory, const char *path,
  * @param mode New mode bits (for example 0777).
  *
  * @return  Standard error code.*/
-/**@brief ASTRA: mode, owner, modification time and link count in one lookup.
+/**@brief ASTRA: metadata and inode identity in one lookup.
  * @param   path to file/directory
- * @param   mode, uid, gid, mtime, nlink, size outputs; any may be NULL
+ * @param   mode, uid, gid, mtime, nlink, size, inode outputs; any may be NULL
  * @return  standard error code */
 int ext4_meta_get(const char *path, uint32_t *mode, uint32_t *uid,
 		  uint32_t *gid, uint32_t *mtime, uint32_t *nlink,
-		  uint64_t *size);
+		  uint64_t *size, uint32_t *inode);
 
 /** Read metadata from a live inode, even after its path is renamed. */
 int ext4_meta_get_handle(const ext4_file *file, uint32_t *mode, uint32_t *uid,
@@ -499,7 +499,8 @@ int ext4_meta_get_handle(const ext4_file *file, uint32_t *mode, uint32_t *uid,
 /** No-follow metadata lookup beneath an open directory inode. */
 int ext4_meta_getat(const ext4_dir *directory, const char *path,
 		    uint32_t *mode, uint32_t *uid, uint32_t *gid,
-		    uint32_t *mtime, uint32_t *nlink, uint64_t *size);
+		    uint32_t *mtime, uint32_t *nlink, uint64_t *size,
+		    uint32_t *inode);
 
 /**@brief ASTRA: metadata for an entry returned by ext4_dir_entry_next.
  * @param   dir open directory that returned entry

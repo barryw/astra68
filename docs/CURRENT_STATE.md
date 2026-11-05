@@ -2,9 +2,21 @@
 
 Status: active continuation map, 2026-11-05
 
+Ext4 identity prerequisite, 2026-11-05: lwext4's path and anchored metadata
+calls now return inode number from the same locked lookup as other metadata.
+The Astra ext4 backend exposes that identity through open, stat, open-handle
+stat, and backend directory enumeration. Haiku reference:
+`src/add-ons/kernel/file_systems/ext2/kernel_interface.cpp` publishes its
+inode ID as `st_ino` and uses the same ID for stat notifications. Beast's
+full `storage ext4-test` suite, including fsck after each fixture, and target
+`storage all` build pass. This backend is not currently the DE25 production
+ext4 path: Linux storage provider presents its mount through HostFS, whose
+metadata already includes inode identity. Native packed directory batches
+still omit inode IDs; exact mutation events remain open.
+
 RAM0 identity gate, 2026-11-05: RAM backend now assigns stable, non-reused
 inode IDs within each mount incarnation. The root, open handles, hard links,
-renames, and directory listings carry the same identity; allocation
+renames, and backend directory listings carry the same identity; allocation
 exhaustion refuses creation without changing the tree. Haiku reference:
 `src/system/kernel/fs/node_monitor.cpp` uses stable node and parent IDs for
 entry notifications. VFS host tests and target HostFS/`fssem` builds passed on

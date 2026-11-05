@@ -1174,8 +1174,16 @@ check_vfs_directory_handle(void)
                        ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY,
                        ASTRA_VFS_MODE_DEFAULT, &directory, &info);
     if (status != ASTRA_VFS_OK || directory == 0u ||
-        info.kind != ASTRA_VFS_KIND_DIRECTORY)
+        info.kind != ASTRA_VFS_KIND_DIRECTORY ||
+        !(info.meta.valid & ASTRA_VFS_META_INODE) || info.meta.inode == 0u)
         return fail("VFS open directory handle", (int)status);
+    uint64_t directory_inode = info.meta.inode;
+    status = ops->stat(&backend, "/dir", &info);
+    if (status != ASTRA_VFS_OK || info.meta.inode != directory_inode)
+        return fail("VFS stat directory identity", (int)status);
+    status = ops->stat_node(&backend, directory, &info);
+    if (status != ASTRA_VFS_OK || info.meta.inode != directory_inode)
+        return fail("VFS handle directory identity", (int)status);
     for (;;) {
         char name[ASTRA_VFS_NAME_MAX];
         uint64_t next = 0u;
@@ -1186,8 +1194,15 @@ check_vfs_directory_handle(void)
             (void)ops->close(&backend, directory);
             return fail("VFS read directory handle", (int)status);
         }
-        if (strcmp(name, "nested") == 0)
+        if (strcmp(name, "nested") == 0) {
+            AstraVfsNodeInfo nested = {0};
+            status = ops->stat(&backend, "/dir/nested", &nested);
+            if (status != ASTRA_VFS_OK ||
+                !(info.meta.valid & ASTRA_VFS_META_INODE) ||
+                info.meta.inode != nested.meta.inode)
+                return fail("VFS directory entry identity", (int)status);
             found_nested = 1;
+        }
         if (strcmp(name, "many") == 0)
             leaked_root = 1;
         cursor = next;
@@ -1922,6 +1937,7 @@ verify(void)
             memcmp(entry->name, "entry_008.dat", 13u) == 0) {
             uint32_t direct[5] = {0u};
             uint32_t path_meta[5] = {0u};
+            uint32_t path_inode = 0u;
             uint64_t direct_size = 0u;
             uint64_t path_size = 0u;
 
@@ -1933,11 +1949,12 @@ verify(void)
             many_path(path, sizeof(path), 8u);
             rc = ext4_meta_get(path, &path_meta[0], &path_meta[1],
                                &path_meta[2], &path_meta[3], &path_meta[4],
-                               &path_size);
+                               &path_size, &path_inode);
             if (rc != EOK)
                 return fail("ext4_meta_get(entry_008.dat)", rc);
             if (memcmp(direct, path_meta, sizeof(direct)) != 0 ||
-                direct_size != path_size || direct_size != 72u) {
+                direct_size != path_size || direct_size != 72u ||
+                path_inode != entry->inode) {
                 printf("FAIL direct directory metadata\n");
                 ++failures;
                 return 1;

@@ -2849,7 +2849,7 @@ static int ext4_meta_get_inode(struct ext4_mountpoint *mp, uint32_t inode,
 
 int ext4_meta_get(const char *path, uint32_t *mode, uint32_t *uid,
 		  uint32_t *gid, uint32_t *mtime, uint32_t *nlink,
-		  uint64_t *size)
+		  uint64_t *size, uint32_t *inode)
 {
 	struct ext4_mountpoint *mp = ext4_get_mount(path);
 	ext4_file f;
@@ -2862,6 +2862,8 @@ int ext4_meta_get(const char *path, uint32_t *mode, uint32_t *uid,
 	if (r == EOK)
 		r = ext4_meta_get_inode(mp, f.inode, mode, uid, gid, mtime,
 					 nlink, size);
+	if (r == EOK && inode)
+		*inode = f.inode;
 	EXT4_MP_UNLOCK(mp);
 	return r;
 }
@@ -2885,7 +2887,8 @@ int ext4_meta_get_handle(const ext4_file *file, uint32_t *mode, uint32_t *uid,
 
 int ext4_meta_getat(const ext4_dir *directory, const char *path,
 		    uint32_t *mode, uint32_t *uid, uint32_t *gid,
-		    uint32_t *mtime, uint32_t *nlink, uint64_t *size)
+		    uint32_t *mtime, uint32_t *nlink, uint64_t *size,
+		    uint32_t *inode)
 {
 	struct ext4_mountpoint *mp;
 	ext4_file f;
@@ -2902,6 +2905,8 @@ int ext4_meta_getat(const ext4_dir *directory, const char *path,
 	if (r == EOK)
 		r = ext4_meta_get_inode(mp, f.inode, mode, uid, gid, mtime,
 					 nlink, size);
+	if (r == EOK && inode)
+		*inode = f.inode;
 	EXT4_MP_UNLOCK(mp);
 	return r;
 }
