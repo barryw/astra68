@@ -2,6 +2,21 @@
 
 Status: active continuation map, 2026-11-05
 
+Filesystem read invalidation correction, 2026-11-05: HostFS no longer advances
+the node generation on a successful `FS_READ`. Reads may update Linux atime,
+but volume notifications describe explicit Astra mutations, not access-time
+bookkeeping. The full confined-provider HostFS suite now asserts that reads
+leave the generation unchanged; it passed on Beast. Its held-descriptor oracle
+now checks only the test QEMU process, avoiding unrelated NFS descriptors on
+the host. `make -C ndk dist-check` passed. The AArch64 QEMU binary with SHA-256
+`0f81a9b47a9dedba63e207b09de4485fdbe84a2113793ec24979f5aea0e66ad8`
+was installed through the DE25 development shadow. Astra reached stage 8
+without panic or degraded boot, runtime/audio/remote-desktop services are
+active, one development release remains, and board has 7.9 GiB free. Haiku
+reference: `src/system/kernel/fs/node_monitor.cpp` emits stat changes from
+explicit filesystem mutations. Exact per-node events and notification
+performance qualification remain open.
+
 Filesystem write invalidation correction, 2026-11-05: QEMU's canonical HostFS
 namespace now advances its node generation after a nonempty successful write,
 including a write whose later position report fails. The existing entry and

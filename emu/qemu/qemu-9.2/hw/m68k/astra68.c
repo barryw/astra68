@@ -7198,8 +7198,6 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         } else {
             moved = sequential ? read(file->description->fd, data, capacity) :
                     pread(file->description->fd, data, capacity, offset);
-            if (moved > 0)
-                changed_nodes = true;
             if (moved < 0) {
                 status = astra_host_path_status(errno, &resolved);
             } else {

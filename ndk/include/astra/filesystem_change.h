@@ -21,7 +21,7 @@ typedef struct AstraFilesystemChange {
     uint32_t size;
     /** Exact mounted volume identity. */
     AstraVolumeReference volume;
-    uint64_t nodes;   /**< File or directory contents/metadata changed. */
+    uint64_t nodes;   /**< Explicit file or directory mutation; reads do not count. */
     uint64_t entries; /**< Directory entries changed. */
 } AstraFilesystemChange;
 

@@ -423,10 +423,12 @@ def open_session(qtest, generation, volume="/work", root="/", read_only=False,
     return get32(answer.raw, 56)
 
 
-def provider_holds(path):
-    """Observe the held inode, including its private bind-mount spelling."""
+def provider_holds(qtest, path):
+    """Observe QEMU's held inode, including its private bind-mount spelling."""
     target = os.stat(path)
-    for fd in glob.glob("/proc/[0-9]*/fd/*"):
+    pid, _, _ = struct.unpack("3i", qtest.socket.getsockopt(
+        socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+    for fd in glob.glob(f"/proc/{pid}/fd/*"):
         try:
             held = os.stat(fd)
             if (held.st_dev, held.st_ino) == (target.st_dev, target.st_ino):
@@ -601,10 +603,10 @@ def scopes(qtest, root):
                                         flags=OPEN_READ, session=sub))
     assert status(held) == STATUS_OK
     target = os.path.join(root, "work", "held-open")
-    assert provider_holds(target)
+    assert provider_holds(qtest, target)
     assert status(execute(qtest, [Command(
         generation, FS_SESSION_CLOSE, session=sub)])[0]) == STATUS_OK
-    assert not provider_holds(target)
+    assert not provider_holds(qtest, target)
     assert status(step(Command(
         generation, FS_CLOSE, handle=get32(held, 16), session=sub))) == \
         STATUS_OK
@@ -620,7 +622,7 @@ def scopes(qtest, root):
     assert status(survivor) == STATUS_OK
     old_handle = get32(survivor, 16)
     qtest.write32(HACC_RELEASE_OWNER, PROVIDER)
-    assert not provider_holds(os.path.join(root, "work", "survivor"))
+    assert not provider_holds(qtest, os.path.join(root, "work", "survivor"))
     orphan = step(Command(
         generation, FS_STAT, "/", session=work))
     assert status(orphan) == STATUS_LOST
@@ -714,7 +716,7 @@ def orphan_open(qtest, root):
         os.close(writer)
     assert status(answer) == STATUS_BAD_HANDLE, status(answer)
     assert get32(answer, 16) == 0
-    assert not provider_holds(fifo)
+    assert not provider_holds(qtest, fifo)
     assert configure_scope(qtest, generation, CONFIG_CLOSE, 10, 41) == 0
     print("PASS orphan-open")
 
@@ -1422,12 +1424,15 @@ def run(qtest, root, outside):
         "empty write must not announce a node mutation"
 
     capacity = len(payload)
+    before_read = changes()
     read = execute(qtest, [Command(
         generation, FS_READ, handle=handle, capacity=capacity,
         session=work)])[0]
     assert status(read) == STATUS_OK
     assert get32(read.raw, 52) == capacity
     assert output(qtest, read, capacity) == payload
+    assert changes() == before_read, \
+        "reading contents must not announce a filesystem mutation"
 
     hard_linked = execute(qtest, [Command(
         generation, FS_LINK, "/data", "/data-hard-link", session=work)])[0]
@@ -1790,7 +1795,7 @@ def descriptions(qtest, root):
     assert status(parent(FS_READ, handle=held_handle, flags=IO_SEQUENTIAL,
                          capacity=1)) == STATUS_OK
     assert status(parent(FS_CLOSE, handle=held_handle)) == STATUS_OK
-    assert not provider_holds(path)
+    assert not provider_holds(qtest, path)
     # A dead sharer loses pending references; already adopted owners retain theirs.
     directory_path = os.path.join(root, "work", "shared-directory")
     os.mkdir(directory_path)
@@ -1831,7 +1836,7 @@ def descriptions(qtest, root):
     assert parent_names() == [third]
     assert status(parent(FS_CLOSE, handle=directory)) == STATUS_OK
     assert status(child(FS_CLOSE, handle=child_directory)) == STATUS_OK
-    assert not provider_holds(directory_path)
+    assert not provider_holds(qtest, directory_path)
     opened = child(FS_OPEN, path="/shared-description", flags=OPEN_READ)
     assert status(opened) == STATUS_OK
     dying_handle = get32(opened, 16)
@@ -1845,7 +1850,7 @@ def descriptions(qtest, root):
     alive = parent(FS_READ, handle=survivor_handle, flags=IO_SEQUENTIAL, capacity=1)
     assert status(alive) == STATUS_OK and output(qtest, alive, 1) == b"Z"
     assert status(parent(FS_CLOSE, handle=survivor_handle)) == STATUS_OK
-    assert not provider_holds(path)
+    assert not provider_holds(qtest, path)
     print("PASS shared-descriptions")
 
 
@@ -1887,7 +1892,7 @@ def paths(qtest, root):
     os.rename(before, os.path.join(root, "cwd-outside"))
     assert status(call(FS_PATH, handle=handle, capacity=128)) == STATUS_NOT_FOUND
     assert status(call(FS_CLOSE, handle=handle)) == STATUS_OK
-    assert not provider_holds(os.path.join(root, "cwd-outside"))
+    assert not provider_holds(qtest, os.path.join(root, "cwd-outside"))
     print("PASS directory-paths")
 
 
@@ -1915,11 +1920,11 @@ def provider_loss(qtest, root, qmp_path):
             assert status(opened) == STATUS_OK, (attempt, status(opened))
             handle = get32(opened, 16)
             host_path = os.path.join(root, "work", "lost.bin")
-            assert provider_holds(host_path)
+            assert provider_holds(qtest, host_path)
             qmp.execute("qom-set", {"path": "/machine",
                 "property": "astra-host-fs-reset", "value": True})
             assert qtest.read32(HACC_GENERATION) == generation
-            assert not provider_holds(host_path)
+            assert not provider_holds(qtest, host_path)
             assert status(call(FS_READ, handle=handle, capacity=8)) == STATUS_LOST
             assert status(execute(qtest, [Command(generation, FS_STAT,
                 path="/", session=session)], owner=0xDEAD)[0]) == STATUS_ACCESS
