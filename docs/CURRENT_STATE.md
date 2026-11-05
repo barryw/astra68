@@ -2,6 +2,20 @@
 
 Status: active continuation map, 2026-11-05
 
+Messaging redelivery correction, 2026-11-05: an unacknowledged reliable event
+now retries with the same subscription sequence after one second; previously
+only a full-port send retried, so a dequeued event whose ACK was lost could
+remain stranded in the broker. The bounded backlog and best-effort default are
+unchanged. Supervisor Messaging host test covers missing ACK, duplicate
+delivery, ACK authorization, and full-backlog admission. Incremental ROM
+SHA-256 `cf4ee3ec8086813c460aabc9cc4787e9f952af7cc32682930383d1c946b8607e`
+was installed through the DE25 development shadow
+`96faa04f5ee76a9d9f92a216121ab3e759358a17b430cf4cd85cb97c5818b97d`.
+Board and Beast ROM hashes match; Astra reached stage 8 without panic or
+degradation, runtime/audio/remote-desktop services are active, one development
+release remains, and board has 8.0 GiB free. Hardware boot was checked; a
+physical lost-ACK injection remains open.
+
 Messaging QoS and filesystem invalidation gate, 2026-11-05: broker keeps
 best-effort fanout as default and adds bounded, opt-in reliable delivery with
 atomic subscriber admission, ordered retries, and authenticated ACKs. A full

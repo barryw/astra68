@@ -27,7 +27,9 @@ subscriber; a full backlog returns `BUSY` without partial delivery. Wire sizes
 stay at version 1; existing publishers send zero QoS and retain best-effort
 behavior. Reliable events and ACKs are additive operations. Broker sends each
 subscriber's head event in order, retries a full port every 100 ms,
-and keeps it until that subscriber acknowledges its sequence. Duplicate ACKs
+redelivers an unacknowledged event after one second, and keeps it until that
+subscriber acknowledges its sequence. Duplicate events carry the same sequence;
+consumers must make processing idempotent. Duplicate ACKs
 succeed. Reliable events use `ASTRA_MESSAGING_RELIABLE_EVENT`; best-effort
 events use `ASTRA_MESSAGING_EVENT`. Reply `delivered` counts backlog admissions
 for reliable publication. Publisher uses a finite call deadline and retries `BUSY`; a timed-out

@@ -195,6 +195,12 @@ int main(void)
     pump();
     assert(reply.status == ASTRA_STATUS_OK && reply.delivered == 1u &&
         event_count == before);
+    for (uint32_t at = 0u; at < 9u; ++at)
+        supervisor_messaging_retry();
+    assert(event_count == before);
+    supervisor_messaging_retry();
+    assert(event_count == before + 1u && event.sequence == 4u &&
+        event.header.operation == ASTRA_MESSAGING_RELIABLE_EVENT);
     request(30u, ASTRA_MESSAGING_ACK, 0u);
     incoming.subscription = subscription;
     incoming.cursor = 4u;
@@ -223,7 +229,7 @@ int main(void)
         supervisor_messaging_needs_retry());
     blocked_send = 0u;
     supervisor_messaging_retry();
-    assert(event.sequence == 6u && !supervisor_messaging_needs_retry());
+    assert(event.sequence == 6u && supervisor_messaging_needs_retry());
     request(20u, ASTRA_MESSAGING_ACK, 0u);
     incoming.subscription = subscription;
     incoming.cursor = 6u;

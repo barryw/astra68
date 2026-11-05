@@ -10,6 +10,8 @@
 
 #define MESSAGING_ENDPOINT_MAX 128u
 #define MESSAGING_SUBSCRIPTION_MAX 128u
+/* The supervisor retry pump runs every 100 ms while an ACK is outstanding. */
+#define MESSAGING_REDELIVERY_TICKS 10u
 
 typedef struct MessagingEndpoint {
     struct MessagingEndpoint *next;
@@ -22,6 +24,7 @@ typedef struct MessagingPending {
     struct MessagingSubscription *target;
     AstraMessagingEvent event;
     uint8_t sent;
+    uint8_t redelivery_ticks;
 } MessagingPending;
 
 typedef struct MessagingSubscription {
@@ -297,8 +300,10 @@ static uint32_t send_pending(MessagingSubscription *entry)
         return ASTRA_SYSCALL_OK;
     uint32_t status = astra_port_send(entry->send, &pending->event,
         sizeof(pending->event), NULL, 0u);
-    if (status == ASTRA_SYSCALL_OK)
+    if (status == ASTRA_SYSCALL_OK) {
         pending->sent = 1u;
+        pending->redelivery_ticks = MESSAGING_REDELIVERY_TICKS;
+    }
     return status;
 }
 
@@ -330,7 +335,7 @@ int supervisor_messaging_needs_retry(void)
 {
     for (MessagingSubscription *entry = subscriptions; entry != NULL;
          entry = entry->next)
-        if (entry->pending_head != NULL && entry->pending_head->sent == 0u)
+        if (entry->pending_head != NULL)
             return 1;
     return 0;
 }
@@ -340,6 +345,10 @@ void supervisor_messaging_retry(void)
     MessagingSubscription **at = &subscriptions;
     while (*at != NULL) {
         MessagingSubscription *entry = *at;
+        MessagingPending *pending = entry->pending_head;
+        if (pending != NULL && pending->sent != 0u &&
+            --pending->redelivery_ticks == 0u)
+            pending->sent = 0u;
         uint32_t status = send_pending(entry);
         if (status == ASTRA_SYSCALL_PEER_DEAD ||
             status == ASTRA_SYSCALL_INVALID_HANDLE) {
