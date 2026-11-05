@@ -519,11 +519,16 @@ static int case_alias_identity(const char *directory)
     fd = open(file, O_RDWR);
     CHECK(fd >= 0 && unlink(file) == 0 && fstat(fd, &b) == 0 &&
           a.st_ino == b.st_ino && b.st_nlink == 1, "held unlinked file identity");
+    CHECK(fchmod(fd, 0400) == 0 && fstat(fd, &b) == 0 &&
+          (b.st_mode & 07777) == 0400,
+          "held unlinked file mode");
     CHECK(ftruncate(fd, 1 << 20) == 0 && fstat(fd, &b) == 0 &&
           b.st_blksize > 0 && b.st_blocks < b.st_size / 512 &&
           b.st_mtim.tv_nsec >= 0 && b.st_mtim.tv_nsec < 1000000000,
           "provider allocation or timestamp metadata");
     CHECK(close(fd) == 0, "close identity fixture");
+    CHECK(unlink(other) == 0 && unlink(moved) == 0 &&
+          rmdir(directory) == 0, "identity fixture cleanup");
     return 0;
 }
 

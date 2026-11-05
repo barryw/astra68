@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-11-05
 
+Handle-chmod exact-event checkpoint, 2026-11-05: successful descriptor-based
+chmod now uses the retained open handle's inode for the existing exact NODE
+record. Path-based chmod and a lost provider reply still invalidate by
+generation, because their mutation identity or outcome is not certain. Beast's
+full confined-provider HostFS gate passed with an exact chmod-record check.
+The AArch64 QEMU SHA-256
+`ce92c6b46d00344474cde1c490c7a0cd31a06f2399dd3fb890ac040bad960329`
+is active in DE25 development shadow
+`762dbbede5e5db12096387f06c0643fde52e508e110ab51c506458de2d409573`.
+DE25 reached boot stage 8; Astra, HDMI audio, and remote desktop are active,
+with zero Astra restarts and 7.9 GiB free. The image has no `chmod` shell
+command, so the existing native `fssem alias-identity` case now tests
+`fchmod` on an unlinked open file and checks the resulting mode with `fstat`.
+That case passed on DE25. Its test directory now self-cleans; the previously
+left directory was removed with the upstream sbase `rmdir`, promoted to the
+primary Astra command set and tested on DE25. The RAM0 probe and both test
+directories were removed and their absence verified. Beast evidence is under
+`/mnt/Documents/astra68/open-truncate-exact-20261105/` with verified hashes;
+disposable board captures were removed. Haiku reference:
+`src/system/kernel/fs/node_monitor.cpp` records node identity at mutation
+time. Exact directory entries and Linux-originated changes remain open.
+
 Open-truncate exact-event checkpoint, 2026-11-05: HostFS now includes the
 opened inode in its existing exact NODE change record when a successful open
 truncates a file. It reuses the fstat already needed to publish the open

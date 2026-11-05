@@ -7728,9 +7728,11 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
          * syscall failures did not change the tree. */
         if (error == 0 || qatomic_read(&s->host.provider_broken) ||
             (session->network && qatomic_read(&s->host.provider_network_path_broken))) {
-            if (operation == ASTRA_HOST_FS_CHMOD)
+            if (operation == ASTRA_HOST_FS_CHMOD) {
                 changed_nodes = true;
-            else if (operation != ASTRA_HOST_FS_READLINK)
+                if (error == 0 && path[0] == '\0' && file != NULL)
+                    changed_inode = file->identity.inode;
+            } else if (operation != ASTRA_HOST_FS_READLINK)
                 changed_entries = true;
         }
         astra_host_resolution(&reply, &resolved);
@@ -7805,8 +7807,8 @@ done:
         if (changed_nodes) qatomic_inc(&namespace->changes_nodes);
         if (changed_entries) qatomic_inc(&namespace->changes_entries);
         if (changed_nodes && changed_inode != 0u) {
-            /* shortcut: exact records cover handle writes/truncates; other
-             * mutations still invalidate through the volume generations. */
+            /* shortcut: exact records cover handle writes/truncates and
+             * descriptor chmod; other mutations still invalidate by generation. */
             if (namespace->change_sequence == UINT64_MAX)
                 namespace->change_sequence = 0u;
             uint64_t sequence = ++namespace->change_sequence;

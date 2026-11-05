@@ -1480,6 +1480,16 @@ def run(qtest, root, outside):
     assert status(execute(qtest, [Command(generation, FS_CLOSE,
         handle=get32(truncate_open.raw, 16), session=work)])[0]) == STATUS_OK
 
+    before_chmod = changes()
+    chmod = execute(qtest, [Command(generation, FS_CHMOD, handle=handle,
+        value=0o644, session=work)])[0]
+    assert status(chmod) == STATUS_OK
+    assert changes() == (before_chmod[0] + 1, before_chmod[1])
+    chmod_sequence, kind, record = next_change(open_sequence)
+    assert chmod_sequence == open_sequence + 1 and kind == CHANGE_NODE
+    assert record == (chmod_sequence, before_chmod[0] + 1,
+                      before_chmod[1], get64(opened.raw, NODE_INODE))
+
     hard_linked = execute(qtest, [Command(
         generation, FS_LINK, "/data", "/data-hard-link", session=work)])[0]
     assert status(hard_linked) == STATUS_OK

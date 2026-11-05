@@ -71,11 +71,11 @@ TERMINFO_LIBRARY := $(ASTRA_TERMINFO_LIBRARY)
 # port builds them (it owns SDL's headers and build rules); this directory
 # strips them and checks their libraries like every other command.
 SDL_COMMANDS := loopwave
-COMMANDS := status events log devices volumes disk mount unmount shares lsof df which open service shutdown restart ls ps metrics cat cp mv mkdir rm apkg \
+COMMANDS := status events log devices volumes disk mount unmount shares lsof df which open service shutdown restart ls ps metrics cat cp mv mkdir rmdir rm apkg \
 	    nice renice \
 	    heapbench fsstress fsbench date echo ntp ping lua vim zsh $(SDL_COMMANDS)
 TEST_COMMANDS := posix hello cxx fpucheck logburst fssem fsprobe mempressure
-SBASE_PRIMARY := ls mkdir nice renice
+SBASE_PRIMARY := ls mkdir rmdir nice renice
 SOURCE_COMMANDS := $(filter-out lua cxx vim zsh $(SDL_COMMANDS) \
 	$(SBASE_PRIMARY),$(COMMANDS) $(TEST_COMMANDS))
 SOURCE_IMAGES := $(patsubst %,build/m68k/%,$(SOURCE_COMMANDS))
@@ -119,6 +119,7 @@ cp_EXTRA_SOURCES := file_target.c
 mv_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 mv_EXTRA_SOURCES := file_target.c
 mkdir_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+rmdir_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 nice_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 renice_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 rm_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
