@@ -1856,6 +1856,21 @@ void kernel_process_soak_checkpoint(uint32_t cycles,
 }
 #endif
 
+static KernelWorkerServiceResult pressure_reclaim(uint32_t batch_limit,
+                                                  void *context)
+{
+    KernelMemoryPressure level;
+    uint32_t headroom;
+
+    if (batch_limit != 1u || context != NULL ||
+        !kernel_memory_pressure(&level, &headroom))
+        return KERNEL_WORKER_SERVICE_FATAL;
+    if (level < KERNEL_MEMORY_PRESSURE_NOTE)
+        return KERNEL_WORKER_SERVICE_COMPLETE;
+    return kernel_process_reclaim_idle_libraries() == KERNEL_PROCESS_OK ?
+        KERNEL_WORKER_SERVICE_COMPLETE : KERNEL_WORKER_SERVICE_FATAL;
+}
+
 /*
  * Declared as well as defined because nothing else declares it: the only caller
  * is `jsr kernel_main` in entry.S, which the C compiler cannot check. Writing
@@ -2012,6 +2027,9 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         kernel_panic("interrupt controller initialization failed");
     process_bootstrap_started = kernel_platform_cpu_cycles_low();
     kernel_process_init();
+    if (kernel_worker_register(KERNEL_WORKER_PRESSURE,
+                               pressure_reclaim, NULL) != KERNEL_WORKER_OK)
+        kernel_panic("memory pressure worker registration failed");
     /* Before the first launch: every process maps it, and logs read it. */
     if (!kernel_time_page_init())
         kernel_panic("time page allocation failed");

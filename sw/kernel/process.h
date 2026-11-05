@@ -491,6 +491,8 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
                                             const void *raw_frame,
                                             KernelCpuContext **next_context);
 KernelProcessStatus kernel_process_maintenance(void);
+/* Existing shared-library cache: reclaim only entries with no live mappings. */
+KernelProcessStatus kernel_process_reclaim_idle_libraries(void);
 bool kernel_process_maintenance_diagnostics(
     KernelProcessMaintenanceDiagnostics *diagnostics);
 KernelProcessStatus kernel_process_reap_deferred(void);

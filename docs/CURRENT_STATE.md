@@ -3,18 +3,22 @@
 Status: active continuation map, 2026-11-05
 
 Coordinated memory pressure prerequisite, 2026-11-05: `kernel_memory_pressure`
-now classifies ordinary allocation headroom after subtracting the existing
-core, protected-service, and DMA floors. Note, warning, and critical
-thresholds are four, two, and one maximum recovery transactions above that
-floor. Haiku reference: `src/system/kernel/low_resource_manager.cpp` computes
-free-page pressure and runs reclaim handlers in priority order outside its
-manager lock. Beast's full kernel host test suite passes, including exact
-threshold, reserve, and recovery checks; target kernel build passes. Baseline
-and current linked kernel images are both 217,940 bytes because no runtime
-consumer is wired yet. Next: use the existing kernel worker to reclaim idle
-library mappings at pressure before adding the general file cache, then expose
-state to service caches and certify recovery on DE25. This classification is
-not yet a complete pressure manager or hardware gate.
+classifies ordinary allocation headroom after subtracting the existing core,
+protected-service, and DMA floors. Note, warning, and critical thresholds are
+four, two, and one maximum recovery transactions above that floor. The existing
+kernel worker now polls every 128 timer ticks and invokes the existing idle
+shared-library cache reclaimer when pressure reaches note level. It uses the
+library-cache cycle budget, not the device batch metric. Haiku reference:
+`src/system/kernel/low_resource_manager.cpp` computes free-page pressure and
+runs reclaim handlers outside its manager lock. Beast's full kernel host suite
+and K1 qualification pass. With target-representative `-icount shift=4`, the
+K1 timer maximum changed from 676 to 679 cycles against its 50,000-cycle
+budget; linked normal kernel grew from 217,940 to 218,312 bytes. Incremental
+normal-ROM SHA-256 `a13cbe4ec6f4077106c656ebc10a1d5604ce00d6604075b43a373da231ebfcc2`
+booted DE25 to stage 8 with Astra, audio, and remote desktop services active;
+board has 7.9 GiB free. The board boot did not induce low memory, so actual
+pressure recovery on DE25, service cache coordination, and general file-cache
+reclaim remain open.
 
 Filesystem change producer correction, 2026-11-05: production HostFS now
 publishes per-volume generations from QEMU's canonical filesystem namespace,

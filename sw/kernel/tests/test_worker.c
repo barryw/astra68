@@ -1,5 +1,6 @@
 #include "worker.h"
 
+#include "memory.h"
 #include "panic.h"
 #include "performance.h"
 #include "platform.h"
@@ -23,9 +24,21 @@ static KernelWorkerServiceResult monitor_result;
 static uint32_t monitor_calls;
 static uint32_t monitor_last_batch;
 static uint32_t device_calls;
+static uint32_t pressure_calls;
+static uint32_t pressure_queries;
+static KernelMemoryPressure pressure_level;
 static uint32_t staged_trace_records;
 static KernelTraceEvent failure_event;
 static uint32_t failure_arguments[4];
+
+bool kernel_memory_pressure(KernelMemoryPressure *level,
+                            uint32_t *ordinary_headroom_frames)
+{
+    ++pressure_queries;
+    *level = pressure_level;
+    *ordinary_headroom_frames = 0u;
+    return true;
+}
 
 bool kernel_trace_write(KernelTraceEvent event, uint16_t flags,
                         uint32_t argument0, uint32_t argument1,
@@ -140,6 +153,15 @@ static KernelWorkerServiceResult device_service(uint32_t batch_limit,
     assert(batch_limit == KERNEL_WORKER_DEVICE_RESET_BATCH);
     assert(context == &device_calls);
     ++device_calls;
+    return KERNEL_WORKER_SERVICE_COMPLETE;
+}
+
+static KernelWorkerServiceResult pressure_service(uint32_t batch_limit,
+                                                  void *context)
+{
+    assert(interrupts_enabled);
+    assert(batch_limit == 1u && context == &pressure_calls);
+    ++pressure_calls;
     return KERNEL_WORKER_SERVICE_COMPLETE;
 }
 
@@ -323,6 +345,34 @@ static void test_trace_flush_is_bounded_and_retried(void)
     assert(stats.class_retries[4] == 1u);
 }
 
+static void test_pressure_uses_existing_worker_and_library_budget(void)
+{
+    KernelPerformanceStats performance;
+
+    assert(kernel_worker_register(KERNEL_WORKER_PRESSURE,
+                                  pressure_service, &pressure_calls) ==
+           KERNEL_WORKER_OK);
+    pressure_level = KERNEL_MEMORY_PRESSURE_NORMAL;
+    for (uint32_t tick = 0u; tick < KERNEL_WORKER_PRESSURE_POLL_TICKS; ++tick)
+        assert(kernel_worker_on_timer() == KERNEL_WORKER_OK);
+    assert(pressure_queries == 1u);
+    assert(!kernel_worker_work_pending());
+
+    pressure_level = KERNEL_MEMORY_PRESSURE_NOTE;
+    for (uint32_t tick = 0u; tick < KERNEL_WORKER_PRESSURE_POLL_TICKS; ++tick)
+        assert(kernel_worker_on_timer() == KERNEL_WORKER_OK);
+    assert(pressure_queries == 2u);
+    assert(worker_stats().pending_work == KERNEL_WORKER_PRESSURE);
+    assert(kernel_worker_try_select());
+    assert(kernel_worker_test_service_once() == KERNEL_WORKER_OK);
+    assert(kernel_worker_test_block_if_idle());
+    assert(pressure_calls == 1u);
+    assert(kernel_performance_stats(&performance));
+    assert(performance.metric[KERNEL_PERFORMANCE_LIBRARY_CACHE].calls == 1u);
+    assert(performance.metric[KERNEL_PERFORMANCE_LIBRARY_CACHE].overruns == 0u);
+    assert(performance.metric[KERNEL_PERFORMANCE_DEVICE_BATCH].calls == 1u);
+}
+
 static void test_maintenance_failure_identifies_worker_class(void)
 {
     maintenance_result = KERNEL_PROCESS_CORRUPT;
@@ -345,6 +395,7 @@ int main(void)
     test_registered_service_is_bounded_and_retried();
     test_device_batch_is_measured();
     test_trace_flush_is_bounded_and_retried();
+    test_pressure_uses_existing_worker_and_library_budget();
     test_maintenance_failure_identifies_worker_class();
     assert(save_disable_calls == 7u);
     assert(restore_calls == save_disable_calls);

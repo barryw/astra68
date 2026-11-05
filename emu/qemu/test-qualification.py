@@ -135,6 +135,9 @@ def main():
     lines = boot(arguments.qemu, arguments.rom, arguments.image,
                  arguments.memory, arguments.deadline)
     elapsed = time.monotonic() - started
+    for line in lines:
+        if line.startswith("K2 PERF "):
+            print(line)
 
     failures = []
     text = "\n".join(lines)

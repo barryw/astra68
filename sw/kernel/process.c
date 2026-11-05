@@ -6560,7 +6560,7 @@ static bool library_cache_idle(const KernelLibraryCacheEntry *entry)
     return visited == entry->page_count;
 }
 
-static KernelProcessStatus library_cache_reclaim_idle(void)
+KernelProcessStatus kernel_process_reclaim_idle_libraries(void)
 {
     uint32_t *link = &library_cache_head;
 
@@ -6655,11 +6655,11 @@ bool kernel_process_test_library_cache_reclaims_after_last_mapping(void)
     library_cache_head = entry_physical;
     if (kernel_memory_retain(page_physical, 1u, LIBRARY_CACHE_OWNER) !=
             KERNEL_MEMORY_OK ||
-        library_cache_reclaim_idle() != KERNEL_PROCESS_OK ||
+        kernel_process_reclaim_idle_libraries() != KERNEL_PROCESS_OK ||
         library_cache_head != entry_physical ||
         kernel_memory_release(page_physical, 1u, LIBRARY_CACHE_OWNER) !=
             KERNEL_MEMORY_OK ||
-        library_cache_reclaim_idle() != KERNEL_PROCESS_OK ||
+        kernel_process_reclaim_idle_libraries() != KERNEL_PROCESS_OK ||
         library_cache_head != 0u ||
         !kernel_memory_frame_info(page_physical, &info))
         return false;
@@ -6715,7 +6715,7 @@ bool kernel_process_test_library_cache_exceeds_legacy_slot_count(void)
         pending_entry = NULL;
         expected_base = base;
     }
-    if (library_cache_reclaim_idle() != KERNEL_PROCESS_OK ||
+    if (kernel_process_reclaim_idle_libraries() != KERNEL_PROCESS_OK ||
         library_cache_head != 0u || !kernel_memory_stats(&after))
         return false;
     return after.free_frames == before.free_frames;
@@ -6724,7 +6724,7 @@ failed:
     if (pending_entry != NULL &&
         library_cache_release_entry(pending_entry) != KERNEL_PROCESS_OK)
         return false;
-    (void)library_cache_reclaim_idle();
+    (void)kernel_process_reclaim_idle_libraries();
     return false;
 }
 #endif
@@ -7032,7 +7032,7 @@ static void library_load_release(void *object, void *context)
         load->process = NULL;
         load->mapped_base = 0u;
         load->mapped_span = 0u;
-        if (library_cache_reclaim_idle() != KERNEL_PROCESS_OK)
+        if (kernel_process_reclaim_idle_libraries() != KERNEL_PROCESS_OK)
             failed = true;
     }
     if (load->entry != NULL &&
@@ -7376,7 +7376,7 @@ static KernelProcessStatus library_load_map(
     }
     if (selected == NULL) {
         if (!library_cache_place(load->entry->span, &base)) {
-            status = library_cache_reclaim_idle();
+            status = kernel_process_reclaim_idle_libraries();
             if (status != KERNEL_PROCESS_OK)
                 return status;
             if (!library_cache_place(load->entry->span, &base))
