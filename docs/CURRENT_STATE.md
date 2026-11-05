@@ -22,7 +22,11 @@ canonical Astra mutation producer or existing volume-generation recovery.
 Haiku's `src/system/kernel/fs/node_monitor.cpp` records parent, child, and
 move identities at the filesystem owner; Astra still needs a bridge through
 its existing broker with overflow/loss recovery. No notification performance
-claim follows from this probe.
+claim follows from this probe. A filesystem mark on a host-directory bind
+export sees the entire host superblock; raw events or the monitoring FD cannot
+be handed to the guest. The root provider must filter exactly or leave that
+source without host-originated exact events; the current generation path only
+covers Astra-originated mutations.
 
 HPS watchdog checkpoint, 2026-11-05: DE25 systemd now owns the existing
 Synopsys DesignWare `/dev/watchdog0` hardware timer. Its versioned manager

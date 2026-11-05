@@ -439,6 +439,11 @@ That can observe Linux-local edits through the provider, but Linux fanotify
 does not report remote changes or mmap writes. Astra's canonical operation
 records remain necessary; both sources must publish through the existing
 broker, with generations covering loss and unsupported sources.
+`FAN_MARK_FILESYSTEM` on a host-directory binding observes the whole backing
+filesystem, not Astra's granted subtree. Raw events or the monitoring FD must
+never cross into the guest; the root-owned provider must filter with exact
+mount/subtree authority or omit external exact events for that binding. The
+current generation path only covers Astra-originated mutations.
 
 Implementation order follows dependencies: node events use the existing broker;
 crash snapshots use the process-handle and trace seams. Pressure handling must
