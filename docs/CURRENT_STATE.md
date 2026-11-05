@@ -516,6 +516,36 @@ One development release remains and 7.9 GiB are free. Build, K1, and board
 evidence is archived under
 `/mnt/Documents/astra68/priority-inherit-scheduler-20261105/` on Beast.
 
+Native RPC priority donation, 2026-11-05: blocking calls now donate their
+effective priority to the awakened receiver and to the thread that imports the
+reply capability. Capability export withdraws from the prior receiver; import
+reattaches to the new one. Nested calls propagate donation, while reply,
+timeout, cancellation, close, and peer death withdraw it. A synchronous cycle
+is not boosted because it has no runnable owner. This extends the existing
+thread priority and handle-transfer mechanisms; no second scheduler or IPC
+path was added. Haiku references:
+`src/system/kernel/scheduler/scheduler.cpp`,
+`src/system/kernel/scheduler/scheduler_thread.cpp`, and
+`src/system/kernel/locks/lock.cpp`. Astra uses the separation between base and
+effective priority and its own native reply-capability ownership.
+Beast's complete kernel suite and 12-marker target-representative K1 gate pass.
+K1 maxima: scheduler pick 38/10,000 cycles, same-priority switch 136/15,000,
+cross-priority switch 141/50,000, wait block 936/15,000, wake 81/15,000;
+zero budget overruns. Normal ROM SHA-256
+`775ebb76fde42c1239bc36048ee8c95b8c93b391d2182a0adc1b19eb82046bad`
+booted DE25 to stage 8. Disposable native `rpcpi` gate ran ten times under a
+medium-priority CPU hog; each call completed and replied before its 500 ms
+deadline, with observed latency 1,593-4,886 microseconds. The test command is
+not part of the release. Evidence is under
+`/mnt/Documents/astra68/rpc-priority-20261105/` on Beast. After evidence
+verification, `rpcpi` was removed from the development image. DE25 rebooted
+to stage 8 with the same ROM, one development release, zero Astra restarts,
+active Astra/audio/remote-desktop services, and 7.9 GiB free. User mutex
+inheritance remains open; shared-process reply handles can be used by another
+thread without transferring them, so explicit transfer is required to identify
+and boost a new receiver. Notification performance qualification remains after
+notification correctness.
+
 Filesystem change producer correction, 2026-11-05: production HostFS now
 publishes per-volume generations from QEMU's canonical filesystem namespace,
 which sees both VFS service requests and direct client lanes. The old VFS

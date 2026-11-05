@@ -428,6 +428,8 @@ static KernelThreadWaitQueue sleep_waiters;
  * nothing happened.
  */
 static uint8_t diagnostic_console_open = 1u;
+static void reply_export_observer(KernelObjectType type, void *object,
+                                  void *context);
 static KernelProcessMaintenanceDiagnostics maintenance_diagnostics;
 static KernelThread *current_thread;
 static uint64_t quantum_deadline;
@@ -4178,6 +4180,7 @@ void kernel_process_init(void)
         return;
     }
     kernel_handle_set_import_rights(host_scope_import_rights);
+    kernel_handle_set_export_observer(reply_export_observer);
     for (uint32_t index = 0u;
          index < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT; ++index)
         kernel_thread_wait_queue_init(&host_channels[index].waiters);
@@ -9866,6 +9869,46 @@ static bool valid_message_header(const uint8_t *message,
  */
 #define KERNEL_REPLY_RIGHTS (ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_TRANSFER)
 
+static void reply_export_observer(KernelObjectType type, void *object,
+                                  void *context)
+{
+    KernelThread *caller;
+
+    if (type != KERNEL_OBJECT_REPLY || (uintptr_t)context == 0u)
+        return;
+    caller = kernel_thread_call_waiting(
+        (uint16_t)((uintptr_t)object - 1u), (uint32_t)(uintptr_t)context);
+    if (caller != NULL &&
+        kernel_thread_call_assign(caller, NULL) != KERNEL_THREAD_OK)
+        process_pool_corrupt = 1u;
+}
+
+static bool attach_reply_donations(KernelHandleTable *table,
+                                   const KernelHandle *handles,
+                                   uint32_t count, KernelThread *receiver)
+{
+    for (uint32_t index = 0u; index < count; ++index) {
+        void *object;
+        void *context;
+        KernelHandleStatus status = kernel_handle_lookup_context(
+            table, handles[index], KERNEL_OBJECT_REPLY, 0u,
+            &object, &context);
+        KernelThread *caller;
+
+        if (status == KERNEL_HANDLE_TYPE_MISMATCH)
+            continue;
+        if (status != KERNEL_HANDLE_OK || object == NULL)
+            return false;
+        caller = kernel_thread_call_waiting(
+            (uint16_t)((uintptr_t)object - 1u),
+            (uint32_t)(uintptr_t)context);
+        if (caller != NULL &&
+            kernel_thread_call_assign(caller, receiver) != KERNEL_THREAD_OK)
+            return false;
+    }
+    return true;
+}
+
 /* Dropped without a reply: the caller learns what a closed reply port told it. */
 static void reply_release(void *object, void *context)
 {
@@ -10037,6 +10080,10 @@ static __attribute__((noinline)) KernelProcessStatus deliver_reply(
     if (caller_result != ASTRA_SYSCALL_OK && handle_count != 0u &&
         kernel_handle_detached_release(transfer->detached, handle_count) !=
             KERNEL_HANDLE_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    if (caller_result == ASTRA_SYSCALL_OK && imported &&
+        !attach_reply_donations(caller_process->handles, import->handles,
+                                handle_count, caller))
         return KERNEL_PROCESS_CORRUPT;
     if (kernel_handle_set_context(current->handles, reply_handle,
                                   KERNEL_OBJECT_REPLY, NULL) !=
@@ -10266,7 +10313,7 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
         port_status = kernel_port_send_narrowed(
             port, current->handles, message, message_size,
             handle_count != 0u ? attached : NULL, handle_count,
-            narrowed ? masks : NULL, &woken);
+            narrowed ? masks : NULL, &woken, NULL);
         kernel_performance_end(performance);
         if (!port_status_to_syscall(port_status, result))
             return KERNEL_PROCESS_CORRUPT;
@@ -10347,9 +10394,17 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
             return KERNEL_PROCESS_CORRUPT;
         }
         port_status = kernel_port_receive_commit(&receipt, &woken);
-        kernel_performance_end(performance);
-        if (port_status != KERNEL_PORT_OK)
+        if (port_status != KERNEL_PORT_OK) {
+            kernel_performance_end(performance);
             return KERNEL_PROCESS_CORRUPT;
+        }
+        if (!attach_reply_donations(current->handles,
+                                    receipt.import.handles,
+                                    required_handles, thread)) {
+            kernel_performance_end(performance);
+            return KERNEL_PROCESS_CORRUPT;
+        }
+        kernel_performance_end(performance);
         if (woken != 0u && ready_thread_outranks(thread))
             ++scheduler_stats.wake_preemptions;
         if (!kernel_port_pool_healthy() ||
@@ -10403,6 +10458,7 @@ static KernelProcessStatus port_call_syscall(KernelProcess *current,
     uint8_t message[ASTRA_MESSAGE_SIZE_MAX];
     AstraPortCall call;
     KernelPort *port = NULL;
+    KernelThread *woken_receiver = NULL;
     KernelHandle reply = KERNEL_HANDLE_INVALID;
     KernelHandleStatus handle_status;
     KernelPortStatus port_status;
@@ -10506,11 +10562,11 @@ static KernelProcessStatus port_call_syscall(KernelProcess *current,
     attached[call.reply_index] = reply;
 
     performance = kernel_performance_begin(KERNEL_PERFORMANCE_PORT_SEND);
-    port_status = kernel_port_send(port, current->handles, message,
-                                   call.request_size, attached,
-                                   call.handle_count + 1u, &woken);
-    kernel_performance_end(performance);
+    port_status = kernel_port_send_narrowed(
+        port, current->handles, message, call.request_size, attached,
+        call.handle_count + 1u, NULL, &woken, &woken_receiver);
     if (port_status != KERNEL_PORT_OK) {
+        kernel_performance_end(performance);
         /* Not sent, so the capability is still ours and names no wait. */
         if (port_status == KERNEL_PORT_CORRUPT ||
             kernel_handle_close(current->handles, reply) != KERNEL_HANDLE_OK)
@@ -10538,8 +10594,16 @@ static KernelProcessStatus port_call_syscall(KernelProcess *current,
     thread->context.data[2] = 0u;
     thread->context.data[3] = 0u;
     thread_status = kernel_thread_call_block(thread, now, deadline);
-    if (thread_status != KERNEL_THREAD_OK)
+    if (thread_status != KERNEL_THREAD_OK) {
+        kernel_performance_end(performance);
         return KERNEL_PROCESS_CORRUPT;
+    }
+    if (woken_receiver != NULL &&
+        kernel_thread_call_assign(thread, woken_receiver) != KERNEL_THREAD_OK) {
+        kernel_performance_end(performance);
+        return KERNEL_PROCESS_CORRUPT;
+    }
+    kernel_performance_end(performance);
     if (woken != 0u && ready_thread_outranks(thread))
         ++scheduler_stats.wake_preemptions;
     if (!kernel_port_pool_healthy() ||

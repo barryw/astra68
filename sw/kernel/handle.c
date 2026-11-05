@@ -166,12 +166,18 @@ static uint16_t detached_backed_limit;
 static uint16_t detached_next_slot;
 static KernelHandleTransferStats transfer_stats;
 static KernelHandleImportRights import_rights;
+static KernelHandleExportObserver export_observer;
 /* ASTRA_RIGHT_TRANSFER: the handle layer stays free of the ABI headers. */
 #define KERNEL_HANDLE_RIGHT_TRANSFER (1u << 5)
 
 void kernel_handle_set_import_rights(KernelHandleImportRights filter)
 {
     import_rights = filter;
+}
+
+void kernel_handle_set_export_observer(KernelHandleExportObserver observer)
+{
+    export_observer = observer;
 }
 
 #if defined(__m68k__)
@@ -1242,6 +1248,9 @@ KernelHandleStatus kernel_handle_transfer_commit_export(
         }
         invalidate_entry(source_table, source, NULL);
         destination->state = KERNEL_DETACHED_LIVE;
+        if (export_observer != NULL)
+            export_observer(destination->type, destination->object,
+                            destination->release_context);
     }
     transfer_stats.reserved_detached -= batch->count;
     transfer_stats.live_detached += batch->count;

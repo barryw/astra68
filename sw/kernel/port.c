@@ -471,7 +471,8 @@ static void free_message(KernelPortMessage *message)
 }
 
 static bool wake_one(KernelThreadWaitQueue *queue, uint32_t result,
-                     uint32_t *woken_threads)
+                     uint32_t *woken_threads,
+                     KernelThread **woken_receiver)
 {
     KernelThread *thread = NULL;
     KernelThreadStatus status = kernel_thread_wake_one(
@@ -480,12 +481,16 @@ static bool wake_one(KernelThreadWaitQueue *queue, uint32_t result,
     if (status == KERNEL_THREAD_NO_RUNNABLE) {
         if (woken_threads != NULL)
             *woken_threads = 0u;
+        if (woken_receiver != NULL)
+            *woken_receiver = NULL;
         return true;
     }
     if (status != KERNEL_THREAD_OK || thread == NULL)
         return false;
     if (woken_threads != NULL)
         *woken_threads = 1u;
+    if (woken_receiver != NULL)
+        *woken_receiver = thread;
     ++pool_stats.wait_wakeups;
     return true;
 }
@@ -900,7 +905,7 @@ KernelPortStatus kernel_port_send_narrowed(
     KernelPort *port, KernelHandleTable *source_table,
     const void *raw_message, uint32_t message_size,
     const KernelHandle *handles, uint32_t handle_count, const uint32_t *masks,
-    uint32_t *woken_threads)
+    uint32_t *woken_threads, KernelThread **woken_receiver)
 {
     KernelPortMessage *message;
     KernelHandleTransferBatch transfer;
@@ -1002,7 +1007,8 @@ KernelPortStatus kernel_port_send_narrowed(
     pool_stats.queued_handles += handle_count;
     ++pool_stats.sends;
     update_queue_maximum();
-    if (!wake_one(&port->readable, ASTRA_SYSCALL_OK, woken_threads)) {
+    if (!wake_one(&port->readable, ASTRA_SYSCALL_OK, woken_threads,
+                  woken_receiver)) {
         pool_corrupt = 1u;
         return KERNEL_PORT_CORRUPT;
     }
@@ -1017,7 +1023,7 @@ KernelPortStatus kernel_port_send(
 {
     return kernel_port_send_narrowed(port, source_table, raw_message,
                                      message_size, handles, handle_count,
-                                     NULL, woken_threads);
+                                     NULL, woken_threads, NULL);
 }
 
 /*
@@ -1184,7 +1190,7 @@ KernelPortStatus kernel_port_receive_commit(KernelPortReceipt *receipt,
     }
     if (port->queued_messages != 0u) {
         if (!wake_one(&port->readable, ASTRA_SYSCALL_OK,
-                      &readable_woken)) {
+                      &readable_woken, NULL)) {
             pool_corrupt = 1u;
             return KERNEL_PORT_CORRUPT;
         }
@@ -1216,7 +1222,7 @@ KernelPortStatus kernel_port_receive_cancel(KernelPortReceipt *receipt,
         return KERNEL_PORT_CORRUPT;
     message->state = KERNEL_PORT_MESSAGE_QUEUED;
     reset_receipt(receipt);
-    if (!wake_one(&port->readable, ASTRA_SYSCALL_OK, woken_threads)) {
+    if (!wake_one(&port->readable, ASTRA_SYSCALL_OK, woken_threads, NULL)) {
         pool_corrupt = 1u;
         return KERNEL_PORT_CORRUPT;
     }

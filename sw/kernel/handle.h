@@ -194,6 +194,9 @@ KernelHandleStatus kernel_handle_transfer_rollback(
 typedef uint32_t (*KernelHandleImportRights)(KernelObjectType type,
                                              void *object, uint32_t rights);
 void kernel_handle_set_import_rights(KernelHandleImportRights filter);
+typedef void (*KernelHandleExportObserver)(KernelObjectType type,
+                                           void *object, void *context);
+void kernel_handle_set_export_observer(KernelHandleExportObserver observer);
 KernelHandleStatus kernel_handle_import_reserve(
     KernelHandleTable *destination_table,
     const KernelDetachedHandle *detached, uint32_t count,

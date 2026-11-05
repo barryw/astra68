@@ -5754,9 +5754,8 @@ static void test_port_call_reply_rights_mask(void)
 }
 
 /*
- * PORT_CALL between two threads of one process: the caller outranks the
- * service, so each reply hands the processor straight back to the caller and
- * the service's own answer is read from its saved context.
+ * PORT_CALL between two threads of one process: the receiver inherits the
+ * blocked caller's priority until reply, close, timeout, or transfer.
  */
 static void test_port_call_contract_and_races(void)
 {
@@ -5901,6 +5900,8 @@ static void test_port_call_contract_and_races(void)
     assert(next->data[1] == sizeof(TestCallRequest));
     assert(next->data[2] == 2u);
     assert(next->data[3] == process_id);
+    assert(service->base_priority == KERNEL_THREAD_PRIORITY_NORMAL - 1u);
+    assert(service->effective_priority == KERNEL_THREAD_PRIORITY_NORMAL);
     assert(kernel_user_copy_from_asm(&received, service_in,
                                      sizeof(received)) ==
            KERNEL_USER_COPY_OK);
@@ -5939,6 +5940,7 @@ static void test_port_call_contract_and_races(void)
                      capability, service_out, sizeof(reply),
                      service_out + 128u, 1u) == KERNEL_PROCESS_OK);
     assert(service->context.data[0] == ASTRA_SYSCALL_OK);
+    assert(service->effective_priority == service->base_priority);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(next->data[1] == sizeof(reply));
     assert(next->data[2] == 1u);
@@ -5960,6 +5962,77 @@ static void test_port_call_contract_and_races(void)
     reply_event = got[0];
     request_event = KERNEL_HANDLE_INVALID;
 
+    /* Moving a reply capability drops its old receiver's donation while the
+       message is queued, then boosts the thread that imports it. */
+    assert(test_port_call(main_stack, frame, &next, call_base, send_handle,
+                          NULL, 0u, 0u, sizeof(reply), 0u,
+                          TEST_CALL_FOREVER, 0x250u) == KERNEL_PROCESS_OK);
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive_handle,
+                     service_in, sizeof(received), service_in + 128u, 2u) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(&capability, service_in + 128u,
+                                     sizeof(capability)) ==
+           KERNEL_USER_COPY_OK);
+    assert(service->effective_priority == KERNEL_THREAD_PRIORITY_NORMAL);
+    handles[0] = capability;
+    assert(kernel_user_copy_to_asm(service_out + 128u, handles,
+                                   sizeof(handles[0])) ==
+           KERNEL_USER_COPY_OK);
+    test_call_message(&request, sizeof(request), 2u, 0x251u);
+    assert(kernel_user_copy_to_asm(service_out, &request, sizeof(request)) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     send_handle, service_out, sizeof(request),
+                     service_out + 128u, 1u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(service->effective_priority == service->base_priority);
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive_handle,
+                     service_in, sizeof(received), service_in + 128u, 2u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&capability, service_in + 128u,
+                                     sizeof(capability)) ==
+           KERNEL_USER_COPY_OK);
+    assert(service->effective_priority == KERNEL_THREAD_PRIORITY_NORMAL);
+    test_call_message(&reply, sizeof(reply), 2u, 0x252u);
+    assert(kernel_user_copy_to_asm(service_out, &reply, sizeof(reply)) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, service_out, sizeof(reply), 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(service->effective_priority == service->base_priority);
+
+    /* A receiver already waiting on the port inherits before it dequeues. */
+    assert(kernel_thread_set_priority(kernel_thread_at(0u), 10u) ==
+           KERNEL_THREAD_OK);
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_YIELD,
+                     0u, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_WAIT_ONE,
+                     receive_handle, ASTRA_DEADLINE_NONE_HI,
+                     ASTRA_DEADLINE_NONE_LO, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(kernel_thread_set_priority(kernel_thread_at(0u),
+                                      KERNEL_THREAD_PRIORITY_NORMAL) ==
+           KERNEL_THREAD_OK);
+    assert(test_port_call(main_stack, frame, &next, call_base, send_handle,
+                          NULL, 0u, 0u, sizeof(reply), 0u,
+                          TEST_CALL_FOREVER, 0x260u) == KERNEL_PROCESS_OK);
+    assert(service->effective_priority == KERNEL_THREAD_PRIORITY_NORMAL);
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive_handle,
+                     service_in, sizeof(received), service_in + 128u, 2u) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(&capability, service_in + 128u,
+                                     sizeof(capability)) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, service_out, sizeof(reply), 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(service->effective_priority == service->base_priority);
+
     /* 2. The spent capability refuses a second reply and closes quietly;
           dropping a live one tells its caller PEER_DEAD. */
     assert(test_port_call(main_stack, frame, &next, call_base, send_handle,
@@ -5980,12 +6053,14 @@ static void test_port_call_contract_and_races(void)
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(next->data[2] == 1u);
+    assert(service->effective_priority == KERNEL_THREAD_PRIORITY_NORMAL);
     assert(kernel_user_copy_from_asm(&capability, service_in + 128u,
                                      sizeof(capability)) ==
            KERNEL_USER_COPY_OK);
     assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
                      capability, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
     assert(service->context.data[0] == ASTRA_SYSCALL_OK);
+    assert(service->effective_priority == service->base_priority);
     assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
     assert(next->data[1] == 0u);
     assert(next->data[2] == 0u);
@@ -6035,6 +6110,7 @@ static void test_port_call_contract_and_races(void)
            KERNEL_PROCESS_OK);
     assert(kernel_user_copy_from_asm(&stale, service_in + 128u,
                                      sizeof(stale)) == KERNEL_USER_COPY_OK);
+    assert(service->effective_priority == KERNEL_THREAD_PRIORITY_NORMAL);
     /* The service waits too, so the deadline expires from idle. */
     assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_WAIT_ONE,
                      wait_event, ASTRA_DEADLINE_NONE_HI,
@@ -6045,6 +6121,7 @@ static void test_port_call_contract_and_races(void)
     next = kernel_process_current_context();
     assert(next != NULL);
     assert(next->data[0] == ASTRA_SYSCALL_TIMED_OUT);
+    assert(service->effective_priority == service->base_priority);
     assert(next->data[1] == 0u);
     assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_SIGNAL,
                      wait_event, 1u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
@@ -6201,6 +6278,7 @@ static void test_port_call_between_processes(void)
     KernelMemoryStats baseline;
     KernelMemoryStats final;
     KernelCpuContext *next;
+    KernelThread *service_thread;
     TestCallRequest received;
     TestCallReply reply;
     TestCallReply answered;
@@ -6224,6 +6302,8 @@ static void test_port_call_between_processes(void)
     assert(kernel_process_create(image, sizeof(image), 0u, 0u,
                                  &client_id) == KERNEL_PROCESS_OK);
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    service_thread = kernel_thread_at(0u);
+    assert(service_thread != NULL && service_thread->process_id == service_id);
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
                KERNEL_PROCESS_CODE_BASE, 0u);
 
@@ -6247,6 +6327,7 @@ static void test_port_call_between_processes(void)
     memset(&untouched, 0x5a, sizeof(untouched));
     assert(kernel_user_copy_to_asm(base + 256u, &untouched,
                                    sizeof(untouched)) == KERNEL_USER_COPY_OK);
+    assert(kernel_thread_set_priority(service_thread, 8u) == KERNEL_THREAD_OK);
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_WAIT_ONE,
                      receive_handle, ASTRA_DEADLINE_NONE_HI,
                      ASTRA_DEADLINE_NONE_LO, 0u, 0u) == KERNEL_PROCESS_OK);
@@ -6256,12 +6337,16 @@ static void test_port_call_between_processes(void)
     assert(test_port_call(stack, frame, &next, base, client_send, NULL, 0u,
                           0u, sizeof(reply), 1u, TEST_CALL_FOREVER,
                           0x1000u) == KERNEL_PROCESS_OK);
+    assert(service_thread->effective_priority ==
+           KERNEL_THREAD_PRIORITY_NORMAL);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_PORT_RECEIVE_TRY,
                      receive_handle, base + 512u, sizeof(received),
                      base + 640u, 1u) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(next->data[3] == client_id);
+    assert(service_thread->effective_priority ==
+           KERNEL_THREAD_PRIORITY_NORMAL);
     assert(kernel_user_copy_from_asm(&capability, base + 640u,
                                      sizeof(capability)) ==
            KERNEL_USER_COPY_OK);
@@ -6271,16 +6356,20 @@ static void test_port_call_between_processes(void)
     handles[0] = reply_event;
     assert(kernel_user_copy_to_asm(base + 896u, handles, sizeof(handles)) ==
            KERNEL_USER_COPY_OK);
-    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
-                     capability, base + 768u, sizeof(reply), base + 896u,
-                     1u) == KERNEL_PROCESS_OK);
-    assert(next->data[0] == ASTRA_SYSCALL_OK);
-    assert(kernel_process_test_handle_count(client_id) ==
-           client_handles + 1u);
     assert(kernel_user_copy_from_asm(&answered, base + 256u,
                                      sizeof(answered)) ==
            KERNEL_USER_COPY_OK);
     assert(memcmp(&answered, &untouched, sizeof(untouched)) == 0);
+    assert(kernel_thread_set_priority(service_thread,
+                                      KERNEL_THREAD_PRIORITY_NORMAL) ==
+           KERNEL_THREAD_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, base + 768u, sizeof(reply), base + 896u,
+                     1u) == KERNEL_PROCESS_OK);
+    assert(service_thread->effective_priority == service_thread->base_priority);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_process_test_handle_count(client_id) ==
+           client_handles + 1u);
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE, capability,
                      0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_WAIT_ONE,

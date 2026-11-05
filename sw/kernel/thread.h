@@ -208,6 +208,7 @@ typedef struct KernelThread {
     uint8_t base_priority;
     uint8_t effective_priority;
     uint8_t inherited_priority;
+    uint8_t call_priority;
     uint8_t occupied;
     uint8_t wait_member_count;
     uint8_t wait_mode;
@@ -222,6 +223,11 @@ typedef struct KernelThread {
      */
     KernelThreadWaitQueue call_waiters;
     uint32_t call;
+    uint32_t call_receiver_id;
+    uint16_t call_receiver_slot;
+    uint16_t call_donor_head;
+    uint16_t call_donor_previous;
+    uint16_t call_donor_next;
     uint32_t call_reply;
     uint32_t call_reply_capacity;
     uint32_t call_reply_handles;
@@ -448,6 +454,8 @@ KernelThreadStatus kernel_thread_call_begin(KernelThread *thread,
 KernelThreadStatus kernel_thread_call_block(KernelThread *thread,
                                             uint64_t now, uint64_t deadline);
 KernelThread *kernel_thread_call_waiting(uint16_t slot, uint32_t call);
+KernelThreadStatus kernel_thread_call_assign(KernelThread *caller,
+                                             KernelThread *receiver);
 KernelThreadStatus kernel_thread_call_complete(KernelThread *thread,
                                                uint32_t result,
                                                uint32_t size,

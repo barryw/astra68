@@ -135,7 +135,8 @@ KernelPortStatus kernel_port_send_narrowed(
     KernelPort *port, KernelHandleTable *source_table,
     const void *message, uint32_t message_size,
     const KernelHandle *handles, uint32_t handle_count,
-    const uint32_t *masks, uint32_t *woken_threads);
+    const uint32_t *masks, uint32_t *woken_threads,
+    KernelThread **woken_receiver);
 KernelPortStatus kernel_port_receive_prepare(
     KernelPort *port, KernelHandleTable *destination_table,
     uint32_t message_capacity, uint32_t handle_capacity,

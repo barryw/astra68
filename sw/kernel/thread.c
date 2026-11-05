@@ -52,6 +52,8 @@ static uint8_t pool_corrupt;
 
 static inline __attribute__((always_inline))
 bool valid_thread(const KernelThread *thread);
+static KernelThreadStatus drop_call_receiver(KernelThread *thread);
+static KernelThreadStatus withdraw_call_receivers(KernelThread *thread);
 
 static KernelThread *thread_at_slot(uint16_t slot)
 {
@@ -1254,6 +1256,9 @@ static KernelThreadStatus complete_wait(
                             thread);
         return status;
     }
+    status = drop_call_receiver(thread);
+    if (status != KERNEL_THREAD_OK)
+        return KERNEL_THREAD_CORRUPT;
     if (cancelled_deadline)
         ++pool_stats.deadline_cancellations;
     thread->context.data[0] = result;
@@ -1452,6 +1457,11 @@ KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
     candidate->base_priority = priority;
     candidate->effective_priority = priority;
     candidate->inherited_priority = 0u;
+    candidate->call_priority = 0u;
+    candidate->call_receiver_slot = KERNEL_THREAD_SLOT_NONE;
+    candidate->call_donor_head = KERNEL_THREAD_SLOT_NONE;
+    candidate->call_donor_previous = KERNEL_THREAD_SLOT_NONE;
+    candidate->call_donor_next = KERNEL_THREAD_SLOT_NONE;
     candidate->occupied = 1u;
     candidate->deadline_position = KERNEL_THREAD_SLOT_NONE;
     reset_wait_row(candidate);
@@ -1602,6 +1612,8 @@ KernelThreadStatus kernel_thread_complete(KernelThread *thread,
     if (!valid_thread(thread) || thread->state != KERNEL_THREAD_RUNNING ||
         thread->wait_member_count != 0u || thread->stack_released != 0u)
         return KERNEL_THREAD_INVALID_STATE;
+    if (withdraw_call_receivers(thread) != KERNEL_THREAD_OK)
+        return KERNEL_THREAD_CORRUPT;
     thread->exit_status = exit_status;
     thread->terminal_result = terminal_result;
     thread->state = KERNEL_THREAD_DEAD;
@@ -1756,8 +1768,17 @@ KernelThreadStatus kernel_thread_make_ready(KernelThread *thread)
     return status;
 }
 
+static uint8_t priority_effective(uint8_t base, uint8_t inherited,
+                                  uint8_t call_priority)
+{
+    uint8_t effective = base > inherited ? base : inherited;
+
+    return effective > call_priority ? effective : call_priority;
+}
+
 static KernelThreadStatus change_priority(KernelThread *thread,
-                                          uint8_t base, uint8_t inherited)
+                                          uint8_t base, uint8_t inherited,
+                                          uint8_t call_priority)
 {
     KernelThreadWaitQueue *queues[KERNEL_THREAD_WAIT_MEMBER_MAX];
     uint8_t effective;
@@ -1765,7 +1786,8 @@ static KernelThreadStatus change_priority(KernelThread *thread,
 
     if (!valid_thread(thread) ||
         base >= KERNEL_THREAD_PRIORITY_LEVELS ||
-        inherited >= KERNEL_THREAD_PRIORITY_LEVELS)
+        inherited >= KERNEL_THREAD_PRIORITY_LEVELS ||
+        call_priority >= KERNEL_THREAD_PRIORITY_LEVELS)
         return KERNEL_THREAD_INVALID_ARGUMENT;
     if (thread->state == KERNEL_THREAD_DEAD)
         return KERNEL_THREAD_INVALID_STATE;
@@ -1773,17 +1795,20 @@ static KernelThreadStatus change_priority(KernelThread *thread,
         thread->state > KERNEL_THREAD_BLOCKED ||
         thread->base_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
         thread->inherited_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
-        thread->effective_priority !=
-            (thread->base_priority > thread->inherited_priority ?
-             thread->base_priority : thread->inherited_priority))
+        thread->call_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
+        thread->effective_priority != priority_effective(
+            thread->base_priority, thread->inherited_priority,
+            thread->call_priority))
         return KERNEL_THREAD_CORRUPT;
     if (thread->base_priority == base &&
-        thread->inherited_priority == inherited)
+        thread->inherited_priority == inherited &&
+        thread->call_priority == call_priority)
         return KERNEL_THREAD_OK;
-    effective = base > inherited ? base : inherited;
+    effective = priority_effective(base, inherited, call_priority);
     if (thread->effective_priority == effective) {
         thread->base_priority = base;
         thread->inherited_priority = inherited;
+        thread->call_priority = call_priority;
         return KERNEL_THREAD_OK;
     }
     if (thread->state == KERNEL_THREAD_READY &&
@@ -1801,6 +1826,7 @@ static KernelThreadStatus change_priority(KernelThread *thread,
     }
     thread->base_priority = base;
     thread->inherited_priority = inherited;
+    thread->call_priority = call_priority;
     thread->effective_priority = effective;
     if (thread->state == KERNEL_THREAD_READY &&
         thread->suspended == 0u &&
@@ -1814,18 +1840,136 @@ static KernelThreadStatus change_priority(KernelThread *thread,
     return KERNEL_THREAD_OK;
 }
 
+static KernelThread *call_receiver(const KernelThread *caller)
+{
+    KernelThread *receiver;
+
+    if (caller->call_receiver_id == 0u ||
+        caller->call_receiver_slot == KERNEL_THREAD_SLOT_NONE)
+        return NULL;
+    receiver = thread_at_slot(caller->call_receiver_slot);
+    return valid_thread(receiver) && receiver->id == caller->call_receiver_id ?
+        receiver : NULL;
+}
+
+static KernelThreadStatus refresh_call_receivers(KernelThread *receiver)
+{
+    uint32_t depth = 0u;
+
+    while (receiver != NULL) {
+        uint8_t inherited = 0u;
+        uint8_t before;
+        uint32_t donors = 0u;
+        KernelThreadStatus status;
+
+        if (!valid_thread(receiver) || receiver->state == KERNEL_THREAD_DEAD ||
+            ++depth > thread_slots)
+            return KERNEL_THREAD_CORRUPT;
+        for (uint16_t slot = receiver->call_donor_head;
+             slot != KERNEL_THREAD_SLOT_NONE;) {
+            KernelThread *caller = thread_at_slot(slot);
+
+            if (caller == NULL || caller->call_receiver_slot != receiver->slot ||
+                caller->call_receiver_id != receiver->id ||
+                caller->state != KERNEL_THREAD_BLOCKED ||
+                caller->call == 0u || caller->call_waiters.count == 0u ||
+                ++donors > thread_slots)
+                return KERNEL_THREAD_CORRUPT;
+            if (caller->effective_priority > inherited)
+                inherited = caller->effective_priority;
+            slot = caller->call_donor_next;
+        }
+        before = receiver->effective_priority;
+        status = change_priority(receiver, receiver->base_priority,
+                                 receiver->inherited_priority, inherited);
+        if (status != KERNEL_THREAD_OK || before == receiver->effective_priority)
+            return status;
+        KernelThread *next = call_receiver(receiver);
+
+        if (receiver->call_receiver_id != 0u && next == NULL)
+            return KERNEL_THREAD_CORRUPT;
+        receiver = next;
+    }
+    return KERNEL_THREAD_OK;
+}
+
+static KernelThreadStatus drop_call_receiver(KernelThread *thread)
+{
+    KernelThread *receiver;
+    KernelThread *previous = NULL;
+    KernelThread *next = NULL;
+
+    if (thread->call_receiver_id == 0u)
+        return thread->call_receiver_slot == KERNEL_THREAD_SLOT_NONE &&
+               thread->call_donor_previous == KERNEL_THREAD_SLOT_NONE &&
+               thread->call_donor_next == KERNEL_THREAD_SLOT_NONE ?
+            KERNEL_THREAD_OK : KERNEL_THREAD_CORRUPT;
+    receiver = call_receiver(thread);
+    if (receiver == NULL)
+        return KERNEL_THREAD_CORRUPT;
+    if (thread->call_donor_previous != KERNEL_THREAD_SLOT_NONE) {
+        previous = thread_at_slot(thread->call_donor_previous);
+        if (previous == NULL || previous->call_donor_next != thread->slot)
+            return KERNEL_THREAD_CORRUPT;
+    } else if (receiver->call_donor_head != thread->slot) {
+        return KERNEL_THREAD_CORRUPT;
+    }
+    if (thread->call_donor_next != KERNEL_THREAD_SLOT_NONE) {
+        next = thread_at_slot(thread->call_donor_next);
+        if (next == NULL || next->call_donor_previous != thread->slot)
+            return KERNEL_THREAD_CORRUPT;
+    }
+    if (previous != NULL)
+        previous->call_donor_next = thread->call_donor_next;
+    else
+        receiver->call_donor_head = thread->call_donor_next;
+    if (next != NULL)
+        next->call_donor_previous = thread->call_donor_previous;
+    thread->call_receiver_id = 0u;
+    thread->call_receiver_slot = KERNEL_THREAD_SLOT_NONE;
+    thread->call_donor_previous = KERNEL_THREAD_SLOT_NONE;
+    thread->call_donor_next = KERNEL_THREAD_SLOT_NONE;
+    return refresh_call_receivers(receiver);
+}
+
+static KernelThreadStatus withdraw_call_receivers(KernelThread *receiver)
+{
+    uint32_t removed = 0u;
+
+    while (receiver->call_donor_head != KERNEL_THREAD_SLOT_NONE) {
+        KernelThread *caller = thread_at_slot(receiver->call_donor_head);
+
+        if (++removed > thread_slots || caller == NULL ||
+            drop_call_receiver(caller) != KERNEL_THREAD_OK)
+            return KERNEL_THREAD_CORRUPT;
+    }
+    return KERNEL_THREAD_OK;
+}
+
 KernelThreadStatus kernel_thread_set_priority(KernelThread *thread,
                                               uint8_t priority)
 {
-    return change_priority(thread, priority,
-                           thread != NULL ? thread->inherited_priority : 0u);
+    uint8_t before = thread != NULL ? thread->effective_priority : 0u;
+    KernelThreadStatus status = change_priority(
+        thread, priority, thread != NULL ? thread->inherited_priority : 0u,
+        thread != NULL ? thread->call_priority : 0u);
+
+    if (status == KERNEL_THREAD_OK && before != thread->effective_priority)
+        status = refresh_call_receivers(call_receiver(thread));
+    return status;
 }
 
 KernelThreadStatus kernel_thread_set_inherited_priority(KernelThread *thread,
                                                         uint8_t priority)
 {
-    return change_priority(thread, thread != NULL ? thread->base_priority : 0u,
-                           priority);
+    uint8_t before = thread != NULL ? thread->effective_priority : 0u;
+    KernelThreadStatus status = change_priority(
+        thread, thread != NULL ? thread->base_priority : 0u, priority,
+        thread != NULL ? thread->call_priority : 0u);
+
+    if (status == KERNEL_THREAD_OK && before != thread->effective_priority)
+        status = refresh_call_receivers(call_receiver(thread));
+    return status;
 }
 
 KernelThreadStatus
@@ -1845,9 +1989,10 @@ kernel_thread_set_process_priority(uint16_t process_slot, uint8_t priority)
             thread->state > KERNEL_THREAD_BLOCKED ||
             thread->base_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
             thread->inherited_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
-            thread->effective_priority !=
-                (thread->base_priority > thread->inherited_priority ?
-                 thread->base_priority : thread->inherited_priority))
+            thread->call_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
+            thread->effective_priority != priority_effective(
+                thread->base_priority, thread->inherited_priority,
+                thread->call_priority))
             return KERNEL_THREAD_CORRUPT;
     }
 
@@ -2396,6 +2541,58 @@ KernelThread *kernel_thread_call_waiting(uint16_t slot, uint32_t call)
     return thread;
 }
 
+KernelThreadStatus kernel_thread_call_assign(KernelThread *caller,
+                                             KernelThread *receiver)
+{
+    KernelThread *previous;
+    KernelThread *cursor;
+    uint32_t depth = 0u;
+    KernelThreadStatus status;
+
+    if (!valid_thread(caller) || caller->call == 0u ||
+        kernel_thread_call_waiting(caller->slot, caller->call) != caller ||
+        (receiver != NULL && (!valid_thread(receiver) ||
+                              receiver->state == KERNEL_THREAD_DEAD)))
+        return KERNEL_THREAD_INVALID_ARGUMENT;
+    previous = call_receiver(caller);
+    if (caller->call_receiver_id != 0u && previous == NULL)
+        return KERNEL_THREAD_CORRUPT;
+    if (previous == receiver)
+        return KERNEL_THREAD_OK;
+    for (cursor = receiver; cursor != NULL;) {
+        KernelThread *next;
+
+        if (++depth > thread_slots)
+            return KERNEL_THREAD_CORRUPT;
+        if (cursor == caller) {
+            /* A synchronous call cycle has no runnable owner to boost. */
+            receiver = NULL;
+            break;
+        }
+        next = call_receiver(cursor);
+        if (cursor->call_receiver_id != 0u && next == NULL)
+            return KERNEL_THREAD_CORRUPT;
+        cursor = next;
+    }
+    status = drop_call_receiver(caller);
+    if (status != KERNEL_THREAD_OK || receiver == NULL)
+        return status;
+    if (receiver->call_donor_head != KERNEL_THREAD_SLOT_NONE) {
+        KernelThread *head = thread_at_slot(receiver->call_donor_head);
+
+        if (head == NULL || head->call_donor_previous !=
+                            KERNEL_THREAD_SLOT_NONE)
+            return KERNEL_THREAD_CORRUPT;
+        head->call_donor_previous = caller->slot;
+    }
+    caller->call_donor_next = receiver->call_donor_head;
+    caller->call_donor_previous = KERNEL_THREAD_SLOT_NONE;
+    receiver->call_donor_head = caller->slot;
+    caller->call_receiver_slot = receiver->slot;
+    caller->call_receiver_id = receiver->id;
+    return refresh_call_receivers(receiver);
+}
+
 KernelThreadStatus kernel_thread_call_complete(KernelThread *thread,
                                                uint32_t result,
                                                uint32_t size,
@@ -2551,6 +2748,9 @@ static KernelThreadStatus retire_process_threads(uint16_t process_slot,
                    thread->state != KERNEL_THREAD_RUNNING) {
             return KERNEL_THREAD_CORRUPT;
         }
+        if (drop_call_receiver(thread) != KERNEL_THREAD_OK ||
+            withdraw_call_receivers(thread) != KERNEL_THREAD_OK)
+            return KERNEL_THREAD_CORRUPT;
         thread->exit_status = 0u;
         thread->terminal_result = terminal_result;
         thread->state = KERNEL_THREAD_DEAD;

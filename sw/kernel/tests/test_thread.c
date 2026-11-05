@@ -239,6 +239,126 @@ static void test_inherited_priority_reorders_and_preserves_base(void)
     assert(kernel_thread_pool_valid());
 }
 
+static void test_call_donation_chain_and_withdrawal(void)
+{
+    KernelThread *caller;
+    KernelThread *middle;
+    KernelThread *service;
+    KernelThread *selected;
+    uint32_t call;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u, 25u,
+                                  &caller) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(2u, 0x10000002u, 1u, 0x00100010u,
+                                  0x70011000u, 0u, 10u,
+                                  &middle) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(3u, 0x10000003u, 2u, 0x00100020u,
+                                  0x70021000u, 0u, 5u,
+                                  &service) == KERNEL_THREAD_OK);
+    publish_thread(caller);
+    publish_thread(middle);
+    publish_thread(service);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == caller);
+    assert(kernel_thread_call_begin(caller, &call) == KERNEL_THREAD_OK);
+    assert(kernel_thread_call_block(caller, 0u,
+                                    KERNEL_THREAD_DEADLINE_NEVER) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == middle);
+    assert(kernel_thread_call_begin(middle, &call) == KERNEL_THREAD_OK);
+    assert(kernel_thread_call_block(middle, 0u,
+                                    KERNEL_THREAD_DEADLINE_NEVER) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == service);
+    assert(kernel_thread_call_assign(caller, middle) == KERNEL_THREAD_OK);
+    assert(kernel_thread_call_assign(middle, service) == KERNEL_THREAD_OK);
+    assert(middle->base_priority == 10u && middle->effective_priority == 25u);
+    assert(service->base_priority == 5u && service->effective_priority == 25u);
+    assert(kernel_thread_set_priority(caller, 21u) == KERNEL_THREAD_OK);
+    assert(middle->effective_priority == 21u &&
+           service->effective_priority == 21u);
+    assert(kernel_thread_set_inherited_priority(service, 18u) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_call_begin(service, &call) == KERNEL_THREAD_OK);
+    assert(kernel_thread_call_block(service, 0u,
+                                    KERNEL_THREAD_DEADLINE_NEVER) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_call_assign(service, caller) == KERNEL_THREAD_OK);
+    assert(service->call_receiver_id == 0u);
+    assert(kernel_thread_call_complete(caller, ASTRA_SYSCALL_OK, 0u, 0u,
+                                       0u) == KERNEL_THREAD_OK);
+    assert(middle->effective_priority == 10u &&
+           service->effective_priority == 18u);
+    assert(kernel_thread_call_complete(middle, ASTRA_SYSCALL_OK, 0u, 0u,
+                                       0u) == KERNEL_THREAD_OK);
+    assert(service->effective_priority == 18u);
+    assert(kernel_thread_set_inherited_priority(service, 0u) ==
+           KERNEL_THREAD_OK);
+    assert(service->effective_priority == 5u);
+    assert(kernel_thread_call_complete(service, ASTRA_SYSCALL_OK, 0u, 0u,
+                                       0u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_pool_valid());
+}
+
+static void test_call_donation_multiple_callers_and_receiver_death(void)
+{
+    KernelThread *high;
+    KernelThread *middle;
+    KernelThread *service;
+    KernelThread *selected;
+    uint32_t call;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u, 25u,
+                                  &high) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(2u, 0x10000002u, 1u, 0x00100010u,
+                                  0x70011000u, 0u, 20u,
+                                  &middle) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(3u, 0x10000003u, 2u, 0x00100020u,
+                                  0x70021000u, 0u, 5u,
+                                  &service) == KERNEL_THREAD_OK);
+    publish_thread(high);
+    publish_thread(middle);
+    publish_thread(service);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == high);
+    assert(kernel_thread_call_begin(high, &call) == KERNEL_THREAD_OK);
+    assert(kernel_thread_call_block(high, 0u,
+                                    KERNEL_THREAD_DEADLINE_NEVER) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == middle);
+    assert(kernel_thread_call_begin(middle, &call) == KERNEL_THREAD_OK);
+    assert(kernel_thread_call_block(middle, 0u,
+                                    KERNEL_THREAD_DEADLINE_NEVER) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == service);
+    assert(kernel_thread_call_assign(high, service) == KERNEL_THREAD_OK);
+    assert(kernel_thread_call_assign(middle, service) == KERNEL_THREAD_OK);
+    assert(service->effective_priority == 25u);
+    assert(kernel_thread_call_assign(high, NULL) == KERNEL_THREAD_OK);
+    assert(service->effective_priority == 20u);
+    assert(kernel_thread_call_assign(high, service) == KERNEL_THREAD_OK);
+    assert(service->effective_priority == 25u);
+    assert(kernel_thread_complete(service, 0u, ASTRA_SYSCALL_OK, NULL) ==
+           KERNEL_THREAD_OK);
+    assert(high->call_receiver_id == 0u &&
+           middle->call_receiver_id == 0u);
+    assert(kernel_thread_call_complete(high, ASTRA_SYSCALL_PEER_DEAD, 0u,
+                                       0u, 0u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_call_complete(middle, ASTRA_SYSCALL_PEER_DEAD, 0u,
+                                       0u, 0u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_pool_valid());
+}
+
 static void test_process_suspend_preserves_wait_state(void)
 {
     KernelThreadWaitQueue queue;
@@ -1331,6 +1451,8 @@ int main(void)
     test_process_priority_reorders_ready_and_blocked_threads();
     test_thread_priority_changes_only_target();
     test_inherited_priority_reorders_and_preserves_base();
+    test_call_donation_chain_and_withdrawal();
+    test_call_donation_multiple_callers_and_receiver_death();
     test_process_suspend_preserves_wait_state();
     test_reused_slot_generation_ids_do_not_repeat();
     test_invalid_inputs_do_not_consume_slots();
