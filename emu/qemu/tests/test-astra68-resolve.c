@@ -303,6 +303,23 @@ int main(void)
     make_link("chain0", "too-many");
     check_cases();
     check_open_paths();
+    {
+        AstraResolution created;
+        struct stat parent;
+        int file;
+        assert(fstat(root, &parent) == 0);
+        file = astra_resolve_open_path(root, root, "ordinary-create",
+            O_CREAT | O_RDWR, 0600, ASTRA_RESOLVE_FOLLOW_FINAL,
+            ASTRA_RESOLVE_LINK_MAX, &created);
+        assert(file >= 0 && created.parent_inode == parent.st_ino &&
+               strcmp(created.leaf, "ordinary-create") == 0);
+        assert(close(file) == 0);
+        file = astra_resolve_open_path(root, root, "ordinary-create",
+            O_CREAT | O_RDWR, 0600, ASTRA_RESOLVE_FOLLOW_FINAL,
+            ASTRA_RESOLVE_LINK_MAX, &created);
+        assert(file >= 0 && created.parent_inode == 0u);
+        assert(close(file) == 0);
+    }
     check_moved_base_and_open();
     check_file_names();
     assert(close(root) == 0);

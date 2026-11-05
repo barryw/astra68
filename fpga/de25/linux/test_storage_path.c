@@ -63,6 +63,17 @@ static void semantics(int root)
     execute(root, 0, &value, fds, &reply, &result);
     assert(reply.error == 0 && result >= 0 && reply.parent_inode == 0u);
     close(result);
+    value = request(ASTRA_STORAGE_PATH_OPEN, "/sub/ordinary");
+    value.flags = O_CREAT | O_RDWR;
+    value.mode = 0600;
+    execute(root, 0, &value, fds, &reply, &result);
+    assert(reply.error == 0 && result >= 0 &&
+           reply.parent_inode == (uint64_t)parent_stat.st_ino &&
+           strcmp(reply.leaf, "ordinary") == 0);
+    close(result);
+    execute(root, 0, &value, fds, &reply, &result);
+    assert(reply.error == 0 && result >= 0 && reply.parent_inode == 0u);
+    close(result);
     value = request(ASTRA_STORAGE_PATH_RENAME, "/sub/file");
     value.resolve = ASTRA_RESOLVE_ENTRY;
     strcpy(value.path2, "/sub/renamed");
@@ -167,6 +178,7 @@ static void semantics(int root)
     assert(unlinkat(root, "sub/hard", 0) == 0);
     assert(unlinkat(root, "sub/renamed", 0) == 0);
     assert(unlinkat(root, "sub/racer", 0) == 0);
+    assert(unlinkat(root, "sub/ordinary", 0) == 0);
     assert(unlinkat(root, "sub", AT_REMOVEDIR) == 0);
     assert(unlinkat(root, "dest", AT_REMOVEDIR) == 0);
 }

@@ -7226,8 +7226,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         status = astra_host_publish_open(s, owner, channel != NULL ? channel->process : 0u, session, session_id,
                                          command, fd, flags, &opened_inode);
         if (changed_nodes) changed_inode = opened_inode;
-        if ((flags & (ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_EXCLUSIVE)) ==
-                (ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_EXCLUSIVE) &&
+        if ((flags & ASTRA_VFS_OPEN_CREATE) != 0u &&
             opened_inode != 0u && resolved.parent_inode != 0u &&
             resolved.leaf[0] != '\0') {
             changed_inode = opened_inode;

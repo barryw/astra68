@@ -1465,7 +1465,25 @@ def run(qtest, root, outside):
     assert record == (removed_sequence, before_remove[0],
         before_remove[1] + 1, 0, get64(root_stat.raw, NODE_INODE),
         CHANGE_ENTRY_REMOVED, 0, b"exclusive-entry")
-    last_sequence = removed_sequence
+    before_ordinary = changes()
+    ordinary = execute(qtest, [Command(generation, FS_OPEN,
+        "/ordinary-entry", flags=OPEN_WRITE | OPEN_CREATE,
+        value=0o600, session=work)])[0]
+    assert status(ordinary) == STATUS_OK
+    ordinary_sequence, kind, record = next_change(removed_sequence)
+    assert ordinary_sequence == removed_sequence + 1 and kind == CHANGE_ENTRY_CREATED
+    assert record == (ordinary_sequence, before_ordinary[0],
+        before_ordinary[1] + 1, get64(ordinary.raw, NODE_INODE),
+        get64(root_stat.raw, NODE_INODE), CHANGE_ENTRY_CREATED, 0,
+        b"ordinary-entry")
+    assert status(execute(qtest, [Command(generation, FS_CLOSE,
+        handle=get32(ordinary.raw, 16), session=work)])[0]) == STATUS_OK
+    assert status(execute(qtest, [Command(generation, FS_UNLINK,
+        "/ordinary-entry", session=work)])[0]) == STATUS_OK
+    last_sequence, kind, record = next_change(ordinary_sequence)
+    assert last_sequence == ordinary_sequence + 1 and kind == CHANGE_ENTRY_REMOVED
+    assert record[3:] == (0, get64(root_stat.raw, NODE_INODE),
+                          CHANGE_ENTRY_REMOVED, 0, b"ordinary-entry")
     before_write = changes()
     payload = b"host transport data integrity\x00\xff"
     written = execute(qtest, [Command(

@@ -138,7 +138,7 @@ int astra_storage_path_call(int socket, const AstraStoragePathRequest *request,
            request->operation != ASTRA_STORAGE_PATH_LINK &&
            request->operation != ASTRA_STORAGE_PATH_RENAME &&
            (request->operation != ASTRA_STORAGE_PATH_OPEN ||
-            (request->flags & (O_CREAT | O_EXCL)) != (O_CREAT | O_EXCL))))) ||
+            (request->flags & O_CREAT) == 0u)))) ||
         (reply->source_parent_inode != 0u &&
          (reply->error != 0 || request->operation != ASTRA_STORAGE_PATH_RENAME ||
           reply->parent_inode == 0u || reply->source_leaf[0] == '\0')) ||

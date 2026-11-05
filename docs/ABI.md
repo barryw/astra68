@@ -442,6 +442,11 @@ Successful mkdir, symlink, and hardlink report ENTRY_CREATED with the exact
 destination parent inode and leaf. Their child inode is zero when the mutation
 reply cannot supply it atomically. Consumers accept zero child inode for
 ENTRY_CREATED and reconcile using the existing volume generation.
+For ordinary `O_CREAT`, the rooted resolver first attempts atomic exclusive
+creation. When that succeeds, the reply carries exact parent and leaf identity
+and QEMU emits ENTRY_CREATED; on failure it retries the requested open flags
+and keeps generation reconciliation because that retry may race another
+writer. Existing-file opens do not claim an exact creation.
 Storage provider protocol 12 adds source parent inode and leaf to successful
 rename replies. QEMU emits an exact removal record for the source followed by
 an exact creation record for the destination; both share the mutation's entry

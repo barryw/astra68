@@ -2,6 +2,29 @@
 
 Status: active continuation map, 2026-11-05
 
+Ordinary-create event checkpoint, 2026-11-05: rooted resolver probes
+nonexclusive `O_CREAT` with atomic exclusive creation, then retries the
+requested flags if the probe fails. Successful exclusive probe supplies exact
+parent and leaf identity, so QEMU publishes ENTRY_CREATED through the existing
+HostFS change ring and Messaging broker. Existing-file opens retain their
+requested behavior and do not claim exact creation. A retry that races another
+writer still uses generation reconciliation. Haiku reference:
+`src/system/kernel/fs/node_monitor.cpp:1196-1218` publishes mutation-time
+entry identity. Beast resolver, storage-path, and full confined HostFS gates
+passed. Matching DE25 QEMU SHA-256
+`69ddcf1e733236a05c907efe8cc867dbaadd696e995b029d19e336fe1e7021d9`
+and provider SHA-256
+`61540ca5f928d8a22b1a9891f27e141c4393fe67feeba94e2dc3b98a7dab68ac`
+are active in development shadow
+`da45652abcdab0e76034920dcb4bfe5691ca9ec133b44edad95384036c9d2b48`.
+DE25 reached stage 8 with Astra, audio, and RFB active, zero Astra restarts,
+and 7.8 GiB free. Terminal created a disposable HOME file through ordinary
+shell redirection while Atlas HOME stayed open; Atlas gained the file without
+Refresh. Removing it restored the original four items. SHA-checked evidence
+is under `/mnt/Documents/astra68/ordinary-create-20261105/` on Beast;
+disposable board captures were removed and only selected shadow remains.
+Linux-originated edits and notification performance qualification remain open.
+
 Exact move checkpoint, 2026-11-05: private storage provider protocol 12
 returns both source and destination parent inode/leaf pairs from retained
 directory FDs after successful rename. QEMU emits source ENTRY_REMOVED then

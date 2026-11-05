@@ -544,10 +544,20 @@ int astra_resolve_open_path(int root, int base, const char *path, int flags,
     status = astra_resolve(root, base, path, resolve, links_left, out);
     if (status != 0)
         return status;
-    fd = astra_resolve_open(root, out, flags, mode);
+    /* Probe creation atomically. A failed probe retries original flags so
+     * existing-file opens retain their permissions and symlink behavior. */
+    bool created = (flags & (O_CREAT | O_EXCL | O_PATH)) ==
+        (O_CREAT | O_EXCL);
+    if ((flags & (O_CREAT | O_EXCL | O_PATH)) == O_CREAT) {
+        fd = astra_resolve_open(root, out, flags | O_EXCL, mode);
+        created = fd >= 0;
+        if (fd < 0)
+            fd = astra_resolve_open(root, out, flags, mode);
+    } else
+        fd = astra_resolve_open(root, out, flags, mode);
     if (fd == -ENOENT)
         out->missing = 1u;
-    if (fd >= 0 && (flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) {
+    if (fd >= 0 && created) {
         struct stat parent;
         if (fstat(out->parent, &parent) == 0)
             out->parent_inode = parent.st_ino;
