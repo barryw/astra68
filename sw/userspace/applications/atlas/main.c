@@ -161,7 +161,7 @@ static AstraVolumeWatch volume_watch = ASTRA_VOLUME_WATCH_INIT;
 static AstraPort filesystem_events = ASTRA_PORT_INIT;
 static uint64_t filesystem_subscription, filesystem_event_sequence;
 static uint64_t filesystem_retry;
-static uint32_t filesystem_skip_refresh;
+static uint32_t filesystem_dirty;
 static AstraHandle volume_metadata, volume_messaging, volume_grant;
 static AstraHandle volume_administrator, volume_inspector;
 static AstraHandle volume_gui;
@@ -4465,7 +4465,8 @@ static AstraResult run(AstraHandle gui)
             ASTRA_DEADLINE_FOREVER;
         if (removal_active && removal_retry < deadline)
             deadline = removal_retry;
-        if (filesystem_event_sequence != 0u && filesystem_retry < deadline)
+        if ((filesystem_event_sequence != 0u || filesystem_dirty) &&
+            filesystem_retry < deadline)
             deadline = filesystem_retry;
         uint32_t waited = astra_wait_multiple(waits, wait_count,
             deadline, &selected, NULL);
@@ -4513,9 +4514,9 @@ static AstraResult run(AstraHandle gui)
                     return ASTRA_ERROR_IO;
                 filesystem_event_sequence = notice.sequence;
                 filesystem_retry = 0u;
-                filesystem_skip_refresh = viewed_volume.id != 0u &&
-                    !astra_volume_reference_equal(&change.volume,
-                        &viewed_volume);
+                if (viewed_volume.id == 0u ||
+                    astra_volume_reference_equal(&change.volume, &viewed_volume))
+                    filesystem_dirty = 1u;
             }
         }
         if (selected == busy_slot && waited != ASTRA_SYSCALL_TIMED_OUT) {
@@ -4550,23 +4551,30 @@ static AstraResult run(AstraHandle gui)
             volume_retry = 0u;
             visible_data = !volume_refresh;
         }
-        if (filesystem_event_sequence != 0u && worker == 0u &&
+        if (filesystem_event_sequence != 0u &&
             astra_clock_monotonic() >= filesystem_retry) {
-            result = filesystem_skip_refresh || volume_lost ?
-                ASTRA_OK : reload_directory();
-            if (result == ASTRA_OK) {
-                AstraResult acknowledged = astra_messaging_ack(
-                    volume_messaging, filesystem_subscription,
-                    filesystem_event_sequence,
-                    astra_clock_monotonic() + UINT64_C(20000000));
-                if (acknowledged == ASTRA_OK) {
-                    filesystem_event_sequence = 0u;
-                    filesystem_skip_refresh = 0u;
-                }
-            }
+            /* Receipt must not depend on a directory reload succeeding. */
+            AstraResult acknowledged = astra_messaging_ack(volume_messaging,
+                filesystem_subscription, filesystem_event_sequence,
+                astra_clock_monotonic() + UINT64_C(20000000));
+            if (acknowledged == ASTRA_OK) filesystem_event_sequence = 0u;
             if (filesystem_event_sequence != 0u)
                 filesystem_retry = astra_clock_monotonic() +
                     UINT64_C(50000000);
+        }
+        if (filesystem_dirty && filesystem_event_sequence == 0u &&
+            worker == 0u && astra_clock_monotonic() >= filesystem_retry) {
+            result = volume_lost ? ASTRA_OK : reload_directory();
+            if (result == ASTRA_OK ||
+                (result != ASTRA_ERROR_BUSY && result != ASTRA_ERROR_TIMEOUT &&
+                 result != ASTRA_ERROR_WOULD_BLOCK &&
+                 result != ASTRA_ERROR_NO_RESOURCES &&
+                 result != ASTRA_ERROR_OUT_OF_MEMORY &&
+                 result != ASTRA_ERROR_IO && result != ASTRA_ERROR_PEER_DEAD))
+                filesystem_dirty = 0u;
+            else
+                filesystem_retry = astra_clock_monotonic() +
+                    UINT64_C(500000000);
         }
         if (volume_refresh && astra_clock_monotonic() >= volume_retry) {
             if (viewed_volume.id == 0u &&

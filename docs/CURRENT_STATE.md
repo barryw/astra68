@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-11-05
 
+Filesystem notification loss-recovery checkpoint, 2026-11-05: DE25 exposed
+global reliable-publish starvation when an Atlas window watched missing
+`/work`. Atlas reloaded its directory before ACK, so the failed reload left
+that subscription's eight-entry backlog full and blocked HostFS publication
+to other windows. Atlas now ACKs receipt independently of view reload and
+tracks a dirty view for retry; an unavailable path cannot hold the broker.
+Haiku reference: `src/system/kernel/fs/node_monitor.cpp:1190-1265` publishes
+entry identity separately; Atlas performs its own later filesystem lookup.
+Beast Atlas build and three focused host tests passed. DE25 candidate Atlas
+SHA-256 `7abadbd387f3a52f6db5fb2a51eadd34293ff1b5b599c3b9055ea8203b17b4a7`
+passed the original failure case: with `/work` invalid and FAT Atlas open,
+a 128-directory host burst changed the FAT view from 262 to 390 items without
+Refresh; one later host marker reached 391, guest `mkdir` reached 392, and
+removal of all 391 disposable directories restored one original item.
+Transient broker BUSY replies occurred during burst and drained. Diagnostic
+HostFS binary was restored to original SHA-256
+`4f011925cb161d817c1ff3c51cfda7270ba3d3039625de0171f3998dd16c866e`;
+on that clean binary, another host marker raised FAT Atlas from one to two
+items and its removal returned to one while the invalid window remained open.
+Evidence and original/test binaries are archived under
+`/mnt/Documents/astra68/fsnotify-overflow-ui-20261105/` on Beast. Performance
+qualification remains open after correctness gates; existing idle Atlas CPU
+cost below is not an accepted production budget.
+
 Notification performance probe, 2026-11-05: after external-event gate, DE25
 `astra-top` measured 20-second idle windows with zero, one, and three Atlas
 instances. Guest idle was 95.0%, 51.1%, and 31.2%; HostFS CPU was 0.71%,
