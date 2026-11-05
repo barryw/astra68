@@ -91,6 +91,10 @@ FS_ADOPT = 22
 FS_FILE_FLAGS = 23
 FS_PATH = 24
 FS_CHANGE_SNAPSHOT = 26
+FS_CHANGE_NEXT = 27
+CHANGE_NONE = 0
+CHANGE_NODE = 1
+CHANGE_GAP = 2
 IO_SEQUENTIAL = 1 << 14
 ADOPT_DISCARD = 1
 UNLINK_DIRECTORY = 1
@@ -101,7 +105,7 @@ METRICS_SNAPSHOT = 1
 SERVICE_ENTROPY = 4
 ENTROPY_FILL = 1
 ENTROPY_MAX = 256
-METRICS_CAPACITY = 16 + 8 * (12 + 2 * 27)
+METRICS_CAPACITY = 16 + 8 * (12 + 2 * (FS_CHANGE_NEXT + 1))
 METRIC_HOST_COMMANDS = 8
 
 OPEN_READ = 1 << 0
@@ -1104,6 +1108,16 @@ def run(qtest, root, outside):
         assert get32(answer.raw, 52) == 0
         return get64(answer.raw, 24), get64(answer.raw, 32)
 
+    def next_change(cursor):
+        answer = execute(qtest, [Command(generation, FS_CHANGE_NEXT,
+            offset=cursor, capacity=32, session=work)])[0]
+        assert status(answer) == STATUS_OK
+        kind = get32(answer.raw, 56)
+        record = output(qtest, answer, 32) if kind == CHANGE_NODE else None
+        assert get32(answer.raw, 52) == (32 if record is not None else 0)
+        return get64(answer.raw, 24), kind, \
+            struct.unpack(">QQQQ", record) if record is not None else None
+
     baseline_changes = changes()
 
     direct_bytes = 4096 + OPERAND_ROOM
@@ -1408,6 +1422,14 @@ def run(qtest, root, outside):
         session=work)])[0]) == STATUS_OK
 
     before_write = changes()
+    last_sequence = 0
+    while True:
+        next_sequence, last_kind, _ = next_change(last_sequence)
+        if last_kind == CHANGE_NONE:
+            break
+        last_sequence = next_sequence
+        if last_kind == CHANGE_GAP:
+            break
     payload = b"host transport data integrity\x00\xff"
     written = execute(qtest, [Command(
         generation, FS_WRITE, handle=handle, data=payload,
@@ -1416,12 +1438,17 @@ def run(qtest, root, outside):
     assert get32(written.raw, 52) == len(payload)
     assert changes() == (before_write[0] + 1, before_write[1]), \
         "successful write was invisible to filesystem change watchers"
+    sequence, kind, record = next_change(last_sequence)
+    assert sequence == last_sequence + 1 and kind == CHANGE_NODE
+    assert record == (sequence, before_write[0] + 1, before_write[1],
+                      get64(opened.raw, NODE_INODE))
     empty_write = execute(qtest, [Command(
         generation, FS_WRITE, handle=handle, data=b"",
         session=work)])[0]
     assert status(empty_write) == STATUS_OK
     assert changes() == (before_write[0] + 1, before_write[1]), \
         "empty write must not announce a node mutation"
+    assert next_change(sequence) == (sequence, CHANGE_NONE, None)
 
     capacity = len(payload)
     before_read = changes()
@@ -1433,6 +1460,12 @@ def run(qtest, root, outside):
     assert output(qtest, read, capacity) == payload
     assert changes() == before_read, \
         "reading contents must not announce a filesystem mutation"
+    assert next_change(sequence) == (sequence, CHANGE_NONE, None)
+    for _ in range(64):
+        truncated = execute(qtest, [Command(generation, FS_TRUNCATE,
+            handle=handle, value=len(payload), session=work)])[0]
+        assert status(truncated) == STATUS_OK
+    assert next_change(last_sequence) == (sequence + 64, CHANGE_GAP, None)
 
     hard_linked = execute(qtest, [Command(
         generation, FS_LINK, "/data", "/data-hard-link", session=work)])[0]

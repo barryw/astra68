@@ -195,6 +195,44 @@ uint32_t astra_vfs_host_change_snapshot(AstraVfsHostBackend *backend,
     return ASTRA_VFS_OK;
 }
 
+uint32_t astra_vfs_host_change_next(AstraVfsHostBackend *backend,
+    uint64_t *cursor, AstraHostFsChangeRecord *record, uint32_t *kind)
+{
+    AstraVfsHostRequest request;
+    uint8_t wire[sizeof(*record)];
+    uint32_t status;
+    uint64_t next;
+
+    if (backend == NULL || cursor == NULL || record == NULL || kind == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    status = command_begin(backend, &request, ASTRA_HOST_FS_CHANGE_NEXT,
+                           0u, NULL, NULL);
+    if (status != ASTRA_VFS_OK) return status;
+    request.command->offset_hi = (uint32_t)(*cursor >> 32);
+    request.command->offset_lo = (uint32_t)*cursor;
+    status = submit(backend, &request, NULL, 0u, wire, sizeof(wire));
+    if (status != ASTRA_VFS_OK) return status;
+    next = ((uint64_t)request.command->offset_hi << 32) |
+        request.command->offset_lo;
+    if (request.command->result_value > ASTRA_HOST_FS_CHANGE_GAP ||
+        (request.command->result_value == ASTRA_HOST_FS_CHANGE_NODE &&
+         (request.command->result_length != sizeof(wire) || next <= *cursor)) ||
+        (request.command->result_value != ASTRA_HOST_FS_CHANGE_NODE &&
+         request.command->result_length != 0u))
+        return ASTRA_VFS_ERR_PROTOCOL;
+    if (request.command->result_value == ASTRA_HOST_FS_CHANGE_NODE) {
+        record->sequence = astra_load_be64(wire);
+        record->nodes = astra_load_be64(wire + 8u);
+        record->entries = astra_load_be64(wire + 16u);
+        record->inode = astra_load_be64(wire + 24u);
+        if (record->sequence != next || record->inode == 0u)
+            return ASTRA_VFS_ERR_PROTOCOL;
+    }
+    *cursor = next;
+    *kind = request.command->result_value;
+    return ASTRA_VFS_OK;
+}
+
 /* OPEN, absolute beneath the session root (directory 0) or relative
  * beneath an open directory. */
 static uint32_t host_open_common(void *context, uintptr_t directory,

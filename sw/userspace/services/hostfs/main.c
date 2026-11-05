@@ -97,6 +97,7 @@ typedef struct HostfsVolume {
     AstraVfsHostBackend backend;
     AstraVfsService service;
     AstraVfsChangeSnapshot published_changes;
+    uint64_t published_change_sequence;
     AstraVfsSessionSlot sessions[ASTRA_VFS_SESSION_MAX];
     AstraVfsPortService port;
     AstraArea storage;
@@ -274,7 +275,7 @@ static const char *const fs_group_names[] = {
     "host.fs.filesystem_info", "host.fs.session_open",
     "host.fs.session_close", "host.fs.claim", "host.fs.seek",
     "host.fs.share", "host.fs.adopt", "host.fs.file_flags", "host.fs.path",
-    "host.fs.try_lock", "host.fs.change_snapshot"
+    "host.fs.try_lock", "host.fs.change_snapshot", "host.fs.change_next"
 };
 _Static_assert(sizeof(fs_group_names) / sizeof(fs_group_names[0]) ==
                    ASTRA_HOST_FS_MAX + 1u,
@@ -944,29 +945,53 @@ static void publish_filesystem_changes(uint32_t messaging)
 {
     for (HostfsVolume *volume = volumes; volume != NULL;
          volume = volume->next) {
-        AstraVfsChangeSnapshot snapshot;
-        uint32_t queued = 0u;
-        if (!volume->service_ready || volume->config_store ||
-            astra_vfs_host_change_snapshot(&volume->backend,
-                &snapshot.nodes, &snapshot.entries) != ASTRA_VFS_OK ||
-            (snapshot.nodes == volume->published_changes.nodes &&
-             snapshot.entries == volume->published_changes.entries))
-            continue;
-        AstraFilesystemChange change = {
-            ASTRA_FILESYSTEM_CHANGE_VERSION, sizeof(change),
-            volume->reference, snapshot.nodes, snapshot.entries
-        };
-        /* Publication is outside VFS locks and writes. BUSY leaves latest
-         * generation pending here for retry; intermediates can coalesce. */
-        AstraResult result = astra_messaging_publish_reliable(messaging,
-            ASTRA_FILESYSTEM_CHANGE_TOPIC, &change, sizeof(change),
-            filesystem_transaction,
-            (AstraMonotonicDeadline)(astra_clock_monotonic() +
-                UINT64_C(20000000)), &queued);
-        if (result == ASTRA_OK) {
+        if (!volume->service_ready || volume->config_store) continue;
+        for (uint32_t limit = 0u; limit < 8u; ++limit) {
+            AstraHostFsChangeRecord record = {0};
+            AstraVfsChangeSnapshot snapshot;
+            uint64_t cursor = volume->published_change_sequence;
+            uint32_t kind;
+            uint32_t queued = 0u;
+            if (astra_vfs_host_change_next(&volume->backend,
+                    &cursor, &record, &kind) != ASTRA_VFS_OK)
+                break;
+            if (kind == ASTRA_HOST_FS_CHANGE_NODE) {
+                snapshot.nodes = record.nodes;
+                snapshot.entries = record.entries;
+            } else if (astra_vfs_host_change_snapshot(&volume->backend,
+                    &snapshot.nodes, &snapshot.entries) != ASTRA_VFS_OK) {
+                break;
+            }
+            if (kind == ASTRA_HOST_FS_CHANGE_NONE &&
+                snapshot.nodes == volume->published_changes.nodes &&
+                snapshot.entries == volume->published_changes.entries)
+                break;
+            if (kind == ASTRA_HOST_FS_CHANGE_GAP &&
+                snapshot.nodes == volume->published_changes.nodes &&
+                snapshot.entries == volume->published_changes.entries) {
+                volume->published_change_sequence = cursor;
+                break;
+            }
+            AstraFilesystemChange change = {
+                ASTRA_FILESYSTEM_CHANGE_VERSION, sizeof(change),
+                volume->reference, snapshot.nodes, snapshot.entries,
+                kind == ASTRA_HOST_FS_CHANGE_NODE ?
+                    ASTRA_FILESYSTEM_CHANGE_NODE :
+                    ASTRA_FILESYSTEM_CHANGE_INVALIDATE,
+                0u, kind == ASTRA_HOST_FS_CHANGE_NODE ? record.inode : 0u
+            };
+            /* BUSY leaves both sequence and generation pending for retry. */
+            AstraResult result = astra_messaging_publish_reliable(messaging,
+                ASTRA_FILESYSTEM_CHANGE_TOPIC, &change, sizeof(change),
+                filesystem_transaction,
+                (AstraMonotonicDeadline)(astra_clock_monotonic() +
+                    UINT64_C(20000000)), &queued);
+            if (result != ASTRA_OK) break;
             volume->published_changes = snapshot;
+            volume->published_change_sequence = cursor;
             ++filesystem_transaction;
             if (filesystem_transaction == 0u) filesystem_transaction = 1u;
+            if (kind != ASTRA_HOST_FS_CHANGE_NODE) break;
         }
     }
 }

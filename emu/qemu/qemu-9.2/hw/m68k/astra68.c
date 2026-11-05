@@ -606,6 +606,9 @@ typedef struct AstraHostNamespace {
     uint64_t changes_entries;
     uint32_t references;
     QemuMutex lock;
+    QemuMutex changes_lock;
+    uint64_t change_sequence;
+    AstraHostFsChangeRecord change_records[64];
 } AstraHostNamespace;
 
 typedef struct AstraHostJob {
@@ -3686,6 +3689,7 @@ static AstraHostNamespace *astra_host_namespace_acquire(Astra68State *s,
         namespace->mount = mount;
         namespace->generation = generation;
         qemu_mutex_init(&namespace->lock);
+        qemu_mutex_init(&namespace->changes_lock);
         g_hash_table_insert(s->host.namespaces, &namespace->mount, namespace);
     }
     ++namespace->references;
@@ -3704,6 +3708,7 @@ static void astra_host_namespace_release(Astra68State *s,
         g_hash_table_remove(s->host.namespaces, &namespace->mount);
     qemu_mutex_unlock(&s->host.files_lock);
     if (last) {
+        qemu_mutex_destroy(&namespace->changes_lock);
         qemu_mutex_destroy(&namespace->lock);
         g_free(namespace);
     }
@@ -6852,6 +6857,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     bool directory_reserved = false;
     bool changed_nodes = false;
     bool changed_entries = false;
+    uint64_t changed_inode = 0u;
     AstraResolution resolved = { .parent = -1 };
 
     stl_be_p(command + HOST_FIELD(status), 0u);
@@ -7008,7 +7014,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
      * directory of this session; handles answer only in their session. */
     root = session->root;
     if (operation != ASTRA_HOST_FS_CLOSE &&
-        operation != ASTRA_HOST_FS_CHANGE_SNAPSHOT && !disconnected_share &&
+        operation != ASTRA_HOST_FS_CHANGE_SNAPSHOT &&
+        operation != ASTRA_HOST_FS_CHANGE_NEXT && !disconnected_share &&
         !disconnected_adopt) {
         int admitted = astra_host_provider_root(s, session->mount,
                                                 session->mount_generation, NULL, NULL);
@@ -7023,6 +7030,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     }
     if (operation != ASTRA_HOST_FS_CLOSE &&
         operation != ASTRA_HOST_FS_CHANGE_SNAPSHOT &&
+        operation != ASTRA_HOST_FS_CHANGE_NEXT &&
         operation != ASTRA_HOST_FS_READ &&
         operation != ASTRA_HOST_FS_SYNC &&
         operation != ASTRA_HOST_FS_SEEK && operation != ASTRA_HOST_FS_FILE_FLAGS) {
@@ -7069,7 +7077,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         }
     }
     if (operation != ASTRA_HOST_FS_CLOSE &&
-        operation != ASTRA_HOST_FS_CHANGE_SNAPSHOT) {
+        operation != ASTRA_HOST_FS_CHANGE_SNAPSHOT &&
+        operation != ASTRA_HOST_FS_CHANGE_NEXT) {
         int live = astra_host_rooted(s, session, root, root);
         if (live != 0) {
             status = astra_host_status_from_errno(-live);
@@ -7103,6 +7112,40 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
                          qatomic_read(&session->namespace->changes_entries));
         status = ASTRA_STATUS_OK;
         break;
+    case ASTRA_HOST_FS_CHANGE_NEXT: {
+        uint32_t capacity = ldl_be_p(command + HOST_FIELD(data_capacity));
+        uint8_t *data = astra_host_command_data(s, physical, bytes,
+            command_bytes, command, sizeof(AstraHostFsChangeRecord));
+        uint64_t cursor = astra_host_get64(command, HOST_FIELD(offset_hi));
+        AstraHostNamespace *namespace = session->namespace;
+        uint32_t outcome = ASTRA_HOST_FS_CHANGE_NONE;
+
+        if (flags || handle || path[0] || path2[0] ||
+            astra_host_get64(command, HOST_FIELD(value_hi)) ||
+            ldl_be_p(command + HOST_FIELD(data_length)) ||
+            capacity < sizeof(AstraHostFsChangeRecord) || data == NULL)
+            break;
+        qemu_mutex_lock(&namespace->changes_lock);
+        uint64_t latest = namespace->change_sequence;
+        if (cursor > latest || latest - cursor > G_N_ELEMENTS(namespace->change_records)) {
+            outcome = ASTRA_HOST_FS_CHANGE_GAP;
+        } else if (cursor < latest) {
+            AstraHostFsChangeRecord *record = &namespace->change_records[
+                cursor % G_N_ELEMENTS(namespace->change_records)];
+            stq_be_p(data, record->sequence);
+            stq_be_p(data + 8u, record->nodes);
+            stq_be_p(data + 16u, record->entries);
+            stq_be_p(data + 24u, record->inode);
+            stl_be_p(command + HOST_FIELD(result_length), sizeof(*record));
+            outcome = ASTRA_HOST_FS_CHANGE_NODE;
+        }
+        astra_host_put64(command, HOST_FIELD(offset_hi),
+            outcome == ASTRA_HOST_FS_CHANGE_NODE ? cursor + 1u : latest);
+        stl_be_p(command + HOST_FIELD(result_value), outcome);
+        qemu_mutex_unlock(&namespace->changes_lock);
+        status = ASTRA_STATUS_OK;
+        break;
+    }
     case ASTRA_HOST_FS_PATH: {
         uint32_t capacity = ldl_be_p(command + HOST_FIELD(data_capacity));
         uint8_t *data = astra_host_command_data(
@@ -7285,8 +7328,10 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
                 moved = sequential ? write(file->description->fd, data, length) :
                         pwrite(file->description->fd, data, length, offset);
             }
-            if (moved > 0)
+            if (moved > 0) {
                 changed_nodes = true;
+                changed_inode = file->identity.inode;
+            }
             if (moved < 0) {
                 status = astra_host_path_status(errno, &resolved);
             } else {
@@ -7433,6 +7478,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
                 file->description->fd, astra_host_get64(command, HOST_FIELD(value_hi))) == 0 ?
                 ASTRA_STATUS_OK : astra_host_path_status(errno, &resolved);
             changed_nodes = status == ASTRA_STATUS_OK;
+            if (changed_nodes) changed_inode = file->identity.inode;
         }
         break;
     case ASTRA_HOST_FS_STAT: {
@@ -7749,9 +7795,25 @@ done:
         status = ASTRA_STATUS_LOST;
     if (file != NULL)
         astra_host_file_unlock(s, file);
-    if (namespace_locked && session != NULL) {
-        if (changed_nodes) qatomic_inc(&session->namespace->changes_nodes);
-        if (changed_entries) qatomic_inc(&session->namespace->changes_entries);
+    if (namespace_locked && session != NULL &&
+        (changed_nodes || changed_entries)) {
+        AstraHostNamespace *namespace = session->namespace;
+        qemu_mutex_lock(&namespace->changes_lock);
+        if (changed_nodes) qatomic_inc(&namespace->changes_nodes);
+        if (changed_entries) qatomic_inc(&namespace->changes_entries);
+        if (changed_nodes && changed_inode != 0u) {
+            /* shortcut: exact records cover handle writes/truncates; other
+             * mutations still invalidate through the volume generations. */
+            if (namespace->change_sequence == UINT64_MAX)
+                namespace->change_sequence = 0u;
+            uint64_t sequence = ++namespace->change_sequence;
+            namespace->change_records[(sequence - 1u) %
+                G_N_ELEMENTS(namespace->change_records)] =
+                (AstraHostFsChangeRecord){ sequence,
+                    qatomic_read(&namespace->changes_nodes),
+                    qatomic_read(&namespace->changes_entries), changed_inode };
+        }
+        qemu_mutex_unlock(&namespace->changes_lock);
     }
     if (namespace_locked && operation != ASTRA_HOST_FS_TRY_LOCK &&
         astra_host_fs_mutates(operation, flags)) {
@@ -10469,7 +10531,8 @@ static void astra68_init(MachineState *machine)
             { "astra-host-fs-file-flags", "astra-host-fs-file-flags-execution-ns" },
             { "astra-host-fs-path", "astra-host-fs-path-execution-ns" },
             { "astra-host-fs-try-lock", "astra-host-fs-try-lock-execution-ns" },
-            { "astra-host-fs-change-snapshot", "astra-host-fs-change-snapshot-execution-ns" }
+            { "astra-host-fs-change-snapshot", "astra-host-fs-change-snapshot-execution-ns" },
+            { "astra-host-fs-change-next", "astra-host-fs-change-next-execution-ns" }
         };
 
         G_STATIC_ASSERT(G_N_ELEMENTS(properties) ==

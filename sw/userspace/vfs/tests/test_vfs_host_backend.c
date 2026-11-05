@@ -25,6 +25,8 @@ typedef struct FakeHost {
     uint32_t expected_requester;
     uint32_t payload_limit;
     uint32_t usage_cursor;
+    uint32_t change_kind;
+    uint32_t change_corrupt;
     AstraVolumeReference expected_volume;
 } FakeHost;
 
@@ -262,6 +264,22 @@ uint32_t astra_vfs_host_transport_submit(
         return host->failure;
     }
     switch (command->operation) {
+    case ASTRA_HOST_FS_CHANGE_NEXT:
+        assert(command->flags == 0u && command->handle == 0u &&
+               input_size == 0u && output_capacity == sizeof(AstraHostFsChangeRecord));
+        assert(((uint64_t)command->offset_hi << 32 | command->offset_lo) == 4u);
+        command->result_value = host->change_kind;
+        command->offset_hi = 0u;
+        command->offset_lo = host->change_kind == ASTRA_HOST_FS_CHANGE_GAP ? 80u :
+            host->change_kind == ASTRA_HOST_FS_CHANGE_NODE ? 5u : 4u;
+        if (host->change_kind == ASTRA_HOST_FS_CHANGE_NODE) {
+            astra_store_be64(output, host->change_corrupt ? 6u : 5u);
+            astra_store_be64((uint8_t *)output + 8u, 12u);
+            astra_store_be64((uint8_t *)output + 16u, 9u);
+            astra_store_be64((uint8_t *)output + 24u, 42u);
+            command->result_length = sizeof(AstraHostFsChangeRecord);
+        }
+        break;
     case ASTRA_HOST_FS_CHANGE_SNAPSHOT:
         assert(command->flags == 0u && command->handle == 0u &&
                input_size == 0u && output_capacity == 0u);
@@ -639,6 +657,9 @@ int main(void)
     uint64_t next;
     uint64_t changes_nodes = 0u;
     uint64_t changes_entries = 0u;
+    uint64_t change_cursor = 4u;
+    AstraHostFsChangeRecord change_record = {0};
+    uint32_t change_kind = 99u;
     AstraVfsFilesystemInfo filesystem_info;
 
     assert(!astra_vfs_host_init(NULL,
@@ -665,6 +686,29 @@ int main(void)
     assert(changes_nodes == UINT64_C(0x100000002) &&
            changes_entries == UINT64_C(0x300000004));
     host.failure = 0u;
+
+    EXPECT(ASTRA_HOST_FS_CHANGE_NEXT);
+    host.change_kind = ASTRA_HOST_FS_CHANGE_NODE;
+    assert(astra_vfs_host_change_next(&backend, &change_cursor,
+        &change_record, &change_kind) == ASTRA_VFS_OK);
+    assert(change_cursor == 5u && change_kind == ASTRA_HOST_FS_CHANGE_NODE &&
+        change_record.sequence == 5u && change_record.nodes == 12u &&
+        change_record.entries == 9u && change_record.inode == 42u);
+    change_cursor = 4u;
+    host.change_corrupt = 1u;
+    assert(astra_vfs_host_change_next(&backend, &change_cursor,
+        &change_record, &change_kind) == ASTRA_VFS_ERR_PROTOCOL);
+    assert(change_cursor == 4u);
+    host.change_corrupt = 0u;
+    host.change_kind = ASTRA_HOST_FS_CHANGE_GAP;
+    assert(astra_vfs_host_change_next(&backend, &change_cursor,
+        &change_record, &change_kind) == ASTRA_VFS_OK);
+    assert(change_cursor == 80u && change_kind == ASTRA_HOST_FS_CHANGE_GAP);
+    change_cursor = 4u;
+    host.change_kind = ASTRA_HOST_FS_CHANGE_NONE;
+    assert(astra_vfs_host_change_next(&backend, &change_cursor,
+        &change_record, &change_kind) == ASTRA_VFS_OK);
+    assert(change_cursor == 4u && change_kind == ASTRA_HOST_FS_CHANGE_NONE);
 
     EXPECT(ASTRA_HOST_FS_OPEN);
     assert(ops->open(&backend, "/file", ASTRA_VFS_OPEN_READ,
@@ -790,7 +834,7 @@ int main(void)
     assert(ops->close(&backend, node) == ASTRA_VFS_OK);
 #undef EXPECT
     /* Backend calls, including identity and generation boundary checks. */
-    assert(host.calls == 35u);
+    assert(host.calls == 39u);
     {
         uint8_t continuation[ASTRA_VFS_PATH_MAX];
         AstraVfsEscape escape = {.path = continuation, .capacity = ASTRA_VFS_ESCAPE_PATH_MAX};
@@ -808,7 +852,7 @@ int main(void)
         assert(ops->lookup(&backend, 0u, "/escape",
                            ASTRA_VFS_LOOKUP_ENTRY | ASTRA_VFS_LOOKUP_FOLLOW,
                            3u, &info, &escape) == ASTRA_VFS_ERR_INVALID);
-        assert(host.calls == 37u);
+        assert(host.calls == 41u);
     }
     {
         uint64_t token;

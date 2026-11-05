@@ -38,6 +38,8 @@ int astra_vfs_host_init(AstraVfsHostBackend *backend,
 const AstraVfsBackendOps *astra_vfs_host_ops(void);
 uint32_t astra_vfs_host_change_snapshot(AstraVfsHostBackend *backend,
                                         uint64_t *nodes, uint64_t *entries);
+uint32_t astra_vfs_host_change_next(AstraVfsHostBackend *backend,
+    uint64_t *cursor, AstraHostFsChangeRecord *record, uint32_t *kind);
 
 /* The provider's control operations, on the transport's own (unbound)
  * channel: claim the filesystem service for this process (or release it),

@@ -2,6 +2,41 @@
 
 Status: active continuation map, 2026-11-05
 
+Exact HostFS node-event checkpoint, 2026-11-05: QEMU's canonical mount
+namespace now retains 64 exact inode records for successful handle writes and
+truncates. `CHANGE_NEXT` reads them without waiting for provider I/O; stale
+cursors report a gap. HostFS publishes each record through existing reliable
+Messaging topic and falls back to volume-generation invalidation for gaps and
+mutations without exact identity. Filesystem event payload version 2 carries
+kind and inode; Atlas validates it and still reconciles by generation. Beast's
+VFS backend contract, full confined-provider HostFS suite, and M68K HostFS and
+Atlas builds passed. AArch64 QEMU and those two guest programs were installed
+through DE25 development shadow
+`fd2b557c03e668bfb346d134ced1e98d3db084637d3e43ece9bc8babe0553848`.
+The board reached stage 8, then Terminal copied a disposable file to RAM0;
+the already-open Atlas RAM0 window refreshed from zero to one item. Removing
+the file refreshed both open RAM0 windows to zero. Astra, audio and remote
+desktop stayed active with no restart and 7.9 GiB free. SHA-matched before,
+after, and clean RFB captures are under
+`/mnt/Documents/astra68/fs-exact-events-20261105/` on Beast; trial captures
+were removed from DE25. A review then closed a generation-before-record
+race: generation and exact ring insertion now share one short mutation lock;
+read-only operations never take it. The full HostFS gate passed again, and
+final AArch64 QEMU SHA-256
+`559ffee409cd52e607106a32a3d96b1ba2f73e2499b8cd6dbd7e15a64ef3e5d4`
+was installed alone through shadow
+`d29dc9f371f14d69daa1372b0f661905b1baf35ad5710370b7654ce845aea2ba`.
+On that exact release, the already-open Atlas RAM0 view again changed
+zero to one after Terminal copy and one to zero after removal. Final captures
+match their Beast copies under the same archive; disposable board files were
+removed. `make -C ndk dist-check` and NDK HTML/PDF coverage passed on Beast.
+Board services remain active, `astra.service` restarts are zero, one
+development release remains, and 7.9 GiB are free. Haiku reference:
+`src/system/kernel/fs/node_monitor.cpp` emits stat changes from exact node
+identity at mutation time. Astra adapts that to its existing HostFS namespace
+and broker. Exact entry identities, Linux-originated edits, and full
+notification performance qualification remain open.
+
 Filesystem notification capability probe, 2026-11-05: DE25 Linux 6.12.11
 accepts a filesystem-wide fanotify mark with
 `FAN_REPORT_DFID_NAME_TARGET` on both host ext4 and tmpfs. A disposable

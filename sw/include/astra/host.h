@@ -257,10 +257,31 @@ enum {
     ASTRA_HOST_FS_FILE_FLAGS,       /**< flags masks mutable status, value_lo supplies it; value_lo answers open flags. */
     ASTRA_HOST_FS_PATH,             /**< Current directory path beneath the session root, or NOT_FOUND when unnamed. */
     ASTRA_HOST_FS_TRY_LOCK,         /**< Nonblocking exclusive advisory lock on an open writable file; closing it releases the lock. */
-    ASTRA_HOST_FS_CHANGE_SNAPSHOT  /**< Return this session's volume node generation in offset and entry generation in value. */
+    ASTRA_HOST_FS_CHANGE_SNAPSHOT, /**< Return this session's volume node generation in offset and entry generation in value. */
+    ASTRA_HOST_FS_CHANGE_NEXT      /**< Read next exact mutation after offset's sequence; result_value is ASTRA_HOST_FS_CHANGE_*. */
 };
 /** Highest valid ASTRA_HOST_FS_* operation code. */
-#define ASTRA_HOST_FS_MAX ASTRA_HOST_FS_CHANGE_SNAPSHOT
+#define ASTRA_HOST_FS_MAX ASTRA_HOST_FS_CHANGE_NEXT
+
+/** No exact mutation remains after the supplied cursor. */
+#define ASTRA_HOST_FS_CHANGE_NONE 0u
+/** One exact node mutation is returned in the data span. */
+#define ASTRA_HOST_FS_CHANGE_NODE 1u
+/** Exact records were lost; offset answers latest sequence, so reconcile by generation. */
+#define ASTRA_HOST_FS_CHANGE_GAP 2u
+
+/** Big-endian data span returned by CHANGE_NEXT when result_value is NODE. */
+typedef struct AstraHostFsChangeRecord {
+    uint64_t sequence; /**< Monotonic exact-record sequence within mount incarnation. */
+    uint64_t nodes;    /**< Node generation after mutation. */
+    uint64_t entries;  /**< Entry generation after mutation. */
+    uint64_t inode;    /**< Changed inode, from retained open handle. */
+} AstraHostFsChangeRecord;
+
+/** @cond ASTRA_INTERNAL */
+_Static_assert(sizeof(AstraHostFsChangeRecord) == 32u,
+    "host filesystem change record ABI changed");
+/** @endcond */
 
 /** A root SESSION_OPEN carries an exact AstraVolumeReference in its input
  * payload. Derived sessions carry no target payload and inherit their parent.
