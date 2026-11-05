@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-11-05
 
+Filesystem notification capability probe, 2026-11-05: DE25 Linux 6.12.11
+accepts a filesystem-wide fanotify mark with
+`FAN_REPORT_DFID_NAME_TARGET` on both host ext4 and tmpfs. A disposable
+create/write/rename/delete sequence produced all four masks, four child FID
+records, two parent-name records, and one old/new rename-name record each on
+both mounts. The repeatable source and target build rule are in
+`fpga/de25/linux/test_fanotify_capability.c` and its Makefile. The exact
+target-built probe passed DE25; output and source hashes are archived under
+`/mnt/Documents/astra68/fsnotify-capability-20261105/` on Beast. The
+disposable board binary and directories were removed; Astra, audio, and
+remote desktop remain active with no runtime restart and 7.9 GiB free.
+This is a host
+capability gate, not Astra event delivery. Linux requires
+`FAN_MARK_FILESYSTEM` for FID-bearing directory events;
+`FAN_MARK_MOUNT` refused the mark with `EINVAL`. Linux fanotify does not
+report remote network mutations or mmap writes, so it cannot replace the
+canonical Astra mutation producer or existing volume-generation recovery.
+Haiku's `src/system/kernel/fs/node_monitor.cpp` records parent, child, and
+move identities at the filesystem owner; Astra still needs a bridge through
+its existing broker with overflow/loss recovery. No notification performance
+claim follows from this probe.
+
 HPS watchdog checkpoint, 2026-11-05: DE25 systemd now owns the existing
 Synopsys DesignWare `/dev/watchdog0` hardware timer. Its versioned manager
 drop-in selects a 120-second runtime timeout and the existing 10-minute reboot

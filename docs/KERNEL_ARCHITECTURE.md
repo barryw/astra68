@@ -433,6 +433,12 @@ Exact entry events require mutation identity from the backend's own operation.
 `OPEN_CREATE` can open an existing file, and a later `stat` races another
 writer. VFS must keep the current generation invalidation fallback when an
 event queue overflows; it must not claim an exact event from a guess.
+DE25 host ext4 and tmpfs passed a filesystem-wide fanotify
+`FAN_REPORT_DFID_NAME_TARGET` create/write/rename/delete capability probe.
+That can observe Linux-local edits through the provider, but Linux fanotify
+does not report remote changes or mmap writes. Astra's canonical operation
+records remain necessary; both sources must publish through the existing
+broker, with generations covering loss and unsupported sources.
 
 Implementation order follows dependencies: node events use the existing broker;
 crash snapshots use the process-handle and trace seams. Pressure handling must

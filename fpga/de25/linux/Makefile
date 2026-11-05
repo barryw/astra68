@@ -83,6 +83,13 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 .PHONY: storage-config-test
 .PHONY: storage-names-test
 .PHONY: codec-provider-test
+.PHONY: fanotify-capability-target
+
+$(OUT)/test-fanotify-capability-aarch64: test_fanotify_capability.c Makefile
+	@mkdir -p $(OUT)
+	$(FONT_AARCH64_CC) -std=gnu11 -O2 -Wall -Wextra -Werror $< -o $@
+
+fanotify-capability-target: $(OUT)/test-fanotify-capability-aarch64
 
 CODEC_VORBIS_HEADER := $(ROOT)/sw/userspace/sdl2/build/vendor/SDL2_mixer/src/codecs/stb_vorbis/stb_vorbis.h
 NETWORK_NM_FLAGS := $(shell pkg-config --cflags gio-2.0)
