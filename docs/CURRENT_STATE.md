@@ -2,6 +2,18 @@
 
 Status: active continuation map, 2026-11-05
 
+exFAT external-notification fallback probe, 2026-11-05: On DE25's live
+private exFAT mount, a disposable inotify watch on a newly created directory
+reported create, modify, paired rename, and delete (`seen=0x3c2`, every
+required mask present). The probe removed its directory and board binary;
+Astra, audio host, and remote desktop remain active with 7.9 GiB free.
+Source, AArch64 binary, output, and verified SHA-256 hashes are under
+`/mnt/Documents/astra68/exfat-inotify-capability-20261105/` on Beast. This
+proves the kernel can report those events for a watched exFAT directory; it
+does not establish recursive coverage, rooted authority after moves, bounded
+watch allocation, overflow recovery, or safe unmount cleanup. Any production
+fallback must feed the existing HostFS change ring and Messaging topic.
+
 exFAT external-notification capability probe, 2026-11-05: DE25's private exFAT
 mount cannot use the existing FID fanotify source (`EOPNOTSUPP`). A disposable
 legacy mount-watch probe on that same mounted volume accepted `FAN_MODIFY` and
