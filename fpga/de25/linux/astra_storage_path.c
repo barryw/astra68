@@ -389,6 +389,15 @@ void astra_storage_path_execute(int allowed_root, int readonly,
             if (fstat(last->parent, &parent_stat) == 0)
                 reply->parent_inode = (uint64_t)parent_stat.st_ino;
         }
+        if (error == 0 && request->operation == ASTRA_STORAGE_PATH_RENAME) {
+            struct stat source_stat, target_stat;
+            if (fstat(left.parent, &source_stat) == 0 &&
+                fstat(right.parent, &target_stat) == 0) {
+                reply->source_parent_inode = (uint64_t)source_stat.st_ino;
+                reply->parent_inode = (uint64_t)target_stat.st_ino;
+                memcpy(reply->source_leaf, left.leaf, sizeof(reply->source_leaf));
+            }
+        }
         break;
     default:
         error = -ENOTSUP;

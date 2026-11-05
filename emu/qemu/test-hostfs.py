@@ -1588,6 +1588,23 @@ def run(qtest, root, outside):
     assert symlink_sequence == link_sequence + 1 and kind == CHANGE_ENTRY_CREATED
     assert record[3:] == (0, get64(root_stat.raw, NODE_INODE),
                           CHANGE_ENTRY_CREATED, 0, b"data-link")
+    before_move = changes()
+    moved = execute(qtest, [Command(generation, FS_RENAME,
+        "/data-hard-link", "/dir-target/moved-hard-link", session=work)])[0]
+    assert status(moved) == STATUS_OK
+    assert changes() == (before_move[0], before_move[1] + 1)
+    removed_sequence, kind, record = next_change(symlink_sequence)
+    assert removed_sequence == symlink_sequence + 1 and kind == CHANGE_ENTRY_REMOVED
+    assert record == (removed_sequence, before_move[0], before_move[1] + 1,
+        0, get64(root_stat.raw, NODE_INODE), CHANGE_ENTRY_REMOVED, 0,
+        b"data-hard-link")
+    created_sequence, kind, record = next_change(removed_sequence)
+    assert created_sequence == removed_sequence + 1 and kind == CHANGE_ENTRY_CREATED
+    assert record == (created_sequence, before_move[0], before_move[1] + 1,
+        0, os.stat(os.path.join(root, "dir-target")).st_ino,
+        CHANGE_ENTRY_CREATED, 0, b"moved-hard-link")
+    assert os.path.samefile(os.path.join(root, "data"),
+                            os.path.join(root, "dir-target", "moved-hard-link"))
     opened_link = execute(qtest, [Command(
         generation, FS_OPEN, "/data-link", flags=OPEN_READ,
         capacity=NAME_CAPACITY, session=work)])[0]

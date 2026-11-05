@@ -67,6 +67,29 @@ static void semantics(int root)
     value.resolve = ASTRA_RESOLVE_ENTRY;
     strcpy(value.path2, "/sub/renamed");
     execute(root, 0, &value, fds, &reply, &result);
+    assert(reply.error == 0 &&
+           reply.source_parent_inode == (uint64_t)parent_stat.st_ino &&
+           reply.parent_inode == (uint64_t)parent_stat.st_ino &&
+           strcmp(reply.source_leaf, "file") == 0 &&
+           strcmp(reply.leaf, "renamed") == 0);
+    assert(mkdirat(root, "dest", 0700) == 0);
+    int destination = openat(root, "dest", O_PATH | O_DIRECTORY | O_CLOEXEC);
+    struct stat destination_stat;
+    assert(destination >= 0 && fstat(destination, &destination_stat) == 0);
+    close(destination);
+    value = request(ASTRA_STORAGE_PATH_RENAME, "/sub/renamed");
+    value.resolve = ASTRA_RESOLVE_ENTRY;
+    strcpy(value.path2, "/dest/renamed");
+    execute(root, 0, &value, fds, &reply, &result);
+    assert(reply.error == 0 &&
+           reply.source_parent_inode == (uint64_t)parent_stat.st_ino &&
+           reply.parent_inode == (uint64_t)destination_stat.st_ino &&
+           strcmp(reply.source_leaf, "renamed") == 0 &&
+           strcmp(reply.leaf, "renamed") == 0);
+    value = request(ASTRA_STORAGE_PATH_RENAME, "/dest/renamed");
+    value.resolve = ASTRA_RESOLVE_ENTRY;
+    strcpy(value.path2, "/sub/renamed");
+    execute(root, 0, &value, fds, &reply, &result);
     assert(reply.error == 0);
     int racer = openat(root, "sub/racer", O_CREAT | O_EXCL | O_WRONLY, 0600);
     assert(racer >= 0 && write(racer, "racer", 5) == 5);
@@ -76,7 +99,8 @@ static void semantics(int root)
     value.flags = RENAME_NOREPLACE;
     strcpy(value.path2, "/sub/racer");
     execute(root, 0, &value, fds, &reply, &result);
-    assert(reply.error == EEXIST);
+    assert(reply.error == EEXIST && reply.parent_inode == 0u &&
+           reply.source_parent_inode == 0u && reply.source_leaf[0] == '\0');
     int source = openat(root, "sub/renamed", O_RDONLY);
     char preserved[6] = {0};
     assert(source >= 0 && read(source, preserved, 3) == 3 &&
@@ -144,6 +168,7 @@ static void semantics(int root)
     assert(unlinkat(root, "sub/renamed", 0) == 0);
     assert(unlinkat(root, "sub/racer", 0) == 0);
     assert(unlinkat(root, "sub", AT_REMOVEDIR) == 0);
+    assert(unlinkat(root, "dest", AT_REMOVEDIR) == 0);
 }
 
 static void seeding(int root)

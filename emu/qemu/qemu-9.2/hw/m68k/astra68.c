@@ -6861,8 +6861,10 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     bool changed_entries = false;
     uint64_t changed_inode = 0u;
     uint64_t changed_parent_inode = 0u;
+    uint64_t changed_source_parent_inode = 0u;
     uint32_t changed_kind = 0u;
     char changed_name[256] = {0};
+    char changed_source_name[256] = {0};
     AstraResolution resolved = { .parent = -1 };
 
     stl_be_p(command + HOST_FIELD(status), 0u);
@@ -7793,6 +7795,16 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             changed_kind = ASTRA_HOST_FS_CHANGE_ENTRY_CREATED;
             memcpy(changed_name, reply.leaf, sizeof(changed_name));
         }
+        if (error == 0 && operation == ASTRA_HOST_FS_RENAME &&
+            reply.source_parent_inode != 0u && reply.parent_inode != 0u &&
+            reply.source_leaf[0] != '\0' && reply.leaf[0] != '\0') {
+            changed_source_parent_inode = reply.source_parent_inode;
+            changed_parent_inode = reply.parent_inode;
+            changed_kind = ASTRA_HOST_FS_CHANGE_ENTRY_CREATED;
+            memcpy(changed_source_name, reply.source_leaf,
+                   sizeof(changed_source_name));
+            memcpy(changed_name, reply.leaf, sizeof(changed_name));
+        }
         astra_host_resolution(&reply, &resolved);
         status = error == ERANGE ? ASTRA_STATUS_BUFFER_TOO_SMALL :
             astra_host_path_status(error, &resolved);
@@ -7867,23 +7879,30 @@ done:
         if ((changed_inode != 0u && changed_nodes) ||
             (changed_entries && changed_parent_inode != 0u &&
              (changed_inode != 0u || changed_kind != 0u))) {
-            if (namespace->change_sequence == UINT64_MAX)
-                namespace->change_sequence = 0u;
-            uint64_t sequence = ++namespace->change_sequence;
-            AstraHostFsChangeRecord record = {
-                .sequence = sequence,
-                .nodes = qatomic_read(&namespace->changes_nodes),
-                .entries = qatomic_read(&namespace->changes_entries),
-                .inode = changed_inode,
-                .parent_inode = changed_parent_inode,
-                .kind = changed_kind != 0u ? changed_kind :
-                    changed_parent_inode != 0u ?
-                    ASTRA_HOST_FS_CHANGE_ENTRY_CREATED :
-                    ASTRA_HOST_FS_CHANGE_NODE
-            };
-            memcpy(record.name, changed_name, sizeof(record.name));
-            namespace->change_records[(sequence - 1u) %
-                G_N_ELEMENTS(namespace->change_records)] = record;
+            for (uint32_t at = 0u; at < (changed_source_parent_inode ? 2u : 1u);
+                 ++at) {
+                if (namespace->change_sequence == UINT64_MAX)
+                    namespace->change_sequence = 0u;
+                uint64_t sequence = ++namespace->change_sequence;
+                bool source = changed_source_parent_inode != 0u && at == 0u;
+                AstraHostFsChangeRecord record = {
+                    .sequence = sequence,
+                    .nodes = qatomic_read(&namespace->changes_nodes),
+                    .entries = qatomic_read(&namespace->changes_entries),
+                    .inode = changed_inode,
+                    .parent_inode = source ? changed_source_parent_inode :
+                        changed_parent_inode,
+                    .kind = source ? ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED :
+                        changed_kind != 0u ? changed_kind :
+                        changed_parent_inode != 0u ?
+                        ASTRA_HOST_FS_CHANGE_ENTRY_CREATED :
+                        ASTRA_HOST_FS_CHANGE_NODE
+                };
+                memcpy(record.name, source ? changed_source_name : changed_name,
+                       sizeof(record.name));
+                namespace->change_records[(sequence - 1u) %
+                    G_N_ELEMENTS(namespace->change_records)] = record;
+            }
         }
         qemu_mutex_unlock(&namespace->changes_lock);
     }

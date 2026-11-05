@@ -2,6 +2,31 @@
 
 Status: active continuation map, 2026-11-05
 
+Exact move checkpoint, 2026-11-05: private storage provider protocol 12
+returns both source and destination parent inode/leaf pairs from retained
+directory FDs after successful rename. QEMU emits source ENTRY_REMOVED then
+destination ENTRY_CREATED through existing bounded change ring; both records
+carry the single mutation's entry generation. No filesystem event schema or
+second notification service was added. A lost provider reply still uses
+generation reconciliation. Haiku reference:
+`src/system/kernel/fs/node_monitor.cpp:1196-1260` reports both sides of a
+move from mutation-time identity. Beast storage-path test and full confined
+HostFS gate passed, including a cross-parent move and both exact records.
+Matching AArch64 QEMU SHA-256
+`4a4686dd7067c6e38be4ca8d8234b47502c234d90d7e8bb415f0aec648128ae6`
+and provider SHA-256
+`b233626405ff17104bcbb776b9b47851b22c347a159ad5a722afd60a3d6659cb`
+are active in DE25 development shadow
+`7cf187f0c702d1bc4cbfb40bd742b8bde3b1e10c8d0d918b0142fce1e5b13ab7`.
+DE25 reached stage 8, with Astra, audio, and RFB active, zero Astra restarts,
+and 7.8 GiB free. Terminal renamed a disposable HOME file while Atlas HOME
+remained open; Atlas changed its displayed name without Refresh. Probe was
+removed and Atlas returned to its original four items. SHA-checked evidence
+is under `/mnt/Documents/astra68/exact-move-20261105/` on Beast; board
+captures were removed and only selected shadow remains. Nonexclusive create,
+Linux-originated edits, and notification performance qualification remain
+open. Performance audit follows notification correctness.
+
 Exact directory-create checkpoint, 2026-11-05: successful mkdir, symlink,
 and hardlink operations now carry destination parent inode from the confined
 provider's retained parent FD and the leaf name through the existing change

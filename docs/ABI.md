@@ -442,6 +442,11 @@ Successful mkdir, symlink, and hardlink report ENTRY_CREATED with the exact
 destination parent inode and leaf. Their child inode is zero when the mutation
 reply cannot supply it atomically. Consumers accept zero child inode for
 ENTRY_CREATED and reconcile using the existing volume generation.
+Storage provider protocol 12 adds source parent inode and leaf to successful
+rename replies. QEMU emits an exact removal record for the source followed by
+an exact creation record for the destination; both share the mutation's entry
+generation. Overwriting a destination is covered by the destination entry
+refresh. No filesystem change payload or record schema change is required.
 
 All Filesystem exports use `ASTRA_FILESYSTEM_9.0`. Filesystem.kit 6.0.0 and
 every in-tree dependent manifest require major 9. The POSIX fork prepare/

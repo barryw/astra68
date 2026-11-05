@@ -34,7 +34,7 @@ typedef struct AstraStorageRecord {
 
 /* Private Linux protocol. Only the launched QEMU peer receives its socket;
  * application authority remains in the native rooted scopes. */
-#define ASTRA_STORAGE_PROVIDER_VERSION 11u
+#define ASTRA_STORAGE_PROVIDER_VERSION 12u
 #define ASTRA_STORAGE_PROVIDER_PATH_MAX 4096u
 #define ASTRA_STORAGE_PROVIDER_FDS 3u
 #define ASTRA_STORAGE_PROVIDER_PAGE 16u
@@ -150,7 +150,9 @@ typedef struct AstraStoragePathReply {
     uint32_t links;
     uint32_t length;
     uint64_t parent_inode;
+    uint64_t source_parent_inode;
     char leaf[256];
+    char source_leaf[256];
     char continuation[ASTRA_STORAGE_PROVIDER_PATH_MAX];
     char data[ASTRA_STORAGE_PROVIDER_PATH_MAX];
 } AstraStoragePathReply;
