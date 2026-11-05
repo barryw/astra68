@@ -602,6 +602,8 @@ typedef struct AstraHostSession {
 typedef struct AstraHostNamespace {
     uint64_t mount;
     uint64_t generation;
+    uint64_t changes_nodes;
+    uint64_t changes_entries;
     uint32_t references;
     QemuMutex lock;
 } AstraHostNamespace;
@@ -6847,6 +6849,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     AstraHostNamespace *opening_namespace = NULL;
     bool descriptor_reserved = false;
     bool directory_reserved = false;
+    bool changed_nodes = false;
+    bool changed_entries = false;
     AstraResolution resolved = { .parent = -1 };
 
     stl_be_p(command + HOST_FIELD(status), 0u);
@@ -7002,7 +7006,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     /* Paths resolve beneath the session root, or beneath an open
      * directory of this session; handles answer only in their session. */
     root = session->root;
-    if (operation != ASTRA_HOST_FS_CLOSE && !disconnected_share &&
+    if (operation != ASTRA_HOST_FS_CLOSE &&
+        operation != ASTRA_HOST_FS_CHANGE_SNAPSHOT && !disconnected_share &&
         !disconnected_adopt) {
         int admitted = astra_host_provider_root(s, session->mount,
                                                 session->mount_generation, NULL, NULL);
@@ -7015,7 +7020,9 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             borrowed_root = true;
         } else close(admitted);
     }
-    if (operation != ASTRA_HOST_FS_CLOSE && operation != ASTRA_HOST_FS_READ &&
+    if (operation != ASTRA_HOST_FS_CLOSE &&
+        operation != ASTRA_HOST_FS_CHANGE_SNAPSHOT &&
+        operation != ASTRA_HOST_FS_READ &&
         operation != ASTRA_HOST_FS_SYNC &&
         operation != ASTRA_HOST_FS_SEEK && operation != ASTRA_HOST_FS_FILE_FLAGS) {
         /* Table locking cannot span these calls; publishing an open reenters it.
@@ -7060,7 +7067,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             goto done;
         }
     }
-    if (operation != ASTRA_HOST_FS_CLOSE) {
+    if (operation != ASTRA_HOST_FS_CLOSE &&
+        operation != ASTRA_HOST_FS_CHANGE_SNAPSHOT) {
         int live = astra_host_rooted(s, session, root, root);
         if (live != 0) {
             status = astra_host_status_from_errno(-live);
@@ -7079,6 +7087,21 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     }
 
     switch (operation) {
+    case ASTRA_HOST_FS_CHANGE_SNAPSHOT:
+        if (flags || handle || path[0] || path2[0] ||
+            astra_host_get64(command, HOST_FIELD(offset_hi)) ||
+            astra_host_get64(command, HOST_FIELD(value_hi)) ||
+            ldl_be_p(command + HOST_FIELD(data_length)) ||
+            ldl_be_p(command + HOST_FIELD(data_capacity)))
+            break;
+        /* Snapshot cannot wait for filesystem I/O: network writes can hold
+         * the namespace lock for an unbounded outage. */
+        astra_host_put64(command, HOST_FIELD(offset_hi),
+                         qatomic_read(&session->namespace->changes_nodes));
+        astra_host_put64(command, HOST_FIELD(value_hi),
+                         qatomic_read(&session->namespace->changes_entries));
+        status = ASTRA_STATUS_OK;
+        break;
     case ASTRA_HOST_FS_PATH: {
         uint32_t capacity = ldl_be_p(command + HOST_FIELD(data_capacity));
         uint8_t *data = astra_host_command_data(
@@ -7130,9 +7153,17 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
                 (ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_EXCLUSIVE)) ? 0u :
                 ASTRA_RESOLVE_FOLLOW_FINAL, ASTRA_RESOLVE_LINK_MAX, &resolved);
         if (fd < 0) {
+            if (qatomic_read(&s->host.provider_broken) ||
+                (session->network && qatomic_read(&s->host.provider_network_path_broken))) {
+                changed_entries = (flags & ASTRA_VFS_OPEN_CREATE) != 0u;
+                changed_nodes = (flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u;
+            }
             status = astra_host_path_status(errno, &resolved);
             break;
         }
+        /* OPEN can create or truncate before publishing its handle succeeds. */
+        changed_entries = (flags & ASTRA_VFS_OPEN_CREATE) != 0u;
+        changed_nodes = (flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u;
         status = astra_host_publish_open(s, owner, channel != NULL ? channel->process : 0u, session, session_id,
                                          command, fd, flags);
         if (status == ASTRA_STATUS_OK)
@@ -7167,6 +7198,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         } else {
             moved = sequential ? read(file->description->fd, data, capacity) :
                     pread(file->description->fd, data, capacity, offset);
+            if (moved > 0)
+                changed_nodes = true;
             if (moved < 0) {
                 status = astra_host_path_status(errno, &resolved);
             } else {
@@ -7398,6 +7431,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             status = ftruncate(
                 file->description->fd, astra_host_get64(command, HOST_FIELD(value_hi))) == 0 ?
                 ASTRA_STATUS_OK : astra_host_path_status(errno, &resolved);
+            changed_nodes = status == ASTRA_STATUS_OK;
         }
         break;
     case ASTRA_HOST_FS_STAT: {
@@ -7640,6 +7674,15 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         int error = astra_host_provider_path(s, session, root, base, second_base,
             path, path2, broker_operation, broker_flags, mode, resolve,
             ASTRA_RESOLVE_LINK_MAX, capacity, &reply, &result);
+        /* A lost provider reply can follow a committed mutation. Ordinary
+         * syscall failures did not change the tree. */
+        if (error == 0 || qatomic_read(&s->host.provider_broken) ||
+            (session->network && qatomic_read(&s->host.provider_network_path_broken))) {
+            if (operation == ASTRA_HOST_FS_CHMOD)
+                changed_nodes = true;
+            else if (operation != ASTRA_HOST_FS_READLINK)
+                changed_entries = true;
+        }
         astra_host_resolution(&reply, &resolved);
         status = error == ERANGE ? ASTRA_STATUS_BUFFER_TOO_SMALL :
             astra_host_path_status(error, &resolved);
@@ -7705,6 +7748,10 @@ done:
         status = ASTRA_STATUS_LOST;
     if (file != NULL)
         astra_host_file_unlock(s, file);
+    if (namespace_locked && session != NULL) {
+        if (changed_nodes) qatomic_inc(&session->namespace->changes_nodes);
+        if (changed_entries) qatomic_inc(&session->namespace->changes_entries);
+    }
     if (namespace_locked && operation != ASTRA_HOST_FS_TRY_LOCK &&
         astra_host_fs_mutates(operation, flags)) {
         qemu_mutex_lock(&s->host.files_lock);
@@ -10411,7 +10458,8 @@ static void astra68_init(MachineState *machine)
             { "astra-host-fs-adopt", "astra-host-fs-adopt-execution-ns" },
             { "astra-host-fs-file-flags", "astra-host-fs-file-flags-execution-ns" },
             { "astra-host-fs-path", "astra-host-fs-path-execution-ns" },
-            { "astra-host-fs-try-lock", "astra-host-fs-try-lock-execution-ns" }
+            { "astra-host-fs-try-lock", "astra-host-fs-try-lock-execution-ns" },
+            { "astra-host-fs-change-snapshot", "astra-host-fs-change-snapshot-execution-ns" }
         };
 
         G_STATIC_ASSERT(G_N_ELEMENTS(properties) ==

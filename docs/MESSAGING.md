@@ -47,6 +47,10 @@ Events are transient, not state snapshots. Subscribers obtain initial state
 from the owning service after subscribing. For state-change topics, publishers
 can coalesce pending changes and retry a reliable publication outside the
 mutation path, so a slow observer cannot stall filesystem writes.
+HostFS reads per-volume provider generations when it polls; direct filesystem
+lanes and VFS service mutations advance the same counters. The snapshot read
+does no storage I/O and takes no namespace lock, including on network volumes.
+External Linux-side changes are not yet included.
 
 Limits: 8 broker requests queued; 128 direct registrations; 128 subscriptions;
 384 payload bytes per event; 8 unacknowledged reliable events per subscriber.

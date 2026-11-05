@@ -262,6 +262,14 @@ uint32_t astra_vfs_host_transport_submit(
         return host->failure;
     }
     switch (command->operation) {
+    case ASTRA_HOST_FS_CHANGE_SNAPSHOT:
+        assert(command->flags == 0u && command->handle == 0u &&
+               input_size == 0u && output_capacity == 0u);
+        command->offset_hi = 1u;
+        command->offset_lo = 2u;
+        command->value_hi = 3u;
+        command->value_lo = 4u;
+        break;
     case ASTRA_HOST_FS_SESSION_OPEN:
         assert(command->value_hi == 0u && command->value_lo == 0u);
         assert(operand(request->path, request->path_length, "/"));
@@ -629,6 +637,8 @@ int main(void)
     uint32_t moved;
     uint64_t position;
     uint64_t next;
+    uint64_t changes_nodes = 0u;
+    uint64_t changes_entries = 0u;
     AstraVfsFilesystemInfo filesystem_info;
 
     assert(!astra_vfs_host_init(NULL,
@@ -644,6 +654,18 @@ int main(void)
     ops = astra_vfs_host_ops();
 
 #define EXPECT(operation) host.expected_operation = (operation)
+    EXPECT(ASTRA_HOST_FS_CHANGE_SNAPSHOT);
+    assert(astra_vfs_host_change_snapshot(&backend, &changes_nodes,
+        &changes_entries) == ASTRA_VFS_OK);
+    assert(changes_nodes == UINT64_C(0x100000002) &&
+           changes_entries == UINT64_C(0x300000004));
+    host.failure = ASTRA_VFS_ERR_IO;
+    assert(astra_vfs_host_change_snapshot(&backend, &changes_nodes,
+        &changes_entries) == ASTRA_VFS_ERR_IO);
+    assert(changes_nodes == UINT64_C(0x100000002) &&
+           changes_entries == UINT64_C(0x300000004));
+    host.failure = 0u;
+
     EXPECT(ASTRA_HOST_FS_OPEN);
     assert(ops->open(&backend, "/file", ASTRA_VFS_OPEN_READ,
                      ASTRA_VFS_MODE_DEFAULT, &node, &info) == ASTRA_VFS_OK);
@@ -768,7 +790,7 @@ int main(void)
     assert(ops->close(&backend, node) == ASTRA_VFS_OK);
 #undef EXPECT
     /* Backend calls, including identity and generation boundary checks. */
-    assert(host.calls == 33u);
+    assert(host.calls == 35u);
     {
         uint8_t continuation[ASTRA_VFS_PATH_MAX];
         AstraVfsEscape escape = {.path = continuation, .capacity = ASTRA_VFS_ESCAPE_PATH_MAX};
@@ -786,7 +808,7 @@ int main(void)
         assert(ops->lookup(&backend, 0u, "/escape",
                            ASTRA_VFS_LOOKUP_ENTRY | ASTRA_VFS_LOOKUP_FOLLOW,
                            3u, &info, &escape) == ASTRA_VFS_ERR_INVALID);
-        assert(host.calls == 35u);
+        assert(host.calls == 37u);
     }
     {
         uint64_t token;

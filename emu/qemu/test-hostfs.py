@@ -90,6 +90,7 @@ FS_SHARE = 21
 FS_ADOPT = 22
 FS_FILE_FLAGS = 23
 FS_PATH = 24
+FS_CHANGE_SNAPSHOT = 26
 IO_SEQUENTIAL = 1 << 14
 ADOPT_DISCARD = 1
 UNLINK_DIRECTORY = 1
@@ -100,7 +101,7 @@ METRICS_SNAPSHOT = 1
 SERVICE_ENTROPY = 4
 ENTROPY_FILL = 1
 ENTROPY_MAX = 256
-METRICS_CAPACITY = 16 + 8 * (12 + 2 * 26)
+METRICS_CAPACITY = 16 + 8 * (12 + 2 * 27)
 METRIC_HOST_COMMANDS = 8
 
 OPEN_READ = 1 << 0
@@ -1070,7 +1071,7 @@ def run(qtest, root, outside):
     snapshot = output(qtest, metrics, metrics_size)
     size, version, count = struct.unpack_from(">IHH", snapshot, 0)
     assert size == metrics_size
-    assert version == 5
+    assert version == 6
     assert count == (metrics_size - 16) // 8
     assert count > METRIC_HOST_COMMANDS
     assert get64(snapshot, 16) != 0
@@ -1093,6 +1094,15 @@ def run(qtest, root, outside):
     # The provider's commands (after the metrics: they count as commands).
     assert claim(qtest, generation) == STATUS_OK
     work = open_session(qtest, generation)
+
+    def changes():
+        answer = execute(qtest, [Command(generation, FS_CHANGE_SNAPSHOT,
+                                          session=work)])[0]
+        assert status(answer) == STATUS_OK
+        assert get32(answer.raw, 52) == 0
+        return get64(answer.raw, 24), get64(answer.raw, 32)
+
+    baseline_changes = changes()
 
     direct_bytes = 4096 + OPERAND_ROOM
     assert configure_channel(qtest, generation, 1,
@@ -1146,6 +1156,12 @@ def run(qtest, root, outside):
                              channel_generation=8) == 0
     assert configure_channel(qtest, generation, 2) == 0
     assert qtest.read32(CHANNEL_APERTURE + 3 * 4096 + 8) == 0
+    assert changes() == (baseline_changes[0], baseline_changes[1] + 3), \
+        "direct-lane mkdir was invisible to filesystem change watchers"
+    failed_mkdir = execute(qtest, [Command(generation, FS_MKDIR, "/direct",
+                                           value=0o755, session=work)])[0]
+    assert status(failed_mkdir) != STATUS_OK
+    assert changes() == (baseline_changes[0], baseline_changes[1] + 3)
 
     concurrent_buffer = BUFFER + 0x8000
     concurrent_capacity = 8

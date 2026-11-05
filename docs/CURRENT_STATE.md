@@ -2,6 +2,42 @@
 
 Status: active continuation map, 2026-11-05
 
+Filesystem change producer correction, 2026-11-05: production HostFS now
+publishes per-volume generations from QEMU's canonical filesystem namespace,
+which sees both VFS service requests and direct client lanes. The old VFS
+service-only counter missed direct CLI writes. Counter reads use session
+authority but no provider I/O or namespace lock, so a slow NFS operation
+cannot block HostFS's control loop. Mutations advance node or entry counters
+after their provider operation; uncertain lost replies invalidate
+conservatively. Haiku reference: `src/system/kernel/fs/node_monitor.cpp` and
+`src/add-ons/kernel/file_systems/ext2/kernel_interface.cpp` emit from the
+filesystem owner using stable node and parent identity. Beast VFS host tests,
+QEMU's confined-provider test, HostFS settings test, NDK `dist-check`, and
+DE25 target builds passed. DE25's live
+Atlas RAM0 view changed from zero to one item after Terminal created a folder
+through its direct lane, without manual refresh; Atlas Trash removed the
+disposable folder afterward. Board/archive RFB and workload SHA-256 hashes
+match under `/mnt/Documents/astra68/filesystem-notify-provider-20261105/` on
+Beast. A blank RFB desktop background at boot was capture-only: Desktop logged
+its five icons, and Atlas opened and rendered normally. Notification throughput
+is not qualified: before this change, RAM0 `fsbench` medians were 2.76 ms
+sequential write, 2.26 ms random write, 2.33 ms append; matching APPS-view
+run after change measured 3.87, 3.94, and 3.76 ms. All workloads succeeded;
+background host-command counts also rose, so cause needs controlled profiling
+after correctness work. Exact per-node events and Linux-originated changes
+remain open.
+
+Selected DE25 development release after final OPEN lost-reply correction:
+`335c2e4ce9e954758570dc870606e4ac40b5b7018c99d9099d00506fa7940c74`.
+POST reached stage 8, Astra, audio, and remote desktop services were active,
+and QMP reported filesystem change-snapshot requests. On this selected release,
+Atlas showed an empty RAM0, Terminal created `notify-proof-final` through its
+direct filesystem lane, and the already open Atlas view showed the folder
+without Refresh. Atlas moved the disposable folder to Trash and emptied it;
+RAM0 returned to 64 MiB free. Raw before, after, and cleaned RFB captures
+match board SHA-256 hashes under
+`/mnt/Documents/astra68/filesystem-notify-provider-final-20261105/` on Beast.
+
 Ext4 identity prerequisite, 2026-11-05: lwext4's path and anchored metadata
 calls now return inode number from the same locked lookup as other metadata.
 The Astra ext4 backend exposes that identity through open, stat, open-handle
@@ -14,15 +50,17 @@ ext4 path: Linux storage provider presents its mount through HostFS, whose
 metadata already includes inode identity. Native packed directory batches
 still omit inode IDs; exact mutation events remain open.
 
-RAM0 identity gate, 2026-11-05: RAM backend now assigns stable, non-reused
-inode IDs within each mount incarnation. The root, open handles, hard links,
-renames, and backend directory listings carry the same identity; allocation
-exhaustion refuses creation without changing the tree. Haiku reference:
-`src/system/kernel/fs/node_monitor.cpp` uses stable node and parent IDs for
-entry notifications. VFS host tests and target HostFS/`fssem` builds passed on
-Beast. Updated HostFS and a temporary `fssem` command were installed in the
-DE25 development release; native `fssem volume-root` passed its RAM0 root and
-new-directory inode checks. Raw RFB evidence, with matching board and Beast
+RAM backend identity prerequisite, 2026-11-05: the currently unused native RAM
+backend now assigns stable, non-reused inode IDs within each mount incarnation.
+Its root, open handles, hard links, renames, and backend directory listings
+carry the same identity; allocation exhaustion refuses creation without
+changing the tree. Haiku reference: `src/system/kernel/fs/node_monitor.cpp`
+uses stable node and parent IDs for entry notifications. VFS host tests and
+target HostFS/`fssem` builds passed on Beast. DE25's RAM0 is actually Linux
+tmpfs served through HostFS. Its native `fssem volume-root` test passed root
+and new-directory inode checks through the existing HostFS metadata path;
+that result does not certify the unused RAM backend on hardware. Raw RFB
+evidence, with matching board and Beast
 SHA-256 `09a358a543f77f49369158b6394dc154b4a8f562765ed9924cfea12648ae29d9`,
 is under `/mnt/Documents/astra68/ram-inode-20261105/` on Beast. Temporary
 command and board captures were removed. Astra reached stage 8; runtime,

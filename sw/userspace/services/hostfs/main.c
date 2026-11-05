@@ -274,7 +274,7 @@ static const char *const fs_group_names[] = {
     "host.fs.filesystem_info", "host.fs.session_open",
     "host.fs.session_close", "host.fs.claim", "host.fs.seek",
     "host.fs.share", "host.fs.adopt", "host.fs.file_flags", "host.fs.path",
-    "host.fs.try_lock"
+    "host.fs.try_lock", "host.fs.change_snapshot"
 };
 _Static_assert(sizeof(fs_group_names) / sizeof(fs_group_names[0]) ==
                    ASTRA_HOST_FS_MAX + 1u,
@@ -947,7 +947,8 @@ static void publish_filesystem_changes(uint32_t messaging)
         AstraVfsChangeSnapshot snapshot;
         uint32_t queued = 0u;
         if (!volume->service_ready || volume->config_store ||
-            !astra_vfs_service_change_snapshot(&volume->service, &snapshot) ||
+            astra_vfs_host_change_snapshot(&volume->backend,
+                &snapshot.nodes, &snapshot.entries) != ASTRA_VFS_OK ||
             (snapshot.nodes == volume->published_changes.nodes &&
              snapshot.entries == volume->published_changes.entries))
             continue;

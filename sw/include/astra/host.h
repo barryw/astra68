@@ -256,10 +256,11 @@ enum {
     ASTRA_HOST_FS_ADOPT,            /**< Consume offset's token in this session; handle answers the new handle. */
     ASTRA_HOST_FS_FILE_FLAGS,       /**< flags masks mutable status, value_lo supplies it; value_lo answers open flags. */
     ASTRA_HOST_FS_PATH,             /**< Current directory path beneath the session root, or NOT_FOUND when unnamed. */
-    ASTRA_HOST_FS_TRY_LOCK          /**< Nonblocking exclusive advisory lock on an open writable file; closing it releases the lock. */
+    ASTRA_HOST_FS_TRY_LOCK,         /**< Nonblocking exclusive advisory lock on an open writable file; closing it releases the lock. */
+    ASTRA_HOST_FS_CHANGE_SNAPSHOT  /**< Return this session's volume node generation in offset and entry generation in value. */
 };
 /** Highest valid ASTRA_HOST_FS_* operation code. */
-#define ASTRA_HOST_FS_MAX ASTRA_HOST_FS_TRY_LOCK
+#define ASTRA_HOST_FS_MAX ASTRA_HOST_FS_CHANGE_SNAPSHOT
 
 /** A root SESSION_OPEN carries an exact AstraVolumeReference in its input
  * payload. Derived sessions carry no target payload and inherit their parent.
@@ -306,7 +307,7 @@ enum {
  */
 #define ASTRA_HOST_METRICS_SNAPSHOT UINT16_C(1)
 /** Wire-format version the host stamps into AstraHostMetricsSnapshot::version. */
-#define ASTRA_HOST_METRICS_VERSION UINT16_C(5)
+#define ASTRA_HOST_METRICS_VERSION UINT16_C(6)
 
 /** AstraHostCommand::operation: connect to the remote-desktop session
  * (idempotent if already connected) and receive its next queued event.

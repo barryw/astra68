@@ -171,6 +171,30 @@ static uint32_t submit(AstraVfsHostBackend *backend,
     return status;
 }
 
+uint32_t astra_vfs_host_change_snapshot(AstraVfsHostBackend *backend,
+                                        uint64_t *nodes, uint64_t *entries)
+{
+    AstraVfsHostRequest request;
+    uint32_t status;
+
+    if (backend == NULL || nodes == NULL || entries == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    status = command_begin(backend, &request, ASTRA_HOST_FS_CHANGE_SNAPSHOT,
+                           0u, NULL, NULL);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    status = submit(backend, &request, NULL, 0u, NULL, 0u);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (request.command->result_length != 0u)
+        return ASTRA_VFS_ERR_PROTOCOL;
+    *nodes = ((uint64_t)request.command->offset_hi << 32) |
+             request.command->offset_lo;
+    *entries = ((uint64_t)request.command->value_hi << 32) |
+               request.command->value_lo;
+    return ASTRA_VFS_OK;
+}
+
 /* OPEN, absolute beneath the session root (directory 0) or relative
  * beneath an open directory. */
 static uint32_t host_open_common(void *context, uintptr_t directory,
