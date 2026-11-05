@@ -272,6 +272,27 @@ def main():
                 close_atlas(machine)
                 check_retired(machine, args.deadline, drawer)
                 print("ATLAS %s PASS" % root, flush=True)
+
+            before = machine.sequence()
+            machine.qmp.type_line("open /apps/Atlas.app /no-such-volume")
+            wait_root(machine, "/no-such-volume", 0, 0, 2,
+                      before, args.deadline)
+            click(machine, 200, 200)
+            before = machine.sequence()
+            machine.qmp.type_line("open /apps/Atlas.app /ram0")
+            wait_root(machine, "/ram0", 2, 1, 0, before, args.deadline)
+            click(machine, 200, 200)
+            before = machine.sequence()
+            command_output(machine,
+                           "; ".join("mkdir /ram0/Notify%02d" % at
+                                     for at in range(9)),
+                           "atlas-notify.txt", args.deadline)
+            wait_root(machine, "/ram0", 11, 10, 0, before, args.deadline)
+            close_atlas(machine)
+            close_atlas(machine)
+            check_retired(machine, args.deadline, drawer)
+            print("ATLAS missing-view subscriber does not starve RAM0 PASS", flush=True)
+
             references = command_output(machine, "volumes --references", "atlas-references.txt", args.deadline)
             rows = [line.split() for line in references if line.strip().endswith(" /ram0")]
             if len(rows) != 1 or len(rows[0]) != 4:

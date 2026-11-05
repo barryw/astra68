@@ -162,6 +162,8 @@ static AstraPort filesystem_events = ASTRA_PORT_INIT;
 static uint64_t filesystem_subscription, filesystem_event_sequence;
 static uint64_t filesystem_retry;
 static uint32_t filesystem_dirty;
+static uint64_t directory_inode;
+static AstraVolumeReference filesystem_volume;
 static AstraHandle volume_metadata, volume_messaging, volume_grant;
 static AstraHandle volume_administrator, volume_inspector;
 static AstraHandle volume_gui;
@@ -1617,6 +1619,29 @@ static void log_root(void)
     astra_runtime_deallocate(bytes);
 }
 
+static int filesystem_change_affects_directory(const AstraFilesystemChange *change)
+{
+    /* Caller filters registry volume; VFS meta.volume uses device identity. */
+    if (result_mode != 0u || directory_inode == 0u)
+        return 1;
+    if (change->kind == ASTRA_FILESYSTEM_CHANGE_INVALIDATE) return 1;
+    if (change->kind == ASTRA_FILESYSTEM_CHANGE_ENTRY_CREATED ||
+        change->kind == ASTRA_FILESYSTEM_CHANGE_ENTRY_REMOVED)
+        return change->parent_inode == directory_inode;
+    if (change->inode == directory_inode) return 1;
+    int unknown = 0;
+    for (uint32_t at = 0u; at < directory.count; ++at) {
+        const AstraVfsNodeMeta *meta = &directory.entries[at].meta;
+        if ((meta->valid & ASTRA_VFS_META_INODE) == 0u) {
+            unknown = 1;
+            continue;
+        }
+        if (meta->inode == change->inode)
+            return 1;
+    }
+    return unknown;
+}
+
 static void log_icons(void)
 {
     AstraWindowInfo info = ASTRA_WINDOW_INFO_INIT;
@@ -1986,6 +2011,8 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
     AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
     AstraVolumeRecord record = {0};
     AstraVolumeReference candidate = {0u, 0u, 0u};
+    AstraVolumeReference notification = {0u, 0u, 0u};
+    AstraFileInfo root_info = ASTRA_FILE_INFO_INIT;
     AstraHandle next_grant = ASTRA_INVALID_HANDLE;
     uint32_t status;
     AstraResult result;
@@ -2006,6 +2033,20 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
         record = *mounted;
         candidate = (AstraVolumeReference){catalog.epoch,
             mounted->id, mounted->generation};
+    }
+    notification = candidate;
+    if (fixed_copy_path(target)) {
+        /* HOME and APPS are assigns into the DH0 system mount. */
+        for (uint32_t at = 0u; at < catalog.count; ++at) {
+            const AstraVolumeRecord *system = &catalog.records[at];
+            if (system->kind == ASTRA_VOLUME_MOUNT &&
+                system->state == ASTRA_VOLUME_MOUNTED &&
+                strcmp(system->name, "/dh0") == 0) {
+                notification = (AstraVolumeReference){catalog.epoch,
+                    system->id, system->generation};
+                break;
+            }
+        }
     }
     astra_volume_snapshot_close(&catalog);
     if ((history_target < NAVIGATION_HISTORY_MAX &&
@@ -2030,6 +2071,7 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
         close_grant(&next_grant);
         return astra_result_from_service(status);
     }
+    (void)astra_filesystem_stat(&filesystem.filesystem, target, &root_info);
     status = prepare_directory(&next, target);
     if (status != ASTRA_VFS_OK) {
         astra_directory_snapshot_dispose(&next);
@@ -2082,6 +2124,7 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
     } else if (candidate.id == 0u)
         volume_release();
     viewed_volume = candidate;
+    filesystem_volume = notification;
     if (candidate.id != 0u) {
         volume_display(&record);
     } else {
@@ -2095,6 +2138,9 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
     clear_entry_icons();
     astra_directory_snapshot_dispose(&directory);
     directory = next;
+    directory_inode =
+        (root_info.meta.valid & ASTRA_VFS_META_INODE) != 0u ?
+        root_info.meta.inode : 0u;
     memcpy(current_path, target, strlen(target) + 1u);
     root = current_path;
     result = recent_leave();
@@ -4514,8 +4560,9 @@ static AstraResult run(AstraHandle gui)
                     return ASTRA_ERROR_IO;
                 filesystem_event_sequence = notice.sequence;
                 filesystem_retry = 0u;
-                if (viewed_volume.id == 0u ||
-                    astra_volume_reference_equal(&change.volume, &viewed_volume))
+                if ((filesystem_volume.id == 0u ||
+                     astra_volume_reference_equal(&change.volume, &filesystem_volume)) &&
+                    filesystem_change_affects_directory(&change))
                     filesystem_dirty = 1u;
             }
         }

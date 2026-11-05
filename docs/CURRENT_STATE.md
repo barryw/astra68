@@ -2,6 +2,29 @@
 
 Status: active continuation map, 2026-11-05
 
+Atlas filesystem event filtering checkpoint, 2026-11-05: Atlas now matches
+notification volume catalog identity before comparing exact parent or node
+inode, including the DH0 system mount behind HOME and APPS assigns. The VFS
+`meta.volume` is a device identity, not the catalog ID; treating them as the
+same value suppressed live USB FAT updates, and omitting volume matching
+caused false refreshes from inode collisions across mounts. Haiku reference:
+`src/system/kernel/fs/node_monitor.cpp:60-70,1190-1265` pairs device with
+inode, and `src/kits/tracker/PoseView.cpp:5445-5585` filters by watched
+directory and pose before refreshing. Beast QEMU Atlas regression passed,
+including a failed-view subscriber, healthy RAM0 changes, and a 257-entry
+DH0 directory. DE25 Atlas SHA-256
+`121dcbdc5037adc20e48e866666d0da41abef880054157dce7d2d14029599aa6`
+showed USB FAT root grow from one to two items after host `mkdir`, then return
+to one after host `rmdir`, without Refresh. Twenty-second zero/one/three
+Atlas idle samples measured guest idle 95.0/93.7/90.6%; three Atlas processes
+each used 0.63-0.65% guest CPU and 35 syscalls/s, with zero display presents.
+The earlier unfiltered three-window probe measured 31.2% idle. All test
+folders were removed and three windows closed. Evidence is under
+`/mnt/Documents/astra68/fsnotify-overflow-ui-20261105/` on Beast. Full
+notification performance audit remains open: subscriber scaling, event burst
+latency, reliable backlog and provider CPU need qualified budgets after
+correctness work is complete.
+
 Filesystem notification loss-recovery checkpoint, 2026-11-05: DE25 exposed
 global reliable-publish starvation when an Atlas window watched missing
 `/work`. Atlas reloaded its directory before ACK, so the failed reload left
