@@ -76,6 +76,13 @@ _Static_assert(KERNEL_DEVICE_RIGHT_HOST_SCOPE == ASTRA_RIGHT_HOST_SCOPE,
                "device scope right");
 _Static_assert(KERNEL_DEVICE_RIGHT_CONFIG_SECRET == ASTRA_RIGHT_CONFIG_SECRET,
                "device config secret right");
+_Static_assert(KERNEL_PROCESS_RIGHT_CRASH == ASTRA_RIGHT_CRASH,
+               "process crash right");
+_Static_assert(KERNEL_VM_MAPPING_UNKNOWN == ASTRA_CRASH_MAPPING_UNKNOWN &&
+                   KERNEL_VM_MAPPING_UNMAPPED == ASTRA_CRASH_MAPPING_UNMAPPED &&
+                   KERNEL_VM_MAPPING_READ_ONLY == ASTRA_CRASH_MAPPING_READ_ONLY &&
+                   KERNEL_VM_MAPPING_READ_WRITE == ASTRA_CRASH_MAPPING_READ_WRITE,
+               "crash mapping values must match VM probes");
 
 _Static_assert(((KERNEL_QUALIFICATION_COMMAND_PREFIX ^
                  ASTRA_PROGRESS_BOOT_COMMAND_PREFIX) &
@@ -231,6 +238,7 @@ typedef struct KernelProcess {
     uint16_t handles_frames;
     uint16_t fault_vector;
     uint16_t fault_status;
+    AstraProcessCrash crash;
     /*
      * One bit per thread stack slot. Sixteen bits was the ceiling on
      * KERNEL_PROCESS_THREAD_SLOT_COUNT; sixty-four costs six bytes a process.
@@ -4909,7 +4917,7 @@ static KernelProcessStatus clone_current_process(
         source->handles, KERNEL_OBJECT_PROCESS,
         KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_TERMINATE |
             KERNEL_PROCESS_RIGHT_SIGNAL | KERNEL_PROCESS_RIGHT_WAIT |
-            KERNEL_PROCESS_RIGHT_TRANSFER,
+            KERNEL_PROCESS_RIGHT_TRANSFER | KERNEL_PROCESS_RIGHT_CRASH,
         child, process_handle_retain,
         process_handle_release, NULL, &parent_handle);
     if (handle_status != KERNEL_HANDLE_OK) {
@@ -8590,7 +8598,8 @@ static KernelProcessStatus executable_load_commit(
         launcher->handles, KERNEL_OBJECT_PROCESS,
         KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_WAIT |
             KERNEL_PROCESS_RIGHT_TERMINATE | KERNEL_PROCESS_RIGHT_SIGNAL |
-            KERNEL_PROCESS_RIGHT_TRANSFER | KERNEL_PROCESS_RIGHT_PRIORITY,
+            KERNEL_PROCESS_RIGHT_TRANSFER | KERNEL_PROCESS_RIGHT_PRIORITY |
+            KERNEL_PROCESS_RIGHT_CRASH,
         child, process_handle_retain, process_handle_release, NULL,
         child_handle);
     if (handle_status != KERNEL_HANDLE_OK) {
@@ -11723,7 +11732,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                 KERNEL_PROCESS_RIGHT_TERMINATE |
                 KERNEL_PROCESS_RIGHT_SIGNAL |
                 KERNEL_PROCESS_RIGHT_TRANSFER |
-                KERNEL_PROCESS_RIGHT_PRIORITY,
+                KERNEL_PROCESS_RIGHT_PRIORITY | KERNEL_PROCESS_RIGHT_CRASH,
             &child_handle);
         /* The slot was reserved above, so a failure here is not a shortage. */
         if (launch_status != KERNEL_PROCESS_OK)
@@ -13800,6 +13809,44 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         result = ASTRA_SYSCALL_OK;
         break;
     }
+    case ASTRA_SYSCALL_PROCESS_CRASH: {
+        KernelProcess *target = NULL;
+        KernelHandleStatus handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1], KERNEL_OBJECT_PROCESS,
+            KERNEL_PROCESS_RIGHT_CRASH, (void **)&target);
+        uint32_t output = thread->context.data[2];
+        int copy_status;
+
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || target == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if ((output & 3u) != 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (target->crash.size == 0u) {
+            result = ASTRA_SYSCALL_WOULD_BLOCK;
+            break;
+        }
+        copy_status = kernel_copy_to_user(output, &target->crash,
+                                          sizeof(target->crash));
+        if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+            copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+            result = ASTRA_SYSCALL_BAD_ADDRESS;
+            break;
+        }
+        if (copy_status != KERNEL_USER_COPY_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
     case ASTRA_SYSCALL_THREAD_INFO: {
         KernelThread *target = NULL;
         KernelHandleStatus handle_status;
@@ -14849,10 +14896,32 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
         *next_context = runtime_resume(thread);
         return KERNEL_PROCESS_OK;
     }
-    current->fault_pc = frame.program_counter;
-    current->fault_vector = (uint16_t)(frame.vector_offset >> 2);
-    current->fault_status = frame.special_status;
-    current->fault_address = frame.fault_address;
+    AstraProcessCrash *crash = &current->crash;
+    kernel_bytes_clear(crash, sizeof(*crash));
+    crash->process_id = current->id;
+    crash->thread_id = thread->id;
+    crash->fault_pc = frame.program_counter;
+    crash->fault_address = frame.fault_address;
+    kernel_bytes_copy(crash->data, thread->context.data,
+                      sizeof(crash->data));
+    kernel_bytes_copy(crash->address, thread->context.address,
+                      sizeof(crash->address));
+    crash->user_stack = thread->context.usp;
+    crash->status_register = thread->context.status_register;
+    crash->vector = (uint16_t)(frame.vector_offset >> 2);
+    crash->fault_status = frame.special_status;
+    crash->frame_format = thread->context.frame_format;
+    crash->pc_mapping = (uint8_t)kernel_vm_probe_address_space(
+        &current->address_space, crash->fault_pc, NULL);
+    crash->fault_mapping = (uint8_t)kernel_vm_probe_address_space(
+        &current->address_space, crash->fault_address, NULL);
+    crash->stack_mapping = (uint8_t)kernel_vm_probe_address_space(
+        &current->address_space, crash->user_stack, NULL);
+    crash->size = sizeof(*crash);
+    current->fault_pc = crash->fault_pc;
+    current->fault_vector = crash->vector;
+    current->fault_status = crash->fault_status;
+    current->fault_address = crash->fault_address;
     ++scheduler_stats.user_faults;
     trace_fault_text(current->id, frame.program_counter, frame.fault_address,
                      frame.vector_offset >> 2);

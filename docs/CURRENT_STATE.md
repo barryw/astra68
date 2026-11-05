@@ -2,6 +2,23 @@
 
 Status: active continuation map, 2026-11-05
 
+User crash snapshot gate, 2026-11-05: Axiom retains a bounded 96-byte faulting
+thread register and selected mapping snapshot before retiring its address
+space. A process `CRASH` capability gates access; launch and clone parents
+receive it, query-only observers do not. Runtime Kit exposes
+`astra_process_crash`, and supervisor logs a compact fault summary. Haiku
+references: `src/system/kernel/debug/user_debugger.cpp` and
+`src/system/kernel/debug/core_dump.cpp`. Kernel process, runtime, supervisor,
+and NDK distribution tests pass on Beast. DE25's native `logburst
+--crash-snapshot` gate faulted child process 21 and read vector 2 and PC
+`00100c18` through its parent handle. First hardware trial exposed a missing
+clone-parent right; that path and its host test are fixed. Board/Beast ROM
+SHA-256 matches `e62461e18f68f708333013249ffe88db71b33d3a02fb952e02771bcbc05dfbab`.
+Evidence is archived at `/mnt/Documents/astra68/crash-snapshot-20261105/` on
+Beast. The disposable command and captures were removed from DE25; Astra
+reached stage 8, runtime/audio/remote-desktop services are active, one
+development release remains, and board has 8.0 GiB free.
+
 Messaging redelivery correction, 2026-11-05: an unacknowledged reliable event
 now retries with the same subscription sequence after one second; previously
 only a full-port send retried, so a dequeued event whose ACK was lost could

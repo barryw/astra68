@@ -2,6 +2,7 @@
  * Measures what logging costs the program that logs.
  *   logburst COUNT [--threads N] [--fault] [--off] [--warm] [--settle MS]
  *   logburst --fork
+ *   logburst --crash-snapshot
  *   logburst --wrap N [--settle MS]
  * Prints "logburst: COUNT lines, N threads, ELAPSED ns" on stdout.
  * --off formats every line but does not log it: the baseline.
@@ -104,6 +105,54 @@ fork_test(void)
     return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 8;
 }
 
+static int
+crash_snapshot_test(void)
+{
+    AstraProcessCrash crash;
+    uint32_t handle = 0u;
+    uint32_t child = 0u;
+    uint32_t exit_status = 0u;
+    uint32_t status = astra_process_clone(&handle, &child);
+    uint32_t crash_status;
+
+    if (status != ASTRA_SYSCALL_OK) {
+        printf("CRASH SNAPSHOT clone status %u\n", (unsigned)status);
+        return 6;
+    }
+    if (child == 0u) {
+        *(volatile int *)0 = 1;
+        return 7;
+    }
+    status = astra_process_resume(handle);
+    if (status != ASTRA_SYSCALL_OK) {
+        printf("CRASH SNAPSHOT resume status %u\n", (unsigned)status);
+        (void)astra_close(handle);
+        return 9;
+    }
+    status = astra_process_wait(handle, ASTRA_DEADLINE_FOREVER, &exit_status);
+    memset(&crash, 0, sizeof(crash));
+    crash_status = astra_process_crash(handle, &crash);
+    if (status != ASTRA_SYSCALL_PEER_DEAD ||
+        crash_status != ASTRA_SYSCALL_OK ||
+        crash.size != ASTRA_PROCESS_CRASH_SIZE ||
+        crash.process_id != child || crash.vector == 0u ||
+        crash.fault_pc == 0u || crash.fault_address != 0u) {
+        printf("CRASH SNAPSHOT wait %u exit %u read %u size %u pid %u/%u vector %u pc %08x address %08x\n",
+               (unsigned)status, (unsigned)exit_status,
+               (unsigned)crash_status, (unsigned)crash.size,
+               (unsigned)crash.process_id, (unsigned)child,
+               (unsigned)crash.vector, (unsigned)crash.fault_pc,
+               (unsigned)crash.fault_address);
+        (void)astra_close(handle);
+        return 8;
+    }
+    (void)astra_close(handle);
+    printf("CRASH SNAPSHOT PASS process %u vector %u pc %08x\n",
+           (unsigned)child, (unsigned)crash.vector,
+           (unsigned)crash.fault_pc);
+    return 0;
+}
+
 static void
 pause_ms(uint32_t milliseconds)
 {
@@ -171,6 +220,8 @@ main(int argc, char **argv)
 
     if (argc == 2 && strcmp(argv[1], "--fork") == 0)
         return fork_test();
+    if (argc == 2 && strcmp(argv[1], "--crash-snapshot") == 0)
+        return crash_snapshot_test();
     if (argc >= 3 && strcmp(argv[1], "--wrap") == 0 &&
         parse_count(argv[2], &count)) {
         if (argc == 5 && strcmp(argv[3], "--settle") == 0 &&
@@ -181,7 +232,8 @@ main(int argc, char **argv)
     if (argc < 2 || !parse_count(argv[1], &count)) {
         (void)fputs("usage: logburst COUNT [--threads N] [--fault] [--off] "
                     "[--warm] [--settle MS]\n"
-                    "       logburst --fork | --wrap N [--settle MS]\n",
+                    "       logburst --fork | --crash-snapshot | "
+                    "--wrap N [--settle MS]\n",
                     stderr);
         return 2;
     }

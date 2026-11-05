@@ -108,6 +108,7 @@ ASTRA_RUNTIME_2.0 {
         astra_posix_process_tty_set_foreground;
         astra_posix_process_tty_signal;
         astra_process_clone;
+        astra_process_crash;
         astra_process_exit;
         astra_process_info;
         astra_process_open;

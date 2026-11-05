@@ -6684,9 +6684,12 @@ static void test_process_fault_death_reports_peer_dead(void)
     };
     const uint32_t wait_array_address = KERNEL_PROCESS_STACK_TOP - 256u;
     const uint32_t info_address = KERNEL_PROCESS_STACK_TOP - 384u;
+    const uint32_t crash_address = KERNEL_PROCESS_STACK_TOP - 640u;
     const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
     AstraProcessInfo info;
+    AstraProcessCrash crash;
     KernelHandle handle;
+    KernelHandle query_only;
     KernelMemoryStats baseline;
     KernelMemoryStats final;
     KernelCpuContext *next;
@@ -6702,11 +6705,21 @@ static void test_process_fault_death_reports_peer_dead(void)
     assert(kernel_process_create(image, sizeof(image), 0u, 0u,
                                  &target_id) == KERNEL_PROCESS_OK);
     assert(kernel_process_grant_handle(
-               observer_id, target_id, TEST_PROCESS_WAIT_RIGHTS,
+               observer_id, target_id,
+               TEST_PROCESS_WAIT_RIGHTS | KERNEL_PROCESS_RIGHT_CRASH,
                &handle) == KERNEL_PROCESS_OK);
+    assert(kernel_process_grant_handle(observer_id, target_id,
+                                       KERNEL_PROCESS_RIGHT_QUERY,
+                                       &query_only) == KERNEL_PROCESS_OK);
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
                KERNEL_PROCESS_CODE_BASE, 0u);
+    registers[0] = ASTRA_SYSCALL_PROCESS_CRASH;
+    registers[1] = handle;
+    registers[2] = crash_address;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_WOULD_BLOCK);
     assert(kernel_user_copy_to_asm(wait_array_address, &handle,
                                    sizeof(handle)) == KERNEL_USER_COPY_OK);
     memset(registers, 0, sizeof(registers));
@@ -6749,10 +6762,33 @@ static void test_process_fault_death_reports_peer_dead(void)
     assert(info.fault_vector == 2u);
     assert(info.fault_status == 0u);
     assert(info.peak_resident_frames >= info.resident_frames);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    registers[0] = ASTRA_SYSCALL_PROCESS_CRASH;
+    registers[1] = query_only;
+    registers[2] = crash_address;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    registers[1] = handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&crash, crash_address, sizeof(crash)) ==
+           KERNEL_USER_COPY_OK);
+    assert(crash.size == sizeof(crash) && crash.process_id == target_id);
+    assert(crash.thread_id != 0u && crash.fault_pc == 0u &&
+           crash.fault_address == 0u && crash.vector == 2u &&
+           crash.user_stack == user_stack &&
+           crash.pc_mapping == ASTRA_CRASH_MAPPING_UNKNOWN &&
+           crash.fault_mapping == ASTRA_CRASH_MAPPING_UNKNOWN &&
+           crash.stack_mapping == ASTRA_CRASH_MAPPING_READ_WRITE);
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
                KERNEL_PROCESS_CODE_BASE, 0u);
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_CLOSE;
+    registers[1] = query_only;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
     registers[1] = handle;
     assert(kernel_process_on_syscall(registers, user_stack, frame,
                                      &next) == KERNEL_PROCESS_OK);
@@ -15603,6 +15639,14 @@ static void test_process_clone_returns_twice_and_is_waitable(void)
         }
     }
     assert(found_child && child_snapshot.suspended == 1u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_CRASH;
+    registers[1] = child_handle;
+    registers[2] = KERNEL_PROCESS_STACK_TOP - 384u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_WOULD_BLOCK);
 
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_PROCESS_RESUME;

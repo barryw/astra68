@@ -43,6 +43,8 @@
 #define ASTRA_RIGHT_HOST_SCOPE (1u << 9)
 /** Host-held Config Kit secret operations; kernel stamps this on channels. */
 #define ASTRA_RIGHT_CONFIG_SECRET (1u << 10)
+/** On a process handle: read its bounded post-fault register snapshot. */
+#define ASTRA_RIGHT_CRASH (1u << 11)
 
 /** Maximum size of one shared or reserved area. */
 #define ASTRA_AREA_SIZE_MAX \

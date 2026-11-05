@@ -68,6 +68,8 @@
 
 /** Fixed byte size of ::AstraProcessInfo. */
 #define ASTRA_PROCESS_INFO_SIZE 80u
+/** Fixed byte size of ::AstraProcessCrash. */
+#define ASTRA_PROCESS_CRASH_SIZE 96u
 /** Fixed byte size of ::AstraThreadInfo. */
 #define ASTRA_THREAD_INFO_SIZE 48u
 
@@ -485,6 +487,51 @@ typedef struct AstraProcessInfo {
     uint32_t peak_resident_frames;
 } AstraProcessInfo;
 
+/** Mapping lookup unavailable or outside the user address range. */
+#define ASTRA_CRASH_MAPPING_UNKNOWN    0u
+/** No page was mapped at the sampled address. */
+#define ASTRA_CRASH_MAPPING_UNMAPPED   1u
+/** Sampled address was mapped readable but not writable. */
+#define ASTRA_CRASH_MAPPING_READ_ONLY  2u
+/** Sampled address was mapped readable and writable. */
+#define ASTRA_CRASH_MAPPING_READ_WRITE 3u
+
+/** Bounded fault snapshot, readable only through a process CRASH capability. */
+typedef struct AstraProcessCrash {
+    /** Always ::ASTRA_PROCESS_CRASH_SIZE when snapshot exists. */
+    uint32_t size;
+    /** Faulting process identifier. */
+    uint32_t process_id;
+    /** Faulting thread identifier. */
+    uint32_t thread_id;
+    /** Faulting instruction address. */
+    uint32_t fault_pc;
+    /** Faulting data address, zero when exception has none. */
+    uint32_t fault_address;
+    /** MC68040 D0 through D7 at fault. */
+    uint32_t data[8];
+    /** MC68040 A0 through A6 at fault. */
+    uint32_t address[7];
+    /** Faulting thread's user stack pointer. */
+    uint32_t user_stack;
+    /** Saved user status register. */
+    uint16_t status_register;
+    /** Faulting exception vector number. */
+    uint16_t vector;
+    /** Exception frame special status word. */
+    uint16_t fault_status;
+    /** MC68040 exception frame format. */
+    uint8_t frame_format;
+    /** Mapping state at fault_pc. */
+    uint8_t pc_mapping;
+    /** Mapping state at fault_address. */
+    uint8_t fault_mapping;
+    /** Mapping state at user_stack. */
+    uint8_t stack_mapping;
+    /** Reserved, always zero. */
+    uint8_t reserved[2];
+} AstraProcessCrash;
+
 /**
  * What a process may learn about a thread it holds a QUERY capability to.
  *
@@ -554,6 +601,8 @@ _Static_assert(ASTRA_STARTUP_BLOCK_SIZE -
                "startup page has room for another capability");
 _Static_assert(sizeof(AstraProcessInfo) == ASTRA_PROCESS_INFO_SIZE,
                "process-info ABI size changed");
+_Static_assert(sizeof(AstraProcessCrash) == ASTRA_PROCESS_CRASH_SIZE,
+               "process-crash ABI size changed");
 _Static_assert(sizeof(AstraThreadInfo) == ASTRA_THREAD_INFO_SIZE,
                "thread-info ABI size changed");
 /** @endcond */

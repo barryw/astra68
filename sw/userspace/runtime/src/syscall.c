@@ -926,6 +926,18 @@ astra_process_info(uint32_t handle, AstraProcessInfo *info)
 }
 
 uint32_t
+astra_process_crash(uint32_t handle, AstraProcessCrash *crash)
+{
+    AstraSyscallResult result;
+
+    if (crash == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_CRASH, handle,
+                   (uint32_t)(uintptr_t)crash, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
 astra_thread_info(uint32_t handle, AstraThreadInfo *info)
 {
     AstraSyscallResult result;

@@ -420,6 +420,7 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_PROCESS_PRIORITY &&
         number != ASTRA_SYSCALL_THREAD_PRIORITY &&
         number != ASTRA_SYSCALL_PROCESS_INFO &&
+        number != ASTRA_SYSCALL_PROCESS_CRASH &&
         number != ASTRA_SYSCALL_THREAD_INFO &&
         number != ASTRA_SYSCALL_PROCESS_SNAPSHOT &&
         number != ASTRA_SYSCALL_PROCESS_OPEN &&
@@ -854,6 +855,7 @@ test_syscall_wrappers(void)
     AstraProcSnapshot process_records[40u];
     AstraProcLibrarySnapshot library_records[SNAPSHOT_BATCH_RECORDS];
     AstraProcessInfo process_info = {0};
+    AstraProcessCrash process_crash = {0};
     AstraThreadInfo thread_info = {0};
     uint32_t library_total = 0u;
     AstraDisplayFrameRequest request = {0};
@@ -994,12 +996,18 @@ test_syscall_wrappers(void)
     assert(mock_number == ASTRA_SYSCALL_PROCESS_INFO);
     assert(mock_argument0 == process);
     assert(mock_argument1 == (uint32_t)(uintptr_t)&process_info);
+    assert(astra_process_crash(process, &process_crash) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_PROCESS_CRASH);
+    assert(mock_argument0 == process);
+    assert(mock_argument1 == (uint32_t)(uintptr_t)&process_crash);
     assert(astra_thread_info(thread, &thread_info) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_THREAD_INFO);
     assert(mock_argument0 == thread);
     assert(mock_argument1 == (uint32_t)(uintptr_t)&thread_info);
     calls = mock_calls;
     assert(astra_process_info(process, NULL) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_process_crash(process, NULL) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(astra_thread_info(thread, NULL) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);

@@ -417,7 +417,7 @@ different quota through a resource-account handle; they do not bypass limits.
 
 Astra already has isolated processes, demand-zero and copy-on-write memory,
 native handles and ports, waitable threads, and a userspace VFS. Haiku's
-corresponding mechanisms show six remaining gaps that matter to Astra. These
+corresponding mechanisms identify six foundation gaps that matter to Astra. These
 are capability gaps, not instructions to move Astra's services into the kernel.
 
 | Gap | Astra's existing owner | Haiku reference and contract to adapt |
@@ -427,14 +427,20 @@ are capability gaps, not instructions to move Astra's services into the kernel.
 | General file cache and file-backed mappings | `sw/kernel/vm.c` supports anonymous, shared, copy-on-write, and library mappings; POSIX `mmap` is absent | `src/system/kernel/cache/file_cache.cpp`, `vm/VMCache.cpp`, and `vm/vm_page_writer.cpp` coordinate vnode identity, cached pages, mapped pages, and writeback. Astra's canonical VFS must supply identity and invalidation; Linux-side cache alone cannot back guest mappings. |
 | Priority inversion control | `sw/kernel/thread.c` has base and effective priority fields, currently always set together | Haiku's scheduler and lock paths show bounded priority changes. Astra needs inheritance for kernel locks and donation across blocking native RPC, withdrawn on reply, timeout, cancellation, and peer death; media CPU budgets need their own bound. |
 | File and directory change events | VFS records successful mutation generations; HostFS publishes coalesced volume invalidations through broker QoS and Atlas refreshes its view. Per-node identity and host-originated changes remain open | `src/system/kernel/fs/node_monitor.cpp` identifies changed node and parent directory and emits creation, removal, move, stat, and unmount events. Astra should extend its VFS mutation records with exact node identity and use existing broker delivery and generation recovery. |
-| User crash capture | `sw/kernel/process.c` records fault PC, address, vector, and status before retirement; trace and console retain a brief report | `src/system/kernel/debug/user_debugger.cpp` and `debug/core_dump.cpp` preserve inspectable thread context and selected mappings. Astra needs bounded, permission-scoped crash snapshots before a dead process loses its address space. |
+| User crash capture | CURRENT: `sw/kernel/process.c` retains a 96-byte faulting-thread register and selected mapping snapshot while a process handle lives; launcher and clone-parent handles carry `CRASH`, while query-only handles cannot read it. Supervisor emits a compact fault summary | `src/system/kernel/debug/user_debugger.cpp` and `debug/core_dump.cpp` preserve inspectable thread context and selected mappings. Astra retains the bounded native snapshot before the address space is retired, without collecting arbitrary process memory. |
 
-Implementation order follows dependencies: node events and crash snapshots can
-use existing broker and trace seams; pressure handling must precede a general
-reclaimable file cache; scheduler donation and watchdog recovery require
+Implementation order follows dependencies: node events use the existing broker;
+crash snapshots use the process-handle and trace seams. Pressure handling must
+precede a general reclaimable file cache; scheduler donation and watchdog
+recovery require
 target-cycle and failure-injection gates before release. SMP scheduling,
 loadable kernel modules, and swap are deliberate non-goals for this single
 MC68040, service-oriented system.
+
+After exact node events pass correctness and loss-recovery gates, qualify their
+cost on DE25 with zero, one, and multiple subscribers. Compare mutation latency,
+broker CPU time, idle wakeups, and reliable backlog occupancy against the
+pre-event baseline before declaring notification work performance-complete.
 
 ## Development discipline
 

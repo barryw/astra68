@@ -1049,6 +1049,14 @@
  * data[1]: scope with ADMINISTER. data[2]: bound, zero for unlimited.
  * Returns INVALID_ARGUMENT while any channel carries the scope. */
 #define ASTRA_SYSCALL_HOST_SCOPE_LIMIT 112
+/**
+ * Read a faulted process's bounded register and mapping snapshot. data[1]
+ * is a process handle carrying ::ASTRA_RIGHT_CRASH; data[2] is a four-byte
+ * aligned output address for one ::AstraProcessCrash. WOULD_BLOCK means the
+ * process has not faulted. Snapshot remains available while the handle keeps
+ * the process record alive, after its address space has been destroyed.
+ */
+#define ASTRA_SYSCALL_PROCESS_CRASH 113
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */

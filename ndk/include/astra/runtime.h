@@ -565,6 +565,13 @@ uint32_t astra_current_thread_handle(uint32_t *thread_handle);
  */
 uint32_t astra_process_info(uint32_t handle, AstraProcessInfo *info);
 /**
+ * Read faulting thread registers and mapping state while process handle lives.
+ * @param handle Process capability carrying ::ASTRA_RIGHT_CRASH.
+ * @param crash Receives one ABI-sized fault snapshot.
+ * @return ASTRA_SYSCALL_* status; WOULD_BLOCK before a fault.
+ */
+uint32_t astra_process_crash(uint32_t handle, AstraProcessCrash *crash);
+/**
  * Query one thread visible through a capability.
  * @param handle Thread capability carrying the QUERY right.
  * @param info ABI-sized structure receiving thread information.

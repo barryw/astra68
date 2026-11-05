@@ -24,6 +24,7 @@
 #include <astra/gui.h>
 #include <astra/host.h>
 #include <astra/event_control.h>
+#include <astra/event_emit.h>
 #include <astra/log_ring.h>
 #include <astra/messaging_abi.h>
 #include <astra/posix_process.h>
@@ -3953,6 +3954,7 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
 
             if (wait_status != ASTRA_SYSCALL_TIMED_OUT) {
                 char service_name[ASTRA_SERVICE_NAME_MAX];
+                AstraProcessCrash crash;
                 uint32_t restart =
                     process_table.records[slot].restart_policy;
                 uint32_t action = process_table.records[slot].action;
@@ -3969,6 +3971,23 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
                 (void)memcpy(service_name,
                              process_table.records[slot].service_name,
                              sizeof(service_name));
+                if (astra_process_crash(process_table.records[slot].handle,
+                                        &crash) == ASTRA_SYSCALL_OK) {
+                    ASTRA_EVENT4(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                        ASTRA_EVENT_LEVEL_ERROR,
+                        "user fault process %u thread %u pc %x address %x",
+                        crash.process_id, crash.thread_id,
+                        crash.fault_pc, crash.fault_address);
+                    ASTRA_EVENT4(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                        ASTRA_EVENT_LEVEL_ERROR,
+                        "user fault vector %u sr %x status %x maps %u",
+                        (uint32_t)crash.vector,
+                        (uint32_t)crash.status_register,
+                        (uint32_t)crash.fault_status,
+                        (uint32_t)crash.pc_mapping |
+                            ((uint32_t)crash.fault_mapping << 8) |
+                            ((uint32_t)crash.stack_mapping << 16));
+                }
                 if (process_table.records[slot].critical != 0u &&
                     action == SUPERVISOR_PROCESS_ACTION_NONE)
                     system_fail(service_name, "exited",
