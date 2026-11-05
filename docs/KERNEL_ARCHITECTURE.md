@@ -429,6 +429,11 @@ are capability gaps, not instructions to move Astra's services into the kernel.
 | File and directory change events | VFS records successful mutation generations; HostFS publishes coalesced volume invalidations through broker QoS and Atlas refreshes its view. Per-node identity and host-originated changes remain open | `src/system/kernel/fs/node_monitor.cpp` identifies changed node and parent directory and emits creation, removal, move, stat, and unmount events. Astra should extend its VFS mutation records with exact node identity and use existing broker delivery and generation recovery. |
 | User crash capture | CURRENT: `sw/kernel/process.c` retains a 96-byte faulting-thread register and selected mapping snapshot while a process handle lives; launcher and clone-parent handles carry `CRASH`, while query-only handles cannot read it. Supervisor emits a compact fault summary | `src/system/kernel/debug/user_debugger.cpp` and `debug/core_dump.cpp` preserve inspectable thread context and selected mappings. Astra retains the bounded native snapshot before the address space is retired, without collecting arbitrary process memory. |
 
+Exact entry events require mutation identity from the backend's own operation.
+`OPEN_CREATE` can open an existing file, and a later `stat` races another
+writer. VFS must keep the current generation invalidation fallback when an
+event queue overflows; it must not claim an exact event from a guess.
+
 Implementation order follows dependencies: node events use the existing broker;
 crash snapshots use the process-handle and trace seams. Pressure handling must
 precede a general reclaimable file cache; scheduler donation and watchdog
