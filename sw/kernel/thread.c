@@ -1451,6 +1451,7 @@ KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
     candidate->state = KERNEL_THREAD_CREATED;
     candidate->base_priority = priority;
     candidate->effective_priority = priority;
+    candidate->inherited_priority = 0u;
     candidate->occupied = 1u;
     candidate->deadline_position = KERNEL_THREAD_SLOT_NONE;
     reset_wait_row(candidate);
@@ -1755,23 +1756,36 @@ KernelThreadStatus kernel_thread_make_ready(KernelThread *thread)
     return status;
 }
 
-KernelThreadStatus kernel_thread_set_priority(KernelThread *thread,
-                                              uint8_t priority)
+static KernelThreadStatus change_priority(KernelThread *thread,
+                                          uint8_t base, uint8_t inherited)
 {
     KernelThreadWaitQueue *queues[KERNEL_THREAD_WAIT_MEMBER_MAX];
+    uint8_t effective;
     uint8_t members;
 
     if (!valid_thread(thread) ||
-        priority >= KERNEL_THREAD_PRIORITY_LEVELS)
+        base >= KERNEL_THREAD_PRIORITY_LEVELS ||
+        inherited >= KERNEL_THREAD_PRIORITY_LEVELS)
         return KERNEL_THREAD_INVALID_ARGUMENT;
     if (thread->state == KERNEL_THREAD_DEAD)
         return KERNEL_THREAD_INVALID_STATE;
     if (thread->state < KERNEL_THREAD_CREATED ||
         thread->state > KERNEL_THREAD_BLOCKED ||
-        thread->base_priority != thread->effective_priority)
+        thread->base_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
+        thread->inherited_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
+        thread->effective_priority !=
+            (thread->base_priority > thread->inherited_priority ?
+             thread->base_priority : thread->inherited_priority))
         return KERNEL_THREAD_CORRUPT;
-    if (thread->base_priority == priority)
+    if (thread->base_priority == base &&
+        thread->inherited_priority == inherited)
         return KERNEL_THREAD_OK;
+    effective = base > inherited ? base : inherited;
+    if (thread->effective_priority == effective) {
+        thread->base_priority = base;
+        thread->inherited_priority = inherited;
+        return KERNEL_THREAD_OK;
+    }
     if (thread->state == KERNEL_THREAD_READY &&
         thread->suspended == 0u &&
         remove_ready(thread) != KERNEL_THREAD_OK)
@@ -1785,8 +1799,9 @@ KernelThreadStatus kernel_thread_set_priority(KernelThread *thread,
                 &thread->wait_registrations[member]) != KERNEL_THREAD_OK)
             return KERNEL_THREAD_CORRUPT;
     }
-    thread->base_priority = priority;
-    thread->effective_priority = priority;
+    thread->base_priority = base;
+    thread->inherited_priority = inherited;
+    thread->effective_priority = effective;
     if (thread->state == KERNEL_THREAD_READY &&
         thread->suspended == 0u &&
         enqueue_ready(thread) != KERNEL_THREAD_OK)
@@ -1797,6 +1812,20 @@ KernelThreadStatus kernel_thread_set_priority(KernelThread *thread,
             return KERNEL_THREAD_CORRUPT;
     }
     return KERNEL_THREAD_OK;
+}
+
+KernelThreadStatus kernel_thread_set_priority(KernelThread *thread,
+                                              uint8_t priority)
+{
+    return change_priority(thread, priority,
+                           thread != NULL ? thread->inherited_priority : 0u);
+}
+
+KernelThreadStatus kernel_thread_set_inherited_priority(KernelThread *thread,
+                                                        uint8_t priority)
+{
+    return change_priority(thread, thread != NULL ? thread->base_priority : 0u,
+                           priority);
 }
 
 KernelThreadStatus
@@ -1814,7 +1843,11 @@ kernel_thread_set_process_priority(uint16_t process_slot, uint8_t priority)
             continue;
         if (thread->state < KERNEL_THREAD_CREATED ||
             thread->state > KERNEL_THREAD_BLOCKED ||
-            thread->base_priority != thread->effective_priority)
+            thread->base_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
+            thread->inherited_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
+            thread->effective_priority !=
+                (thread->base_priority > thread->inherited_priority ?
+                 thread->base_priority : thread->inherited_priority))
             return KERNEL_THREAD_CORRUPT;
     }
 

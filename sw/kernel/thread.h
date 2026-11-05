@@ -207,6 +207,7 @@ typedef struct KernelThread {
     uint8_t state;
     uint8_t base_priority;
     uint8_t effective_priority;
+    uint8_t inherited_priority;
     uint8_t occupied;
     uint8_t wait_member_count;
     uint8_t wait_mode;
@@ -407,6 +408,8 @@ KernelThreadStatus kernel_thread_set_process_priority(uint16_t process_slot,
                                                       uint8_t priority);
 KernelThreadStatus kernel_thread_set_priority(KernelThread *thread,
                                               uint8_t priority);
+KernelThreadStatus kernel_thread_set_inherited_priority(KernelThread *thread,
+                                                        uint8_t priority);
 KernelThreadStatus kernel_thread_suspend_process(uint16_t process_slot);
 KernelThreadStatus kernel_thread_resume_process(uint16_t process_slot);
 void kernel_thread_wait_queue_init(KernelThreadWaitQueue *queue);

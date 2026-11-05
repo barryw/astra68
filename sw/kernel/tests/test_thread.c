@@ -184,6 +184,61 @@ static void test_thread_priority_changes_only_target(void)
     assert(kernel_thread_pool_valid());
 }
 
+static void test_inherited_priority_reorders_and_preserves_base(void)
+{
+    KernelThreadWaitQueue queue;
+    KernelThread *low;
+    KernelThread *middle;
+    KernelThread *selected;
+    uint32_t sequence;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_thread_wait_queue_init(&queue);
+    sequence = kernel_thread_wait_queue_sequence(&queue);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u, 10u,
+                                  &low) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(2u, 0x10000002u, 1u, 0x00100010u,
+                                  0x70011000u, 0u, 18u,
+                                  &middle) == KERNEL_THREAD_OK);
+    publish_thread(low);
+    publish_thread(middle);
+    assert(kernel_thread_set_inherited_priority(NULL, 22u) ==
+           KERNEL_THREAD_INVALID_ARGUMENT);
+    assert(kernel_thread_set_inherited_priority(
+               low, KERNEL_THREAD_PRIORITY_LEVELS) ==
+           KERNEL_THREAD_INVALID_ARGUMENT);
+    assert(kernel_thread_set_inherited_priority(low, 22u) == KERNEL_THREAD_OK);
+    assert(low->base_priority == 10u && low->effective_priority == 22u);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == low);
+    assert(kernel_thread_block(low, &queue, sequence) == KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == middle);
+    assert(kernel_thread_block(middle, &queue, sequence) == KERNEL_THREAD_OK);
+    assert(kernel_thread_set_inherited_priority(low, 0u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_wake_one(&queue, ASTRA_SYSCALL_OK, &selected) ==
+           KERNEL_THREAD_OK && selected == middle);
+    assert(kernel_thread_set_inherited_priority(low, 25u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_wake_one(&queue, ASTRA_SYSCALL_OK, &selected) ==
+           KERNEL_THREAD_OK && selected == low);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == low);
+    assert(kernel_thread_set_priority(low, 26u) == KERNEL_THREAD_OK);
+    assert(low->effective_priority == 26u);
+    assert(kernel_thread_set_priority(low, 8u) == KERNEL_THREAD_OK);
+    assert(low->effective_priority == 25u);
+    assert(kernel_thread_set_process_priority(1u, 9u) == KERNEL_THREAD_OK);
+    assert(low->base_priority == 9u && low->effective_priority == 25u);
+    assert(kernel_thread_set_inherited_priority(low, 0u) == KERNEL_THREAD_OK);
+    assert(low->effective_priority == 9u);
+    assert(kernel_thread_make_ready(low) == KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == middle);
+    assert(kernel_thread_pool_valid());
+}
+
 static void test_process_suspend_preserves_wait_state(void)
 {
     KernelThreadWaitQueue queue;
@@ -1275,6 +1330,7 @@ int main(void)
     test_priority_fifo_and_process_retirement();
     test_process_priority_reorders_ready_and_blocked_threads();
     test_thread_priority_changes_only_target();
+    test_inherited_priority_reorders_and_preserves_base();
     test_process_suspend_preserves_wait_state();
     test_reused_slot_generation_ids_do_not_repeat();
     test_invalid_inputs_do_not_consume_slots();

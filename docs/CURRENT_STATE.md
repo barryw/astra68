@@ -494,6 +494,28 @@ One development release remains; Astra, audio, and remote desktop are active
 with 7.9 GiB free. The board workload confirms recovery, while the exact
 per-level wake count is covered by the host test rather than board telemetry.
 
+Priority-inheritance scheduler prerequisite, 2026-11-05: thread records now
+keep base and inherited priority separately; effective priority is their
+maximum. Ready and wait queues move only when effective priority changes.
+The kernel thread test covers boost, withdrawal, base priority changes during
+boost, and ready/wait ordering. Beast's complete kernel host suite and K1
+qualification pass. Target-representative scheduler pick is 38/10,000 cycles
+against 38/10,000 before this change; wait block is 936/15,000 against
+935/15,000 and wake is 78/15,000 against 77/15,000. These are maxima from
+separate deterministic QEMU runs, not averages. Native RPC ownership and
+mutex donation remain unwired, so priority inversion is not closed. Haiku
+reference: `src/system/kernel/scheduler/scheduler.cpp` keeps static and
+effective scheduling priority distinct; `src/system/kernel/locks/lock.cpp`
+shows lock wait and wake ownership. Astra retains its existing priority/FIFO
+queues and makes only effective-priority changes reorder them.
+Incremental normal-ROM SHA-256
+`de6166c2390222634b96b270801505cc0c35ed743fff050baa179468047698a1`
+matches DE25's selected development shadow. The board reached stage 8 with
+zero Astra restarts; runtime, audio, and remote desktop services are active.
+One development release remains and 7.9 GiB are free. Build, K1, and board
+evidence is archived under
+`/mnt/Documents/astra68/priority-inherit-scheduler-20261105/` on Beast.
+
 Filesystem change producer correction, 2026-11-05: production HostFS now
 publishes per-volume generations from QEMU's canonical filesystem namespace,
 which sees both VFS service requests and direct client lanes. The old VFS
