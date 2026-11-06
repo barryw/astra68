@@ -24,7 +24,7 @@ audio = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audio)
 
 
-def fixture(image, work, overflow=False):
+def fixture(image, work, overflow=False, atlas_bundle=None):
     offset, size = image_tools.ext4_partition(image)
     volume = os.path.join(work, "volume.ext4")
     image_tools._slice(image, offset, size, volume)
@@ -47,6 +47,18 @@ def fixture(image, work, overflow=False):
             name = "ZZOverflow%03d" % at
             image_tools._mkdir(volume, "/home/Desktop/" + name,
                                "desktop overflow folder")
+    if atlas_bundle is not None:
+        image_tools.check_application_policy([atlas_bundle],
+                                             image_tools.STARTUP_MANIFEST)
+        image_tools._clear_directory(volume, "/apps/Atlas.app")
+        image_tools._install_bundle(volume, atlas_bundle, "/apps/Atlas.app")
+        startup = os.path.join(work, "startup-system")
+        with open(startup, "w", encoding="ascii") as output:
+            output.write(image_tools.STARTUP_MANIFEST)
+        image_tools._debugfs(volume, "rm /startup/system", "old launch ceiling")
+        image_tools._debugfs(volume,
+                             "write %s /startup/system" % image_tools._debugfs_quote(startup),
+                             "candidate launch ceiling")
     image_tools._splice(image, offset, volume)
 
 
@@ -64,8 +76,9 @@ def wait_root(machine, root, count, folders, status, after, timeout):
                "desktop launch" in line for line in lines):
             raise RuntimeError("Atlas refused: %s" % lines[-20:])
         time.sleep(0.1)
-    raise RuntimeError("missing %r: %s" % (
-        wanted, machine.said_with_syslog(after)[0][-30:]))
+    relevant = [line for line in machine.said_with_syslog(after)[0]
+                if "atlas root /work" in line or "launch /apps/Atlas.app" in line]
+    raise RuntimeError("missing %r: %s" % (wanted, relevant[-30:]))
 
 
 def click(machine, x, y):
@@ -153,6 +166,8 @@ def main():
                         help="skip full reinstall; caller supplies current products")
     parser.add_argument("--overflow", action="store_true",
                         help="qualify desktop scrolling with 160 extra application entries")
+    parser.add_argument("--atlas-bundle",
+                        help="install candidate Atlas bundle into disposable test image")
     args = parser.parse_args()
     if os.geteuid() != 0:
         parser.error("desktop gate needs the root observer with explicit "
@@ -163,7 +178,7 @@ def main():
         shutil.copyfile(args.image, image)
         if not args.preinstalled:
             image_tools.install(image)
-        fixture(image, work, args.overflow)
+        fixture(image, work, args.overflow, args.atlas_bundle)
         audio_socket = os.path.join(work, "audio.sock")
         host_audio = audio.AudioHost(audio_socket,
                                      hostfs=os.path.join(work, "exports"),
@@ -199,6 +214,35 @@ def main():
             close_atlas(machine)
             check_retired(machine, args.deadline, drawer)
             print("ATLAS RAM0 exact native root grant PASS", flush=True)
+
+            # Linux-side changes must reach Atlas through the existing HostFS
+            # change ring and broker, without a guest Refresh command.
+            shared = os.path.join(machine.reader.hostfs_root, "work", "atlas-host-change")
+            os.mkdir(shared)
+            host_file = os.path.join(shared, "from-linux.txt")
+            try:
+                before = machine.sequence()
+                command_output(machine,
+                               "open /apps/Atlas.app /work/atlas-host-change",
+                               "atlas-host-open.txt", args.deadline)
+                wait_root(machine, "/work/atlas-host-change", 0, 0, 0,
+                          before, args.deadline)
+                before = machine.sequence()
+                with open(host_file, "w", encoding="utf-8") as output:
+                    output.write("external change\n")
+                wait_root(machine, "/work/atlas-host-change", 1, 0, 0,
+                          before, args.deadline)
+                before = machine.sequence()
+                os.unlink(host_file)
+                wait_root(machine, "/work/atlas-host-change", 0, 0, 0,
+                          before, args.deadline)
+                close_atlas(machine)
+                check_retired(machine, args.deadline, drawer)
+                print("ATLAS host-shared Linux create/remove without Refresh PASS", flush=True)
+            finally:
+                if os.path.exists(host_file):
+                    os.unlink(host_file)
+                os.rmdir(shared)
 
             if args.overflow:
                 # Input uses the shared ScrollView policy. End exposes the
@@ -319,7 +363,8 @@ def main():
                   "input/reflow, process retirement")
         except Exception:
             print("Atlas diagnostics:", flush=True)
-            for line in machine.said_with_syslog()[0]:
+            for line in [line for line in machine.said_with_syslog()[0]
+                         if "atlas root" in line or "Atlas window" in line][-30:]:
                 if "Atlas" in line or "atlas" in line or "desktop" in line:
                     print(line, flush=True)
             for line in machine.recent_faults() + machine.recent_trace(40):

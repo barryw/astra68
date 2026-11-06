@@ -436,7 +436,11 @@ provider delivers each event to every matching rooted binding. An independently
 rooted subtree excludes events outside its root. Beast exFAT and sanitizer
 gates and the target-built provider fixture on DE25 exercised shared and nested
 bindings; a coherent protocol-14 release passed a DE25 stage-8 private trial.
-Literal cable replug and guest Atlas delivery from host-shared bindings remain.
+Guest Atlas delivery from the `/work` host-shared binding passed the Beast
+Atlas gate and a 240-second DE25 private trial: Linux-side create and delete
+changed the open view from zero to one and back without Refresh. Atlas needed
+the `WORK:rw` bundle grant and matching trusted startup ceiling; the existing
+change ring and broker handled delivery. Literal USB cable replug remains.
 `OPEN_CREATE` can open an existing file; the rooted provider probes atomic
 exclusive creation first and retries the requested flags when that probe
 fails. Only a successful exclusive creation emits an exact create record.

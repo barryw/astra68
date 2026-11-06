@@ -93,7 +93,7 @@ assert ceiling["GUI"] == "" and ceiling["APPS"] == "r" and \
 assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
         if line.startswith("trusted ")] == [
     "trusted /apps/Terminal.app grants " + astra_image.TERMINAL_CEILING,
-    "trusted /apps/Atlas.app grants GUI CLIPBOARD APP_LAUNCH VOLUMES VOLUME_ADMIN VOLUME_USAGE VOLUME_READ VOLUME_WRITE RAM_READ RAM_WRITE DH0:r HOME:rw FONTS:r APPS:r LIBS:r LOG PROC:r",
+    "trusted /apps/Atlas.app grants GUI CLIPBOARD APP_LAUNCH VOLUMES VOLUME_ADMIN VOLUME_USAGE VOLUME_READ VOLUME_WRITE RAM_READ RAM_WRITE DH0:r HOME:rw WORK:rw FONTS:r APPS:r LIBS:r LOG PROC:r",
     "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD VOLUMES VOLUME_READ DH0:r LIBS:r",
     "trusted /apps/InterfaceGallery.app grants GUI FONT_CATALOG CLIPBOARD LIBS:r",
     "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG",

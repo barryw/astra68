@@ -17,6 +17,7 @@ capability RAM_READ
 capability RAM_WRITE
 capability DH0:r
 capability HOME:rw
+capability WORK:rw
 capability FONTS:r
 capability APPS:r
 capability LIBS:r

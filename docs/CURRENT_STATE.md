@@ -1,6 +1,22 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-11-05
+Status: active continuation map, 2026-11-06
+
+Host-shared Atlas notification gate, 2026-11-06: Atlas now requests `WORK:rw`
+in its bundle and trusted startup ceiling. The existing HostFS change ring and
+broker needed no new notification path. The full Beast Atlas gate opened
+`/work/atlas-host-change` and observed Linux-side create/delete as 0, 1, then
+0 entries without Refresh; image-provider policy tests passed. A 240-second
+DE25 private trial with candidate image SHA-256
+`de4006d621ea803ff4bf4efcffae7a8ef97418200eea21bb58ed3481e53fd5c2`
+repeated the 0/1/0 sequence in Atlas. RFB captured the created file, and the
+guest log confirmed removal. Checksummed console, syslog, and RFB frames are
+under `/home/barry/astra-evidence/atlas-work-candidate-20261106/de25/` on
+Beast. The selected release was restored, Astra reached stage 8, all three
+services were active, trial state was removed, and 7.8 GiB remained free.
+Literal USB cable replug
+and notification loss-recovery gates remain; performance qualification follows
+correctness.
 
 Provider blocked-I/O gate, 2026-11-05: The existing confined-provider QEMU
 fixture now freezes only its disposable loop-mounted ext4 system volume, starts
