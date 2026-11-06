@@ -2,6 +2,42 @@
 
 Status: active continuation map, 2026-11-06
 
+DE25 reset-cause investigation, 2026-11-06: The official Agilex 5 CS/R1 HPS
+register map puts `Reset_Mgr.stat` at `0x10d11000`. Bits 16-20 record L4
+watchdog *warm* reset requests; bits 0-2 include SDM cold, SDM warm, and
+last-POR status. A disposable read-only Linux module built against the exact
+running `6.12.11-astra-storage3-gd7d192a9ddd9` kernel sampled the register
+through `ioremap`; direct `/dev/mem` access returned `EFAULT`. Before a
+controlled hardware watchdog gate, status was `0x03000005`. Astra, audio, and
+remote desktop stopped cleanly, storage detached and synced, then the existing
+`watchdog-expiry` diagnostic stopped PID 1 under a transient 180-second
+runtime limit. DE25 rebooted before the diagnostic's 165-second rescue. Boot
+ID changed from `aa9a291c-a2cc-4677-8d1b-76dbb88e581f` to
+`17775865-f910-48a8-9da9-5219cd94d7b1`; Astra reached stage 8, all three
+services returned with zero restarts, only production loop0 remained, and
+7.9 GiB was free. After reboot the same module still read `0x03000005`:
+no watchdog bit and no changed raw status. The official reset documentation
+says the SDM can turn watchdog expiry into HPS cold reset, which clears the
+warm-request bits. The observed status is consistent with that path but does
+not prove it; the static register cannot distinguish this event from another
+HPS cold reset on this board. Do not label `sdmcoldrst` as a
+watchdog cause. The module was removed from source and unloaded/removed from
+the board. Source, module, pre/post state, and service evidence are archived
+under `/home/barry/astra-evidence/reset-cause-module-de25-20261106/` on Beast.
+The generated vendor HPS IP at
+`build/de25/astra-shell/hps_subsys/ip/hps_subsys/agilex_hps.ip` has
+`Rst_watchdog_en=false` and `Rst_sdm_wd_config=0`; the watchdog reset conduit
+is not exposed in that build. Its SHA-256 is
+`fde6086d40bcd32ea8e809c520dd05874079db603449e5dc32f7c38a3e0df7f6`.
+Hardware-cause attribution remains open:
+inspect SDM boot diagnostics first; if none retain the source, enable and
+route the HPS watchdog-reset conduit into a fabric latch that survives HPS
+cold reset. Any fabric change needs full timing route and physical reset gate
+before selection. References: Altera Agilex 5 CS/R1 HPS Register Map RC28,
+`https://docs.altera.com/v/u/resources/864455/agilex-5-cs-and-r1-suffix-opn-hps-register-map`;
+Agilex 5 HPS reset configuration,
+`https://docs.altera.com/r/docs/813752/26.1/hard-processor-system-component-reference-manual-agilextm-5-socs/reset-signals`.
+
 VFS retained metadata, 2026-11-06: Retained descriptions now use the existing
 backend `stat_node` path to recheck size and known identity after client
 handle/session close. Beast target build, host tests, and sanitizers passed.
