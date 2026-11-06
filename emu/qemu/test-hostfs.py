@@ -2338,7 +2338,7 @@ def main():
     # Every protocol oracle runs through the real privilege-separated provider.
     provider_main = runpy.run_path(os.path.join(os.path.dirname(__file__),
         "test-storage-provider.py"))["main"]
-    for scenario in ("full", "serial", "budgets", "external"):
+    for scenario in ("full", "serial", "budgets", "external", "blocked_io"):
         provider_main([args.qemu, args.provider, "--uid", str(args.uid),
             "--gid", str(args.gid), "--scenario", scenario])
     if args.budget_out:

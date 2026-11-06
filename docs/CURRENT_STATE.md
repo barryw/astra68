@@ -2,6 +2,22 @@
 
 Status: active continuation map, 2026-11-05
 
+Provider blocked-I/O gate, 2026-11-05: The existing confined-provider QEMU
+fixture now freezes only its disposable loop-mounted ext4 system volume, starts
+a guest write, and confirms a QEMU thread enters Linux `D` state. Sending TERM
+to the provider owner leaves its process and mount present until the filesystem
+is thawed; afterward the owner retires, `e2fsck -fn` passes, and no test loop or
+domain remains. A detached 30-second thaw rescue protects against test-runner
+loss. The scenario passed alone and as part of the full Beast HostFS suite,
+then passed on DE25 against the selected AArch64 QEMU/provider. Checksummed
+board test source and output are under
+`/home/barry/astra-evidence/provider-blocked-io-de25-20261105/` on Beast.
+Only production loop0 remained; board trial files were removed, Astra, audio,
+and remote desktop stayed active, panic log was empty, and 7.9 GiB remained
+free. This proves real blocked-I/O retention and thaw cleanup. A forced reboot
+while that same provider remains blocked, retained reset-cause attribution, and
+stuck-engine fault gates remain open.
+
 Production exFAT notification smoke, 2026-11-05: With the selected release
 running on DE25, Atlas showed an empty `CLIEXFAT` `/usb0` root. A Linux-side
 `mkdir` through the storage provider's private mount namespace added one item
