@@ -462,6 +462,24 @@ HPS manager, not a storage provider blocked during cleanup; bounded cleanup
 recovery and a controlled hardware-expiry gate remain open. Haiku has no HPS
 hardware-watchdog equivalent in `src/system/kernel`; Astra uses Linux's owner.
 
+Controlled HPS expiry gate, 2026-11-05: `fpga/de25/watchdog-expiry.c` was
+cross-built on Beast as a static AArch64 diagnostic. Its one-second attach and
+detach probe resumed PID 1 normally. For the expiry trial, Astra, audio, and
+remote desktop stopped cleanly and storage was synced; a transient systemd
+unit with a 180-second runtime limit traced and stopped PID 1 for up to 165
+seconds. The board dropped off the network and rebooted before the helper's
+rescue deadline. Boot ID changed from
+`607ef8ce-5cda-4fb5-af4a-8790e6e6bbe7` to
+`19742b10-0bd5-4fba-ba04-231e117d9b4f`. After boot, systemd armed
+`/dev/watchdog0` for two minutes, Astra reached stage 8, all three services
+were active, and 7.9 GiB remained free. Beast evidence, including diagnostic
+source and binary hashes, is under
+`/home/barry/astra-evidence/watchdog-expiry-20261105/`; the board test binary
+and probe log were removed. This validates reset and service recovery under a
+stopped HPS manager. The Linux driver exposes no watchdog boot-status or
+reset-cause counter, so hardware reset attribution remains an inference from
+the controlled stop and timing; a retained reset-cause signal remains open.
+
 Provider stop recovery checkpoint, 2026-11-05: the release `astra.service`
 retains `TimeoutStopSec=infinity` so systemd does not kill a provider holding
 mounted storage. Its unit job now has `JobRunningTimeoutSec=180s` and
