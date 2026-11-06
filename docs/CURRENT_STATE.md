@@ -2,6 +2,19 @@
 
 Status: active continuation map, 2026-11-06
 
+VFS slot-reuse wait guard, 2026-11-06: The existing per-file wait remembers
+generation, so a close/reopen that returns a slot to OPEN cannot redirect a
+waiting read to the new node. Public READ test reproduces the reuse. Haiku
+`src/system/kernel/fs/fd.cpp:284-312` pins its descriptor object across
+lookup; Astra adapts that lifetime rule to its generation-tagged slots. Beast
+host suite and sanitizers passed. DE25 AArch64 core fixture passed one million
+forced switches, board/Beast binary SHA-256
+`44eaa210fb3f425536a8978d3473aeaf51815230984235e705c319218b46bebe`.
+Astra, audio, and remote desktop stayed active, only production loop0 was
+present, 8.5 GiB was free, and trial binary was removed. Checksummed evidence:
+`/home/barry/astra-evidence/vfs-slot-guard-de25-20261106/` on Beast. Guest
+pager, cache, and mappings remain open.
+
 VFS retained-read boundary, 2026-11-06: Ordinary and retained file reads now
 share backend result validation. An overreported count returns I/O error and
 zero published bytes instead of clipped success. Beast target build, host

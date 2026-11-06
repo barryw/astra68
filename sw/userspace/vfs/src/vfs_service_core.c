@@ -59,6 +59,8 @@ static int
 file_acquire_for(AstraVfsService *service, AstraVfsOpenFile *file,
                  uint8_t allowed_state)
 {
+    uint16_t generation = file->generation;
+
     if (file->state != allowed_state)
         return 0;
     while (file->active != 0u) {
@@ -73,7 +75,7 @@ file_acquire_for(AstraVfsService *service, AstraVfsOpenFile *file,
         --file->waiters;
         if (!waited)
             return 0;
-        if (file->state != allowed_state)
+        if (file->state != allowed_state || file->generation != generation)
             return 0;
     }
     file->active = 1u;

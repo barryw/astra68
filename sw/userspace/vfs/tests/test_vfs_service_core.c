@@ -953,6 +953,22 @@ test_state_wait(void *context, volatile uint32_t *sequence,
     return 1;
 }
 
+static int
+test_slot_reuse_wait(void *context, volatile uint32_t *sequence,
+                     uint32_t expected)
+{
+    AstraVfsOpenFile *file = (AstraVfsOpenFile *)((uint8_t *)sequence -
+                                                offsetof(AstraVfsOpenFile,
+                                                         sequence));
+
+    (void)context;
+    assert(*sequence == expected && file->active != 0u);
+    file->active = 0u;
+    ++file->generation;
+    ++file->sequence;
+    return 1;
+}
+
 static void
 test_state_wake(void *context, volatile uint32_t *sequence)
 {
@@ -992,6 +1008,40 @@ test_uncontended_file_operation_does_not_wake(void)
     fixture_dispatch(&service, ASTRA_VFS_OP_READ, &request, &reply);
     assert(reply.status == ASTRA_VFS_OK);
     assert(state_wakes == 0u);
+    assert(pthread_cond_destroy(&file_condition) == 0);
+    assert(pthread_mutex_destroy(&state_mutex) == 0);
+}
+
+static void
+test_read_refuses_reused_waiting_slot(void)
+{
+    pthread_mutex_t state_mutex = PTHREAD_MUTEX_INITIALIZER;
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    uint32_t session;
+    uint32_t handle;
+    uint32_t slot;
+
+    reset();
+    assert(fake_create("/old", ASTRA_VFS_KIND_FILE) != NULL);
+    assert(pthread_cond_init(&file_condition, NULL) == 0);
+    assert(astra_vfs_service_set_state_lock(
+        &service, test_lock_acquire, test_lock_release, &state_mutex));
+    assert(astra_vfs_service_set_state_wait(
+        &service, test_slot_reuse_wait, test_state_wake));
+    session = open_session();
+    begin_request(&request, session, "/old");
+    request.flags = ASTRA_VFS_OPEN_READ;
+    fixture_dispatch(&service, ASTRA_VFS_OP_OPEN, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    handle = reply.file;
+    slot = (handle & 0xffffu) - 1u;
+    service.files[slot].active = 1u;
+    begin_request(&request, session, NULL);
+    request.file = handle;
+    request.length = 1u;
+    fixture_dispatch(&service, ASTRA_VFS_OP_READ, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_IO && reply.count == 0u);
     assert(pthread_cond_destroy(&file_condition) == 0);
     assert(pthread_mutex_destroy(&state_mutex) == 0);
 }
@@ -2620,6 +2670,7 @@ main(void)
     test_client_through_transport();
     test_lookup_reply_validation();
     test_uncontended_file_operation_does_not_wake();
+    test_read_refuses_reused_waiting_slot();
     test_unrelated_session_overtakes_held_backend();
     test_same_session_independent_request_overtakes_held_backend();
     test_close_waits_for_active_file_operation();

@@ -83,6 +83,20 @@ was free. Trial binary was removed; checksummed evidence is under
 `/home/barry/astra-evidence/vfs-read-bound-de25-20261106/` on Beast.
 Kernel pager and cache consumers remain open.
 
+Fifth slice, 2026-11-06: the existing per-file wait now remembers slot
+generation while it sleeps. If close and reopen recycle the slot before the
+waiter runs, a matching OPEN state alone cannot make an old read use the new
+node. A deterministic public READ test simulates that reuse inside the wait;
+the full Beast VFS host suite and sanitizers passed. The DE25 AArch64 core
+fixture passed one million forced switches with board/Beast binary SHA-256
+`44eaa210fb3f425536a8978d3473aeaf51815230984235e705c319218b46bebe`.
+Services stayed active, only production loop0 was present, 8.5 GiB was free,
+and the board trial binary was removed. Checksummed evidence is under
+`/home/barry/astra-evidence/vfs-slot-guard-de25-20261106/` on Beast.
+Haiku `src/system/kernel/fs/fd.cpp:284-312` pins the descriptor object while
+`get_fd()` returns it; Astra keeps its existing generation-tagged slot and
+rejects a waiter whose slot incarnation changed.
+
 ## Target baseline, 2026-11-06
 
 Three focused `fsbench` runs on DE25 used the selected release's kernel and
