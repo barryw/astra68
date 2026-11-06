@@ -2,6 +2,18 @@
 
 Status: active continuation map, 2026-11-05
 
+Production exFAT notification smoke, 2026-11-05: With the selected release
+running on DE25, Atlas showed an empty `CLIEXFAT` `/usb0` root. A Linux-side
+`mkdir` through the storage provider's private mount namespace added one item
+to Atlas without Refresh; `rmdir` returned it to zero items. Before, created,
+and removed RFB captures were SHA-256 verified against the board copies and
+archived under `/home/barry/astra-evidence/exfat-atlas-live-20261105/` on Beast.
+The exact test directory and board captures were removed. Astra, audio, and
+remote desktop remained active; panic log was empty and 7.9 GiB free. This
+checks the physical exFAT mount, not the separate host-shared binding or
+literal cable replug gates. Notification performance audit remains deferred
+until correctness closes.
+
 User mutex ownership checkpoint, 2026-11-05: Native mutex words now carry the
 stable owning thread ID. The existing process-scoped futex wait table tracks
 contenders, donates effective priority through the existing wait-owner graph,
