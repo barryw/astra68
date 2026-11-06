@@ -355,6 +355,45 @@ static void test_call_donation_chain_and_withdrawal(void)
     assert(kernel_thread_pool_valid());
 }
 
+static void test_call_number_retires_on_abort_timeout_and_cancel(void)
+{
+    KernelThread *thread, *selected;
+    uint32_t call, expired;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u, 16u,
+                                  &thread) == KERNEL_THREAD_OK);
+    publish_thread(thread);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == thread);
+    assert(kernel_thread_call_begin(thread, &call) == KERNEL_THREAD_OK);
+    assert(kernel_thread_call_begin(thread, &call) ==
+           KERNEL_THREAD_INVALID_ARGUMENT);
+    assert(kernel_thread_call_abort(thread) == KERNEL_THREAD_OK);
+    assert(thread->call == 0u);
+    assert(kernel_thread_call_abort(thread) == KERNEL_THREAD_INVALID_STATE);
+
+    assert(kernel_thread_call_begin(thread, &call) == KERNEL_THREAD_OK);
+    assert(kernel_thread_call_block(thread, 0u, 10u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_call_abort(thread) == KERNEL_THREAD_INVALID_STATE);
+    assert(kernel_thread_expire_deadlines(10u, &expired, NULL) ==
+           KERNEL_THREAD_OK && expired == 1u);
+    assert(thread->call == 0u && thread->state == KERNEL_THREAD_READY);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == thread);
+
+    assert(kernel_thread_call_begin(thread, &call) == KERNEL_THREAD_OK);
+    assert(kernel_thread_call_block(thread, 10u,
+                                    KERNEL_THREAD_DEADLINE_NEVER) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_cancel_wait(thread, ASTRA_SYSCALL_CANCELLED) ==
+           KERNEL_THREAD_OK);
+    assert(thread->call == 0u && thread->state == KERNEL_THREAD_READY);
+    assert(kernel_thread_pool_valid());
+}
+
 static void test_mutex_wait_donation_crosses_rpc_and_withdraws(void)
 {
     KernelThreadWaitQueue mutex_waiters;
@@ -1398,6 +1437,7 @@ static void test_wait_registration_allocation_failure_is_atomic(void)
     assert(kernel_thread_block_wait_set(
                thread, &spec, 1u, 0u, KERNEL_THREAD_DEADLINE_NEVER,
                ASTRA_SYSCALL_TIMED_OUT) == KERNEL_THREAD_CORRUPT);
+    assert(kernel_thread_call_abort(thread) == KERNEL_THREAD_OK);
     assert(kernel_thread_call_begin(thread, &call) == KERNEL_THREAD_CORRUPT);
     assert(thread->state == KERNEL_THREAD_RUNNING &&
            thread->wait_registration_count == 0u &&
@@ -1655,6 +1695,7 @@ int main(void)
     test_inherited_priority_reorders_and_preserves_base();
     test_media_budget_throttle_preserves_donation();
     test_call_donation_chain_and_withdrawal();
+    test_call_number_retires_on_abort_timeout_and_cancel();
     test_mutex_wait_donation_crosses_rpc_and_withdraws();
     test_call_donation_multiple_callers_and_receiver_death();
     test_process_suspend_preserves_wait_state();

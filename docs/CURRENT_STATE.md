@@ -2,6 +2,25 @@
 
 Status: active continuation map, 2026-11-06
 
+Call lifecycle prerequisite, 2026-11-06: `PORT_CALL` now aborts a call number
+when reply-capability installation or port send fails. Shared thread wait
+completion clears that number on timeout or cancellation as well as normal
+reply, before the thread becomes runnable; a stale call previously made later
+user-mutex donation reject the waiter. Tests cover failed send, double begin,
+abort, timeout, and cancellation. Haiku's
+`src/system/kernel/condition_variable.cpp:408-426` clears wait state before
+unblocking; Astra applies that ordering to its existing call wait queue.
+Beast full kernel host suite, MC68040 build and K1 qualification passed, with
+13 markers and zero cycle overruns. The identical K1 ROM SHA-256
+`6fc4d745d387eb8d365fb90f0b845aaeec17833a275a5f8559e638478bbb9ac6`
+passed DE25's AArch64-hosted MC68040 QEMU with no production storage image;
+board and Beast log SHA-256 matched at
+`f9b02aa2c42c0fcb0038166531ca0d826a5117d87cc602afb79014b8026c7f72`.
+Evidence is under `/home/barry/astra-evidence/call-lifecycle-20261106/` on
+Beast. Trial files were removed; production Astra, HDMI audio host, and remote
+desktop are active, only production loop0 remains, and 8.5 GiB is free.
+The guest pager and file cache still do not consume this call lifecycle.
+
 Renderer abort bound, 2026-11-06: `ST_ABORT_WAIT` now uses the existing
 deadline timer for a 100 us abort grace period. A missing AXI write response
 then latches control fault `0x00080001`, ends local reset, and fails closed

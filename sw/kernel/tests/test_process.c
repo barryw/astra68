@@ -6373,6 +6373,7 @@ static void test_port_call_contract_and_races(void)
                           TEST_CALL_FOREVER, 0x900u) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_WOULD_BLOCK);
     assert(next->data[1] == ASTRA_PORT_CALL_UNSENT);
+    assert(kernel_thread_at(0u)->call == 0u);
     assert(kernel_process_test_handle_count(process_id) == handle_baseline);
 
     /* 7. The service port closing with a call queued: the discarded request

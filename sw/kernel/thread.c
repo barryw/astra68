@@ -1243,6 +1243,7 @@ static KernelThreadStatus complete_wait(
     KernelThreadStatus status;
     uint16_t member = winner == NULL ? UINT16_MAX : winner->member;
     uint8_t mode;
+    bool call_wait;
     bool cancelled_deadline;
 
     if (!valid_thread(thread) || thread->state != KERNEL_THREAD_BLOCKED ||
@@ -1253,6 +1254,8 @@ static KernelThreadStatus complete_wait(
         return KERNEL_THREAD_INVALID_STATE;
     }
     mode = thread->wait_mode;
+    call_wait = mode == KERNEL_THREAD_WAIT_ONE &&
+        thread->wait_registrations[0].queue == &thread->call_waiters;
     cancelled_deadline =
         thread->deadline_position != KERNEL_THREAD_SLOT_NONE;
     status = deadline_remove(thread);
@@ -1270,6 +1273,8 @@ static KernelThreadStatus complete_wait(
     status = drop_wait_owner(thread);
     if (status != KERNEL_THREAD_OK)
         return KERNEL_THREAD_CORRUPT;
+    if (call_wait)
+        thread->call = 0u;
     if (cancelled_deadline)
         ++pool_stats.deadline_cancellations;
     thread->context.data[0] = result;
@@ -2569,7 +2574,7 @@ KernelThreadStatus kernel_thread_call_begin(KernelThread *thread,
     KernelThreadStatus status;
 
     if (!valid_thread(thread) || call == NULL ||
-        thread->state != KERNEL_THREAD_RUNNING)
+        thread->state != KERNEL_THREAD_RUNNING || thread->call != 0u)
         return KERNEL_THREAD_INVALID_ARGUMENT;
     status = ensure_wait_registrations(thread);
     if (status != KERNEL_THREAD_OK)
@@ -2578,6 +2583,15 @@ KernelThreadStatus kernel_thread_call_begin(KernelThread *thread,
         next_call = 1u;
     thread->call = next_call;
     *call = next_call;
+    return KERNEL_THREAD_OK;
+}
+
+KernelThreadStatus kernel_thread_call_abort(KernelThread *thread)
+{
+    if (!valid_thread(thread) || thread->state != KERNEL_THREAD_RUNNING ||
+        thread->call == 0u || thread->call_waiters.count != 0u)
+        return KERNEL_THREAD_INVALID_STATE;
+    thread->call = 0u;
     return KERNEL_THREAD_OK;
 }
 

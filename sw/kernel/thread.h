@@ -468,6 +468,7 @@ KernelThreadStatus kernel_thread_observe_wait(KernelThread *thread,
                                               void *context);
 KernelThreadStatus kernel_thread_call_begin(KernelThread *thread,
                                             uint32_t *call);
+KernelThreadStatus kernel_thread_call_abort(KernelThread *thread);
 KernelThreadStatus kernel_thread_call_block(KernelThread *thread,
                                             uint64_t now, uint64_t deadline);
 KernelThread *kernel_thread_call_waiting(uint16_t slot, uint32_t call);

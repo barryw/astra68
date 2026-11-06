@@ -4,6 +4,17 @@ Status: design contract; VFS description-retention, metadata, and writeback
 seams passed host and DE25 AArch64 core gates. Pager, cache, mapping, and guest
 certification open.
 
+Call lifecycle prerequisite, 2026-11-06: failed `PORT_CALL` sends and reply
+capability installation now abort their call number. Shared wait completion
+also retires call numbers on deadline and cancellation before wake. This
+prevents a later mutex wait from carrying stale RPC state; it does not yet
+implement a pager continuation. Beast host/target and K1 gates passed, as did
+DE25 K1 with matching archived ROM and log checksums. See
+`docs/CURRENT_STATE.md` and
+`/home/barry/astra-evidence/call-lifecycle-20261106/` on Beast. Haiku
+`src/system/kernel/condition_variable.cpp:408-426` clears wait status before
+unblocking; Astra keeps that ordering in its existing thread wait path.
+
 ## Existing owners
 
 - VFS service owns open descriptions, filesystem operations, exact volume

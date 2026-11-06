@@ -10667,9 +10667,12 @@ static KernelProcessStatus port_call_syscall(KernelProcess *current,
         current->handles, KERNEL_OBJECT_REPLY, KERNEL_REPLY_RIGHTS,
         (void *)(uintptr_t)((uint32_t)thread->slot + 1u), reply_release,
         (void *)(uintptr_t)call_number, &reply);
-    if (handle_status != KERNEL_HANDLE_OK)
+    if (handle_status != KERNEL_HANDLE_OK) {
+        if (kernel_thread_call_abort(thread) != KERNEL_THREAD_OK)
+            return KERNEL_PROCESS_CORRUPT;
         return handle_status_to_syscall(handle_status, result) ?
             KERNEL_PROCESS_OK : KERNEL_PROCESS_CORRUPT;
+    }
     for (uint32_t index = call.handle_count; index > call.reply_index;
          --index)
         attached[index] = attached[index - 1u];
@@ -10684,6 +10687,8 @@ static KernelProcessStatus port_call_syscall(KernelProcess *current,
         /* Not sent, so the capability is still ours and names no wait. */
         if (port_status == KERNEL_PORT_CORRUPT ||
             kernel_handle_close(current->handles, reply) != KERNEL_HANDLE_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        if (kernel_thread_call_abort(thread) != KERNEL_THREAD_OK)
             return KERNEL_PROCESS_CORRUPT;
         if (!port_status_to_syscall(port_status, result))
             return KERNEL_PROCESS_CORRUPT;
