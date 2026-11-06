@@ -131,6 +131,8 @@ typedef enum KernelThreadStatus {
 } KernelThreadStatus;
 
 struct KernelThread;
+typedef void (*KernelThreadWaitObserver)(struct KernelThread *thread,
+                                         uint32_t result, void *context);
 typedef struct KernelThreadWaitRegistration KernelThreadWaitRegistration;
 
 /* A wait queue links its waiters' registrations directly. Thread records and
@@ -228,6 +230,8 @@ typedef struct KernelThread {
      * past, so it can never complete a later call.
      */
     KernelThreadWaitQueue call_waiters;
+    KernelThreadWaitObserver wait_observer;
+    void *wait_observer_context;
     uint32_t call;
     uint32_t wait_owner_id;
     uint16_t wait_owner_slot;
@@ -457,6 +461,11 @@ KernelThreadStatus kernel_thread_wake_all_detail(
     bool write_one_detail, uint32_t *woken_threads);
 KernelThreadStatus kernel_thread_cancel_wait(KernelThread *thread,
                                              uint32_t result);
+/* Called once when this blocked wait completes, expires, cancels, or retires.
+ * Observer runs inside scheduler state: it must not block or allocate. */
+KernelThreadStatus kernel_thread_observe_wait(KernelThread *thread,
+                                              KernelThreadWaitObserver observer,
+                                              void *context);
 KernelThreadStatus kernel_thread_call_begin(KernelThread *thread,
                                             uint32_t *call);
 KernelThreadStatus kernel_thread_call_block(KernelThread *thread,

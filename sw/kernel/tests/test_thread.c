@@ -20,6 +20,22 @@
 
 static KernelHandle next_test_handle = 0x00000101u;
 
+typedef struct WaitObservation {
+    uint32_t count;
+    uint32_t result;
+    uint8_t state;
+} WaitObservation;
+
+static void observe_wait(KernelThread *thread, uint32_t result, void *context)
+{
+    WaitObservation *observation = context;
+
+    assert(thread != NULL && observation != NULL);
+    ++observation->count;
+    observation->result = result;
+    observation->state = thread->state;
+}
+
 static void publish_thread(KernelThread *thread)
 {
     assert(kernel_thread_attach_handle(thread, next_test_handle) ==
@@ -903,6 +919,103 @@ static void test_bounded_deadline_order_expiry_and_signal_race(void)
     assert(stats.deadline_max_depth == 3u);
 }
 
+static void test_wait_observer_completes_once_on_every_exit(void)
+{
+    KernelThreadWaitQueue queue;
+    KernelThread *thread;
+    KernelThread *selected;
+    WaitObservation observation = {0};
+    uint32_t expired;
+    uint32_t retired;
+    uint32_t call;
+    uint8_t highest;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_thread_wait_queue_init(&queue);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u, 20u,
+                                  &thread) == KERNEL_THREAD_OK);
+    publish_thread(thread);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == thread);
+    assert(kernel_thread_observe_wait(thread, observe_wait, &observation) ==
+           KERNEL_THREAD_INVALID_ARGUMENT);
+
+    assert(kernel_thread_block_until(thread, &queue,
+        kernel_thread_wait_queue_sequence(&queue), 0u, 100u,
+        ASTRA_SYSCALL_TIMED_OUT) == KERNEL_THREAD_OK);
+    assert(kernel_thread_observe_wait(thread, observe_wait, &observation) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_observe_wait(thread, observe_wait, &observation) ==
+           KERNEL_THREAD_INVALID_ARGUMENT);
+    assert(kernel_thread_wake_one(&queue, ASTRA_SYSCALL_OK, &selected) ==
+           KERNEL_THREAD_OK);
+    assert(selected == thread && observation.count == 1u &&
+           observation.result == ASTRA_SYSCALL_OK &&
+           observation.state == KERNEL_THREAD_READY);
+    assert(thread->wait_observer == NULL &&
+           thread->wait_observer_context == NULL);
+    assert(kernel_thread_pool_valid());
+
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == thread);
+    assert(kernel_thread_block_until(thread, &queue,
+        kernel_thread_wait_queue_sequence(&queue), 0u, 200u,
+        ASTRA_SYSCALL_TIMED_OUT) == KERNEL_THREAD_OK);
+    assert(kernel_thread_observe_wait(thread, observe_wait, &observation) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_expire_deadlines(200u, &expired, &highest) ==
+           KERNEL_THREAD_OK);
+    assert(expired == 1u && observation.count == 2u &&
+           observation.result == ASTRA_SYSCALL_TIMED_OUT &&
+           observation.state == KERNEL_THREAD_READY);
+    assert(kernel_thread_pool_valid());
+
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == thread);
+    assert(kernel_thread_block(thread, &queue,
+        kernel_thread_wait_queue_sequence(&queue)) == KERNEL_THREAD_OK);
+    assert(kernel_thread_observe_wait(thread, observe_wait, &observation) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_cancel_wait(thread, ASTRA_SYSCALL_CANCELLED) ==
+           KERNEL_THREAD_OK);
+    assert(observation.count == 3u &&
+           observation.result == ASTRA_SYSCALL_CANCELLED &&
+           observation.state == KERNEL_THREAD_READY);
+    assert(kernel_thread_pool_valid());
+
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == thread);
+    assert(kernel_thread_call_begin(thread, &call) == KERNEL_THREAD_OK);
+    assert(kernel_thread_call_block(thread, 0u,
+                                    KERNEL_THREAD_DEADLINE_NEVER) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_observe_wait(thread, observe_wait, &observation) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_call_complete(thread, ASTRA_SYSCALL_OK, 0u, 0u,
+                                       0u) == KERNEL_THREAD_OK);
+    assert(observation.count == 4u &&
+           observation.result == ASTRA_SYSCALL_OK &&
+           observation.state == KERNEL_THREAD_READY);
+    assert(kernel_thread_pool_valid());
+
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == thread);
+    assert(kernel_thread_block(thread, &queue,
+        kernel_thread_wait_queue_sequence(&queue)) == KERNEL_THREAD_OK);
+    assert(kernel_thread_observe_wait(thread, observe_wait, &observation) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_retire_process(1u, ASTRA_SYSCALL_PEER_DEAD,
+                                        &retired) == KERNEL_THREAD_OK);
+    assert(retired == 1u && observation.count == 5u &&
+           observation.result == ASTRA_SYSCALL_PEER_DEAD &&
+           observation.state == KERNEL_THREAD_DEAD);
+    assert(thread->wait_observer == NULL &&
+           thread->wait_observer_context == NULL);
+    assert(kernel_thread_pool_valid());
+}
+
 static void test_deadline_capacity_matches_thread_capacity(void)
 {
     KernelThreadWaitQueue queue;
@@ -1553,6 +1666,7 @@ int main(void)
     test_wait_queue_rejects_corrupt_header();
     test_irq_wake_records_blocked_thread_failure();
     test_bounded_deadline_order_expiry_and_signal_race();
+    test_wait_observer_completes_once_on_every_exit();
     test_deadline_capacity_matches_thread_capacity();
     test_waitable_death_status_and_deferred_reap();
     test_final_handle_close_wins_without_killing_target();

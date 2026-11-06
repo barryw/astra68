@@ -299,6 +299,21 @@ with zero cycle overruns; Beast's normal user-fault sample remained
 request can block yet; pending-fault state, reply delivery, cache pages, and
 mapping API remain open.
 
+The next scheduler prerequisite now passes: one observer can attach to an
+already blocked thread and is cleared before invocation on wake, RPC reply,
+deadline expiry, cancellation, or process retirement. `complete_wait()` and
+process retirement are the only wait-withdrawal exits. Tests exercise each
+exit and duplicate registration. Haiku's
+`src/system/kernel/thread.cpp:3035-3168` retains a blocked kernel stack and
+`src/system/kernel/condition_variable.cpp:165-212` withdraws its condition
+entry when that wait returns; Astra cannot retain the exception stack, so this
+bounded observer supplies the completion edge for an explicit continuation.
+Beast K1 passed 13 markers with zero overruns and 21,951/125,000 ordinary
+user-fault cycles; the same ROM booted DE25 to `KERNEL MULTITASKING` with no
+storage image, panic, or overrun. Evidence:
+`/home/barry/astra-evidence/wait-observer-k1-20261106/` on Beast. No pager
+operation consumes this observer yet.
+
 ## Implementation order and release gates
 
 1. Measure current fault, area-map, VFS read, and pressure-worker cycles on

@@ -1224,6 +1224,17 @@ static KernelThreadStatus withdraw_wait_set(
     return KERNEL_THREAD_OK;
 }
 
+static void notify_wait_observer(KernelThread *thread, uint32_t result)
+{
+    KernelThreadWaitObserver observer = thread->wait_observer;
+    void *context = thread->wait_observer_context;
+
+    thread->wait_observer = NULL;
+    thread->wait_observer_context = NULL;
+    if (observer != NULL)
+        observer(thread, result, context);
+}
+
 static KernelThreadStatus complete_wait(
     KernelThread *thread, KernelThreadWaitRegistration *winner,
     KernelThreadWaitQueue *already_advanced, uint32_t result,
@@ -1271,6 +1282,7 @@ static KernelThreadStatus complete_wait(
         thread->context.data[1] = detail;
     }
     thread->state = KERNEL_THREAD_READY;
+    notify_wait_observer(thread, result);
     if (thread->suspended != 0u)
         return KERNEL_THREAD_OK;
     status = enqueue_ready(thread);
@@ -2530,6 +2542,19 @@ KernelThreadStatus kernel_thread_cancel_wait(KernelThread *thread,
     return status;
 }
 
+KernelThreadStatus kernel_thread_observe_wait(KernelThread *thread,
+                                              KernelThreadWaitObserver observer,
+                                              void *context)
+{
+    if (!valid_thread(thread) || observer == NULL ||
+        thread->state != KERNEL_THREAD_BLOCKED ||
+        thread->wait_member_count == 0u || thread->wait_observer != NULL)
+        return KERNEL_THREAD_INVALID_ARGUMENT;
+    thread->wait_observer = observer;
+    thread->wait_observer_context = context;
+    return KERNEL_THREAD_OK;
+}
+
 /*
  * PORT_CALL's wait. Call numbers are machine-wide rather than per thread, so a
  * capability outliving its thread cannot match whatever reuses the slot.
@@ -2815,6 +2840,7 @@ static KernelThreadStatus retire_process_threads(uint16_t process_slot,
         thread->exit_status = 0u;
         thread->terminal_result = terminal_result;
         thread->state = KERNEL_THREAD_DEAD;
+        notify_wait_observer(thread, terminal_result);
         thread->suspended = 0u;
         if (release_stacks)
             thread->stack_released = 1u;
@@ -3002,6 +3028,10 @@ bool kernel_thread_pool_stats(KernelThreadPoolStats *stats)
             thread->handle_references > 1u ||
             !valid_wait_queue(&thread->death_waiters) ||
             !valid_wait_queue(&thread->call_waiters) ||
+            (thread->wait_observer != NULL &&
+             thread->state != KERNEL_THREAD_BLOCKED) ||
+            (thread->wait_observer == NULL &&
+             thread->wait_observer_context != NULL) ||
             (thread->state != KERNEL_THREAD_DEAD &&
              thread->stack_released != 0u) ||
             (thread->state == KERNEL_THREAD_DEAD &&

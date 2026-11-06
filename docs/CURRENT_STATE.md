@@ -2,6 +2,26 @@
 
 Status: active continuation map, 2026-11-06
 
+Blocked-wait completion seam, 2026-11-06: `sw/kernel/thread.c` now invokes one
+bounded observer on wake, RPC reply, timeout, cancellation, or process
+retirement. Registration requires an already blocked thread and is cleared
+before invocation, so a pending pager operation can release its state once
+without polling the timer path. Host tests cover all five exits and duplicate
+registration. Beast kernel host suite and MC68040 build passed. Beast K1
+qualification passed 13 markers with zero overruns; ordinary user-fault cost
+was 21,951/125,000 cycles, one above the prior 21,950-cycle sample. The same
+ROM (SHA-256
+`ded1617668cd972a6d20213662e09cd92eabc0698fa07c83618e9c7b437d45c2`)
+booted DE25 to `KERNEL MULTITASKING` without a storage image, panic, or cycle
+overrun. Checksummed evidence is under
+`/home/barry/astra-evidence/wait-observer-k1-20261106/` on Beast. Normal ROM
+was restored, trial ROM removed from board, production reboot reached stage 8,
+all three services stayed active with zero restarts, only loop0 remained, and
+8.5 GiB was free. This is a prerequisite; no guest pager request, cache, or
+file mapping consumes the observer yet. Haiku reference:
+`src/system/kernel/thread.cpp` and
+`src/system/kernel/condition_variable.cpp`.
+
 Blocked-fault scheduler handoff, 2026-11-06: `sw/kernel/dispatch.c` now uses
 the syscall dispatch's existing worker/idle selection when a user fault
 returns `NO_RUNNABLE` without process maintenance. Host dispatch tests cover
@@ -25,9 +45,9 @@ fault regression, not a live pager request or file mapping.
 File-cache pager handoff review, 2026-11-06: `docs/FILE_CACHE_DESIGN.md`
 now specifies how a VFS-owned reserved area can use the existing port send
 endpoint, reply capability, call donation, and area frame ownership for a
-blocked page fault. The current fault dispatcher only resumes an immediately
-runnable context, and ordinary `deliver_reply()` writes to a user buffer;
-neither is yet a pager continuation. No guest mapping or pager code has been
+blocked page fault. Fault dispatch can now select worker or idle when no user
+thread is runnable; ordinary `deliver_reply()` still writes to a user buffer.
+Neither is yet a pager continuation. No guest mapping or pager code has been
 selected. Haiku reference: `src/system/kernel/vm/vm.cpp` and
 `src/system/kernel/cache/file_cache.cpp`.
 
