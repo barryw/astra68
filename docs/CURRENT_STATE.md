@@ -65,9 +65,13 @@ fault 21,950 cycles (one sample) and area map maximum 1,415 cycles (two
 samples), with all 13 markers passing. The DE25 log has matching board/Beast
 SHA-256 values under `/home/barry/astra-evidence/file-cache-k1-de25-20261106/`;
 services and selected release were restored, staged files removed, and 7.9 GiB
-was free. No pressure worker sample ran. Raw evidence and limits are in
-`docs/FILE_CACHE_DESIGN.md`. Pressure-worker measurement and the native cache
-implementation remain open. Literal USB cable replug is deferred by user.
+was free. K1 now signals the existing pressure worker once at normal memory
+level; Beast and DE25 each measured 22 instruction-timed cycles for dispatch,
+with all 13 markers passing. Matching board/Beast log SHA-256 values are under
+`/home/barry/astra-evidence/file-cache-pressure-worker-k1-de25-20261106/`.
+Actual reclaim under pressure and the native cache implementation remain open;
+raw evidence and limits are in `docs/FILE_CACHE_DESIGN.md`. Literal USB cable
+replug is deferred by user.
 
 General file cache work, 2026-11-06: `docs/FILE_CACHE_DESIGN.md` records the
 native owner split, Haiku source paths, identity and invalidation rules, and

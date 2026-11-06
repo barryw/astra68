@@ -50,9 +50,10 @@ Beast K1 qualification measured user-fault dispatch at 21,930 CPU cycles
 against its 125,000-cycle budget, with zero overruns
 (`mutex-k1-baseline-20261105.log`). These readings define the unchanged-path
 regression comparison; they do not measure a future pager or file-cache hit.
-Target-representative area-map measurements are recorded below. Direct
-pressure-worker measurement and separate budgets for new fault handoff and
-pager completion remain required before those paths become dependencies.
+Target-representative area-map and pressure-worker dispatch measurements are
+recorded below. Actual pressure reclaim measurement and separate budgets for
+new fault handoff and pager completion remain required before those paths
+become dependencies.
 
 The existing K1 qualification harness already records area-map and pressure
 worker metrics. Its output now retains those lines and raw sample counts.
@@ -73,8 +74,20 @@ evidence is under `/home/barry/astra-evidence/file-cache-k1-de25-20261106/`.
 Astra, audio host, and remote desktop were restored; only production loop0
 remained, staged board files were removed, and 7.9 GiB was free. These are
 instruction-timed MC68040 samples on the real host, not wall-clock HPS
-latencies. Two area-map samples cannot establish tail latency. No pressure
-reclaim ran, so pressure-worker measurement remains open.
+latencies. Two area-map samples cannot establish tail latency.
+
+The K1-only workload now signals the existing pressure worker once after its
+registration. At normal memory pressure the callback returns without reclaim;
+this isolates dispatch overhead. Beast and DE25 each recorded one 22-cycle
+`KERNEL_PERFORMANCE_LIBRARY_CACHE` sample, with all 13 markers passing. The
+DE25 log SHA-256 matched its Beast archive at
+`/home/barry/astra-evidence/file-cache-pressure-worker-k1-de25-20261106/`:
+`1850d0604c303c6ba06f2c15454d144241e10211e0f82a1f6f6b0d24e18a8761`.
+Qualification ROM SHA-256:
+`60595e574290ca9afc772cee0a8392e65f0b0c4797360551cb4972c12f74807b`.
+Services and selected release were restored, only production loop0 remained,
+trial files were removed, and 7.9 GiB was free. Actual reclaim cost under
+pressure and tail latency remain unmeasured.
 
 ## Native contract
 

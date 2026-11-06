@@ -2047,6 +2047,11 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         kernel_panic("memory pressure worker registration failed");
     if (!kernel_memory_set_pressure_notifier(pressure_signal))
         kernel_panic("memory pressure notification registration failed");
+#if ASTRA_KERNEL_K1_QUALIFICATION
+    /* Exercise existing worker dispatch before the qualification snapshot. */
+    if (kernel_worker_signal(KERNEL_WORKER_PRESSURE) != KERNEL_WORKER_OK)
+        kernel_panic("K1 pressure worker signal failed");
+#endif
     /* Before the first launch: every process maps it, and logs read it. */
     if (!kernel_time_page_init())
         kernel_panic("time page allocation failed");
