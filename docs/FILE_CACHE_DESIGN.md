@@ -159,6 +159,15 @@ pressure and tail latency remain unmeasured.
    pager request. Reply, timeout, cancellation, pager death, and process exit
    must each retire that continuation exactly once.
 
+   A page is 4 KiB, but `ASTRA_MESSAGE_INLINE_MAX` is 1 KiB. Page bytes must
+   travel through one existing native shared area, as VFS bulk read/write
+   already does with `BIND_AREA` and `READ_AREA`/`WRITE_AREA`. The call/reply
+   carries only identity, offset, length, status, and transfer ownership.
+   Bound area and reply capability must remain valid for the entire pending
+   fault; timeout or death revokes both before frame reuse. No partial read
+   becomes a mapped page: zero the page tail and publish only after the full
+   result and current volume incarnation are checked.
+
    `AstraVfsOpenFile` in `sw/userspace/vfs/src/vfs_service_core.c` is owned by
    one session. `close_file()` closes its backend node and invalidates its
    generation. A mapping therefore cannot hold only this session token:
