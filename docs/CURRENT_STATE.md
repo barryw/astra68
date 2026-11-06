@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-11-06
 
+Pager area ownership prerequisite, 2026-11-06: `AREA_BIND_PAGER` now attaches
+one retained port send endpoint to an uncommitted, unmapped reserved area.
+Binding requires area administration and port signal rights; the endpoint is
+released when the area closes. A bound area's missing pages cannot silently
+zero-fill through faults or kernel reads, and writable mappings, kernel writes,
+and client decommit are refused. Page publication remains atomic. Host area
+and process tests cover endpoint lifetime, invalid and duplicate binding,
+read-only mapping, and missing-page refusal. Beast full kernel suite,
+MC68040 build, and NDK distribution check passed. K1 now exercises a bound
+area and its real port lifetime before page publication: Beast passed 14
+qualification markers, ordinary user-fault 21,952 cycles, and publication
+6,782/20,000 cycles. Identical ROM SHA-256
+`7576a9e5ee62538be89533bbdf11451204ab533918acd2d9601312cacaa53c38`
+passed DE25 to `KERNEL MULTITASKING` without production storage; board log
+SHA-256 `0e1c81030166ec5c25f49318795b04ddf58a069464f527cf5bd935ab2e58ec2f`.
+Evidence: `/home/barry/astra-evidence/pager-bind-20261106/` on Beast. Normal
+Beast ROM build was restored; board trial files were removed. Astra, HDMI
+audio host, and remote desktop remain active, only production loop0 remains,
+and 8.5 GiB is free. This does not yet service a missing-page fault: request,
+reply, cancellation, VFS cache, and file mapping remain open. Haiku reference:
+`src/system/kernel/vm/vm.cpp` keeps mapping authority at the area;
+`src/system/kernel/cache/file_cache.cpp` publishes pages only after read and
+zero-tail completion.
+
 Atomic file-page publication prerequisite, 2026-11-06: the existing reserved
 area frame/VM-table path can now publish one 4 KiB page after copying valid
 bytes into a zeroed frame. A short read leaves a zero tail; mapping peers see

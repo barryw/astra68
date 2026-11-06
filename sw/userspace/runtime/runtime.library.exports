@@ -122,6 +122,7 @@ ASTRA_RUNTIME_2.0 {
         astra_process_wait;
         astra_progress;
         astra_query_abi;
+        astra_rt_area_bind_pager;
         astra_rt_area_create;
         astra_rt_area_create_flagged;
         astra_rt_area_decommit;

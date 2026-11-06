@@ -1072,6 +1072,12 @@
  * directly to the highest-priority waiter, or stores zero when none waits.
  */
 #define ASTRA_SYSCALL_MUTEX_UNLOCK 115
+/**
+ * Bind a reserved, unmapped area to a pager service. data[1] is an area
+ * handle with ADMINISTER, data[2] a port send handle with SIGNAL. The area
+ * retains the send endpoint; clients may map it read-only after binding.
+ */
+#define ASTRA_SYSCALL_AREA_BIND_PAGER 116
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */

@@ -8174,6 +8174,74 @@ static void test_area_publication_rolls_back_when_handle_table_full(void)
            initial_memory.free_frames);
 }
 
+static void test_pager_binding_retains_send_endpoint(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u,
+                                    0x4eu, 0x71u, 0x4eu, 0x71u};
+    const uint32_t stack = KERNEL_PROCESS_STACK_TOP - 512u;
+    const uint32_t rights = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                            ASTRA_RIGHT_MAP | ASTRA_RIGHT_ADMINISTER;
+    KernelCpuContext *next;
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id, area, receive, send, base;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_PORT_CREATE,
+                     2u, 2u * ASTRA_MESSAGE_HEADER_SIZE, 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    receive = next->data[1];
+    send = next->data[2];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_CREATE,
+                     2u * KERNEL_PAGE_SIZE, rights,
+                     ASTRA_AREA_CREATE_RESERVED, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    area = next->data[1];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_BIND_PAGER,
+                     area, receive, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_BIND_PAGER,
+                     area, send, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_BIND_PAGER,
+                     area, send, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     send, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_MAP,
+                     area, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                     0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_MAP,
+                     area, ASTRA_AREA_MAP_READ, 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    base = next->data[1];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_UNMAP,
+                     base, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     area, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_area_pool_valid());
+    assert(kernel_port_pool_valid());
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     receive, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_EXIT,
+                     0u, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(kernel_area_pool_valid());
+    assert(kernel_port_pool_valid());
+}
+
 static void test_area_and_ring_endpoint_transfer_over_port(void)
 {
     static const uint8_t image[] = {
@@ -17031,6 +17099,7 @@ int main(void)
     test_malformed_syscall_and_message_corpus();
     test_shared_area_and_bulk_ring_syscalls();
     test_area_publication_rolls_back_when_handle_table_full();
+    test_pager_binding_retains_send_endpoint();
     test_area_and_ring_endpoint_transfer_over_port();
     test_executable_loading();
     test_executable_threads_receive_independent_tls();

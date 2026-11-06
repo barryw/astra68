@@ -83,6 +83,9 @@ struct KernelArea {
     uint8_t state;
     uint8_t frames_released;
     uint8_t reserved_form;
+    KernelPort *pager;
+    KernelHandleRelease pager_release;
+    void *pager_release_context;
     /* Frame of shared-table addresses, one per span; 0 until first map. */
     uint32_t span_tables_physical;
 };
@@ -94,7 +97,7 @@ struct KernelArea {
 #if defined(__m68k__)
 _Static_assert(sizeof(KernelAreaMapping) == 24u,
                "area mapping size changed; update the memory budget");
-_Static_assert(sizeof(KernelArea) <= 304u,
+_Static_assert(sizeof(KernelArea) <= 320u,
                "area record memory budget changed");
 #endif
 
@@ -690,6 +693,12 @@ static KernelAreaStatus close_area(KernelArea *area, uint32_t terminal_result)
         pool_corrupt = 1u;
         return KERNEL_AREA_CORRUPT;
     }
+    if (area->pager != NULL) {
+        area->pager_release(area->pager, area->pager_release_context);
+        area->pager = NULL;
+        area->pager_release = NULL;
+        area->pager_release_context = NULL;
+    }
     maybe_free(area);
     return pool_corrupt == 0u ? KERNEL_AREA_OK : KERNEL_AREA_CORRUPT;
 }
@@ -824,6 +833,24 @@ allocation_failed:
                                KERNEL_AREA_CORRUPT;
 }
 
+KernelAreaStatus kernel_area_bind_pager(KernelArea *area, KernelPort *port,
+                                        KernelHandleRelease release,
+                                        void *release_context)
+{
+    if (!valid_area(area) || port == NULL || release == NULL)
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    if (area->state != KERNEL_AREA_LIVE)
+        return KERNEL_AREA_PEER_DEAD;
+    if (area->reserved_form == 0u || area->pager != NULL ||
+        area->child_references != 0u || area->mapping_references != 0u ||
+        area->committed_pages != 0u)
+        return KERNEL_AREA_INVALID_STATE;
+    area->pager = port;
+    area->pager_release = release;
+    area->pager_release_context = release_context;
+    return KERNEL_AREA_OK;
+}
+
 void kernel_area_abandon_unpublished(KernelArea *area)
 {
     if (!valid_area(area) || area->state != KERNEL_AREA_LIVE ||
@@ -913,6 +940,8 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
     *byte_size = 0u;
     if (area->state != KERNEL_AREA_LIVE)
         return KERNEL_AREA_PEER_DEAD;
+    if (area->pager != NULL && (permissions & KERNEL_VM_WRITE) != 0u)
+        return KERNEL_AREA_ACCESS_DENIED;
     {
         KernelAreaMappingCursor cursor = {mapping_blocks, 0u};
         KernelAreaMapping *mapping;
@@ -1361,7 +1390,8 @@ bool kernel_area_fault(uint32_t process_id, KernelAddressSpace *space,
     KernelArea *area;
 
     mapping = authorised_mapping(process_id, space, address);
-    if (mapping == NULL || mapping->area->reserved_form == 0u)
+    if (mapping == NULL || mapping->area->reserved_form == 0u ||
+        mapping->area->pager != NULL)
         return false;
     area = mapping->area;
     page = (address - mapping->virtual_base) / KERNEL_PAGE_SIZE;
@@ -1456,6 +1486,8 @@ KernelAreaStatus kernel_area_decommit(uint32_t process_id,
     if (mapping == NULL)
         return KERNEL_AREA_NOT_MAPPED;
     area = mapping->area;
+    if (area->pager != NULL)
+        return KERNEL_AREA_ACCESS_DENIED;
     /*
      * An ordinary area is committed by definition -- its whole extent is its
      * identity, and something is reading it. Only a reserved one has pages
@@ -1566,6 +1598,8 @@ KernelAreaStatus kernel_area_write(KernelArea *area, uint32_t offset,
 
     if (source == NULL || size == 0u || !range_valid(area, offset, size))
         return KERNEL_AREA_INVALID_ARGUMENT;
+    if (area->pager != NULL)
+        return KERNEL_AREA_ACCESS_DENIED;
     while (size != 0u) {
         uint32_t page = offset / KERNEL_PAGE_SIZE;
         uint32_t page_offset = offset & (KERNEL_PAGE_SIZE - 1u);
@@ -1666,6 +1700,15 @@ KernelAreaStatus kernel_area_read(const KernelArea *area, uint32_t offset,
 
     if (destination == NULL || size == 0u || !range_valid(area, offset, size))
         return KERNEL_AREA_INVALID_ARGUMENT;
+    if (area->pager != NULL) {
+        uint32_t first = offset / KERNEL_PAGE_SIZE;
+        uint32_t last = (offset + size - 1u) / KERNEL_PAGE_SIZE;
+
+        for (uint32_t page = first; page <= last; ++page) {
+            if (!page_committed(area, page))
+                return KERNEL_AREA_INVALID_STATE;
+        }
+    }
     while (size != 0u) {
         uint32_t page = offset / KERNEL_PAGE_SIZE;
         uint32_t page_offset = offset & (KERNEL_PAGE_SIZE - 1u);
@@ -1841,6 +1884,8 @@ bool kernel_area_pool_valid(void)
                 area->handle_references != 0u ||
                 area->child_references != 0u ||
                 area->mapping_references != 0u ||
+                area->pager != NULL || area->pager_release != NULL ||
+                area->pager_release_context != NULL ||
                 area->frames_released == 0u)
                 return false;
             for (uint32_t leaf = 0u; leaf < AREA_PAGE_LEAF_COUNT; ++leaf) {
@@ -1853,6 +1898,11 @@ bool kernel_area_pool_valid(void)
         if (!valid_area(area) || area->creator == 0u ||
             area->frame_owner == 0u || area->page_count == 0u ||
             area->page_count > KERNEL_AREA_PAGE_MAX ||
+            (area->pager != NULL &&
+             (area->reserved_form == 0u || area->pager_release == NULL)) ||
+            (area->pager == NULL &&
+             (area->pager_release != NULL ||
+              area->pager_release_context != NULL)) ||
             area->byte_size != area->page_count * KERNEL_PAGE_SIZE)
             return false;
         ++active;
@@ -1887,8 +1937,12 @@ bool kernel_area_pool_valid(void)
         }
         committed += area->committed_pages;
         while ((mapping = next_mapping(&cursor)) != NULL) {
-            if (mapping->active != 0u && mapping->area == area)
+            if (mapping->active != 0u && mapping->area == area) {
+                if (area->pager != NULL &&
+                    (mapping->permissions & KERNEL_VM_WRITE) != 0u)
+                    return false;
                 ++mapping_count;
+            }
         }
         if (mapping_count != area->mapping_references)
             return false;

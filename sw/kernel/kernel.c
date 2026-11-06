@@ -11,6 +11,7 @@
 #include "kernel_build_info.h"
 #if ASTRA_KERNEL_K1_QUALIFICATION
 #include "area.h"
+#include "port.h"
 #endif
 #include "allocation.h"
 #include "block.h"
@@ -1898,6 +1899,7 @@ static bool qualification_publish_page(uint32_t *cycles)
 {
     KernelAddressSpace space = {0};
     KernelArea *area = NULL;
+    KernelPort *pager = NULL;
     static uint8_t source[KERNEL_PAGE_SIZE];
     uint8_t bytes[16];
     uint8_t tail[16];
@@ -1918,10 +1920,32 @@ static bool qualification_publish_page(uint32_t *cycles)
     if (kernel_area_create(KERNEL_SELFTEST_OWNER, 2u * KERNEL_PAGE_SIZE,
                            KERNEL_AREA_CREATE_RESERVED, &area) !=
             KERNEL_AREA_OK ||
+        kernel_port_create(KERNEL_SELFTEST_OWNER, 1u,
+                           KERNEL_PORT_MESSAGE_SIZE_MIN, &pager) !=
+            KERNEL_PORT_OK ||
+        !kernel_port_handle_retain(
+            pager, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND))
+        goto done;
+    if (kernel_area_bind_pager(
+            area, pager, kernel_port_handle_release,
+            (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND) != KERNEL_AREA_OK) {
+        kernel_port_handle_release(
+            pager, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND);
+        goto done;
+    }
+    if (kernel_area_map(area, KERNEL_SELFTEST_OWNER, &space,
+                        KERNEL_VM_READ | KERNEL_VM_WRITE, &base,
+                        &size) != KERNEL_AREA_ACCESS_DENIED ||
         kernel_area_map(area, KERNEL_SELFTEST_OWNER, &space, KERNEL_VM_READ,
                         &base, &size) != KERNEL_AREA_OK)
         goto done;
     mapped = true;
+    bytes[0] = 0x7eu;
+    if (kernel_area_fault(KERNEL_SELFTEST_OWNER, &space, base) ||
+        kernel_area_read(area, 0u, bytes, 1u) !=
+            KERNEL_AREA_INVALID_STATE ||
+        bytes[0] != 0x7eu)
+        goto done;
     started = kernel_platform_cpu_cycles_low();
     if (kernel_area_publish_page(area, 0u, source, sizeof(source)) !=
             KERNEL_AREA_OK)
@@ -1954,8 +1978,14 @@ done:
         passed = false;
     if (area != NULL)
         kernel_area_handle_release(area, NULL);
+    if (pager != NULL) {
+        kernel_port_handle_release(
+            pager, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND);
+        kernel_port_handle_release(
+            pager, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_RECEIVE);
+    }
     if (kernel_vm_destroy_address_space(&space) != KERNEL_VM_OK ||
-        !kernel_area_pool_healthy())
+        !kernel_area_pool_healthy() || !kernel_port_pool_healthy())
         passed = false;
     return passed;
 }

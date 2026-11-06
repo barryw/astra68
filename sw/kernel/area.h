@@ -57,6 +57,7 @@ typedef enum KernelAreaStatus {
 } KernelAreaStatus;
 
 typedef struct KernelArea KernelArea;
+typedef struct KernelPort KernelPort;
 
 /* A physically contiguous run of an area's bytes. */
 typedef struct KernelAreaExtent {
@@ -107,6 +108,10 @@ typedef struct KernelAreaPoolStats {
 void kernel_area_pool_init(void);
 KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
                                     uint32_t flags, KernelArea **area);
+/* Takes ownership of one retained send endpoint on success. */
+KernelAreaStatus kernel_area_bind_pager(KernelArea *area, KernelPort *port,
+                                        KernelHandleRelease release,
+                                        void *release_context);
 /*
  * Answers a fault inside the area window: commits the cluster containing the
  * address and publishes it into every address space that already has the area

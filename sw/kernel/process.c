@@ -12745,6 +12745,44 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             current->id, virtual_base, byte_size, area_handle);
         break;
     }
+    case ASTRA_SYSCALL_AREA_BIND_PAGER: {
+        KernelArea *area = NULL;
+        KernelPort *port = NULL;
+        KernelHandleStatus handle_status;
+        KernelAreaStatus area_status;
+
+        handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1], KERNEL_OBJECT_AREA,
+            ASTRA_RIGHT_ADMINISTER, (void **)&area);
+        if (handle_status != KERNEL_HANDLE_OK) {
+            if (!handle_status_to_syscall(handle_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[2],
+            KERNEL_OBJECT_PORT_SEND, ASTRA_RIGHT_SIGNAL, (void **)&port);
+        if (handle_status != KERNEL_HANDLE_OK) {
+            if (!handle_status_to_syscall(handle_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        if (!kernel_port_handle_retain(
+                port, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND)) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        area_status = kernel_area_bind_pager(
+            area, port, kernel_port_handle_release,
+            (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND);
+        if (area_status != KERNEL_AREA_OK) {
+            kernel_port_handle_release(
+                port, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND);
+            if (!area_status_to_syscall(area_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+        }
+        break;
+    }
     case ASTRA_SYSCALL_AREA_UNMAP: {
         KernelAreaStatus area_status;
         uint32_t virtual_base = thread->context.data[1];

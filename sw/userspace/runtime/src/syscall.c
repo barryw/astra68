@@ -257,6 +257,15 @@ astra_rt_area_create(uint32_t byte_size, uint32_t rights, uint32_t *handle)
     return astra_rt_area_create_flagged(byte_size, rights, 0u, handle);
 }
 
+uint32_t astra_rt_area_bind_pager(uint32_t area, uint32_t port)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_AREA_BIND_PAGER, area, port, 0u, 0u, 0u,
+                   &result);
+    return result.status;
+}
+
 uint32_t
 astra_rt_area_decommit(void *address, uint32_t byte_size,
                     uint32_t *released_pages)

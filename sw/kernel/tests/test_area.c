@@ -1021,6 +1021,74 @@ static void test_reserved_area_publishes_one_complete_page(void)
     assert(kernel_area_pool_valid());
 }
 
+static uint32_t pager_release_count;
+
+static void release_test_pager(void *object, void *context)
+{
+    assert(object == (void *)(uintptr_t)1u);
+    assert(context == (void *)(uintptr_t)2u);
+    ++pager_release_count;
+}
+
+static void test_pager_area_never_zero_fills_missing_file_data(void)
+{
+    KernelAddressSpace client = {0};
+    KernelArea *area = NULL;
+    uint32_t base, size, released;
+    uint8_t byte = 0xa5u;
+
+    initialize_test();
+    pager_release_count = 0u;
+    assert(kernel_vm_create_address_space(317u, &client) == KERNEL_VM_OK);
+    assert(kernel_area_create(317u, 2u * KERNEL_PAGE_SIZE,
+                              KERNEL_AREA_CREATE_RESERVED, &area) ==
+           KERNEL_AREA_OK);
+    assert(kernel_area_map(area, 317u, &client, KERNEL_VM_READ, &base,
+                           &size) == KERNEL_AREA_OK);
+    assert(kernel_area_bind_pager(area, (KernelPort *)(uintptr_t)1u,
+                                  release_test_pager,
+                                  (void *)(uintptr_t)2u) ==
+           KERNEL_AREA_INVALID_STATE);
+    assert(kernel_area_unmap(317u, &client, base) == KERNEL_AREA_OK);
+    assert(kernel_area_bind_pager(area, (KernelPort *)(uintptr_t)1u,
+                                  release_test_pager,
+                                  (void *)(uintptr_t)2u) == KERNEL_AREA_OK);
+    assert(kernel_area_bind_pager(area, (KernelPort *)(uintptr_t)1u,
+                                  release_test_pager,
+                                  (void *)(uintptr_t)2u) ==
+           KERNEL_AREA_INVALID_STATE);
+    assert(kernel_area_map(area, 317u, &client,
+                           KERNEL_VM_READ | KERNEL_VM_WRITE, &base,
+                           &size) == KERNEL_AREA_ACCESS_DENIED);
+    assert(kernel_area_map(area, 317u, &client, KERNEL_VM_READ, &base,
+                           &size) == KERNEL_AREA_OK);
+    assert(!kernel_area_fault(317u, &client, base));
+    assert(kernel_area_read(area, 0u, &byte, 1u) ==
+           KERNEL_AREA_INVALID_STATE);
+    assert(byte == 0xa5u);
+    assert(kernel_area_write(area, 0u, &byte, 1u) ==
+           KERNEL_AREA_ACCESS_DENIED);
+    assert(kernel_area_decommit(317u, &client, base, KERNEL_PAGE_SIZE,
+                                &released) == KERNEL_AREA_ACCESS_DENIED);
+    assert(kernel_area_publish_page(area, 0u, &byte, 1u) == KERNEL_AREA_OK);
+    byte = 0u;
+    assert(kernel_area_read(area, 0u, &byte, 1u) == KERNEL_AREA_OK);
+    assert(byte == 0xa5u);
+    {
+        uint8_t across[2] = {0x7eu, 0x7eu};
+
+        assert(kernel_area_read(area, KERNEL_PAGE_SIZE - 1u, across,
+                                sizeof(across)) == KERNEL_AREA_INVALID_STATE);
+        assert(across[0] == 0x7eu && across[1] == 0x7eu);
+    }
+    assert(kernel_area_pool_valid());
+    assert(kernel_area_unmap(317u, &client, base) == KERNEL_AREA_OK);
+    kernel_area_handle_release(area, NULL);
+    assert(pager_release_count == 1u);
+    assert(kernel_vm_destroy_address_space(&client) == KERNEL_VM_OK);
+    assert(kernel_area_pool_valid());
+}
+
 /*
  * Committing on fault must not become a way to spend somebody else's frames.
  * A process with no mapping of the area gets nothing, however good its address
@@ -1374,6 +1442,7 @@ int main(void)
     test_reserved_area_commits_only_what_is_touched();
     test_reserved_area_commit_reaches_every_mapping();
     test_reserved_area_publishes_one_complete_page();
+    test_pager_area_never_zero_fills_missing_file_data();
     test_reserved_area_fault_requires_authority();
     test_reserved_area_kernel_access_commits_only_on_write();
     test_reserved_area_decommit_returns_frames();

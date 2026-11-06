@@ -256,6 +256,13 @@ uint32_t astra_rt_area_create(uint32_t byte_size, uint32_t rights,
 uint32_t astra_rt_area_create_flagged(uint32_t byte_size, uint32_t rights,
                                    uint32_t flags, uint32_t *handle);
 /**
+ * Bind a private reserved area to a pager service before sharing it.
+ * @param area Reserved area with ASTRA_RIGHT_ADMINISTER.
+ * @param port Pager send endpoint with ASTRA_RIGHT_SIGNAL.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_area_bind_pager(uint32_t area, uint32_t port);
+/**
  * Decommit mapped pages while preserving the virtual reservation.
  * @param address Page-aligned address within a reserved area.
  * @param byte_size Page-aligned span.

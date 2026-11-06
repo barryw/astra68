@@ -345,6 +345,17 @@ storage image, panic, or overrun. Evidence:
 `/home/barry/astra-evidence/wait-observer-k1-20261106/` on Beast. No pager
 operation consumes this observer yet.
 
+The area ownership prerequisite now passes: an administering service binds a
+reserved area to its port send endpoint before any mapping or committed page
+exists. The area retains that endpoint and releases it on close. Bound areas
+permit read-only client mappings but refuse anonymous fault zero-fill,
+unpublished kernel reads, writes, and client decommit. K1 uses a real port and
+the bound area for its existing atomic page-publication gate; Beast and DE25
+both passed with 6,782 publication cycles against the 20,000-cycle budget.
+Evidence: `/home/barry/astra-evidence/pager-bind-20261106/` on Beast. This is
+an ownership and safety gate, not a working pager: fault request, reply
+continuation, cancellation, VFS page lifecycle, and mapping API remain open.
+
 ## Implementation order and release gates
 
 1. Measure current fault, area-map, VFS read, and pressure-worker cycles on
