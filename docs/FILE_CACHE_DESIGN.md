@@ -1,7 +1,8 @@
 # General file cache and file-backed mappings
 
-Status: design contract; VFS description-retention slice passed host and DE25
-AArch64 core gates. Pager, cache, mapping, and guest certification open.
+Status: design contract; VFS description-retention and metadata slices passed
+host and DE25 AArch64 core gates. Pager, cache, mapping, and guest
+certification open.
 
 ## Existing owners
 
@@ -39,6 +40,19 @@ at `7b8df7034c264927ce5d5b2cd644377f3343d293c9c90823255caafbc5331428`.
 Evidence is under `/home/barry/astra-evidence/stop-job-180s-de25-20261106/`
 on Beast. This retained description is one necessary VFS lifetime rule; no
 guest mapping or page cache consumes it yet.
+
+Second slice, 2026-11-06: the retained description exposes the existing
+backend `stat_node` operation for current size and known identity after its
+client handle/session closes. The test changes the backend size after close,
+checks the new size through the retained token, then checks stale-token refusal
+after final release. Beast `make -C sw/userspace/vfs all test sanitize` passed.
+The AArch64 core test passed on DE25 with one million forced switches; board
+and Beast binary SHA-256 matched at
+`7f2a8dd2409bd75cfb0caef48b04282f55a897a6fa27ef9ddd2eb2ec94299d44`.
+The board trial binary was removed; all three production services stayed
+active, only production loop0 remained, and 7.9 GiB was free. Evidence:
+`/home/barry/astra-evidence/vfs-retained-stat-aarch64.bin` and
+`vfs-retained-stat-de25.txt` on Beast. No guest pager consumes this API yet.
 
 ## Target baseline, 2026-11-06
 

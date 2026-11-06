@@ -2,6 +2,17 @@
 
 Status: active continuation map, 2026-11-06
 
+VFS retained metadata, 2026-11-06: Retained descriptions now use the existing
+backend `stat_node` path to recheck size and known identity after client
+handle/session close. Beast target build, host tests, and sanitizers passed.
+The AArch64 core test on DE25 passed one million forced switches and retained
+metadata checks. Board/Beast binary SHA-256 matched at
+`7f2a8dd2409bd75cfb0caef48b04282f55a897a6fa27ef9ddd2eb2ec94299d44`;
+evidence is in `/home/barry/astra-evidence/vfs-retained-stat-*` on Beast.
+The board trial file was removed; Astra, audio, and remote desktop remained
+active, only production loop0 remained, and 7.9 GiB was free. Pager handoff,
+cached frames, writeback, and guest mappings remain open.
+
 Exact DE25 stop-job deadline, 2026-11-06: A disposable systemd service loaded
 `JobRunningTimeoutSec=180s`, `JobTimeoutAction=reboot-force`, an infinite
 service stop timeout, and an `ExecStop` that remained blocked. Astra, audio,

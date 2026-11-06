@@ -1220,6 +1220,39 @@ astra_vfs_service_read_retained(AstraVfsService *service,
 }
 
 uint32_t
+astra_vfs_service_stat_retained(AstraVfsService *service,
+                                AstraVfsFile retained, AstraVfsNodeInfo *info)
+{
+    AstraVfsOpenFile *file;
+    uint8_t state;
+    uint32_t status;
+
+    if (service == NULL || info == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    node_info_clear(info);
+    if (!state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    file = find_retained(service, retained);
+    if (file == NULL) {
+        state_release(service);
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    }
+    state = file->state;
+    if (!file_acquire_for(service, file, state)) {
+        state_release(service);
+        return ASTRA_VFS_ERR_BUSY;
+    }
+    state_release(service);
+    status = service->backend.ops->stat_node(service->backend.context,
+                                              file->node, info);
+    if (!state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    file_release(service, file);
+    state_release(service);
+    return status;
+}
+
+uint32_t
 astra_vfs_service_release_retained(AstraVfsService *service,
                                     AstraVfsFile retained)
 {

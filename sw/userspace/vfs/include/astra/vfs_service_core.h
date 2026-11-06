@@ -242,6 +242,8 @@ uint32_t astra_vfs_service_retain_file(AstraVfsService *service,
 uint32_t astra_vfs_service_read_retained(AstraVfsService *service,
     AstraVfsFile retained, uint64_t offset, void *buffer,
     uint32_t length, uint32_t *moved);
+uint32_t astra_vfs_service_stat_retained(AstraVfsService *service,
+    AstraVfsFile retained, AstraVfsNodeInfo *info);
 uint32_t astra_vfs_service_release_retained(AstraVfsService *service,
     AstraVfsFile retained);
 

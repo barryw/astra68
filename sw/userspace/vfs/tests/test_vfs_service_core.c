@@ -1315,6 +1315,7 @@ test_retained_description_survives_client_close(void)
     AstraVfsRequest request;
     AstraVfsReply reply;
     AstraVfsFile handle, retained;
+    AstraVfsNodeInfo info;
     FakeNode *node;
     MountProbe probe = {0};
     uint8_t bytes[8];
@@ -1350,6 +1351,13 @@ test_retained_description_survives_client_close(void)
     assert(astra_vfs_service_read_retained(&service, handle, 0u, bytes,
                                            sizeof(bytes), &moved) == ASTRA_VFS_OK);
     assert(moved == 5u && memcmp(bytes, "cache", 5u) == 0);
+    assert(astra_vfs_service_stat_retained(&service, handle, &info) ==
+           ASTRA_VFS_OK);
+    assert(info.size == 5u && info.kind == ASTRA_VFS_KIND_FILE);
+    node->size = 3u;
+    assert(astra_vfs_service_stat_retained(&service, handle, &info) ==
+           ASTRA_VFS_OK);
+    assert(info.size == 3u);
     assert(astra_vfs_service_release_retained(&service, handle) == ASTRA_VFS_OK);
     assert(fake.closes == 1u && service.open_files == 0u);
     assert(astra_vfs_service_shutdown(&service, &writable, &probe) ==
@@ -1359,6 +1367,8 @@ test_retained_description_survives_client_close(void)
                                            sizeof(bytes), &moved) ==
            ASTRA_VFS_ERR_BAD_HANDLE);
     assert(astra_vfs_service_release_retained(&service, handle) ==
+           ASTRA_VFS_ERR_BAD_HANDLE);
+    assert(astra_vfs_service_stat_retained(&service, handle, &info) ==
            ASTRA_VFS_ERR_BAD_HANDLE);
 }
 
