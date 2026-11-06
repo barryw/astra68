@@ -323,7 +323,7 @@ static void test_call_donation_chain_and_withdrawal(void)
                                     KERNEL_THREAD_DEADLINE_NEVER) ==
            KERNEL_THREAD_OK);
     assert(kernel_thread_call_assign(service, caller) == KERNEL_THREAD_OK);
-    assert(service->call_receiver_id == 0u);
+    assert(service->wait_owner_id == 0u);
     assert(kernel_thread_call_complete(caller, ASTRA_SYSCALL_OK, 0u, 0u,
                                        0u) == KERNEL_THREAD_OK);
     assert(middle->effective_priority == 10u &&
@@ -336,6 +336,61 @@ static void test_call_donation_chain_and_withdrawal(void)
     assert(service->effective_priority == 5u);
     assert(kernel_thread_call_complete(service, ASTRA_SYSCALL_OK, 0u, 0u,
                                        0u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_pool_valid());
+}
+
+static void test_mutex_wait_donation_crosses_rpc_and_withdraws(void)
+{
+    KernelThreadWaitQueue mutex_waiters;
+    KernelThread *waiter, *owner, *service, *selected, *woken;
+    uint32_t call;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_thread_wait_queue_init(&mutex_waiters);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u, 25u,
+                                  &waiter) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(1u, 0x10000002u, 1u, 0x00100010u,
+                                  0x70011000u, 0u, 10u,
+                                  &owner) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(2u, 0x10000003u, 2u, 0x00100020u,
+                                  0x70021000u, 0u, 5u,
+                                  &service) == KERNEL_THREAD_OK);
+    publish_thread(waiter);
+    publish_thread(owner);
+    publish_thread(service);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == waiter);
+    assert(kernel_thread_block_until(waiter, &mutex_waiters,
+                                     kernel_thread_wait_queue_sequence(
+                                         &mutex_waiters),
+                                     0u, KERNEL_THREAD_DEADLINE_NEVER,
+                                     ASTRA_SYSCALL_TIMED_OUT) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == owner);
+    assert(kernel_thread_call_begin(owner, &call) == KERNEL_THREAD_OK);
+    assert(kernel_thread_call_block(owner, 0u,
+                                    KERNEL_THREAD_DEADLINE_NEVER) ==
+           KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == service);
+    assert(kernel_thread_call_assign(owner, service) == KERNEL_THREAD_OK);
+    assert(kernel_thread_mutex_assign(waiter, owner) == KERNEL_THREAD_OK);
+    assert(owner->effective_priority == 25u &&
+           service->effective_priority == 25u);
+    assert(kernel_thread_set_priority(waiter, 21u) == KERNEL_THREAD_OK);
+    assert(owner->effective_priority == 21u &&
+           service->effective_priority == 21u);
+    assert(kernel_thread_wake_one(&mutex_waiters, ASTRA_SYSCALL_OK,
+                                  &woken) == KERNEL_THREAD_OK &&
+           woken == waiter);
+    assert(owner->effective_priority == 10u &&
+           service->effective_priority == 10u);
+    assert(kernel_thread_call_complete(owner, ASTRA_SYSCALL_OK, 0u, 0u,
+                                       0u) == KERNEL_THREAD_OK);
+    assert(service->effective_priority == 5u);
     assert(kernel_thread_pool_valid());
 }
 
@@ -384,8 +439,8 @@ static void test_call_donation_multiple_callers_and_receiver_death(void)
     assert(service->effective_priority == 25u);
     assert(kernel_thread_complete(service, 0u, ASTRA_SYSCALL_OK, NULL) ==
            KERNEL_THREAD_OK);
-    assert(high->call_receiver_id == 0u &&
-           middle->call_receiver_id == 0u);
+    assert(high->wait_owner_id == 0u &&
+           middle->wait_owner_id == 0u);
     assert(kernel_thread_call_complete(high, ASTRA_SYSCALL_PEER_DEAD, 0u,
                                        0u, 0u) == KERNEL_THREAD_OK);
     assert(kernel_thread_call_complete(middle, ASTRA_SYSCALL_PEER_DEAD, 0u,
@@ -1487,6 +1542,7 @@ int main(void)
     test_inherited_priority_reorders_and_preserves_base();
     test_media_budget_throttle_preserves_donation();
     test_call_donation_chain_and_withdrawal();
+    test_mutex_wait_donation_crosses_rpc_and_withdraws();
     test_call_donation_multiple_callers_and_receiver_death();
     test_process_suspend_preserves_wait_state();
     test_reused_slot_generation_ids_do_not_repeat();

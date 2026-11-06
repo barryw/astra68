@@ -30,6 +30,10 @@
 #define KERNEL_THREAD_PRIORITY_MEDIA 24
 #define KERNEL_THREAD_PRIORITY_USER_MAX 27
 
+#define KERNEL_THREAD_DONATION_NONE 0u
+#define KERNEL_THREAD_DONATION_CALL 1u
+#define KERNEL_THREAD_DONATION_MUTEX 2u
+
 #define KERNEL_THREAD_SUPERVISOR_GUARD_SIZE 0x00001000
 #define KERNEL_THREAD_SUPERVISOR_STACK_SIZE 0x00002000
 #define KERNEL_THREAD_SUPERVISOR_SLOT_SIZE 0x00003000
@@ -208,8 +212,9 @@ typedef struct KernelThread {
     uint8_t base_priority;
     uint8_t effective_priority;
     uint8_t inherited_priority;
-    uint8_t call_priority;
+    uint8_t donated_priority;
     uint8_t budget_throttled;
+    uint8_t donation_kind;
     uint8_t occupied;
     uint8_t wait_member_count;
     uint8_t wait_mode;
@@ -224,11 +229,11 @@ typedef struct KernelThread {
      */
     KernelThreadWaitQueue call_waiters;
     uint32_t call;
-    uint32_t call_receiver_id;
-    uint16_t call_receiver_slot;
-    uint16_t call_donor_head;
-    uint16_t call_donor_previous;
-    uint16_t call_donor_next;
+    uint32_t wait_owner_id;
+    uint16_t wait_owner_slot;
+    uint16_t wait_donor_head;
+    uint16_t wait_donor_previous;
+    uint16_t wait_donor_next;
     uint32_t call_reply;
     uint32_t call_reply_capacity;
     uint32_t call_reply_handles;
@@ -459,6 +464,8 @@ KernelThreadStatus kernel_thread_call_block(KernelThread *thread,
 KernelThread *kernel_thread_call_waiting(uint16_t slot, uint32_t call);
 KernelThreadStatus kernel_thread_call_assign(KernelThread *caller,
                                              KernelThread *receiver);
+KernelThreadStatus kernel_thread_mutex_assign(KernelThread *waiter,
+                                              KernelThread *owner);
 KernelThreadStatus kernel_thread_call_complete(KernelThread *thread,
                                                uint32_t result,
                                                uint32_t size,

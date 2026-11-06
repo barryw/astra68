@@ -48,7 +48,12 @@ typedef struct KernelFutexSlot {
     uint32_t address;
     uint32_t resource_owner;
     uint32_t physical;
+    uint32_t mutex_owner_id;
+    uint8_t kind;
 } KernelFutexSlot;
+
+#define FUTEX_SLOT_ADDRESS 0u
+#define FUTEX_SLOT_MUTEX 1u
 
 #define KERNEL_SYNC_TIMER_SLOT_NONE UINT16_MAX
 #define SYNC_LEAF_BITS 6u
@@ -104,7 +109,8 @@ static KernelFutexSlot *futex_slot_find(uint32_t process_id,
 
 static KernelFutexSlot *futex_slot_create(uint32_t process_id,
                                           uint32_t resource_owner,
-                                          uint32_t address)
+                                          uint32_t address, uint8_t kind,
+                                          uint32_t mutex_owner_id)
 {
     KernelFutexSlot *slot;
 
@@ -138,6 +144,8 @@ static KernelFutexSlot *futex_slot_create(uint32_t process_id,
     slot->process_id = process_id;
     slot->address = address;
     slot->resource_owner = resource_owner;
+    slot->kind = kind;
+    slot->mutex_owner_id = mutex_owner_id;
     slot->next = futex_slots;
     futex_slots = slot;
     return slot;
@@ -662,10 +670,13 @@ KernelFutexStatus kernel_futex_wait(uint32_t process_id,
         return KERNEL_FUTEX_INVALID_ARGUMENT;
     slot = futex_slot_find(process_id, address);
     if (slot == NULL)
-        slot = futex_slot_create(process_id, resource_owner, address);
+        slot = futex_slot_create(process_id, resource_owner, address,
+                                 FUTEX_SLOT_ADDRESS, 0u);
     if (slot == NULL)
         return pool_corrupt != 0u ? KERNEL_FUTEX_CORRUPT :
                                    KERNEL_FUTEX_NO_SLOT;
+    if (slot->kind != FUTEX_SLOT_ADDRESS)
+        return KERNEL_FUTEX_INVALID_ARGUMENT;
     sequence = kernel_thread_wait_queue_sequence(&slot->waiters);
     status = kernel_thread_block_until(thread, &slot->waiters, sequence, now,
                                        deadline, timeout_result);
@@ -696,6 +707,8 @@ KernelFutexStatus kernel_futex_wake(uint32_t process_id, uint32_t address,
     slot = futex_slot_find(process_id, address);
     if (slot == NULL)
         return pool_corrupt != 0u ? KERNEL_FUTEX_CORRUPT : KERNEL_FUTEX_OK;
+    if (slot->kind != FUTEX_SLOT_ADDRESS)
+        return KERNEL_FUTEX_INVALID_ARGUMENT;
     while (woken < count &&
            kernel_thread_wait_queue_count(&slot->waiters) != 0u) {
         KernelThread *thread;
@@ -727,11 +740,155 @@ KernelFutexStatus kernel_futex_wake_all_irq(uint32_t process_id,
     slot = futex_slot_find(process_id, address);
     if (slot == NULL)
         return pool_corrupt != 0u ? KERNEL_FUTEX_CORRUPT : KERNEL_FUTEX_OK;
+    if (slot->kind != FUTEX_SLOT_ADDRESS)
+        return KERNEL_FUTEX_INVALID_ARGUMENT;
     if (kernel_thread_wake_all_irq(&slot->waiters, result, woken_threads) !=
         KERNEL_THREAD_OK)
         return KERNEL_FUTEX_CORRUPT;
     if (!futex_slot_release(slot))
         return KERNEL_FUTEX_CORRUPT;
+    return KERNEL_FUTEX_OK;
+}
+
+KernelFutexStatus kernel_mutex_wait(uint32_t process_id,
+                                    uint32_t resource_owner,
+                                    uint32_t address,
+                                    KernelThread *waiter,
+                                    KernelThread *owner, uint64_t now)
+{
+    KernelFutexSlot *slot;
+    KernelThreadStatus status;
+
+    if (process_id == 0u || address == 0u ||
+        (address & (sizeof(uint32_t) - 1u)) != 0u || waiter == NULL ||
+        owner == NULL || waiter == owner ||
+        waiter->process_slot != owner->process_slot)
+        return KERNEL_FUTEX_INVALID_ARGUMENT;
+    slot = futex_slot_find(process_id, address);
+    if (slot == NULL)
+        slot = futex_slot_create(process_id, resource_owner, address,
+                                 FUTEX_SLOT_MUTEX, owner->id);
+    if (slot == NULL)
+        return pool_corrupt != 0u ? KERNEL_FUTEX_CORRUPT :
+                                   KERNEL_FUTEX_NO_SLOT;
+    if (slot->kind != FUTEX_SLOT_MUTEX ||
+        slot->mutex_owner_id != owner->id)
+        return KERNEL_FUTEX_INVALID_ARGUMENT;
+    status = kernel_thread_block_until(
+        waiter, &slot->waiters,
+        kernel_thread_wait_queue_sequence(&slot->waiters), now,
+        KERNEL_THREAD_DEADLINE_NEVER, ASTRA_SYSCALL_TIMED_OUT);
+    if (status == KERNEL_THREAD_OK) {
+        if (kernel_thread_mutex_assign(waiter, owner) != KERNEL_THREAD_OK)
+            return KERNEL_FUTEX_CORRUPT;
+        return KERNEL_FUTEX_BLOCKED;
+    }
+    if (kernel_thread_wait_queue_count(&slot->waiters) == 0u &&
+        !futex_slot_release(slot))
+        return KERNEL_FUTEX_CORRUPT;
+    return status == KERNEL_THREAD_DEADLINE_EXPIRED ?
+        KERNEL_FUTEX_TIMED_OUT : KERNEL_FUTEX_CORRUPT;
+}
+
+KernelFutexStatus kernel_mutex_next_owner(uint32_t process_id,
+                                          uint32_t address,
+                                          KernelThread *owner,
+                                          uint32_t *next_owner_id)
+{
+    KernelFutexSlot *slot;
+
+    if (process_id == 0u || address == 0u || owner == NULL ||
+        next_owner_id == NULL ||
+        (address & (sizeof(uint32_t) - 1u)) != 0u)
+        return KERNEL_FUTEX_INVALID_ARGUMENT;
+    *next_owner_id = 0u;
+    slot = futex_slot_find(process_id, address);
+    if (slot == NULL)
+        return pool_corrupt != 0u ? KERNEL_FUTEX_CORRUPT : KERNEL_FUTEX_OK;
+    if (slot->kind != FUTEX_SLOT_MUTEX ||
+        slot->mutex_owner_id != owner->id)
+        return KERNEL_FUTEX_INVALID_ARGUMENT;
+    if (kernel_thread_wait_queue_count(&slot->waiters) == UINT32_MAX)
+        return KERNEL_FUTEX_CORRUPT;
+    if (slot->waiters.head != NULL) {
+        KernelThread *next = slot->waiters.head->thread;
+
+        if (next == NULL || next->state != KERNEL_THREAD_BLOCKED ||
+            next->wait_owner_id != owner->id)
+            return KERNEL_FUTEX_CORRUPT;
+        *next_owner_id = next->id;
+    }
+    return KERNEL_FUTEX_OK;
+}
+
+KernelFutexStatus kernel_mutex_release(uint32_t process_id,
+                                       uint32_t address,
+                                       KernelThread *owner,
+                                       uint32_t next_owner_id,
+                                       uint32_t *woken_threads)
+{
+    KernelFutexSlot *slot;
+    KernelThread *next;
+
+    if (process_id == 0u || address == 0u || owner == NULL ||
+        woken_threads == NULL ||
+        (address & (sizeof(uint32_t) - 1u)) != 0u)
+        return KERNEL_FUTEX_INVALID_ARGUMENT;
+    *woken_threads = 0u;
+    slot = futex_slot_find(process_id, address);
+    if (slot == NULL)
+        return next_owner_id == 0u && pool_corrupt == 0u ?
+            KERNEL_FUTEX_OK : KERNEL_FUTEX_CORRUPT;
+    if (slot->kind != FUTEX_SLOT_MUTEX ||
+        slot->mutex_owner_id != owner->id)
+        return KERNEL_FUTEX_INVALID_ARGUMENT;
+    if (next_owner_id == 0u)
+        return kernel_thread_wait_queue_count(&slot->waiters) == 0u &&
+                       futex_slot_release(slot) ?
+            KERNEL_FUTEX_OK : KERNEL_FUTEX_CORRUPT;
+    if (kernel_thread_wake_one(&slot->waiters, ASTRA_SYSCALL_OK, &next) !=
+            KERNEL_THREAD_OK || next == NULL || next->id != next_owner_id)
+        return KERNEL_FUTEX_CORRUPT;
+    slot->mutex_owner_id = next_owner_id;
+    *woken_threads = 1u;
+    for (KernelThreadWaitRegistration *registration = slot->waiters.head;
+         registration != NULL; registration = registration->next) {
+        if (kernel_thread_mutex_assign(registration->thread, next) !=
+            KERNEL_THREAD_OK)
+            return KERNEL_FUTEX_CORRUPT;
+    }
+    if (kernel_thread_wait_queue_count(&slot->waiters) == 0u &&
+        !futex_slot_release(slot))
+        return KERNEL_FUTEX_CORRUPT;
+    return KERNEL_FUTEX_OK;
+}
+
+KernelFutexStatus kernel_mutex_owner_died(uint32_t process_id,
+                                          uint32_t owner_id,
+                                          uint32_t *woken_threads)
+{
+    KernelFutexSlot *slot = futex_slots;
+
+    if (process_id == 0u || owner_id == 0u || woken_threads == NULL)
+        return KERNEL_FUTEX_INVALID_ARGUMENT;
+    *woken_threads = 0u;
+    while (slot != NULL) {
+        KernelFutexSlot *next = slot->next;
+
+        if (slot->kind == FUTEX_SLOT_MUTEX &&
+            slot->process_id == process_id &&
+            slot->mutex_owner_id == owner_id) {
+            uint32_t woken = 0u;
+
+            if (kernel_thread_wake_all(&slot->waiters,
+                                       ASTRA_SYSCALL_PEER_DEAD,
+                                       &woken) != KERNEL_THREAD_OK ||
+                !futex_slot_release(slot))
+                return KERNEL_FUTEX_CORRUPT;
+            *woken_threads += woken;
+        }
+        slot = next;
+    }
     return KERNEL_FUTEX_OK;
 }
 

@@ -30,6 +30,7 @@ ASTRA_RUNTIME_2.0 {
         astra_console_info;
         astra_console_write;
         astra_current_thread_handle;
+        astra_current_thread_id;
         astra_device_query;
         astra_device_reset;
         astra_display_collect;

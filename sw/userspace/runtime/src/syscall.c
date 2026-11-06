@@ -1168,6 +1168,19 @@ astra_current_thread_handle(uint32_t *thread_handle)
 #endif
 }
 
+uint32_t
+astra_current_thread_id(uint32_t *thread_id)
+{
+    AstraSyscallResult result;
+
+    if (thread_id == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    result = invoke(ASTRA_SYSCALL_QUERY_ABI, 0u);
+    if (result.status == ASTRA_SYSCALL_OK)
+        *thread_id = result.value3;
+    return result.status;
+}
+
 void
 astra_runtime_forget_current_thread_handle(void)
 {

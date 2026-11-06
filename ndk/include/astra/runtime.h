@@ -558,6 +558,12 @@ uint32_t astra_query_abi(uint32_t *abi_version, uint32_t *process_handle,
  */
 uint32_t astra_current_thread_handle(uint32_t *thread_handle);
 /**
+ * Return the stable kernel ID of the calling thread.
+ * @param thread_id Receives the current thread ID.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_current_thread_id(uint32_t *thread_id);
+/**
  * Query one process visible through a capability.
  * @param handle Process capability, or the ABI-defined current-process value.
  * @param info ABI-sized structure receiving process information.
@@ -791,78 +797,59 @@ uint32_t astra_futex_wake(volatile uint32_t *address, uint32_t count,
                           uint32_t *woken);
 
 /**
- * Atomically exchange a mutex word, retrying a spurious CAS failure so the
- * returned value is always the one actually replaced (MC68040 GCC can
- * otherwise return a stale pre-retry value when lowering
- * __atomic_exchange_n).
- * @param state Aligned shared mutex word.
- * @param replacement Value to store.
- * @param order A `__ATOMIC_*` builtin memory order for the exchange.
- * @return The word's previous value.
+ * Try to acquire a shared sleepable mutex without blocking.
+ * @param state Aligned shared mutex word initialized to zero.
+ * @return ASTRA_SYSCALL_* status.
  */
-static inline uint32_t astra_mutex_swap(volatile uint32_t *state,
-                                        uint32_t replacement, int order)
+static inline uint32_t astra_mutex_trylock(volatile uint32_t *state)
 {
-    uint32_t previous = __atomic_load_n(state, __ATOMIC_RELAXED);
+    uint32_t expected = 0u;
+    uint32_t self;
+    uint32_t status;
 
-    /* MC68040 GCC can return the value from before a failed CAS retry when
-     * lowering __atomic_exchange_n. The wake decision needs the value that
-     * the successful CAS actually replaced. */
-    while (!__atomic_compare_exchange_n(state, &previous, replacement, 0,
-                                        order, __ATOMIC_RELAXED)) {}
-    return previous;
+    if (state == NULL || ((uintptr_t)state & (sizeof(*state) - 1u)) != 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    status = astra_current_thread_id(&self);
+    if (status != ASTRA_SYSCALL_OK)
+        return status;
+    if (__atomic_compare_exchange_n(state, &expected, self, 0,
+                                    __ATOMIC_ACQUIRE,
+                                    __ATOMIC_RELAXED))
+        return ASTRA_SYSCALL_OK;
+    return ASTRA_SYSCALL_WOULD_BLOCK;
 }
 
 /**
- * Acquire a shared sleepable mutex; uncontended acquisition stays in user mode.
+ * Acquire a shared sleepable mutex. The word holds the owning thread ID.
  * @param state Aligned shared mutex word initialized to zero.
  * @return ASTRA_SYSCALL_* status.
  */
 static inline uint32_t astra_mutex_lock(volatile uint32_t *state)
 {
-    uint32_t expected = 0u;
+    AstraSyscallResult result;
+    uint32_t status = astra_mutex_trylock(state);
 
-    if (state == NULL || ((uintptr_t)state & (sizeof(*state) - 1u)) != 0u)
-        return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    if (__atomic_compare_exchange_n(state, &expected, 1u, 0,
-                                    __ATOMIC_ACQUIRE,
-                                    __ATOMIC_RELAXED))
-        return ASTRA_SYSCALL_OK;
-    for (;;) {
-        uint32_t previous = expected;
-        uint32_t status;
-
-        if (previous != 2u)
-            previous = astra_mutex_swap(state, 2u, __ATOMIC_ACQUIRE);
-        if (previous == 0u)
-            return ASTRA_SYSCALL_OK;
-        status = astra_futex_wait(state, 2u, ASTRA_DEADLINE_FOREVER);
-        if (status != ASTRA_SYSCALL_OK &&
-            status != ASTRA_SYSCALL_CANCELLED &&
-            status != ASTRA_SYSCALL_WOULD_BLOCK)
-            return status;
-        expected = astra_mutex_swap(state, 2u, __ATOMIC_ACQUIRE);
-        if (expected == 0u)
-            return ASTRA_SYSCALL_OK;
-    }
+    if (status != ASTRA_SYSCALL_WOULD_BLOCK)
+        return status;
+    astra_syscall5(ASTRA_SYSCALL_MUTEX_WAIT, (uint32_t)(uintptr_t)state,
+                   0u, 0u, 0u, 0u, &result);
+    return result.status;
 }
 
 /**
- * Release a shared sleepable mutex and wake one contending thread.
+ * Release a shared sleepable mutex; kernel hands ownership to next waiter.
  * @param state Mutex word held by the caller.
  * @return ASTRA_SYSCALL_* status.
  */
 static inline uint32_t astra_mutex_unlock(volatile uint32_t *state)
 {
-    uint32_t previous;
+    AstraSyscallResult result;
 
     if (state == NULL || ((uintptr_t)state & (sizeof(*state) - 1u)) != 0u)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    previous = astra_mutex_swap(state, 0u, __ATOMIC_RELEASE);
-    if (previous == 0u)
-        return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    return previous == 2u ? astra_futex_wake(state, 1u, NULL) :
-                            ASTRA_SYSCALL_OK;
+    astra_syscall5(ASTRA_SYSCALL_MUTEX_UNLOCK, (uint32_t)(uintptr_t)state,
+                   0u, 0u, 0u, 0u, &result);
+    return result.status;
 }
 /**
  * Arm a masked interrupt endpoint for its next interrupt.

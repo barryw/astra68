@@ -2,6 +2,31 @@
 
 Status: active continuation map, 2026-11-05
 
+User mutex ownership checkpoint, 2026-11-05: Native mutex words now carry the
+stable owning thread ID. The existing process-scoped futex wait table tracks
+contenders, donates effective priority through the existing wait-owner graph,
+hands ownership directly to the highest-priority waiter, and wakes waiters
+with `PEER_DEAD` if their owner exits. POSIX pthread mutexes use the same
+native mechanism. Haiku references:
+`src/system/kernel/locks/user_mutex.cpp` for address-keyed user wait state and
+`src/system/kernel/locks/lock.cpp` for lock ownership; Astra keeps its existing
+single-core scheduler and futex table. Beast kernel, runtime, POSIX, NDK,
+MC68040 K1, and guest mutex-priority tests passed. A user-corrupted word that
+disagrees with a tracked owner returns an error rather than a kernel corruption
+verdict; the host sync test covers this case. Hardened K1 recorded 1650/50000
+syscall-entry cycles and zero overruns. Coherent release
+`d6d13fdc86f0b8c73ff514e4bcd9e5dbbc4f09c1219069a7b71befdc09805bc1`
+passed a 180-second DE25 stage-8 private trial; native `mutexpi` reported
+`PASS elapsed_us=2662 status=0` in the guest. Checksummed trial logs are under
+`/home/barry/astra-evidence/mutex-owner-hardened-de25-trial-20261105/` on
+Beast. The same release was promoted to DE25: migration preserved the existing
+system image, kernel confirmation and stage-8 boot passed, all three services
+are active, panic log is empty, and disposable board state was removed with
+7.9 GiB free.
+General file cache and file-backed mappings, physical media-load scheduler
+qualification, literal USB cable replug, and fault-injected recovery gates
+remain. Notification performance audit follows correctness.
+
 Media-band scheduler checkpoint, 2026-11-05: Priority 24-27 threads now share
 one 15 ms CPU budget per 20 ms period. Exhaustion caps their base priority at
 19 until replenishment, allowing priority 20-23 services to run; inherited and

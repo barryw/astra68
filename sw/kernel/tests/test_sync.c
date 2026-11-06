@@ -749,6 +749,49 @@ static void test_futex_waits_are_process_scoped_and_priority_ordered(void)
     assert(kernel_sync_pool_valid());
 }
 
+static void test_mutex_handoff_donation_and_owner_death(void)
+{
+    KernelThread *owner;
+    KernelThread *first;
+    KernelThread *second;
+    KernelThread *third;
+    uint32_t next_owner;
+    uint32_t woken;
+
+    initialize_test();
+    owner = allocate_thread(0u, 0u, 10u);
+    assert(take_thread() == owner);
+    first = allocate_thread(0u, 1u, 25u);
+    assert(take_thread() == first);
+    assert(kernel_mutex_wait(0x1001u, 0x1001u, 0x4000u, first,
+                             owner, 0u) == KERNEL_FUTEX_BLOCKED);
+    assert(owner->effective_priority == 25u);
+    second = allocate_thread(0u, 2u, 20u);
+    assert(take_thread() == second);
+    assert(kernel_mutex_wait(0x1001u, 0x1001u, 0x4000u, second,
+                             owner, 0u) == KERNEL_FUTEX_BLOCKED);
+    third = allocate_thread(0u, 3u, 15u);
+    assert(kernel_mutex_wait(0x1001u, 0x1001u, 0x4000u, third,
+                             second, 0u) == KERNEL_FUTEX_INVALID_ARGUMENT);
+    assert(kernel_mutex_next_owner(0x1001u, 0x4000u, second,
+                                   &next_owner) == KERNEL_FUTEX_INVALID_ARGUMENT);
+    assert(kernel_mutex_release(0x1001u, 0x4000u, second, 0u,
+                                &woken) == KERNEL_FUTEX_INVALID_ARGUMENT);
+    assert(kernel_mutex_next_owner(0x1001u, 0x4000u, owner,
+                                   &next_owner) == KERNEL_FUTEX_OK);
+    assert(next_owner == first->id);
+    assert(kernel_mutex_release(0x1001u, 0x4000u, owner,
+                                next_owner, &woken) == KERNEL_FUTEX_OK);
+    assert(woken == 1u && owner->effective_priority == 10u);
+    assert(first->effective_priority == 25u);
+    assert(first->context.data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_mutex_owner_died(0x1001u, first->id, &woken) ==
+           KERNEL_FUTEX_OK);
+    assert(woken == 1u);
+    assert(second->context.data[0] == ASTRA_SYSCALL_PEER_DEAD);
+    assert(kernel_sync_pool_valid());
+}
+
 int main(void)
 {
     test_object_injection_preserves_pool();
@@ -766,6 +809,7 @@ int main(void)
     test_timer_heap_order_rearm_and_level_readiness();
     test_timer_wait_set_cancel_duplicate_and_close();
     test_futex_waits_are_process_scoped_and_priority_ordered();
+    test_mutex_handoff_donation_and_owner_death();
     puts("sync tests passed");
     return 0;
 }

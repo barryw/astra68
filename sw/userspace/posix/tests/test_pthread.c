@@ -13,8 +13,9 @@
 #include "../src/thread_internal.h"
 
 static uint32_t wake_count;
-static uint32_t mutex_wait_scenario;
 static uint32_t mutex_wait_calls;
+static uint32_t mutex_unlock_calls;
+static volatile uint32_t *mock_mutex_state;
 static uint32_t once_calls;
 static uint32_t created_thread_rights;
 static uint8_t mock_thread_priority = ASTRA_PROCESS_PRIORITY_NORMAL;
@@ -36,15 +37,36 @@ uint32_t astra_query_abi(uint32_t *abi, uint32_t *process, uint32_t *thread)
 uint32_t astra_futex_wait(volatile uint32_t *address, uint32_t expected,
                           uint64_t deadline)
 {
-    if (mutex_wait_scenario != 0u) {
-        assert(expected == 2u && deadline == ASTRA_DEADLINE_FOREVER);
-        assert(++mutex_wait_calls <= mutex_wait_scenario);
-        if (mutex_wait_calls == mutex_wait_scenario) {
-            __atomic_store_n(address, 0u, __ATOMIC_RELEASE);
-            return ASTRA_SYSCALL_OK;
-        }
-    }
+    (void)address;
+    (void)expected;
+    (void)deadline;
     return ASTRA_SYSCALL_WOULD_BLOCK;
+}
+
+uint32_t astra_current_thread_id(uint32_t *id)
+{
+    *id = 7u;
+    return ASTRA_SYSCALL_OK;
+}
+
+void astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
+                    uint32_t argument2, uint32_t argument3,
+                    uint32_t argument4, AstraSyscallResult *result)
+{
+    (void)argument0;
+    (void)argument1;
+    (void)argument2;
+    (void)argument3;
+    (void)argument4;
+    result->status = ASTRA_SYSCALL_OK;
+    if (number == ASTRA_SYSCALL_MUTEX_WAIT) {
+        ++mutex_wait_calls;
+        *mock_mutex_state = 7u;
+    } else {
+        assert(number == ASTRA_SYSCALL_MUTEX_UNLOCK);
+        ++mutex_unlock_calls;
+        *mock_mutex_state = 0u;
+    }
 }
 
 uint32_t astra_futex_wake(volatile uint32_t *address, uint32_t count,
@@ -146,6 +168,8 @@ int main(void)
     sigset_t previous_mask;
     int value = 42;
 
+    mock_mutex_state = &mutex.state;
+
     /* A thread's identity is asked of the kernel once, not per lock. */
     assert(pthread_self() == 7u && pthread_self() == 7u);
     assert(pthread_mutex_lock(&mutex) == 0 &&
@@ -207,19 +231,15 @@ int main(void)
     assert(pthread_mutex_unlock(&mutex) == 0);
     assert(pthread_mutex_unlock(&mutex) == 0);
     assert(pthread_mutex_init(&mutex, NULL) == 0);
-    for (uint32_t scenario = 1u; scenario <= 2u; ++scenario) {
-        mutex.state = 1u;
-        mutex.owner = 9u;
-        mutex.depth = 1u;
-        mutex_wait_scenario = scenario;
-        mutex_wait_calls = 0u;
-        assert(pthread_mutex_lock(&mutex) == 0);
-        assert(mutex_wait_calls == scenario && mutex.owner == 7u &&
-               mutex.depth == 1u && mutex.state == 2u);
-        mutex_wait_scenario = 0u;
-        assert(pthread_mutex_unlock(&mutex) == 0);
-        assert(mutex.state == 0u);
-    }
+    mutex.state = 9u;
+    mutex.owner = 9u;
+    mutex.depth = 1u;
+    assert(pthread_mutex_trylock(&mutex) == EBUSY);
+    assert(pthread_mutex_lock(&mutex) == 0);
+    assert(mutex_wait_calls == 1u && mutex.owner == 7u &&
+           mutex.depth == 1u);
+    assert(pthread_mutex_unlock(&mutex) == 0);
+    assert(mutex_unlock_calls != 0u);
     assert(pthread_mutex_lock(NULL) == EINVAL);
     assert(pthread_once(&once, initialize_once) == 0);
     assert(pthread_once(&once, initialize_once) == 0);

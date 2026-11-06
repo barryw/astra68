@@ -820,6 +820,21 @@ static KernelProcess *process_for_thread(const KernelThread *thread)
     return process;
 }
 
+static KernelThread *thread_for_process_id(const KernelProcess *process,
+                                           uint32_t thread_id)
+{
+    if (process == NULL || thread_id == 0u)
+        return NULL;
+    for (uint32_t slot = 0u; slot < kernel_thread_slot_limit(); ++slot) {
+        KernelThread *thread = kernel_thread_at(slot);
+
+        if (thread != NULL && thread->process_slot == process->slot &&
+            thread->id == thread_id && thread->state != KERNEL_THREAD_DEAD)
+            return thread;
+    }
+    return NULL;
+}
+
 static bool valid_process_pointer(const KernelProcess *process)
 {
     return process != NULL && process->slot != PROCESS_SLOT_NONE &&
@@ -4221,6 +4236,11 @@ static KernelProcessStatus retire_current_thread(
     if (process->live_threads == 1u)
         return retire_current(KERNEL_PROCESS_EXIT_LAST_THREAD, exit_status,
                               next_context);
+    if (kernel_mutex_owner_died(process->id, current_thread->id, &woken) !=
+        KERNEL_FUTEX_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    scheduler_stats.sync_wakeups += woken;
+    woken = 0u;
     if (kernel_thread_complete(current_thread, exit_status,
                                ASTRA_SYSCALL_OK, &woken) !=
         KERNEL_THREAD_OK)
@@ -11105,6 +11125,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         thread->context.data[1] = ASTRA_SYSCALL_ABI_VERSION;
         thread->context.data[2] = current->self_handle;
         thread->context.data[3] = thread->self_handle;
+        thread->context.data[4] = thread->id;
         break;
     case ASTRA_SYSCALL_LIBRARY_ATTACH: {
         AstraLibraryReference reference;
@@ -14697,6 +14718,98 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (futex_status != KERNEL_FUTEX_OK)
             return KERNEL_PROCESS_CORRUPT;
         thread->context.data[1] = woken;
+        break;
+    }
+    case ASTRA_SYSCALL_MUTEX_WAIT: {
+        uint32_t address = thread->context.data[1];
+        uint32_t observed;
+        KernelThread *owner;
+        KernelFutexStatus mutex_status;
+
+        if (address == 0u ||
+            (address & (sizeof(uint32_t) - 1u)) != 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (kernel_vm_read(&current->address_space, address, &observed,
+                           sizeof(observed)) != KERNEL_VM_OK) {
+            result = ASTRA_SYSCALL_BAD_ADDRESS;
+            break;
+        }
+        if (observed == 0u) {
+            uint32_t self = thread->id;
+
+            result = kernel_vm_write(&current->address_space, address,
+                                     &self, sizeof(self)) == KERNEL_VM_OK ?
+                ASTRA_SYSCALL_OK : ASTRA_SYSCALL_BAD_ADDRESS;
+            break;
+        }
+        if (observed == thread->id) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        owner = thread_for_process_id(current, observed);
+        if (owner == NULL) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        mutex_status = kernel_mutex_wait(
+            current->id, current->owner, address, thread, owner,
+            scheduler_cycles());
+        if (mutex_status == KERNEL_FUTEX_NO_SLOT) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        if (mutex_status == KERNEL_FUTEX_INVALID_ARGUMENT) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (mutex_status != KERNEL_FUTEX_BLOCKED)
+            return KERNEL_PROCESS_CORRUPT;
+        ++scheduler_stats.wait_blocks;
+        status = schedule_next(SWITCH_BLOCK, next_context);
+        if (status != KERNEL_PROCESS_OK &&
+            status != KERNEL_PROCESS_NO_RUNNABLE)
+            return status;
+        return status;
+    }
+    case ASTRA_SYSCALL_MUTEX_UNLOCK: {
+        uint32_t address = thread->context.data[1];
+        uint32_t observed;
+        uint32_t next_owner_id;
+        uint32_t woken;
+
+        if (address == 0u ||
+            (address & (sizeof(uint32_t) - 1u)) != 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (kernel_vm_read(&current->address_space, address, &observed,
+                           sizeof(observed)) != KERNEL_VM_OK) {
+            result = ASTRA_SYSCALL_BAD_ADDRESS;
+            break;
+        }
+        if (observed != thread->id) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        KernelFutexStatus mutex_status = kernel_mutex_next_owner(
+            current->id, address, thread, &next_owner_id);
+        if (mutex_status == KERNEL_FUTEX_INVALID_ARGUMENT) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (mutex_status != KERNEL_FUTEX_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        if (kernel_vm_write(&current->address_space, address, &next_owner_id,
+                            sizeof(next_owner_id)) != KERNEL_VM_OK) {
+            result = ASTRA_SYSCALL_BAD_ADDRESS;
+            break;
+        }
+        if (kernel_mutex_release(current->id, address, thread,
+                                 next_owner_id, &woken) != KERNEL_FUTEX_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        scheduler_stats.sync_wakeups += woken;
         break;
     }
     case ASTRA_SYSCALL_SIGNAL: {

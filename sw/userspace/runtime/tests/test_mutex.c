@@ -3,104 +3,91 @@
 
 static int test_cas(volatile uint32_t *state, uint32_t *expected,
                     uint32_t desired, int weak, int success, int failure);
-static uint32_t __attribute__((unused))
-test_exchange(volatile uint32_t *state, uint32_t desired, int order);
 
 #define __atomic_compare_exchange_n test_cas
-#define __atomic_exchange_n test_exchange
 #include <astra/runtime.h>
 #undef __atomic_compare_exchange_n
-#undef __atomic_exchange_n
 
-enum { NORMAL, LOCK_RETRY, UNLOCK_RETRY };
-static int scenario;
-static unsigned cas_calls;
-static unsigned wait_calls;
-static unsigned wake_calls;
+static volatile uint32_t *mutex_word;
+static uint32_t mutex_calls;
+static uint32_t cas_calls;
+static uint32_t self_id = 42u;
+static uint32_t wait_result = ASTRA_SYSCALL_OK;
+static int race_before_cas;
 
 static int test_cas(volatile uint32_t *state, uint32_t *expected,
                     uint32_t desired, int weak, int success, int failure)
 {
-    uint32_t actual;
-
     (void)weak;
     (void)success;
     (void)failure;
     ++cas_calls;
-    if (scenario == LOCK_RETRY && cas_calls == 2u) {
-        assert(*state == 1u && desired == 2u);
-        *state = 0u; /* Owner released between load and CAS. */
-    } else if (scenario == UNLOCK_RETRY && cas_calls == 1u) {
-        assert(*state == 1u && desired == 0u);
-        *state = 2u; /* Waiter marked the lock contended. */
+    if (race_before_cas) {
+        *state = 17u;
+        race_before_cas = 0;
     }
-    actual = *state;
-    if (actual == *expected) {
-        *state = desired;
-        return 1;
-    }
-    *expected = actual;
-    return 0;
-}
-
-static uint32_t test_exchange(volatile uint32_t *state, uint32_t desired,
-                              int order)
-{
-    uint32_t previous = *state;
-
-    (void)order;
-    /* Models the target compiler's stale return after an internal CAS retry.
-     * A correct mutex implementation must not rely on this operation. */
-    if (scenario == LOCK_RETRY && desired == 2u) {
-        *state = 2u;
-        return 1u;
-    }
-    if (scenario == UNLOCK_RETRY && desired == 0u) {
-        *state = 0u;
-        return 1u;
+    if (*state != *expected) {
+        *expected = *state;
+        return 0;
     }
     *state = desired;
-    return previous;
+    return 1;
 }
 
-uint32_t astra_futex_wait(volatile uint32_t *state, uint32_t expected,
-                          uint64_t deadline)
+uint32_t astra_current_thread_id(uint32_t *id)
 {
-    (void)state;
-    (void)expected;
-    (void)deadline;
-    ++wait_calls;
-    return ASTRA_SYSCALL_INVALID_ARGUMENT;
-}
-
-uint32_t astra_futex_wake(volatile uint32_t *state, uint32_t count,
-                          uint32_t *woken)
-{
-    (void)state;
-    assert(count == 1u && woken == NULL);
-    ++wake_calls;
+    *id = self_id;
     return ASTRA_SYSCALL_OK;
+}
+
+void astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
+                    uint32_t argument2, uint32_t argument3,
+                    uint32_t argument4, AstraSyscallResult *result)
+{
+    (void)argument0;
+    (void)argument1;
+    (void)argument2;
+    (void)argument3;
+    (void)argument4;
+    ++mutex_calls;
+    result->status = wait_result;
+    if (number == ASTRA_SYSCALL_MUTEX_WAIT) {
+        if (wait_result == ASTRA_SYSCALL_OK)
+            *mutex_word = self_id;
+    } else {
+        assert(number == ASTRA_SYSCALL_MUTEX_UNLOCK);
+        assert(*mutex_word == self_id);
+        if (wait_result == ASTRA_SYSCALL_OK)
+            *mutex_word = 0u;
+    }
 }
 
 int main(void)
 {
     volatile uint32_t state = 0u;
 
-    assert(astra_mutex_lock(&state) == ASTRA_SYSCALL_OK);
-    assert(state == 1u && wait_calls == 0u);
+    mutex_word = &state;
+    assert(astra_mutex_trylock(&state) == ASTRA_SYSCALL_OK);
+    assert(state == self_id && mutex_calls == 0u);
+    assert(astra_mutex_trylock(&state) == ASTRA_SYSCALL_WOULD_BLOCK);
     assert(astra_mutex_unlock(&state) == ASTRA_SYSCALL_OK);
-    assert(state == 0u && wake_calls == 0u);
+    assert(state == 0u && mutex_calls == 1u);
 
-    scenario = LOCK_RETRY;
-    state = 1u;
-    cas_calls = 0u;
+    state = 17u;
     assert(astra_mutex_lock(&state) == ASTRA_SYSCALL_OK);
-    assert(state == 2u && cas_calls == 3u && wait_calls == 0u);
-
-    scenario = UNLOCK_RETRY;
-    state = 1u;
-    cas_calls = 0u;
+    assert(state == self_id && mutex_calls == 2u);
     assert(astra_mutex_unlock(&state) == ASTRA_SYSCALL_OK);
-    assert(state == 0u && cas_calls == 2u && wake_calls == 1u);
+
+    state = 0u;
+    race_before_cas = 1;
+    assert(astra_mutex_lock(&state) == ASTRA_SYSCALL_OK);
+    assert(state == self_id && cas_calls >= 4u && mutex_calls == 4u);
+
+    state = 17u;
+    wait_result = ASTRA_SYSCALL_PEER_DEAD;
+    assert(astra_mutex_lock(&state) == ASTRA_SYSCALL_PEER_DEAD);
+    assert(state == 17u);
+    assert(astra_mutex_trylock(NULL) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_mutex_unlock(NULL) == ASTRA_SYSCALL_INVALID_ARGUMENT);
     return 0;
 }

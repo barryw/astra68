@@ -45,7 +45,8 @@
 /**
  * Identifies the running kernel's syscall ABI. No argument. Returns
  * ::ASTRA_SYSCALL_ABI_VERSION in data[1], a handle to the calling process
- * in data[2], and a handle to the calling thread in data[3].
+ * in data[2], a handle to the calling thread in data[3], and its stable
+ * kernel thread ID in data[4].
  */
 #define ASTRA_SYSCALL_QUERY_ABI 0
 /**
@@ -1059,6 +1060,18 @@
  * the process record alive, after its address space has been destroyed.
  */
 #define ASTRA_SYSCALL_PROCESS_CRASH 113
+/**
+ * Acquire a process-private mutex word. data[1] is a four-byte-aligned user
+ * address containing zero or the current owner's stable thread ID. The
+ * kernel acquires an unowned word or sleeps behind its live owner, donating
+ * priority until handoff, cancellation, or owner death.
+ */
+#define ASTRA_SYSCALL_MUTEX_WAIT 114
+/**
+ * Release a mutex owned by the caller at data[1]. The kernel hands ownership
+ * directly to the highest-priority waiter, or stores zero when none waits.
+ */
+#define ASTRA_SYSCALL_MUTEX_UNLOCK 115
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */

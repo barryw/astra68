@@ -494,6 +494,8 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         result->value1 = 0u;
     }
     result->value3 = 0x33333333u;
+    if (number == ASTRA_SYSCALL_QUERY_ABI)
+        result->value3 = 0x87654321u;
     if (number == ASTRA_SYSCALL_PROCESS_LOAD_BEGIN) {
         ++mock_stream_begin_calls;
         result->value0 = MOCK_STREAM_LOAD_HANDLE;
@@ -992,6 +994,9 @@ test_syscall_wrappers(void)
     assert(abi == ASTRA_SYSCALL_ABI_VERSION);
     assert(process == 0x11111111u);
     assert(thread == 0x22222222u);
+    assert(astra_current_thread_id(&thread) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_QUERY_ABI);
+    assert(thread == 0x87654321u);
     assert(astra_process_info(process, &process_info) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_PROCESS_INFO);
     assert(mock_argument0 == process);

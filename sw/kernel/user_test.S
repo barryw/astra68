@@ -21,6 +21,29 @@ _k1_survivor_image_entry:
 		KERNEL_QUALIFICATION_MEDIA_RESULT_OFFSET(%a0)
 	bne     .Lmain_fail
 
+	| Exercise owner-checked mutex syscalls in the target cycle budget.
+	clr.l   KERNEL_QUALIFICATION_MUTEX_WORD_OFFSET(%a0)
+	move.l  #KERNEL_QUALIFICATION_SHARED_BASE + \
+		KERNEL_QUALIFICATION_MUTEX_WORD_OFFSET, %d1
+	moveq   #ASTRA_SYSCALL_MUTEX_WAIT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	moveq   #ASTRA_SYSCALL_QUERY_ABI, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmp.l   KERNEL_QUALIFICATION_MUTEX_WORD_OFFSET(%a0), %d4
+	bne     .Lmain_fail
+	move.l  #KERNEL_QUALIFICATION_SHARED_BASE + \
+		KERNEL_QUALIFICATION_MUTEX_WORD_OFFSET, %d1
+	moveq   #ASTRA_SYSCALL_MUTEX_UNLOCK, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	tst.l   KERNEL_QUALIFICATION_MUTEX_WORD_OFFSET(%a0)
+	bne     .Lmain_fail
+
 	| Two runnable threads of equal priority, neither yielding: the quantum
 	| is the only thing that can separate them, and the milestone asserts a
 	| quantum preemption happened. The offender burns the same span for the

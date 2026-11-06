@@ -59,6 +59,8 @@ static int syscall_error(uint32_t status)
     case ASTRA_SYSCALL_RESOURCE_LIMIT: return EAGAIN;
     case ASTRA_SYSCALL_INVALID_ARGUMENT: return EINVAL;
     case ASTRA_SYSCALL_INVALID_HANDLE: return ESRCH;
+    case ASTRA_SYSCALL_ACCESS_DENIED: return EPERM;
+    case ASTRA_SYSCALL_PEER_DEAD: return ENOTRECOVERABLE;
     default: return EIO;
     }
 }
@@ -411,7 +413,7 @@ int pthread_mutex_destroy(pthread_mutex_t *mutex)
 
 int pthread_mutex_trylock(pthread_mutex_t *mutex)
 {
-    uint32_t expected = 0u;
+    uint32_t status;
     pthread_t self;
 
     if (mutex == NULL || !mutex_type_valid(mutex->type))
@@ -426,9 +428,10 @@ int pthread_mutex_trylock(pthread_mutex_t *mutex)
         }
         return EBUSY;
     }
-    if (!__atomic_compare_exchange_n(&mutex->state, &expected, 1u, false,
-                                     __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
-        return EBUSY;
+    status = astra_mutex_trylock(&mutex->state);
+    if (status != ASTRA_SYSCALL_OK)
+        return status == ASTRA_SYSCALL_WOULD_BLOCK ? EBUSY :
+               syscall_error(status);
     mutex->owner = self;
     mutex->depth = 1u;
     return 0;
@@ -463,6 +466,7 @@ int pthread_mutex_lock(pthread_mutex_t *mutex)
 int pthread_mutex_unlock(pthread_mutex_t *mutex)
 {
     pthread_t self;
+    uint32_t status;
 
     if (mutex == NULL || !mutex_type_valid(mutex->type))
         return EINVAL;
@@ -473,9 +477,12 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
         --mutex->depth;
         return 0;
     }
+    status = astra_mutex_unlock(&mutex->state);
+    if (status != ASTRA_SYSCALL_OK)
+        return syscall_error(status);
     mutex->owner = 0u;
     mutex->depth = 0u;
-    return syscall_error(astra_mutex_unlock(&mutex->state));
+    return 0;
 }
 
 int pthread_condattr_init(pthread_condattr_t *attr)
