@@ -1341,6 +1341,13 @@ test_retained_description_survives_client_close(void)
     assert(retained == handle);
     assert(astra_vfs_service_retain_file(&service, session, handle,
                                          &retained) == ASTRA_VFS_ERR_BUSY);
+    fake.read_mode = 2u;
+    begin_request(&request, session, NULL);
+    request.file = handle;
+    request.length = sizeof(bytes);
+    fixture_dispatch(&service, ASTRA_VFS_OP_READ, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_IO && reply.count == 0u);
+    fake.read_mode = 0u;
     begin_request(&request, session, NULL);
     request.file = handle;
     fixture_dispatch(&service, ASTRA_VFS_OP_CLOSE, &request, &reply);
@@ -1355,6 +1362,12 @@ test_retained_description_survives_client_close(void)
     assert(astra_vfs_service_read_retained(&service, handle, 0u, bytes,
                                            sizeof(bytes), &moved) == ASTRA_VFS_OK);
     assert(moved == 5u && memcmp(bytes, "cache", 5u) == 0);
+    fake.read_mode = 2u;
+    assert(astra_vfs_service_read_retained(&service, handle, 0u, bytes,
+                                           sizeof(bytes), &moved) ==
+           ASTRA_VFS_ERR_IO);
+    assert(moved == 0u);
+    fake.read_mode = 0u;
     assert(astra_vfs_service_stat_retained(&service, handle, &info) ==
            ASTRA_VFS_OK);
     assert(info.size == 5u && info.kind == ASTRA_VFS_KIND_FILE);

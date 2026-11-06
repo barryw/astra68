@@ -69,6 +69,20 @@ remained, and 7.9 GiB was free. Checksummed evidence:
 `/home/barry/astra-evidence/vfs-retained-write-de25-20261106/` on Beast.
 This is VFS writeback access, not a guest pager or file mapping.
 
+Fourth slice, 2026-11-06: ordinary and retained file reads now share the
+same backend-read and result-validation path. A backend that reports more
+bytes than requested returns I/O error with zero published bytes rather
+than a clipped success, so a future page-in cannot treat an invalid count
+as a complete page. Focused tests cover both public read and cache-retained
+read. Beast target build, full VFS host suite, sanitizers, and one million
+forced-switch operations passed. The same AArch64 core fixture passed on
+DE25; board and Beast binary SHA-256 matched at
+`8ed11ff50caf0f073f9fcc6350315779ca945367d6d5226f2dc331b198c3b497`.
+Services remained active, only production loop0 was present, and 8.5 GiB
+was free. Trial binary was removed; checksummed evidence is under
+`/home/barry/astra-evidence/vfs-read-bound-de25-20261106/` on Beast.
+Kernel pager and cache consumers remain open.
+
 ## Target baseline, 2026-11-06
 
 Three focused `fsbench` runs on DE25 used the selected release's kernel and

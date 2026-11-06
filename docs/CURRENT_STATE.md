@@ -2,6 +2,17 @@
 
 Status: active continuation map, 2026-11-06
 
+VFS retained-read boundary, 2026-11-06: Ordinary and retained file reads now
+share backend result validation. An overreported count returns I/O error and
+zero published bytes instead of clipped success. Beast target build, host
+suite, sanitizers, and one million forced-switch operations passed. DE25
+AArch64 core fixture passed with board/Beast SHA-256
+`8ed11ff50caf0f073f9fcc6350315779ca945367d6d5226f2dc331b198c3b497`.
+Astra, audio, and remote desktop remained active; only production loop0 was
+present, 8.5 GiB was free, and trial binary was removed. Checksummed evidence:
+`/home/barry/astra-evidence/vfs-read-bound-de25-20261106/` on Beast. Pager,
+cached frames, writeback worker, and guest mappings remain open.
+
 DE25 render deadline recovery, 2026-11-06: Existing
 `astra-render-certify --timeout-recovery` now submits a valid full-frame fill
 with a 200 us deadline. On the selected fabric, the first pixel changed before

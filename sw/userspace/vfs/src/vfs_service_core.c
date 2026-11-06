@@ -980,11 +980,29 @@ handle_open(AstraVfsService *service, uint32_t session,
 }
 
 static uint32_t
-read_file(AstraVfsService *service, AstraVfsOpenFile *file, uint64_t offset,
-          void *buffer, uint32_t length, uint32_t *moved)
+read_acquired_file(AstraVfsService *service, AstraVfsOpenFile *file,
+                   uint64_t offset, void *buffer, uint32_t length,
+                   uint32_t *moved)
 {
     uint32_t status;
 
+    state_release(service);
+    status = service->backend.ops->read(service->backend.context, file->node,
+                                        offset, buffer, length, moved);
+    if (!state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    file_release(service, file);
+    if (status == ASTRA_VFS_OK && *moved > length) {
+        *moved = 0u;
+        return ASTRA_VFS_ERR_IO;
+    }
+    return status;
+}
+
+static uint32_t
+read_file(AstraVfsService *service, AstraVfsOpenFile *file, uint64_t offset,
+          void *buffer, uint32_t length, uint32_t *moved)
+{
     *moved = 0u;
     if ((file->flags & ASTRA_VFS_OPEN_READ) == 0u)
         return ASTRA_VFS_ERR_ACCESS;
@@ -992,15 +1010,7 @@ read_file(AstraVfsService *service, AstraVfsOpenFile *file, uint64_t offset,
         return ASTRA_VFS_ERR_IS_DIR;
     if (!file_acquire(service, file))
         return ASTRA_VFS_ERR_IO;
-    state_release(service);
-    status = service->backend.ops->read(service->backend.context, file->node,
-                                        offset, buffer, length, moved);
-    if (!state_acquire(service))
-        return ASTRA_VFS_ERR_IO;
-    file_release(service, file);
-    if (status == ASTRA_VFS_OK && *moved > length)
-        *moved = length;
-    return status;
+    return read_acquired_file(service, file, offset, buffer, length, moved);
 }
 
 static void
@@ -1222,15 +1232,8 @@ astra_vfs_service_read_retained(AstraVfsService *service,
         state_release(service);
         return status;
     }
+    status = read_acquired_file(service, file, offset, buffer, length, moved);
     state_release(service);
-    status = service->backend.ops->read(service->backend.context, file->node,
-                                        offset, buffer, length, moved);
-    if (!state_acquire(service))
-        return ASTRA_VFS_ERR_IO;
-    file_release(service, file);
-    state_release(service);
-    if (status == ASTRA_VFS_OK && *moved > length)
-        *moved = length;
     return status;
 }
 
