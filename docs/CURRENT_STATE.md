@@ -619,6 +619,18 @@ RFB SHA-256 matches board hash
 The disposable command and board captures were removed. One development
 release remains; Astra, audio, and remote desktop are active with 7.9 GiB free.
 
+Service cache audit, 2026-11-05: current guest services have no idle RAM cache
+that can safely join the pressure reclaim order. VFS mount clients and host
+channel lanes track live namespace/file or thread ownership; the borrowed read
+buffer is valid only for its active request. Display window composition banks
+live in hardware media RAM, not guest physical frames; font faces are released
+when their last context reference drops. The ext4 provider's fixed block cache
+belongs to a mounted filesystem and has no safe online shrink operation.
+Adding a pressure callback to any of these would evict live state or free no
+guest frames. The first new reclaimable cache will be the general file cache;
+it must register after idle shared-library reclaim and before protected
+reserves are considered.
+
 Memory-pressure transition correction, 2026-11-05: the allocator now signals
 the existing pressure worker on each worsening level (normal to note, note to
 warning, and warning to critical), rather than only on first entry from
