@@ -26,6 +26,34 @@ lifetime. `src/system/kernel/vm/vm_page_writer.cpp` keeps dirty writeback
 separate from clean-page eviction. Astra keeps those contracts while VFS
 remains a userspace service.
 
+## Target baseline, 2026-11-06
+
+Three focused `fsbench` runs on DE25 used the selected release's kernel and
+VFS with `fsbench` added only to a disposable system image. Each run prepared
+200 small files and two 4 MiB files under a new `/work/fsbench-cachebaseN`
+directory. No file cache or mapping change was present. Raw guest results and
+matching board/Beast SHA-256 checksums are archived under
+`/home/barry/astra-evidence/file-cache-baseline-20261106/` on Beast.
+
+| Existing path | Median guest time, three runs | p95 guest time, three runs |
+|---|---:|---:|
+| `stat` warm, 200 operations | 5.059-5.193 ms | 7.053-9.257 ms |
+| open/close warm, 200 operations | 4.676-4.760 ms | 6.804-7.864 ms |
+| sequential read, 64 × 64 KiB | 2.716-2.732 ms | 3.198-3.668 ms |
+| random read, 1024 × 4 KiB | 2.219-2.280 ms | 3.265-3.608 ms |
+
+Sequential throughput was 22.95-23.99 MB/s; random throughput was
+1.60-1.69 MB/s. `fsbench` reports `ns / 80` as *guest wall-time-equivalent*
+MC68040 cycles, not cycles spent on CPU: the 4 KiB read medians were
+27,736-28,500 equivalents and include waits for VFS and HostFS. The existing
+Beast K1 qualification measured user-fault dispatch at 21,930 CPU cycles
+against its 125,000-cycle budget, with zero overruns
+(`mutex-k1-baseline-20261105.log`). These readings define the unchanged-path
+regression comparison; they do not measure a future pager or file-cache hit.
+Direct target measurements of area-map commit and pressure-worker dispatch,
+plus separate budgets for new fault handoff and pager completion, remain
+required before those paths become dependencies.
+
 ## Native contract
 
 1. A cache object names one open VFS node on one exact volume incarnation.

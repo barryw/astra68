@@ -2,6 +2,19 @@
 
 Status: active continuation map, 2026-11-06
 
+General file cache baseline, 2026-11-06: Three focused `fsbench` runs on a
+disposable DE25 image passed warm stat, open/close, sequential read, and random
+read workloads. Sequential 4 MiB reads measured 22.95-23.99 MB/s; random
+4 KiB reads measured 1.60-1.69 MB/s. `docs/FILE_CACHE_DESIGN.md` records
+per-operation timing and the distinction between wall-time equivalents and
+CPU cycles. Board and Beast result/log hashes matched under
+`/home/barry/astra-evidence/file-cache-baseline-20261106/` on Beast. The
+540-second private trial remained at stage 8 with no panic log, restored the
+selected release, and removed disposable board state. The restored guest
+reached stage 8; Astra, audio, and remote desktop are active with 7.9 GiB
+free. Direct area-map and pressure-worker measurements and the native cache
+implementation remain open. Literal USB cable replug is deferred by user.
+
 General file cache work, 2026-11-06: `docs/FILE_CACHE_DESIGN.md` records the
 native owner split, Haiku source paths, identity and invalidation rules, and
 implementation/release gates. Existing kernel library cache shares immutable
