@@ -39,7 +39,11 @@ with tempfile.TemporaryDirectory(prefix="astra-kernel-boot-gate-") as directory:
     assert timestamp.strip() == "0", "FIT timestamp must be reproducible across runtime releases"
     subprocess.run(["dumpimage", "-T", "flat_dt", "-p", "0", "-o", str(extracted),
                     str(workspace / "boot.scr.uimg")], check=True)
-    identity = hashlib.sha256((package / "SHA256SUMS").read_bytes()).hexdigest()
+    derived_package = workspace / "package"
+    identity = hashlib.sha256((derived_package / "SHA256SUMS").read_bytes()).hexdigest()
+    assert identity != hashlib.sha256((package / "SHA256SUMS").read_bytes()).hexdigest()
+    assert (derived_package / "metadata/boot-policy.sha256").read_text().strip() == \
+        hashlib.sha256((repository / "fpga/de25/boot.cmd").read_bytes()).hexdigest()
     original = (repository / "fpga/de25/boot.cmd").read_text()
     actual = extracted.read_text()
     for filename in ("Image", "socfpga_agilex5_de25_nano.dtb"):
@@ -48,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix="astra-kernel-boot-gate-") as directory:
     assert actual == original, "generated script changed canonical fabric/boot policy"
     kernel = fixture / "kernel"
     kernel.mkdir()
-    shutil.copytree(package, kernel / "package")
+    shutil.copytree(derived_package, kernel / "package")
     for name in ("boot.identity", "boot.scr.uimg"):
         shutil.copyfile(workspace / name, kernel / name)
     root = fixture / "root"

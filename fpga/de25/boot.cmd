@@ -1,12 +1,16 @@
 echo "Astra 68: configuring FPGA fabric";
 if test ${target} = "mmc0"; then
         if mmc rescan; then
+                setenv astra_watchdog_preload unknown;
+                if setexpr.l astra_watchdog_preload *0x10d120e8; then
+                        echo "Astra pre-reload watchdog GP: ${astra_watchdog_preload}";
+                fi;
                 if fatload mmc 0:1 ${loadaddr} astra68.core.rbf; then
                         if fpga load 0 ${loadaddr} ${filesize}; then
                                 if bridge enable; then
                                         if fatload mmc 0:1 ${kernel_addr_r} Image; then
                                                 if fatload mmc 0:1 ${fdt_addr_r} socfpga_agilex5_de25_nano.dtb; then
-                                                        setenv bootargs "console=ttyS0,115200 root=${mmcroot} rootflags=commit=5 rw rootwait astra.fabric=ready";
+                                                        setenv bootargs "console=ttyS0,115200 root=${mmcroot} rootflags=commit=5 rw rootwait astra.fabric=ready astra.watchdog_preload=${astra_watchdog_preload}";
                                                         booti ${kernel_addr_r} - ${fdt_addr_r};
                                                 fi;
                                         fi;

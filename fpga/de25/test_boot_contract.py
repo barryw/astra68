@@ -37,6 +37,9 @@ ordered = (
 )
 positions = [boot.index(item) for item in ordered]
 assert positions == sorted(positions), "fabric must precede bridges and Linux"
+assert boot.index("setenv astra_watchdog_preload unknown") < boot.index(ordered[0])
+assert boot.index("setexpr.l astra_watchdog_preload *0x10d120e8") < boot.index(ordered[0])
+assert "astra.watchdog_preload=${astra_watchdog_preload}" in boot
 assert "if fpga load 0 ${loadaddr} ${filesize}; then" in boot
 assert "if bridge enable; then" in boot
 assert "&&" not in boot

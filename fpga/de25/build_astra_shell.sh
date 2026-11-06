@@ -89,7 +89,9 @@ cp "$ROOT/fpga/arty/common/astra_async_fifo.sv" \
     "$ROOT/fpga/arty/rtl/astra_front_panel_axi.sv" \
     "$ROOT/fpga/common/astra_i2s_transmitter.sv" \
     "$ROOT/third_party/hdl-util-hdmi/video_timing.sv" \
-    "$ROOT/fpga/de25/astra_de25_graphics.sv" "$INCOMING/astra/common/"
+    "$ROOT/fpga/de25/astra_de25_graphics.sv" \
+    "$ROOT/fpga/de25/astra_watchdog_counter.sv" \
+    "$INCOMING/astra/common/"
 cp "$ROOT/fpga/de25/astra_de25.dawf" "$INCOMING/"
 extract_resource "$HDMI_PIXEL_PLL" "$INCOMING/vendor_hdmi/sys_pll.ip" \
     "$HDMI_PIXEL_PLL_SHA256"
@@ -144,7 +146,7 @@ sed -i '/ jtag_subsys\//d' "$INCOMING/golden_top.qsf"
     # The archive ships hps_subsys's generated RTL, which Quartus reuses; it
     # still instantiates FPGA2HPS ports that disable_fpga2hps.tcl removed.
     "$QUARTUS_ROOT/sopc_builder/bin/qsys-generate" hps_subsys/hps_subsys.qsys \
-        --synthesis=VERILOG --quartus-project=golden_top \
+        --synthesis=VERILOG --parallel=off --quartus-project=golden_top \
         --part=A5EB013BB23BE4SCS
     if grep -q fpga2hps_awid hps_subsys/hps_subsys/synth/hps_subsys.v; then
         echo "hps_subsys RTL still has FPGA2HPS ports" >&2

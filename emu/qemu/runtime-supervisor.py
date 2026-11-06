@@ -74,10 +74,10 @@ def stop(child):
     child.wait()
 
 
-def record_watchdog(path, reason, counter, error):
+def record_text(path, contents):
     temporary = path.with_name(path.name + ".tmp")
     with temporary.open("w") as stream:
-        stream.write(f"{time.time():.0f} {reason}; heartbeat={counter}; qmp={error or 'ok'}\n")
+        stream.write(contents)
         stream.flush()
         os.fsync(stream.fileno())
     temporary.replace(path)
@@ -86,6 +86,23 @@ def record_watchdog(path, reason, counter, error):
         os.fsync(directory)
     finally:
         os.close(directory)
+
+
+def record_watchdog(path, reason, counter, error):
+    record_text(path, f"{time.time():.0f} {reason}; heartbeat={counter}; qmp={error or 'ok'}\n")
+
+
+def reset_cause(cmdline):
+    words = [part.partition("=")[2] for part in cmdline.split()
+             if part.startswith("astra.watchdog_preload=")]
+    if len(words) != 1:
+        return "unknown"
+    try:
+        word = int(words[0], 16)
+    except ValueError:
+        return "unknown"
+    return {0xA57A68D0: "no-watchdog-event-observed",
+            0xA57A68D1: "watchdog-event"}.get(word, "unknown")
 
 
 def main():
@@ -110,6 +127,14 @@ def main():
         command = command[1:]
     if not command:
         parser.error("provider command required")
+    try:
+        cmdline = Path("/proc/cmdline").read_text()
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        record_text(args.panic.with_name("reset-cause-latest.log"),
+                    f"{time.time():.0f} boot={boot_id} cause={reset_cause(cmdline)} "
+                    f"preload={next((part.partition('=')[2] for part in cmdline.split() if part.startswith('astra.watchdog_preload=')), 'missing')}\n")
+    except OSError as error:
+        print(f"Cannot retain Astra reset cause: {error}", file=sys.stderr)
     display_command = ["taskset", "-c", args.display_cpu, *args.display]
     if args.display_splash:
         display_command.append(args.display_splash)

@@ -76,6 +76,14 @@ test -f "$KERNEL_PACKAGE/boot/dtbs/intel/socfpga_agilex5_de25_nano.dtb"
 # immutable, package-specific directory; the selected script is installed last.
 BOOT_WORKSPACE=$(mktemp -d "${TMPDIR:-/tmp}/astra-kernel-boot.XXXXXX")
 trap 'rm -rf "$BOOT_WORKSPACE"' EXIT HUP INT TERM
+test ! -e "$KERNEL_PACKAGE/metadata/boot-policy.sha256"
+cp -a "$KERNEL_PACKAGE" "$BOOT_WORKSPACE/package"
+KERNEL_PACKAGE=$BOOT_WORKSPACE/package
+chmod u+w "$KERNEL_PACKAGE/metadata" "$KERNEL_PACKAGE/SHA256SUMS"
+sha256sum "$REPOSITORY/fpga/de25/boot.cmd" | cut -d' ' -f1 \
+    > "$KERNEL_PACKAGE/metadata/boot-policy.sha256"
+(cd "$KERNEL_PACKAGE" && sha256sum metadata/boot-policy.sha256 >> SHA256SUMS &&
+    sha256sum -c --quiet SHA256SUMS)
 python3 - "$REPOSITORY/fpga/de25/boot.cmd" "$KERNEL_PACKAGE/SHA256SUMS" "$BOOT_WORKSPACE" <<'PY'
 import hashlib
 from pathlib import Path

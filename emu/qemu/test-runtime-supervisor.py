@@ -12,6 +12,8 @@ import time
 supervisor = runpy.run_path(str(Path(__file__).with_name("runtime-supervisor.py")))
 GuestWatchdog = supervisor["GuestWatchdog"]
 record_watchdog = supervisor["record_watchdog"]
+reset_cause = supervisor["reset_cause"]
+record_text = supervisor["record_text"]
 QmpClient = runpy.run_path(str(Path(__file__).with_name(
     "astra-input-hotplug.py")))["QmpClient"]
 
@@ -31,6 +33,15 @@ with tempfile.TemporaryDirectory() as directory:
     assert "heartbeat=2" in path.read_text()
     assert "QMP timed out" in path.read_text()
     assert not path.with_name(path.name + ".tmp").exists()
+
+    reset = Path(directory) / "reset-cause-latest.log"
+    record_text(reset, "boot=test cause=watchdog-event preload=0xa57a68d1\n")
+    assert reset.read_text() == "boot=test cause=watchdog-event preload=0xa57a68d1\n"
+    assert not reset.with_name(reset.name + ".tmp").exists()
+    assert reset_cause("console=ttyS0 astra.watchdog_preload=0xa57a68d1") == "watchdog-event"
+    assert reset_cause("astra.watchdog_preload=a57a68d0") == "no-watchdog-event-observed"
+    for cmdline in ("", "astra.watchdog_preload=unknown", "astra.watchdog_preload=0", "astra.watchdog_preload=0xa57a68d2", "astra.watchdog_preload=a57a68d1 astra.watchdog_preload=a57a68d0"):
+        assert reset_cause(cmdline) == "unknown"
 
     listener = socket.socket(socket.AF_UNIX)
     listener.bind(str(Path(directory) / "qmp.sock"))

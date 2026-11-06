@@ -31,7 +31,7 @@ foreach connection [get_connections] {
 
 add_component astra_lpddr4b $component
 add_instance astra_lpddr4b_status altera_avalon_pio
-set_instance_parameter_value astra_lpddr4b_status width 3
+set_instance_parameter_value astra_lpddr4b_status width 32
 set_instance_parameter_value astra_lpddr4b_status direction Input
 
 # Keep the HPS path observable after a stalled Linux access.  Intel's PMON is
@@ -165,6 +165,8 @@ add_interface astra_host axi4 end
 set_interface_property astra_host EXPORT_OF astra_host_bridge.s0
 
 foreach {name type role endpoint} {
+    astra_watchdog_reset reset end subsys_hps.h2f_watchdog_reset
+    astra_watchdog_gp conduit end subsys_hps.hps_gp
     astra_lpddr4b_core_init_n reset end astra_lpddr4b.core_init_n
     astra_lpddr4b_ctrl_ready reset start astra_lpddr4b.s0_axi4_ctrl_ready
     astra_lpddr4b_calibration axi4lite end astra_lpddr4b.s0_axi4lite

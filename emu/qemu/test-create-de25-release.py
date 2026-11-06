@@ -88,6 +88,7 @@ assert "ExecStopPost=/usr/local/sbin/astra-stop-guard" in guard_unit
 # follows the Linux Makefile's default OUT, so omitting the explicit provider
 # output directory fails instead of silently borrowing a stale binary.
 repository = Path(__file__).resolve().parents[2]
+boot_identities = []
 for stale_provider in (False, True):
     with tempfile.TemporaryDirectory(prefix="astra-release-output-") as directory:
         fixture = Path(directory)
@@ -101,6 +102,9 @@ for stale_provider in (False, True):
             target = tree / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(repository / name, target)
+        if stale_provider:
+            boot_script = tree / "fpga/de25/boot.cmd"
+            boot_script.write_text(boot_script.read_text() + "# fixture boot policy change\n")
         for name in (
             "fpga/de25/astra.service", "fpga/de25/astra-watchdog.conf",
             "fpga/de25/astra-stop-guard.conf",
@@ -233,6 +237,13 @@ for product in products:
                 "fixture fpga/de25/astra-watchdog.conf\n"
             assert (output / "systemd/90-astra-stop-guard.conf").read_text() == \
                 "fixture fpga/de25/astra-stop-guard.conf\n"
+            derived = output / "kernel/package"
+            assert (derived / "metadata/boot-policy.sha256").read_text().strip() == \
+                hashlib.sha256((tree / "fpga/de25/boot.cmd").read_bytes()).hexdigest()
+            boot_identity = (output / "kernel/boot.identity").read_text().strip()
+            assert boot_identity == hashlib.sha256((derived / "SHA256SUMS").read_bytes()).hexdigest()
+            boot_identities.append(boot_identity)
+            assert (derived / "SHA256SUMS").read_bytes() != (package / "SHA256SUMS").read_bytes()
             subprocess.run(["python3", str(tree / "tools/astra_release.py"),
                             "verify", str(output)], check=True, stdout=subprocess.DEVNULL)
         finally:
@@ -240,6 +251,7 @@ for product in products:
             for target in [output] + list(output.rglob("*")):
                 if target.exists() and not target.is_symlink():
                     target.chmod(target.stat().st_mode | 0o200)
+assert boot_identities[0] != boot_identities[1], "boot policy revision reused kernel boot slot"
 print("DE25 fresh provider output and stale-artifact replacement: PASS")
 
 print("DE25 release creation contract: PASS")

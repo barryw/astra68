@@ -1,5 +1,175 @@
 # DE25-Nano Timing Closure
 
+## 2026-11-06: watchdog reset conduit candidates
+
+- Source base `e4e1dbae918d1441de2d3c483844a0c33609cfa1`; watchdog RTL
+  SHA-256 `116e2cda581284ab237c006b8eca3c9417b3ec275317f7fbfbb0ab5d8dd7f842`.
+  Beast Quartus Pro 26.1.1 Build 130. Existing read-only calibration PIO
+  widens from 3 to 32 bits; low three bits retain their contract, upper 29
+  carry a fabric counter driven by the HPS watchdog reset conduit. A separate
+  Qsys probe confirmed generated port `astra_watchdog_reset_reset_n`.
+  `iverilog` counter simulation and shell source contract pass. No board
+  image changed.
+- First candidate in `build/de25-watchdog-candidate/astra-shell.failed-rpc`
+  stalled during HPS subsystem generation after a Platform Designer RPC error.
+  Log `/home/barry/astra-evidence/watchdog-route-20261106.log`, SHA-256
+  `f71c8ec2e95beb3cb4fdff9b607132c0534fe0ed9090ef13778d1702b9c9a3f0`.
+  Only the exact scoped build was stopped. Second candidate used serial top
+  Qsys generation, but nested EMIF generation failed to create a native
+  thread with `TasksMax=256`; memory use was about 3 GiB, no cgroup OOM.
+  Log `/home/barry/astra-evidence/watchdog-route-serial-20261106.log`,
+  SHA-256 `e4547ec412b43e2f3b4a78dc367058ed6c0b47bf40c8279501fb1fc7e635ac29`.
+  Its tree is `astra-shell.failed-tasks`. Both failed before synthesis, so
+  neither has resource or clock results.
+- Third candidate raised `TasksMax` to 512 within the same 12 GiB memory and
+  zero-swap limits. Qsys passed, then 12 Quartus synthesis workers stalled
+  against the memory-high throttle. Exact scoped build was stopped; tree
+  `astra-shell.failed-synthesis`, log
+  `/home/barry/astra-evidence/watchdog-route-tasks512-20261106.log`, SHA-256
+  `52959f85686d17e4b9ee34f15d29824208f47ff2efe82d42accff8379f9eb2c8`.
+  Fourth candidate limited Quartus to four synthesis workers and reached
+  synthesis, then was stopped before completion to add a boot handoff; tree
+  `astra-shell.failed-design`, log
+  `/home/barry/astra-evidence/watchdog-route-parallel4-20261106.log`, SHA-256
+  `fdadae49a430dade9d18d088a8a8d3537bb57109c90f7b8d2df355ef6e2de238`.
+  Neither has complete resource or clock results.
+- Fifth candidate also exports the HPS GP input. U-Boot reads its exact
+  magic word before reloading fabric; the Linux runtime records the pre-reload
+  word and classifies only exact Astra values. Qsys reset and GP ports were
+  separately confirmed in isolated probes. Source manifest
+  `/home/barry/astra-evidence/watchdog-gp-source-20261106.sha256`, SHA-256
+  `575a160eb09a8a70c5fa973672cec96b0325389ff36b5d8f32cf57238bb7c76a`.
+  Beast Quartus Pro 26.1.1 Build 130 completed full compile, but release gate
+  rejected hold violation. Retained tree
+  `build/de25-watchdog-candidate/astra-shell.failed-hold`, log
+  `/home/barry/astra-evidence/watchdog-route-gp-20261106.log`, SHA-256
+  `0df47c88ce25e6c17f5f0c472860f5d0386aecce09c8dec28c932b86967236f0`.
+  No production bitstream or DE25 board image changed.
+- Synthesis checkpoint: `golden_top.syn.summary` reports Successful at
+  18:17:24 UTC, 44,440/46,800 estimated ALMs (95%), 72,587 dedicated logic
+  registers, and 67 estimated DSPs. Selected build's same-stage estimate is
+  45,249/46,800 ALMs; this is an estimate, not routed resource
+  acceptance. Disposition: proceed to full fit; selected build unchanged.
+- Placement checkpoint: Beast `golden_top.fit.place.rpt` at 18:23 UTC reports
+  40,928/46,800 ALMs needed (87%) and 67 DSP blocks needed. Same source
+  manifest above. Disposition: continue full route, no board selection.
+- Full route checkpoint: `golden_top.fit.summary` at 18:27:48 UTC reports
+  Successful, 40,928/46,800 ALMs, 3,640,768/7,331,840 block-memory bits,
+  317/358 RAM blocks, and 67/376 DSP blocks. All production clocks are
+  constrained. Worst setup slack +0.006 ns; worst hold slack **-5.341 ns**,
+  with two failing endpoints and -10.214 ns hold TNS on
+  `pll_inst|iopll_0_outclk0` at Slow fix4a 0C. Both failed paths launch from
+  HPS `hps_internal_osc` watchdog reset output: one to
+  `astra_watchdog_counter_i|reset_sync_q[0]`, one to
+  `astra_watchdog_counter_i|armed_q` through direct raw-signal use. Event is
+  asynchronous to fabric clock. Disposition: REJECT this route. Remove direct
+  raw-signal use and constrain only source to first synchronizer flop, then
+  reroute. Boot and physical gates remain open.
+- Sixth candidate initializes synchronizer low, arms only after synchronized
+  high, and never uses raw watchdog signal beyond its first flop. Timing
+  exception targets only HPS `hps_internal_osc` to that first flop; later
+  stages remain timed. The first zero-initialization simulation caught a
+  false arm from the old all-ones initial value; corrected `iverilog`/`vvp`
+  simulation and shell source contract pass on Beast. Source manifest
+  `/home/barry/astra-evidence/watchdog-gp-holdfix-source-20261106.sha256`,
+  SHA-256 `3b8a0e5b26ac55d452cfec8e2ef675c6d7983772bffd8258d82e4236f3eb49ae`.
+  Beast Quartus Pro 26.1.1 Build 130 synthesis passed with 44,440/46,800
+  estimated ALMs, 72,587 dedicated registers, and 67 estimated DSPs, matching
+  fifth candidate's same-stage resources. Placement report at 18:46 UTC shows
+  40,959/46,800 ALMs needed (88%). Full fit succeeded with 40,959 ALMs,
+  3,640,768 block-memory bits, 317 RAM blocks, and 67 DSPs. All production
+  clocks constrained; setup slack +0.030 ns and hold slack +0.001 ns, no failing
+  timing endpoints. However Design Assistant found one high-severity CDC-50001
+  crossing from HPS `hps_internal_osc` watchdog output to
+  `astra_watchdog_counter_i|reset_sync_q[0]`; the first synchronizer stage
+  still fed arm logic through an all-bits reduction and was not recognized as
+  a clean chain. Release gate rejected this route. Retained tree
+  `build/de25-watchdog-candidate/astra-shell.failed-cdc`, log
+  `/home/barry/astra-evidence/watchdog-route-holdfix-20261106.log`, SHA-256
+  `92a5bdaafd2f6d7af9eab95243709c56159c8c9fa7bdc590890c11a45027a00c`.
+  Disposition: REJECT; isolate all three synchronizer stages and detect edges
+  only after last stage. Selected bitstream and board remain unchanged.
+- Seventh candidate uses only final synchronized watchdog bit for arming and
+  adds a fabric-clocked prior-value register for edge detection. First two
+  synchronizer stages have no logic fan-out, matching Altera's synchronizer
+  recognition contract. Beast `iverilog`/`vvp` and shell source contract pass.
+  Source manifest
+  `/home/barry/astra-evidence/watchdog-gp-cdcsync-source-20261106.sha256`,
+  SHA-256 `455a294dbdfe31dfe24e71b48f4b428bdf3e7e7f8a79c7ea5b99a8ca3802e5be`.
+  Beast Quartus Pro 26.1.1 Build 130 synthesis passed: 44,440/46,800
+  estimated ALMs, 72,588 dedicated registers, 67 estimated DSPs. Placement
+  at 19:08 UTC reports 41,007/46,800 ALMs needed (88%). Full fit succeeded
+  with 41,007 ALMs, 3,640,768 block-memory bits, 317 RAM blocks, and 67 DSPs.
+  Design Assistant CDC-50001 reports zero high-severity violations. All
+  production clocks are constrained, but setup slack is **-0.341 ns** on
+  `l4_sys_free_clk` at Slow fix4a 0C; hold slack is +0.000 ns. The one failing
+  path launches from fabric `astra_watchdog_counter_i|count_q[13]~DUPLICATE`,
+  traverses the status reduction, and terminates at HPS `f2s_gp[0]`. That bit
+  is a stable boot status read by U-Boot before fabric reload, not a timed
+  fabric/HPS transfer. Retained tree
+  `build/de25-watchdog-candidate/astra-shell.failed-gp-setup`, log
+  `/home/barry/astra-evidence/watchdog-route-cdcsync-20261106.log`, SHA-256
+  `080019bb421c80266b9b2d03764c89f39424598beeaa2e6925cce080cb8351d5`.
+  Disposition: REJECT; constrain only counter registers to that HPS GP input
+  endpoint, then reroute. No board or selected bitstream changed.
+- Eighth candidate adds one false path from fabric watchdog counter registers
+  to the single HPS `f2s_gp` input endpoint; all other counter destinations
+  and all production clocks remain timed. Beast post-fit STA on the rejected
+  seventh route matched 49 source registers, including fitter duplicates, and
+  exactly one destination register. Source manifest
+  `/home/barry/astra-evidence/watchdog-gp-hps-path-source-20261106.sha256`,
+  SHA-256 `be800b8b5d0343c6f86b05006cedf54a2e2fb707bfe39b1ae326f388e00085e0`.
+  Beast Quartus Pro 26.1.1 Build 130 synthesis succeeded at 19:26:34 UTC:
+  44,440/46,800 estimated ALMs (95%), 72,588 dedicated registers, 67
+  estimated DSPs. Full fit completed at 19:36:53 UTC, with 41,035/46,800 ALMs
+  (88%), 3,640,768/7,331,840 block-memory bits, 317/358 RAM blocks, and
+  67/376 DSP blocks. All production clocks constrained; worst setup slack
+  +0.070 ns on `ASTRA_HDMI_PIXEL_CLOCK`, worst hold slack +0.000 ns, and zero
+  timing TNS. Design Assistant CDC-50001 reports zero high-severity violations;
+  full build and `BUILD_SHA256SUMS` verification pass. Log
+  `/home/barry/astra-evidence/watchdog-route-gp-path-20261106.log`, SHA-256
+  `1fd270a91892c4183e14520b92a29694e24df43b48327f94e7634eb4cf28c76c`;
+  retained candidate RBF SHA-256
+  `f67d200a0f1c0c56032a24cf54bbedb0980362c7a8aceb3898cec37075cf4abe`.
+  Disposition: ACCEPT full-route timing/CDC checkpoint; physical boot,
+  watchdog, storage, graphics, and HDMI gates remain before selection. Build
+  ran in the isolated protected scope; selected bitstream and board unchanged.
+- Physical DE25 checkpoint for the accepted eighth route: candidate boot
+  bundle `watchdog-boot-candidate-20261106` verified against the routed RBF
+  SHA-256 `f67d200a0f1c0c56032a24cf54bbedb0980362c7a8aceb3898cec37075cf4abe`.
+  The existing RBF and boot script were copied to Beast and their board/archive
+  hashes matched before installation. Normal boot with the new RBF and old
+  script changed boot ID from `17775865-f910-48a8-9da9-5219cd94d7b1` to
+  `fd6790b0-8773-4e50-a1ce-23a7200b3c68`; storage POST, guest stage 8,
+  Astra/audio/remote-desktop services, and RFB capture passed. Exact-kernel
+  read-only GP probe returned `0xa57a68d0`. User confirmed desktop and startup
+  sound normal over HDMI. Evidence:
+  `/home/barry/astra-evidence/watchdog-fabric-boot-20261106/` on Beast.
+- Versioned boot script SHA-256
+  `cdb4d6a3712bc070e95c01c45fb185a93e1408ee7498653c8e387dcc99ef87a3`
+  staged through the existing kernel transaction under identity
+  `0f9442d4807774c0eed1f40f66bd019630d1b8771f5b7de9194c5912e7bf3ca8`.
+  A second normal reboot yielded
+  `astra.watchdog_preload=a57a68d0` in Linux cmdline. Controlled two-minute
+  HPS watchdog expiry then changed boot ID to
+  `54e3091c-3c3d-4cc9-a565-cd149055ad9e`; Linux cmdline carried
+  `astra.watchdog_preload=a57a68d1`. POST, stage 8, all three services,
+  zero Astra restarts, and RFB capture passed after reset. This directly
+  distinguishes hardware watchdog event from ordinary boot. Evidence:
+  `/home/barry/astra-evidence/watchdog-boot-preload-20261106/` and
+  `/home/barry/astra-evidence/watchdog-expiry-gp-20261106/` on Beast.
+- Coherent release `2e1fe6ef28b190ade4016b1e3ab6ca783ad21959b5d42b0419a5b5b8972a539f`
+  was selected with preserved-state deployment. The kernel installer confirmed
+  the armed boot transaction, and new runtime retained
+  `cause=watchdog-event preload=a57a68d1` against the exact post-reset boot
+  ID. Services remain active, zero Astra restarts, only production loop0,
+  8.5 GiB free after prune. Deployment log SHA-256
+  `dbd8c871bfe38b27d600355855802fedf8e36921a23b0368ce0deb4976f7f65d`;
+  selected-release evidence manifest SHA-256
+  `4df0dd12575c451df070ca8c2fe4b4e20cd1a0b6d23f2e59814d104d45fcb0a2`.
+  User missed post-watchdog HDMI/audio window; repeated physical check remains
+  open. Normal reboot after watchdog should also prove event bit returns to 0.
+
 ## 2026-10-25: ADV7513 audio candidate aborted by Beast global OOM
 
 - Source Git HEAD `6cd588e389f05fa55c511ae9c5d06a98a65e5615`, staged

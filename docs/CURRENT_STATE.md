@@ -21,8 +21,12 @@ Stratix10 RSU service and an exact-version `stratix10-rsu` module. A read-only
 load bound to the existing `stratix10-rsu.0` platform device, but its SDM
 status, error, and image sysfs fields all read zero. The kernel logged
 `COMMAND_RSU_STATUS returned 0x7`, a retry-counter failure, and missing SPTs.
-Current firmware therefore did not provide usable watchdog-cause evidence
-through this interface. The module was unloaded after the probe; Astra, audio,
+The exact running Linux source defines `INTEL_SIP_SMC_RSU_ERROR` as `0x7` in
+`include/linux/firmware/intel/stratix10-smc.h`; the service layer reports
+that return as `SVC_STATUS_ERROR`, and the RSU client clears its status fields.
+Those zero fields are therefore failed-query defaults, not evidence of a
+successful boot. Current firmware did not provide usable watchdog-cause
+evidence through this interface. The module was unloaded after the probe; Astra, audio,
 and remote desktop remained active, only production loop0 remained, and 7.9
 GiB was free. Probe output and SHA-256 check are under
 `/home/barry/astra-evidence/rsu-reset-cause-de25-20261106/` on Beast. Exact
@@ -55,14 +59,54 @@ The generated vendor HPS IP at
 `Rst_watchdog_en=false` and `Rst_sdm_wd_config=0`; the watchdog reset conduit
 is not exposed in that build. Its SHA-256 is
 `fde6086d40bcd32ea8e809c520dd05874079db603449e5dc32f7c38a3e0df7f6`.
-Hardware-cause attribution remains open:
-inspect SDM boot diagnostics first; if none retain the source, enable and
-route the HPS watchdog-reset conduit into a fabric latch that survives HPS
-cold reset. Any fabric change needs full timing route and physical reset gate
-before selection. References: Altera Agilex 5 CS/R1 HPS Register Map RC28,
+At that checkpoint, hardware-cause attribution remained open: the RSU query
+could not supply it on current firmware. Altera's Agilex 5 reset guide says
+HPS cold reset leaves
+FPGA fabric state intact. An isolated Qsys probe confirmed the HPS watchdog
+reset output; another confirmed the fabric-to-HPS GP input. Current candidate
+counts that exact watchdog assertion outside HPS reset, exposes count through
+the widened calibration-status PIO, and puts an Astra magic plus event bit on
+the GP input. U-Boot reads that raw word before its unconditional `fpga load`
+erases fabric state; Linux's runtime records it and classifies only exact
+magic values. The isolated Beast full route closed all production clocks
+(worst setup +0.070 ns, hold +0.000 ns) with zero high-severity CDC violations.
+DE25 normal and controlled watchdog boots now prove exact GP preload values
+`a57a68d0` and `a57a68d1`, with POST, stage 8, and services recovered.
+Preserved-state release `2e1fe6ef28b190ade4016b1e3ab6ca783ad21959b5d42b0419a5b5b8972a539f`
+is selected; its runtime retained `cause=watchdog-event` with the exact
+post-reset boot ID. User confirmed HDMI desktop and startup sound on the first
+candidate boot. Repeated physical HDMI/audio check after watchdog and a normal
+reboot proving the event bit clears remain open. See
+`fpga/de25/TIMING_CLOSURE.md` for full source, route, and hardware evidence.
+References:
+Altera Agilex 5 CS/R1 HPS Register Map RC28,
 `https://docs.altera.com/v/u/resources/864455/agilex-5-cs-and-r1-suffix-opn-hps-register-map`;
 Agilex 5 HPS reset configuration,
-`https://docs.altera.com/r/docs/813752/26.1/hard-processor-system-component-reference-manual-agilextm-5-socs/reset-signals`.
+`https://docs.altera.com/r/docs/813752/26.1/hard-processor-system-component-reference-manual-agilextm-5-socs/reset-signals`;
+Agilex 5 HPS reset effects,
+`https://docs.altera.com/r/docs/813762/25.3/hard-processor-system-booting-user-guide-agilextm-3-and-agilextm-5-socs/reset`.
+
+DE25 GP address probe, 2026-11-06: An exact-kernel read-only module mapped
+System Manager `0x10d120e8` and read zero with the selected fabric. This
+confirms the register is accessible, not that the new fabric drives the
+expected magic. Module was unloaded and removed; Astra, audio, and remote
+desktop stayed active, only production loop0 remained, and 7.9 GiB was free.
+Source, binary, and matching board/Beast SHA-256 are archived under
+`/home/barry/astra-evidence/watchdog-gp-probe-20261106/` on Beast.
+
+DE25 boot policy identity, 2026-11-06: Release construction now derives a
+package manifest containing the `boot.cmd` hash before calculating the
+versioned kernel boot directory name. A boot script change therefore gets a
+new staging slot even when Image, DTB, and modules stay byte-identical; the
+original qualified package is left unchanged. The existing kernel installer
+retains arm, confirm, and rollback ownership. Beast constructor and real
+1,349-module FIT/staging gates passed; the constructor test proves two boot
+policy revisions get distinct identities. Haiku reference
+`src/system/boot/loader/file_systems/packagefs/packagefs.cpp` reads immutable
+boot package content; Astra adapts that principle to its versioned SD boot
+selector. DE25 booted the new script with normal and watchdog-event GP values;
+the selected release retained the watchdog cause. Normal reboot event-clear
+check remains open.
 
 VFS retained metadata, 2026-11-06: Retained descriptions now use the existing
 backend `stat_node` path to recheck size and known identity after client

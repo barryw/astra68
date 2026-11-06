@@ -23,7 +23,7 @@ scope_de25_build() {
     # Failed synthesis must lose memory before Beast's live Longhorn volumes.
     exec systemd-run --user --scope --collect --expand-environment=no \
         -p MemoryHigh=10G -p MemoryMax=12G -p MemorySwapMax=0 \
-        -p CPUQuota=800% -p TasksMax=256 \
+        -p CPUQuota=800% -p TasksMax=512 \
         /bin/bash -c 'printf 1000 > /proc/self/oom_score_adj; export ASTRA_DE25_SCOPED=1; exec "$@"' \
         bash "$script" "$@"
 }
@@ -43,6 +43,9 @@ prepare_de25_tree() {
         "$tree/golden_top.qsf"
     sed -i '/SOURCE_FILE output_files\/program_qspi_flash/d' \
         "$tree/golden_top.qsf"
+    # Keep synthesis workers within the protected build memory scope.
+    printf '%s\n' 'set_global_assignment -name NUM_PARALLEL_PROCESSORS 4' \
+        >>"$tree/golden_top.qsf"
     rm -rf "$tree/output_files" "$tree/db" "$tree/dni" \
         "$tree/incremental_db" "$tree/qdb"
 }

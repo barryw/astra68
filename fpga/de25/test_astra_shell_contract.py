@@ -32,7 +32,7 @@ for required in (
     "add_connection clk_100.out_clk astra_lpddr4b.s0_axi4lite_clock",
     "add_connection rst_in.out_reset astra_lpddr4b.s0_axi4lite_reset_n",
     "add_instance astra_lpddr4b_status altera_avalon_pio",
-    "set_instance_parameter_value astra_lpddr4b_status width 3",
+    "set_instance_parameter_value astra_lpddr4b_status width 32",
     "set_instance_parameter_value astra_lpddr4b_status direction Input",
     "add_connection subsys_hps.lwhps2fpga astra_lpddr4b_status.s1",
     "subsys_hps.lwhps2fpga/astra_lpddr4b_status.s1 baseAddress 0x20000",
@@ -40,6 +40,8 @@ for required in (
     "add_connection rst_in.out_reset astra_lpddr4b_status.reset",
     "astra_lpddr4b_calibration axi4lite end",
     "astra_lpddr4b_status conduit end",
+    "astra_watchdog_reset reset end subsys_hps.h2f_watchdog_reset",
+    "astra_watchdog_gp conduit end subsys_hps.hps_gp",
     "astra_lpddr4b_mem conduit end",
     "add_instance astra_control_bridge altera_axi_bridge",
     "set_instance_parameter_value astra_control_bridge ADDR_WIDTH 16",
@@ -86,6 +88,10 @@ disable = (HERE / "disable_fpga2hps.tcl").read_text(encoding="utf-8")
 for required in (
     "load_component agilex_hps",
     "set_component_parameter_value f2s_data_width 0",
+    "set_component_parameter_value Rst_watchdog_en true",
+    "set_component_parameter_value GP_Enable true",
+    "set_interface_property h2f_watchdog_reset EXPORT_OF agilex_hps.h2f_watchdog_reset",
+    "set_interface_property hps_gp EXPORT_OF agilex_hps.hps_gp",
     'error "agilex_hps f2s_data_width is not the vendor 256"',
     'error "hps_subsys still exports $export"',
 ):
@@ -120,6 +126,10 @@ for required in (
     "require_zero_high_severity",
     "-o hps=1",
     "astra_de25_graphics.sv",
+    "astra_watchdog_counter.sv",
+    "set_global_assignment -name NUM_PARALLEL_PROCESSORS 4",
+    "--parallel=off",
+    "TasksMax=512",
     'graphics/*.vh',
     "emit-cp437-hex",
     "sw/userspace/graphics/fonts/astra-rescue-mono.afnt",
@@ -308,7 +318,7 @@ assert "DEFAULT_MEMORY_BYTES = 512 * 1024 * 1024" in qemu_runtime
 assert 'DEFAULT_MEMORY = "%dM" % (DEFAULT_MEMORY_BYTES // (1024 * 1024))' in qemu_runtime
 assert "MEMORY = DEFAULT_MEMORY" in terminal_gate
 assert 'parser.add_argument("--memory", default=MEMORY' in terminal_gate
-assert '"-m", DEFAULT_MEMORY' in display_gate
+assert "terminal_gate.Machine(qemu, rom, scratch, directory)" in display_gate
 assert '"-m", DEFAULT_MEMORY' in raw_host_gate
 assert 'parser.add_argument("--memory", default=DEFAULT_MEMORY)' in qualification_gate
 assert 'parser.add_argument("--memory", default=DEFAULT_MEMORY)' in boot_timer
@@ -358,8 +368,13 @@ with tempfile.TemporaryDirectory() as temporary_text:
     assert "astra_lpddr4b_calibration_driver" in patched_top
     assert "astra_lpddr4b_cal_failed" in patched_top
     assert "astra_lpddr4b_calibration_status" in patched_top
+    assert "astra_watchdog_counter astra_watchdog_counter_i" in patched_top
+    assert "astra_watchdog_count" in patched_top
+    assert "astra_watchdog_boot_word" in patched_top
     assert ".astra_lpddr4b_core_init_n_reset_n" in patched_top
     assert ".astra_lpddr4b_status_export" in patched_top
+    assert ".astra_watchdog_reset_reset_n" in patched_top
+    assert ".astra_watchdog_gp_gp_in" in patched_top
     assert ".astra_lpddr4b_mem_mem_dq" in patched_top
     assert "astra_de25_graphics graphics_i" in patched_top
     assert ".astra_control_awaddr" in patched_top
@@ -426,6 +441,16 @@ with tempfile.TemporaryDirectory() as temporary_text:
         "set_clock_groups -asynchronous "
         "-group [get_clocks {pll_inst|iopll_0_outclk0}] "
         "-group [get_clocks {graphics_i|pixel_pll_i|iopll_0_outclk1}]"
+    ) in patched_timing
+    assert (
+        "set_false_path -from [get_clocks {hps_internal_osc}] "
+        "-to [get_registers {astra_watchdog_counter_i|reset_sync_q[0]}]"
+    ) in patched_timing
+    assert (
+        "set_false_path -from [get_registers "
+        "{astra_watchdog_counter_i|count_q[*]}] -to [get_registers "
+        "{u0|subsys_hps|agilex_hps|intel_agilex_5_soc_inst|sm_hps|"
+        "sundancemesa_hps_inst~l4_sys_free_clk.reg}]"
     ) in patched_timing
     assert "SYNCHRONIZATION_REGISTER_CHAIN_LENGTH 1" not in patched_qsf
     assert (

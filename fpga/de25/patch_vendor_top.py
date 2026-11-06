@@ -30,10 +30,24 @@ wire        astra_lpddr4b_rvalid;
 wire        astra_lpddr4b_cal_done_n;
 wire        astra_lpddr4b_ctrl_ready;
 reg         astra_lpddr4b_cal_failed;
-wire [2:0]  astra_lpddr4b_calibration_status;
+wire        astra_watchdog_reset_n;
+wire [28:0] astra_watchdog_count;
+wire [31:0] astra_watchdog_boot_word;
+wire [31:0] astra_lpddr4b_calibration_status;
 
-// bit 0: calibration passed; bit 1: calibration failed; bit 2: data path ready.
+astra_watchdog_counter astra_watchdog_counter_i (
+    .clock(system_clk_100_internal),
+    .watchdog_reset_n(astra_watchdog_reset_n),
+    .count(astra_watchdog_count)
+);
+
+// GP input is visible to U-Boot before it reloads the fabric. Only one bit
+// varies across watchdog reset, so HPS clock-domain synchronization is safe.
+assign astra_watchdog_boot_word = {31'h52bd3468, |astra_watchdog_count};
+
+// Bits 0-2 retain calibration status; bits 3-31 count HPS watchdog events.
 assign astra_lpddr4b_calibration_status = {
+    astra_watchdog_count,
     astra_lpddr4b_ctrl_ready,
     astra_lpddr4b_cal_failed,
     astra_lpddr4b_cal_done_n
@@ -382,6 +396,9 @@ PORTS = r'''        .astra_build_clk_clk                    (astra_build_clk),
         .astra_lpddr4b_core_init_n_reset_n     (astra_lpddr4b_cal_done_n),
         .astra_lpddr4b_ctrl_ready_reset_n      (astra_lpddr4b_ctrl_ready),
         .astra_lpddr4b_status_export            (astra_lpddr4b_calibration_status),
+        .astra_watchdog_reset_reset_n           (astra_watchdog_reset_n),
+        .astra_watchdog_gp_gp_in                 (astra_watchdog_boot_word),
+        .astra_watchdog_gp_gp_out                (),
         .astra_lpddr4b_calibration_awaddr      (astra_lpddr4b_awaddr),
         .astra_lpddr4b_calibration_awprot      (astra_lpddr4b_awprot),
         .astra_lpddr4b_calibration_awvalid     (astra_lpddr4b_awvalid),
@@ -574,7 +591,17 @@ def main() -> None:
         "-to [get_registers {graphics_i|hdmi_int_sync_q[0]}]\n"
         "set_false_path -from [get_registers "
         "{graphics_i|hdmi_config_i|READY}] -to [get_registers "
-        "{graphics_i|hdmi_ready_build_sync_q[0]}]",
+        "{graphics_i|hdmi_ready_build_sync_q[0]}]\n"
+        "# HPS watchdog reset is asynchronous to fabric; only the first "
+        "synchronizer flop accepts it.\n"
+        "set_false_path -from [get_clocks {hps_internal_osc}] "
+        "-to [get_registers {astra_watchdog_counter_i|reset_sync_q[0]}]\n"
+        "# Boot status stays stable until fabric reload; HPS samples it in "
+        "an unrelated clock domain.\n"
+        "set_false_path -from [get_registers "
+        "{astra_watchdog_counter_i|count_q[*]}] -to [get_registers "
+        "{u0|subsys_hps|agilex_hps|intel_agilex_5_soc_inst|sm_hps|"
+        "sundancemesa_hps_inst~l4_sys_free_clk.reg}]",
         "50 MHz fabric reference clock",
     )
     timing = replace_once(
