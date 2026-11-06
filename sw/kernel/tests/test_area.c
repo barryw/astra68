@@ -947,6 +947,80 @@ static void test_reserved_area_commit_reaches_every_mapping(void)
     assert(kernel_vm_destroy_address_space(&peer) == KERNEL_VM_OK);
 }
 
+static void test_reserved_area_publishes_one_complete_page(void)
+{
+    KernelAddressSpace owner = {0};
+    KernelAddressSpace peer = {0};
+    KernelArea *area = NULL;
+    KernelAreaSnapshot snapshot;
+    uint32_t owner_base, peer_base, size, owner_physical, peer_physical;
+    uint32_t published_physical;
+    const uint8_t source[] = {0x51u, 0x52u, 0x53u, 0x54u, 0x55u};
+
+    initialize_test();
+    assert(kernel_vm_create_address_space(315u, &owner) == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(316u, &peer) == KERNEL_VM_OK);
+    assert(kernel_area_create(315u, 2u * KERNEL_PAGE_SIZE,
+                              KERNEL_AREA_CREATE_RESERVED,
+                              &area) == KERNEL_AREA_OK);
+    assert(kernel_area_map(area, 315u, &owner,
+                           KERNEL_VM_READ | KERNEL_VM_WRITE, &owner_base,
+                           &size) == KERNEL_AREA_OK);
+    assert(kernel_area_map(area, 316u, &peer, KERNEL_VM_READ, &peer_base,
+                           &size) == KERNEL_AREA_OK);
+    assert(kernel_vm_switch(&owner) == KERNEL_VM_OK);
+    assert(!kernel_vm_test_translate_current(owner_base, false,
+                                             &owner_physical));
+    assert(kernel_area_publish_page(area, 1u, source, sizeof(source)) ==
+           KERNEL_AREA_INVALID_ARGUMENT);
+    assert(kernel_area_publish_page(area, 0u, NULL, 0u) ==
+           KERNEL_AREA_INVALID_ARGUMENT);
+    assert(kernel_area_publish_page(area, 0u, source, KERNEL_PAGE_SIZE + 1u) ==
+           KERNEL_AREA_INVALID_ARGUMENT);
+    kernel_allocation_test_fail_site(KERNEL_ALLOCATION_SITE_AREA_PAGES, 1u);
+    assert(kernel_area_publish_page(area, 0u, source, sizeof(source)) ==
+           KERNEL_AREA_OUT_OF_MEMORY);
+    kernel_allocation_test_clear_failure();
+    assert(!kernel_vm_test_translate_current(owner_base, false,
+                                             &owner_physical));
+    assert(kernel_area_snapshot(0u, &snapshot) &&
+           snapshot.committed_pages == 0u);
+    assert(kernel_area_publish_page(area, 0u, source, sizeof(source)) ==
+           KERNEL_AREA_OK);
+    assert(kernel_area_snapshot(0u, &snapshot) &&
+           snapshot.committed_pages == 1u);
+    assert(kernel_vm_test_translate_current(owner_base, true,
+                                            &owner_physical));
+    published_physical = owner_physical;
+    assert(memcmp(&physical_memory[owner_physical - RAM_BASE], source,
+                  sizeof(source)) == 0);
+    assert(physical_memory[owner_physical - RAM_BASE + sizeof(source)] == 0u);
+    assert(physical_memory[owner_physical - RAM_BASE + KERNEL_PAGE_SIZE - 1u]
+           == 0u);
+    assert(!kernel_vm_test_translate_current(owner_base + KERNEL_PAGE_SIZE,
+                                             false, &owner_physical));
+    assert(kernel_vm_switch(&peer) == KERNEL_VM_OK);
+    assert(kernel_vm_test_translate_current(peer_base, false, &peer_physical));
+    assert(published_physical == peer_physical);
+    assert(!kernel_vm_test_translate_current(peer_base, true, &peer_physical));
+    assert(kernel_area_publish_page(area, 0u, source, sizeof(source)) ==
+           KERNEL_AREA_INVALID_STATE);
+    assert(kernel_area_publish_page(area, KERNEL_PAGE_SIZE, source, 0u) ==
+           KERNEL_AREA_OK);
+    assert(kernel_vm_test_translate_current(peer_base + KERNEL_PAGE_SIZE,
+                                            false, &peer_physical));
+    assert(physical_memory[peer_physical - RAM_BASE] == 0u);
+    assert(kernel_area_pool_valid());
+
+    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+    assert(kernel_area_unmap(315u, &owner, owner_base) == KERNEL_AREA_OK);
+    assert(kernel_area_unmap(316u, &peer, peer_base) == KERNEL_AREA_OK);
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_vm_destroy_address_space(&owner) == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&peer) == KERNEL_VM_OK);
+    assert(kernel_area_pool_valid());
+}
+
 /*
  * Committing on fault must not become a way to spend somebody else's frames.
  * A process with no mapping of the area gets nothing, however good its address
@@ -1299,6 +1373,7 @@ int main(void)
     test_map_transaction_rolls_back_every_stage();
     test_reserved_area_commits_only_what_is_touched();
     test_reserved_area_commit_reaches_every_mapping();
+    test_reserved_area_publishes_one_complete_page();
     test_reserved_area_fault_requires_authority();
     test_reserved_area_kernel_access_commits_only_on_write();
     test_reserved_area_decommit_returns_frames();

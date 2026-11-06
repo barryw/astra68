@@ -9,6 +9,9 @@
 #include <astra/syscall.h>
 
 #include "kernel_build_info.h"
+#if ASTRA_KERNEL_K1_QUALIFICATION
+#include "area.h"
+#endif
 #include "allocation.h"
 #include "block.h"
 #include "boot_progress.h"
@@ -47,6 +50,7 @@
 #define KERNEL_SELFTEST_OWNER 0xfffffff0u
 #define KERNEL_SELFTEST_USER_ADDRESS 0x10000000u
 #define KERNEL_SOAK_REPORT_INTERVAL 1000u
+#define KERNEL_AREA_PUBLISH_BUDGET_CYCLES 20000u
 #define PANIC_SCREEN_TRACE_RECORDS 6u
 #define PANIC_REPORT_TRACE_RECORDS 32u
 
@@ -99,6 +103,7 @@ static struct {
 } panic_exception;
 #if ASTRA_KERNEL_K1_QUALIFICATION
 static uint32_t qualification_survivor_process_id;
+static bool qualification_publish_page(uint32_t *cycles);
 #endif
 static KernelAddressSpace user_copy_selftest_space;
 static const KernelMonitorBuildInfo monitor_build_info = {
@@ -1583,6 +1588,7 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     uint32_t performance_mask;
     uint32_t qualification_authorized;
     uint32_t qualification_completed;
+    uint32_t publish_cycles;
 
     kernel_performance_freeze();
     kernel_irqoff_latency_freeze();
@@ -1781,6 +1787,15 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
         console_putc('\n');
         kernel_panic("interrupt-disabled latency budget exceeded");
     }
+    if (!qualification_publish_page(&publish_cycles))
+        kernel_panic("K1 page publication failed");
+    console_puts("K8 PAGE PUBLISH cycles=");
+    console_dec32(publish_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_PUBLISH_BUDGET_CYCLES);
+    if (publish_cycles > KERNEL_AREA_PUBLISH_BUDGET_CYCLES)
+        kernel_panic("K1 page publication budget exceeded");
+    console_puts(" PASS\n");
     if (performance_mask == KERNEL_PERFORMANCE_RELEASE_MASK)
         console_puts("K10 PERFORMANCE PASS\n");
     console_puts("K2 MEDIA BUDGET PASS\n");
@@ -1877,6 +1892,74 @@ static KernelWorkerServiceResult pressure_reclaim(uint32_t batch_limit,
     return kernel_process_reclaim_idle_libraries() == KERNEL_PROCESS_OK ?
         KERNEL_WORKER_SERVICE_COMPLETE : KERNEL_WORKER_SERVICE_FATAL;
 }
+
+#if ASTRA_KERNEL_K1_QUALIFICATION
+static bool qualification_publish_page(uint32_t *cycles)
+{
+    KernelAddressSpace space = {0};
+    KernelArea *area = NULL;
+    static uint8_t source[KERNEL_PAGE_SIZE];
+    uint8_t bytes[16];
+    uint8_t tail[16];
+    uint32_t base = 0u;
+    uint32_t size = 0u;
+    uint32_t started;
+    bool mapped = false;
+    bool passed = false;
+
+    if (cycles == NULL)
+        return false;
+    *cycles = 0u;
+    for (uint32_t index = 0u; index < KERNEL_PAGE_SIZE; ++index)
+        source[index] = (uint8_t)(index ^ 0x5au);
+    if (kernel_vm_create_address_space(KERNEL_SELFTEST_OWNER, &space) !=
+        KERNEL_VM_OK)
+        return false;
+    if (kernel_area_create(KERNEL_SELFTEST_OWNER, 2u * KERNEL_PAGE_SIZE,
+                           KERNEL_AREA_CREATE_RESERVED, &area) !=
+            KERNEL_AREA_OK ||
+        kernel_area_map(area, KERNEL_SELFTEST_OWNER, &space, KERNEL_VM_READ,
+                        &base, &size) != KERNEL_AREA_OK)
+        goto done;
+    mapped = true;
+    started = kernel_platform_cpu_cycles_low();
+    if (kernel_area_publish_page(area, 0u, source, sizeof(source)) !=
+            KERNEL_AREA_OK)
+        goto done;
+    *cycles = kernel_platform_cpu_cycles_low() - started;
+    if (kernel_vm_read(&space, base, bytes, sizeof(bytes)) != KERNEL_VM_OK ||
+        kernel_vm_read(&space, base + KERNEL_PAGE_SIZE - sizeof(tail), tail,
+                       sizeof(tail)) != KERNEL_VM_OK ||
+        kernel_area_publish_page(area, 0u, source, sizeof(source)) !=
+            KERNEL_AREA_INVALID_STATE)
+        goto done;
+    passed = true;
+    for (uint32_t index = 0u; index < sizeof(bytes); ++index) {
+        if (bytes[index] != source[index] ||
+            tail[index] != source[KERNEL_PAGE_SIZE - sizeof(tail) + index])
+            passed = false;
+    }
+    if (kernel_area_publish_page(area, KERNEL_PAGE_SIZE, source, 5u) !=
+            KERNEL_AREA_OK ||
+        kernel_vm_read(&space, base + KERNEL_PAGE_SIZE, bytes,
+                       sizeof(bytes)) != KERNEL_VM_OK)
+        passed = false;
+    for (uint32_t index = 0u; index < sizeof(bytes); ++index)
+        if (bytes[index] != (index < 5u ? source[index] : 0u))
+            passed = false;
+
+done:
+    if (mapped && kernel_area_unmap(KERNEL_SELFTEST_OWNER, &space, base) !=
+                      KERNEL_AREA_OK)
+        passed = false;
+    if (area != NULL)
+        kernel_area_handle_release(area, NULL);
+    if (kernel_vm_destroy_address_space(&space) != KERNEL_VM_OK ||
+        !kernel_area_pool_healthy())
+        passed = false;
+    return passed;
+}
+#endif
 
 static void pressure_signal(void)
 {

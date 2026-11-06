@@ -118,6 +118,11 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
  */
 bool kernel_area_fault(uint32_t process_id, KernelAddressSpace *space,
                        uint32_t address);
+/* Publish one complete file page after copying valid bytes into a zeroed
+ * frame. No mapping sees the frame until the copy and zero tail are ready. */
+KernelAreaStatus kernel_area_publish_page(KernelArea *area, uint32_t offset,
+                                          const void *source,
+                                          uint32_t valid_bytes);
 /*
  * Drops the committed pages of a reserved area that lie wholly inside the
  * range, and keeps the reservation. This is what makes freeing memory mean

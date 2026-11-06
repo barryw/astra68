@@ -2,6 +2,31 @@
 
 Status: active continuation map, 2026-11-06
 
+Atomic file-page publication prerequisite, 2026-11-06: the existing reserved
+area frame/VM-table path can now publish one 4 KiB page after copying valid
+bytes into a zeroed frame. A short read leaves a zero tail; mapping peers see
+the same complete page only after publication. Host tests cover two mappings,
+short and zero-byte pages, invalid and duplicate publication, and allocation
+failure with no visible partial mapping. Haiku
+`src/system/kernel/cache/file_cache.cpp:345-375` zeroes unread page tails
+before exposing cached data; Astra applies that rule within its existing
+`sw/kernel/area.c` owner. Beast full kernel suite and MC68040 build passed.
+K1 now runs full-page plus short-page publication after the ordinary
+performance snapshot, enforces a 20,000-cycle full-page budget, and requires
+its marker as the fourteenth qualification gate. Beast measured 6,783 cycles
+for full-page publication and unchanged 21,952 user-fault cycles; DE25 measured
+6,782 publication cycles and reached `KERNEL MULTITASKING`. Identical trial
+ROM SHA-256:
+`3251f12ae5e94e9dd2b66082db7c9eab70f919e42b2ff112b6961be188e53175`;
+DE25 log SHA-256 matched Beast archive at
+`ae4769c08d907f2d680843cbadf89e2efa995d93d4c37b0a3a40145c1a4bfbfd`.
+Evidence is under `/home/barry/astra-evidence/area-page-publish-20261106/`.
+Normal Beast ROM build was restored; DE25 trial files were removed. Astra,
+HDMI audio host, and remote desktop are active, only production loop0 remains,
+and 8.5 GiB is free. No file mapping uses this page path yet: pager binding,
+fault suspension, VFS page request/reply, cache identity and invalidation,
+dirty writeback, pressure reclaim, and native/POSIX mapping APIs remain.
+
 Call lifecycle prerequisite, 2026-11-06: `PORT_CALL` now aborts a call number
 when reply-capability installation or port send fails. Shared thread wait
 completion clears that number on timeout or cancellation as well as normal

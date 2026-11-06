@@ -1,8 +1,8 @@
 # General file cache and file-backed mappings
 
-Status: design contract; VFS description-retention, metadata, and writeback
-seams passed host and DE25 AArch64 core gates. Pager, cache, mapping, and guest
-certification open.
+Status: design contract; VFS description-retention, metadata, writeback, and
+VM page-publication seams passed host and DE25 gates. Pager, cache, mapping,
+and guest certification open.
 
 Call lifecycle prerequisite, 2026-11-06: failed `PORT_CALL` sends and reply
 capability installation now abort their call number. Shared wait completion
@@ -120,6 +120,26 @@ Services remained active with zero restarts, only production loop0 was present,
 8.5 GiB was free, and the trial binary was removed. Checksummed evidence is
 under `/home/barry/astra-evidence/vfs-write-bound-de25-20261106/` on Beast.
 Guest pager and cache consumers remain open.
+
+Seventh slice, 2026-11-06: `kernel_area_publish_page()` reuses reserved-area
+frame allocation and shared-table publication. It copies valid bytes into a
+zeroed frame before the page becomes visible; short reads leave a zero tail.
+Host tests cover two mappings, absent peers on allocation failure, duplicate
+and invalid publication, short and zero-byte pages. Haiku's
+`src/system/kernel/cache/file_cache.cpp:345-375` clears unread tails before
+cache publication; Astra keeps that ordering in its existing area owner.
+Beast full kernel suite, target build and K1 pass. K1 measures a 4 KiB page at
+6,783/20,000 cycles, while the ordinary user fault remains 21,952 cycles.
+The same ROM passed DE25's MC68040 QEMU at 6,782/20,000 publication cycles.
+The qualification harness now requires the page marker among 14 markers.
+ROM SHA-256 is
+`3251f12ae5e94e9dd2b66082db7c9eab70f919e42b2ff112b6961be188e53175`;
+checksummed evidence is under
+`/home/barry/astra-evidence/area-page-publish-20261106/` on Beast. The normal
+ROM was restored and board trial files removed. This publishes a kernel-owned
+page; it does not yet bind a VFS pager, track dirty pages, or expose mappings
+to guest applications. Separate budgets are still required for fault handoff
+and pager reply before those paths become dependencies.
 
 ## Target baseline, 2026-11-06
 

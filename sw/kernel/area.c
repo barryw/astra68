@@ -1212,7 +1212,8 @@ static bool open_span(KernelArea *area, uint32_t span)
     return true;
 }
 
-static bool commit_cluster(KernelArea *area, uint32_t page)
+static bool commit_cluster(KernelArea *area, uint32_t page,
+                           const uint8_t *source, uint32_t valid_bytes)
 {
     uint32_t aligned;
     uint32_t limit;
@@ -1242,10 +1243,14 @@ static bool commit_cluster(KernelArea *area, uint32_t page)
     if (page >= limit || page_committed(area, page))
         return false;
     first = page;
-    while (first > aligned && !page_committed(area, first - 1u))
-        --first;
-    while (first + count < limit && !page_committed(area, first + count))
-        ++count;
+    if (source == NULL) {
+        while (first > aligned && !page_committed(area, first - 1u))
+            --first;
+        while (first + count < limit && !page_committed(area, first + count))
+            ++count;
+    } else {
+        count = 1u;
+    }
     if (count == 0u)
         return false;
     if (!ensure_page_leaf(area, first)) {
@@ -1277,6 +1282,18 @@ static bool commit_cluster(KernelArea *area, uint32_t page)
         ++pool_stats.allocation_failures;
         ++pool_stats.commit_failures;
         return false;
+    }
+    if (source != NULL) {
+        volatile uint8_t *destination;
+
+        if (!physical_pointer(frames[0], &destination)) {
+            (void)kernel_memory_release(frames[0], 1u, area->frame_owner);
+            pool_corrupt = 1u;
+            ++pool_stats.commit_failures;
+            return false;
+        }
+        for (uint32_t index = 0u; index < valid_bytes; ++index)
+            destination[index] = source[index];
     }
     for (uint32_t index = 0u; index < count; ++index)
         entries[index] = frames[index];
@@ -1350,7 +1367,31 @@ bool kernel_area_fault(uint32_t process_id, KernelAddressSpace *space,
     page = (address - mapping->virtual_base) / KERNEL_PAGE_SIZE;
     if (page >= area->page_count || page_committed(area, page))
         return false;
-    return commit_cluster(area, page);
+    return commit_cluster(area, page, NULL, 0u);
+}
+
+KernelAreaStatus kernel_area_publish_page(KernelArea *area, uint32_t offset,
+                                          const void *source,
+                                          uint32_t valid_bytes)
+{
+    uint32_t page;
+
+    if (!valid_area(area) || source == NULL || valid_bytes > KERNEL_PAGE_SIZE ||
+        (offset & (KERNEL_PAGE_SIZE - 1u)) != 0u)
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    if (area->state != KERNEL_AREA_LIVE)
+        return KERNEL_AREA_PEER_DEAD;
+    if (area->reserved_form == 0u)
+        return KERNEL_AREA_INVALID_STATE;
+    if (!range_valid(area, offset, KERNEL_PAGE_SIZE))
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    page = offset / KERNEL_PAGE_SIZE;
+    if (page_committed(area, page))
+        return KERNEL_AREA_INVALID_STATE;
+    if (!commit_cluster(area, page, source, valid_bytes))
+        return pool_corrupt != 0u ? KERNEL_AREA_CORRUPT :
+                                    KERNEL_AREA_OUT_OF_MEMORY;
+    return KERNEL_AREA_OK;
 }
 
 
@@ -1539,7 +1580,8 @@ KernelAreaStatus kernel_area_write(KernelArea *area, uint32_t offset,
          * -- the same reversal the user stack's copy path makes. Refusing
          * would fail a write to a perfectly good offset of a reserved area.
          */
-        if (!page_committed(area, page) && !commit_cluster(area, page))
+        if (!page_committed(area, page) &&
+            !commit_cluster(area, page, NULL, 0u))
             return KERNEL_AREA_OUT_OF_MEMORY;
         uint32_t *entry = page_entries(area, page);
 
