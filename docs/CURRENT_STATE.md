@@ -382,6 +382,25 @@ disposable board state was removed, restoring 7.9 GiB free. Physical media
 load and long-running target scheduler performance qualification remain open.
 Notification performance qualification follows correctness.
 
+DE25 HDMI media-load trial, 2026-11-06: On selected release
+`2e1fe6ef28b190ade4016b1e3ab6ca783ad21959b5d42b0419a5b5b8972a539f`,
+Chocolate Quake ran a 60.06-second `astra-top` window with 68.25% guest CPU,
+Display 10.01%, 11.71% idle, 16.13 presents/s, and zero host audio underruns
+or software gaps. User saw smooth gameplay and heard continuous effects, but
+no music. Native Terminal showed `/store/id1/music` absent; Quake music tracks
+are user supplied, so this run cannot certify music playback. RFB captured
+live gameplay. This checks physical scheduler coexistence; media-band budget
+exhaustion under competing priority-20 service load and Quake's 30 FPS target
+remain open. Checksummed evidence:
+`/home/barry/astra-evidence/media-scheduler-hdmi-20261106/` on Beast.
+During cleanup, a root-run temporary diagnostic imported a Python script from
+the installed release and wrote one `__pycache__` file there. Release
+verification correctly rejected the extra file and systemd retried. The exact
+bytecode file and empty directory were removed, the installed release verified,
+and Astra restarted to stage 8. Astra/audio/remote are active, Astra restart
+count is zero since clean start, only production loop0 remains, and 8.5 GiB is
+free. Diagnostic imports of installed modules must suppress bytecode writes.
+
 Linux external entry identity, 2026-11-05: Storage protocol 14 and HostFS
 change-record schema 2 carry the child inode supplied by a fanotify target
 handle for create and rename entry events. The rooted provider resolves the

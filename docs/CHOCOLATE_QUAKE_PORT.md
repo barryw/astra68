@@ -25,6 +25,14 @@ Target: Chocolate Quake 2.1.0 (tag
 
 ## Current checkpoint
 
+- Selected-release DE25 HDMI trial on 2026-11-06: a 60.06-second live-demo
+  window measured 16.13 presents/s, 68.25% Quake guest CPU, 11.71% guest
+  idle, and zero host audio underruns or software gaps. User reported smooth
+  gameplay and effects, with no music. Native Terminal confirmed
+  `/store/id1/music` does not exist on that installation, so this run did not
+  exercise Ogg playback. The 30 FPS usability gate remains open. Checksummed
+  trial evidence is under
+  `/home/barry/astra-evidence/media-scheduler-hdmi-20261106/` on Beast.
 - Revised SDL_mixer Ogg adapter decodes ahead on a separate thread, then
   feeds its existing output stream without blocking the audio callback.
   A guarded 180-second DE25 trial measured 21.18 and 20.84 presents/s in

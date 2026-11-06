@@ -132,8 +132,11 @@ Exhaustion caps their base priority at 19 until replenishment so priority
 20-23 system services can run. Inherited and RPC-donated priority still win
 when a higher-priority caller depends on a media thread. K1 qualification
 exercises exhaustion with a spinning media thread and a priority-20 service.
-DE25 disposable-image stage-8 trial passed; physical media-load qualification
-remains open.
+DE25 disposable-image stage-8 trial passed. A selected-release HDMI Quake
+trial gave priority-20 Display 10.01% guest CPU while Quake used 68.25%; the
+user saw smooth gameplay and heard continuous effects, with zero host audio
+gaps. This proves physical coexistence, but does not force media-band budget
+exhaustion against a competing priority-20 service. That gate remains open.
 
 ## Nonpreemptible regions
 
