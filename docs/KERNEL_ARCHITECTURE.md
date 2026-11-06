@@ -433,9 +433,10 @@ Exact entry events require mutation identity from the backend's own operation.
 Host-shared exFAT bindings use the same bounded inotify fallback as physical
 exFAT mounts. Multiple bindings can share one Linux watch descriptor, so the
 provider delivers each event to every matching rooted binding. An independently
-rooted subtree excludes events outside its root. The Beast exFAT and sanitizer
-gates exercised shared and nested bindings; a coherent protocol-14 release
-passed a DE25 stage-8 private trial. Literal cable replug remains open.
+rooted subtree excludes events outside its root. Beast exFAT and sanitizer
+gates and the target-built provider fixture on DE25 exercised shared and nested
+bindings; a coherent protocol-14 release passed a DE25 stage-8 private trial.
+Literal cable replug and guest Atlas delivery from host-shared bindings remain.
 `OPEN_CREATE` can open an existing file; the rooted provider probes atomic
 exclusive creation first and retries the requested flags when that probe
 fails. Only a successful exclusive creation emits an exact create record.

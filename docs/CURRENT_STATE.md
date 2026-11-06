@@ -36,8 +36,15 @@ passed a 90-second disposable-image DE25 stage-8 private trial. The selected
 release and Astra, audio, and remote-desktop services recovered; trial logs
 were checksum-verified under
 `/home/barry/astra-evidence/exfat-binding-de25-trial-20261105/` on Beast.
-Disposable board tree was removed and free space returned to 7.9 GiB. Physical
-cable replug and notification performance qualification remain open.
+The exact AArch64 provider fixture then passed twice on DE25's Linux 6.12.11
+with a disposable exFAT loop image: two bindings of one root and a nested
+binding received their expected events exactly once. Its output and binaries
+are checksum-verified under
+`/home/barry/astra-evidence/exfat-binding-de25-provider-gate-20261105/`.
+The fixture accepts explicit non-root mount-owner IDs when launched by root.
+Only the production loop remains; disposable board trees were removed and free
+space returned to 7.9 GiB. Physical cable replug, guest Atlas delivery from
+host-shared bindings, and notification performance qualification remain open.
 
 exFAT external notification integration, 2026-11-05: DE25's private exFAT
 mount rejects filesystem FID fanotify (`EOPNOTSUPP`), so the root provider now

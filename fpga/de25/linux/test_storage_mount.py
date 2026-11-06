@@ -19,7 +19,11 @@ def main():
     parser.add_argument("--smb-auth-server")
     parser.add_argument("--formatter-fat")
     parser.add_argument("--formatter-exfat")
+    parser.add_argument("--owner-uid", type=int, default=os.getuid())
+    parser.add_argument("--owner-gid", type=int, default=os.getgid())
     args = parser.parse_args()
+    if args.owner_uid <= 0 or args.owner_gid <= 0:
+        parser.error("mount owner must be non-root; set --owner-uid and --owner-gid")
     if args.exfat_tool and not args.provider:
         parser.error("--exfat-tool requires --provider")
     if args.nfs_server and not args.provider:
@@ -51,7 +55,7 @@ def main():
             images[name] = image
             if not args.provider:
                 subprocess.run(["sudo", "-n", binary, image, format_id,
-                                str(os.getuid()), str(os.getgid())], check=True)
+                                str(args.owner_uid), str(args.owner_gid)], check=True)
         for bits, size, format_id in ((12, 4, "7"), (16, 32, "8"), (32, 64, "2")):
             image = str(Path(work) / f"fat{bits}.img")
             with open(image, "wb") as handle:
@@ -62,7 +66,7 @@ def main():
             images[f"fat{bits}.img"] = image
             if not args.provider and bits != 32:
                 subprocess.run(["sudo", "-n", binary, image, format_id,
-                                str(os.getuid()), str(os.getgid())], check=True)
+                                str(args.owner_uid), str(args.owner_gid)], check=True)
         ntfs = str(Path(work) / "ntfs.img")
         with open(ntfs, "wb") as handle:
             handle.truncate(64 * 1024 * 1024)
@@ -96,7 +100,7 @@ def main():
             if args.smb_auth_server:
                 sudo.append("ASTRA_TEST_SMB_AUTH_SERVER=" + args.smb_auth_server)
             subprocess.run(sudo + [binary, images["rock-ridge.iso"],
-                            str(os.getuid()), str(os.getgid()),
+                            str(args.owner_uid), str(args.owner_gid),
                             images["fat12.img"], images["fat16.img"],
                             images["fat32.img"], images["ntfs.img"],
                             images["disc.udf"]] +
@@ -108,7 +112,7 @@ def main():
                                check=True, stdout=subprocess.DEVNULL)
         else:
             subprocess.run(["sudo", "-n", binary, ntfs, "9",
-                            str(os.getuid()), str(os.getgid())], check=True)
+                            str(args.owner_uid), str(args.owner_gid)], check=True)
 
 
 if __name__ == "__main__":
