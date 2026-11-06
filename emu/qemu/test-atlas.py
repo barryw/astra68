@@ -126,9 +126,12 @@ def command_output(machine, command, name, timeout):
         for path in paths[:2]:
             with open(path, encoding="utf-8", errors="replace") as output:
                 captured.append(output.read(2048))
+        said = machine.said(before)[0]
         raise RuntimeError("native oracle command failed (%s): %s\n"
-                           "shell lines: %r\ncaptured output: %r\ntrace:\n%s" %
-                           (failure, command, machine.said(before)[0][-40:], captured,
+                           "markers: %r\nshell lines: %r\ncaptured output: %r\ntrace:\n%s" %
+                           (failure, command,
+                            [line for line in said if "ATLAS-OUTPUT" in line],
+                            said[-40:], captured,
                             "\n".join(machine.recent_trace(24))))
     if len(paths) != 1:
         raise RuntimeError("native oracle output missing/ambiguous: %s" % paths)
@@ -220,6 +223,7 @@ def main():
             shared = os.path.join(machine.reader.hostfs_root, "work", "atlas-host-change")
             os.mkdir(shared)
             host_file = os.path.join(shared, "from-linux.txt")
+            reset_file = os.path.join(shared, "after-reset.txt")
             burst = []
             try:
                 before = machine.sequence()
@@ -235,6 +239,23 @@ def main():
                           before, args.deadline)
                 before = machine.sequence()
                 os.unlink(host_file)
+                wait_root(machine, "/work/atlas-host-change", 0, 0, 0,
+                          before, args.deadline)
+
+                resets = machine.qmp.execute("qom-get", {"path": "/machine",
+                    "property": "astra-host-fs-resets"})
+                machine.qmp.execute("qom-set", {"path": "/machine",
+                    "property": "astra-host-fs-reset", "value": True})
+                if machine.qmp.execute("qom-get", {"path": "/machine",
+                        "property": "astra-host-fs-resets"}) != resets + 1:
+                    raise RuntimeError("HostFS reset was not applied")
+                before = machine.sequence()
+                with open(reset_file, "w", encoding="utf-8") as output:
+                    output.write("after provider reset\n")
+                wait_root(machine, "/work/atlas-host-change", 1, 0, 0,
+                          before, args.deadline)
+                before = machine.sequence()
+                os.unlink(reset_file)
                 wait_root(machine, "/work/atlas-host-change", 0, 0, 0,
                           before, args.deadline)
 
@@ -258,11 +279,15 @@ def main():
                 wait_root(machine, "/work/atlas-host-change", 0, 0, 0,
                           before, args.deadline)
                 close_atlas(machine)
+                command_output(machine, "print probe", "atlas-post-reset-probe.txt",
+                               args.deadline)
                 check_retired(machine, args.deadline, drawer)
-                print("ATLAS host-shared Linux create/remove and overflow recovery without Refresh PASS", flush=True)
+                print("ATLAS host-shared Linux create/remove, provider reset and overflow recovery without Refresh PASS", flush=True)
             finally:
                 if os.path.exists(host_file):
                     os.unlink(host_file)
+                if os.path.exists(reset_file):
+                    os.unlink(reset_file)
                 for path in burst:
                     if os.path.isdir(path):
                         os.rmdir(path)

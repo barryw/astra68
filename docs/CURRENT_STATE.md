@@ -10,12 +10,42 @@ through the existing 64-record change ring; it adds no event path. Beast
 exFAT and DE25 AArch64 provider gates passed against disposable loop images.
 Board and Beast test binaries/script and gate log had matching SHA-256 values;
 log is archived under `/home/barry/astra-evidence/watch-loss-de25-20261106/`
-on Beast. Only production loop0 remained, Astra/audio/remote desktop stayed
-active, staged board files were removed, and 7.9 GiB remained free. Haiku
-reference: `src/system/kernel/fs/node_monitor.cpp:1170-1275` keeps parent and
-node identity separate from notification delivery. Atlas UI recovery from
-watch loss and provider restart still needs end-to-end gates; literal USB
-cable replug awaits user readiness.
+on Beast. Production CLIEXFAT `/usb0` then passed Atlas UI recovery without
+Refresh: Linux created a directory (0 to 1 item), removed that watched
+directory (1 to 0, inducing watch reset), then created and removed a file
+after rearm (0 to 1 to 0). RFB frames and Atlas root log have matching
+board/Beast SHA-256 values under
+`/home/barry/astra-evidence/atlas-watch-ui-20261106/`; both exact test names
+were removed. Only production loop0 remained, Astra/audio/remote desktop
+stayed active, Atlas was closed, staged board files were removed, and 7.9 GiB
+remained free. Haiku reference:
+`src/system/kernel/fs/node_monitor.cpp:1170-1275` keeps parent and node
+identity separate from notification delivery. Provider restart recovery is
+qualified below; literal USB cable replug awaits user readiness.
+
+HostFS provider-reset recovery, 2026-11-06: Direct VFS clients now check their
+scope lease before an operation, so a new path operation refreshes its client
+after provider reset even when no old descriptor first reports loss. Existing
+descriptors retain stale-generation failure. Beast QEMU Atlas gate passed
+Linux-side create/remove, QMP provider reset, another create/remove without
+Refresh, then the first new shell `/work` write after closing Atlas. Three
+DE25 private trials reached stage 8 without panic; the 240-second targeted
+trial opened Terminal, applied QMP reset (counter 0 to 1), recorded HostFS
+recovery, and wrote `resetok` to `/work/reset-first-open.txt` on its first new
+path operation. Trial log, console, syslog, and proof file have matching
+board/Beast SHA-256 hashes under
+`/home/barry/astra-evidence/vfs-reset-de25-trial3-20261106/`. Selected release
+was restored; Astra, audio host, and remote desktop are active, only production
+loop0 remains, trial state is removed, and 7.9 GiB is free. Haiku reference:
+`src/system/kernel/fs/node_monitor.cpp:1170-1275` separates watch identity
+from delivery; Astra also needs explicit HostFS lease validation to recover
+clients across provider generations. A lease query now runs at each direct VFS
+entry. Three focused DE25 `fsbench` runs passed, but sequential and random
+read medians were about 7-8% slower than the prior baseline; this cost needs
+performance qualification after correctness gates. The VFS host test target
+still fails to link because its mutex test harness lacks
+`astra_current_thread_id` and `astra_syscall5` mocks; NDK `dist-check` and
+Beast QEMU Atlas gate passed.
 
 General file cache baseline, 2026-11-06: Three focused `fsbench` runs on a
 disposable DE25 image passed warm stat, open/close, sequential read, and random
@@ -49,9 +79,8 @@ syslog, and both RFB frames under
 `/home/barry/astra-evidence/atlas-gap-de25-20261106/` on Beast. The selected
 release was restored, Astra reached stage 8, all three services were active,
 trial state was removed, and 7.8 GiB remained free. Watch-resource loss and
-provider restart still need end-to-end UI recovery gates; literal USB cable
-replug awaits the user. Notification performance qualification follows those
-correctness gates.
+provider restart are qualified above; literal USB cable replug awaits the user.
+Notification performance qualification follows those correctness gates.
 
 Host-shared Atlas notification gate, 2026-11-06: Atlas now requests `WORK:rw`
 in its bundle and trusted startup ceiling. The existing HostFS change ring and
@@ -65,7 +94,8 @@ guest log confirmed removal. Checksummed console, syslog, and RFB frames are
 under `/home/barry/astra-evidence/atlas-work-candidate-20261106/de25/` on
 Beast. The selected release was restored, Astra reached stage 8, all three
 services were active, trial state was removed, and 7.8 GiB remained free.
-Overflow recovery is qualified above; literal USB cable replug remains.
+Overflow and watch-loss recovery are qualified above; literal USB cable
+replug remains.
 
 Provider blocked-I/O gate, 2026-11-05: The existing confined-provider QEMU
 fixture now freezes only its disposable loop-mounted ext4 system volume, starts

@@ -98,9 +98,20 @@ static uint32_t lane_enter(AstraVfsClient *client)
         if (status != ASTRA_VFS_OK)
             return status;
         direct = client->port_direct_address;
-        if (direct == NULL || !__atomic_load_n(&direct->backend.lost, __ATOMIC_ACQUIRE))
+        if (direct == NULL)
+            return ASTRA_VFS_OK;
+        AstraHostLeaseInfo lease;
+        uint32_t lease_status = astra_host_lease_query(client->port_direct_scope,
+                                                       &lease);
+        if (lease_status == ASTRA_SYSCALL_OK &&
+            !__atomic_load_n(&direct->backend.lost, __ATOMIC_ACQUIRE))
             return ASTRA_VFS_OK;
         astra_vfs_port_client_leave(client);
+        if (lease_status != ASTRA_SYSCALL_OK &&
+            lease_status != ASTRA_SYSCALL_PEER_DEAD)
+            return astra_vfs_storage_status(
+                astra_vfs_host_status_from_syscall(lease_status));
+        /* Scope revocation can finish before this client observes a lost I/O. */
         status = astra_vfs_port_refresh(client);
         if (status != ASTRA_VFS_OK)
             return status;
