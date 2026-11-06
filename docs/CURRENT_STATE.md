@@ -2,6 +2,14 @@
 
 Status: active continuation map, 2026-11-06
 
+General file cache work, 2026-11-06: `docs/FILE_CACHE_DESIGN.md` records the
+native owner split, Haiku source paths, identity and invalidation rules, and
+implementation/release gates. Existing kernel library cache shares immutable
+ELF pages; VFS owns mutable file descriptions outside the kernel. The missing
+mechanism is a fault-time pager handoff with cancellation and writeback,
+followed by pressure reclaim and POSIX adaptation. Design is recorded;
+implementation and certification remain open.
+
 Atlas notification overflow recovery, 2026-11-06: The Atlas gate now pauses
 the guest while Linux creates 80 directories in an open `/work` view. The
 provider's independently tested 64-record queue returns GAP after this burst;

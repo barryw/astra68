@@ -485,6 +485,8 @@ recovery require
 target-cycle and failure-injection gates before release. SMP scheduling,
 loadable kernel modules, and swap are deliberate non-goals for this single
 MC68040, service-oriented system.
+`docs/FILE_CACHE_DESIGN.md` records the native VFS/VM owner split and release
+gates for the still-open general cache and file-backed mapping work.
 
 After notification correctness and loss-recovery gates close, qualify their
 cost on DE25 with zero, one, and multiple subscribers. Compare mutation latency,
