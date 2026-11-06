@@ -2,6 +2,23 @@
 
 Status: active continuation map, 2026-11-06
 
+DE25 render deadline recovery, 2026-11-06: Existing
+`astra-render-certify --timeout-recovery` now submits a valid full-frame fill
+with a 200 us deadline. On the selected fabric, the first pixel changed before
+the command timed out; the renderer emitted one failed completion, advanced
+its timeout and local reset counters once, returned idle, and rendered a
+second one-pixel fill correctly. This proves physical in-flight command
+deadline and recovery without changing RTL. Beast AArch64 build and board
+binary matched SHA-256
+`1073adfd9cb983b04cee786d7032ba6a4bed44779c535ba672ece70377bc3ea5`.
+The selected release verified before restart; Astra reached stage 8, Astra,
+audio, and remote desktop were active with zero restarts, only production
+loop0 remained, and 8.5 GiB was free. Trial binary was removed from board.
+Checksummed evidence is under
+`/home/barry/astra-evidence/render-timeout-recovery-de25-20261106/` on Beast.
+Actual stalled AXI/engine fault injection and bounded failed-reset gates
+remain open.
+
 VFS retained writeback seam, 2026-11-06: Retained descriptions now use the
 existing backend write/sync operations after client close, preserving open
 rights, limits, short writes, errors, and node-change generation. The same

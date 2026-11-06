@@ -174,6 +174,10 @@ ring backpressure, completion and reset, the complete blitter, virtual-sprite
 groups, geometry, pattern and bounded flood operations, every AFNT format,
 copper execution and timing classes, and integrated pipeline behavior.
 
+On DE25, `astra-render-certify --timeout-recovery` checks physical command
+deadline and local reset after pixels were written, then verifies the next
+command completes. It does not inject a stalled AXI slave.
+
 Component routes remain useful for attribution but are not release evidence:
 
 ```sh

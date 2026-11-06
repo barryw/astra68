@@ -129,7 +129,7 @@ The OS-facing machine must provide the following bounded facilities:
 | bus timeout | PARTIAL | every target times out to BERR and latches target/address/cycle class |
 | interrupt controller | CURRENT | 32 pending/mask/config sources with stable vectored IACK |
 | graphics IRQs | CURRENT SIM | vblank, raster, blit, draw, and fence completion remain bounded |
-| engine recovery | PARTIAL: device lease reset covers display, block, input, network, and host transports; renderer has command deadlines and soft reset. Stuck-engine fault gates remain open | qualify every stuck-engine path and bound failed reset without resetting CPU or unrelated engines |
+| engine recovery | PARTIAL: device lease reset covers display, block, input, network, and host transports. DE25 renderer physically timed out after writing pixels, reset locally once, emitted one failed completion, and rendered the next command. Actual stalled AXI and failed-reset fault gates remain open | qualify every stuck-engine path and bound failed reset without resetting CPU or unrelated engines |
 | early console | CURRENT | FTDI UART works before PMMU/scheduler; ESP runtime remains SPI-only |
 | retained trace | PARTIAL | reserved SDRAM log exists; add allocation-free trace storage outside ordinary heap corruption |
 | memory bursts | PARTIAL | current caches/line fill are retained; benchmark and qualify Motorola-compatible burst behavior |

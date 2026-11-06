@@ -2824,6 +2824,7 @@ restore:
 
 static int parse_present_milliseconds(int argc, char **argv,
                                       unsigned *milliseconds, bool *scaled,
+                                      bool *timeout_recovery,
                                       const char **capture_path)
 {
     char *end = NULL;
@@ -2831,9 +2832,14 @@ static int parse_present_milliseconds(int argc, char **argv,
 
     *milliseconds = 0u;
     *scaled = false;
+    *timeout_recovery = false;
     *capture_path = NULL;
     if (argc == 1)
         return 0;
+    if (argc == 2 && strcmp(argv[1], "--timeout-recovery") == 0) {
+        *timeout_recovery = true;
+        return 0;
+    }
     if (argc == 3 && strcmp(argv[1], "--capture") == 0) {
         *capture_path = argv[2];
         return 0;
@@ -2842,7 +2848,7 @@ static int parse_present_milliseconds(int argc, char **argv,
                       strcmp(argv[1], "--present-scaled-ms") != 0)) {
         fprintf(stderr,
                 "usage: %s [--present-ms|--present-scaled-ms 1..60000"
-                "|--capture OUTPUT.rgb]\n",
+                "|--capture OUTPUT.rgb|--timeout-recovery]\n",
                 argv[0]);
         return -1;
     }
@@ -2874,6 +2880,103 @@ static void close_maps(struct render_maps *maps)
     astra_graphics_memory_map_close(&maps->queues);
 }
 
+static int certify_timeout_recovery(const struct astra_graphics_device *device,
+                                    const struct render_maps *maps)
+{
+    struct engine_counters before;
+    struct engine_counters timed_out;
+    struct engine_counters recovered;
+    volatile uint8_t *command;
+    volatile const uint8_t *completion;
+    uint32_t status;
+
+    store_be16(maps->frame.data, 0xffffu);
+    if (write_fill(maps, 0u, 1u, 0, 0,
+                   ASTRA_FRAMEBUFFER_WIDTH, ASTRA_FRAMEBUFFER_HEIGHT,
+                   0x1234u) != 0)
+        return -1;
+    command = command_record(maps, 0u);
+    store_be32(command + 16u, 200u);
+    astra_graphics_memory_barrier();
+    capture_counters(device, &before);
+    astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER, 1u);
+    if (wait_for_completions(device, 1u) != 0 ||
+        wait_for_idle(device, ENGINE_TIMEOUT_NS) != 0)
+        return -1;
+    completion = queue_address(maps, COMPLETION_RING_OFFSET,
+                               ASTRA_RENDER_COMPLETION_BYTES);
+    capture_counters(device, &timed_out);
+    status = astra_mmio_read(device, ASTRA_REG_RENDER_STATUS);
+    if (completion == NULL ||
+        load_be32(completion) != pair_u16(ASTRA_RENDER_ABI_VERSION,
+                                          ASTRA_RENDER_COMPLETION_BYTES) ||
+        load_be32(completion + 4u) !=
+            pair_u16(ASTRA_RENDER_OP_FILL, ASTRA_RENDER_STATUS_TIMEOUT) ||
+        load_be32(completion + 8u) != 1u ||
+        load_be32(completion + 12u) != 0u ||
+        load_be32(completion + 24u) != 2u ||
+        load_be32(completion + 28u) != RESOURCE_GENERATION ||
+        load_be16(maps->frame.data) != 0x1234u ||
+        timed_out.submitted - before.submitted != 1u ||
+        timed_out.completed - before.completed != 1u ||
+        timed_out.failed - before.failed != 1u ||
+        timed_out.timeouts - before.timeouts != 1u ||
+        timed_out.resets - before.resets != 1u ||
+        (status & (ASTRA_RENDER_ENGINE_BUSY |
+                   ASTRA_RENDER_ENGINE_RESET_ACTIVE |
+                   ASTRA_RENDER_ENGINE_CONFIG_FAULT)) != 0u) {
+        fprintf(stderr, "render timeout recovery: first command failed "
+                "status=%08" PRIx32 " timeouts=%" PRIu32
+                " resets=%" PRIu32 " first_pixel=%04x\n", status,
+                timed_out.timeouts - before.timeouts,
+                timed_out.resets - before.resets,
+                load_be16(maps->frame.data));
+        return -1;
+    }
+    astra_mmio_write(device, ASTRA_REG_RENDER_COMPLETION_CONSUMER, 1u);
+
+    if (write_fill(maps, 1u, 2u, 0, 0, 1u, 1u, 0x5678u) != 0)
+        return -1;
+    astra_graphics_memory_barrier();
+    astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER, 2u);
+    if (wait_for_completions(device, 2u) != 0 ||
+        wait_for_idle(device, ENGINE_TIMEOUT_NS) != 0)
+        return -1;
+    completion = queue_address(maps, COMPLETION_RING_OFFSET +
+                               ASTRA_RENDER_COMPLETION_BYTES,
+                               ASTRA_RENDER_COMPLETION_BYTES);
+    capture_counters(device, &recovered);
+    status = astra_mmio_read(device, ASTRA_REG_RENDER_STATUS);
+    if (completion == NULL ||
+        load_be32(completion) != pair_u16(ASTRA_RENDER_ABI_VERSION,
+                                          ASTRA_RENDER_COMPLETION_BYTES) ||
+        load_be32(completion + 4u) !=
+            pair_u16(ASTRA_RENDER_OP_FILL, ASTRA_RENDER_STATUS_OK) ||
+        load_be32(completion + 8u) != 2u ||
+        load_be32(completion + 12u) != 1u ||
+        load_be32(completion + 24u) != 0u ||
+        load_be32(completion + 28u) != RESOURCE_GENERATION ||
+        load_be16(maps->frame.data) != 0x5678u ||
+        recovered.submitted - timed_out.submitted != 1u ||
+        recovered.completed - timed_out.completed != 1u ||
+        recovered.failed != timed_out.failed ||
+        recovered.timeouts != timed_out.timeouts ||
+        recovered.resets != timed_out.resets ||
+        (status & (ASTRA_RENDER_ENGINE_BUSY |
+                   ASTRA_RENDER_ENGINE_RESET_ACTIVE |
+                   ASTRA_RENDER_ENGINE_CONFIG_FAULT)) != 0u) {
+        fprintf(stderr, "render timeout recovery: next command failed "
+                "status=%08" PRIx32 " completed=%" PRIu32 "\n",
+                status, recovered.completed - timed_out.completed);
+        return -1;
+    }
+    astra_mmio_write(device, ASTRA_REG_RENDER_COMPLETION_CONSUMER, 2u);
+    astra_mmio_write(device, ASTRA_REG_RENDER_IRQ_PENDING, 1u);
+    printf("ASTRA_RENDER_TIMEOUT_RECOVERY PASS deadline_us=200"
+           " timeouts=1 resets=1 first_pixel=1234 next_pixel=5678\n");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     struct astra_graphics_device device;
@@ -2901,6 +3004,7 @@ int main(int argc, char **argv)
     uint32_t texture_pixels;
     unsigned present_milliseconds;
     bool present_scaled;
+    bool timeout_recovery;
     const char *capture_path;
     uint32_t capabilities;
     uint32_t status;
@@ -2908,6 +3012,7 @@ int main(int argc, char **argv)
 
     if (parse_present_milliseconds(
             argc, argv, &present_milliseconds, &present_scaled,
+            &timeout_recovery,
             &capture_path) != 0)
         return EXIT_FAILURE;
     astra_graphics_device_init(&device);
@@ -2961,6 +3066,11 @@ int main(int argc, char **argv)
         goto done;
     if (configure_engine(&device) != 0)
         goto done;
+    if (timeout_recovery) {
+        if (certify_timeout_recovery(&device, &maps) == 0)
+            result = EXIT_SUCCESS;
+        goto stop_engine;
+    }
     capture_counters(&device, &before);
     astra_mmio_write(&device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER,
                      COMMAND_COUNT);
