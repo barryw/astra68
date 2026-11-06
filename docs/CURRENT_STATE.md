@@ -2,6 +2,20 @@
 
 Status: active continuation map, 2026-11-06
 
+VFS writeback boundary, 2026-11-06: Ordinary and retained writes now reject a
+backend count larger than the requested length with I/O error and zero
+published bytes. A backend-reported mutation still advances the node change
+generation, even if its result is invalid. Both public and retained tests
+exercise the boundary. Beast target build, host suite, and sanitizers passed;
+DE25 AArch64 core fixture passed one million forced switches. Board/Beast
+binary SHA-256 matched at
+`acc8e4f4c7628f9a2f2bf9a4555b5da4ac219eb8bda00de55385d36c7152443d`.
+Checksummed evidence is under
+`/home/barry/astra-evidence/vfs-write-bound-de25-20261106/` on Beast. Trial
+binary was removed; Astra, audio, and remote desktop stayed active with zero
+restarts, only production loop0 was present, and 8.5 GiB was free. Guest
+pager, cached frames, writeback worker, and mappings remain open.
+
 VFS slot-reuse wait guard, 2026-11-06: The existing per-file wait remembers
 generation, so a close/reopen that returns a slot to OPEN cannot redirect a
 waiting read to the new node. Public READ test reproduces the reuse. Haiku

@@ -48,6 +48,7 @@ typedef struct FakeFs {
     uint32_t read_mode;
     uint32_t close_status;
     uint32_t write_status;
+    uint32_t write_overreport;
     uint32_t sync_status;
 } FakeFs;
 
@@ -224,6 +225,8 @@ fake_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags, uint6
     }
     *moved = length;
     *position = offset + length;
+    if (fake.write_overreport)
+        ++*moved;
     return ASTRA_VFS_OK;
 }
 
@@ -1430,12 +1433,18 @@ test_retained_description_survives_client_close(void)
     assert(moved == 1u && node->size == 3u);
     assert(node->bytes[0] == 'c' && node->bytes[1] == 'X');
     assert(service.changes.nodes == 1u);
+    fake.write_overreport = 1u;
+    assert(astra_vfs_service_write_retained(&service, handle, 2u, UINT64_MAX,
+                                            "Y", 1u, &moved) == ASTRA_VFS_ERR_IO);
+    assert(moved == 0u && node->bytes[2] == 'Y' &&
+           service.changes.nodes == 2u);
+    fake.write_overreport = 0u;
     fake.write_status = ASTRA_VFS_ERR_NO_SPACE;
     assert(astra_vfs_service_write_retained(&service, handle, 2u, UINT64_MAX,
                                             "Z", 1u, &moved) ==
            ASTRA_VFS_ERR_NO_SPACE);
-    assert(moved == 0u && node->bytes[2] == 'c' &&
-           service.changes.nodes == 1u);
+    assert(moved == 0u && node->bytes[2] == 'Y' &&
+           service.changes.nodes == 2u);
     fake.write_status = ASTRA_VFS_OK;
     assert(astra_vfs_service_sync_retained(&service, handle) == ASTRA_VFS_OK);
     fake.sync_status = ASTRA_VFS_ERR_IO;
@@ -2116,6 +2125,17 @@ test_full_width_binary_write(void)
     request.length = ASTRA_VFS_IO_MAX + 1u;
     fixture_dispatch(&service, ASTRA_VFS_OP_WRITE, &request, &reply);
     assert(reply.status == ASTRA_VFS_ERR_INVALID);
+
+    fake.write_overreport = 1u;
+    begin_request(&request, session, NULL);
+    request.file = file;
+    request.length = 1u;
+    request.body.payload[0] = 0x5au;
+    fixture_dispatch(&service, ASTRA_VFS_OP_WRITE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_IO && reply.count == 0u);
+    assert(fake_find("/bin")->bytes[0] == 0x5au);
+    assert(service.changes.nodes == 2u);
+    fake.write_overreport = 0u;
 }
 
 static void

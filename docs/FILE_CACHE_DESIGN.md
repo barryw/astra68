@@ -97,6 +97,19 @@ Haiku `src/system/kernel/fs/fd.cpp:284-312` pins the descriptor object while
 `get_fd()` returns it; Astra keeps its existing generation-tagged slot and
 rejects a waiter whose slot incarnation changed.
 
+Sixth slice, 2026-11-06: ordinary and retained writes share backend-count
+validation. An overreported write returns I/O error and zero published bytes
+instead of clipped success. The node change generation advances when a backend
+reports any mutation, including an invalid count, so later cache invalidation
+does not miss a potentially changed file. Public and retained tests passed the
+Beast target build, host suite, and sanitizers. The DE25 AArch64 core fixture
+passed one million forced switches with matching board/Beast binary SHA-256
+`acc8e4f4c7628f9a2f2bf9a4555b5da4ac219eb8bda00de55385d36c7152443d`.
+Services remained active with zero restarts, only production loop0 was present,
+8.5 GiB was free, and the trial binary was removed. Checksummed evidence is
+under `/home/barry/astra-evidence/vfs-write-bound-de25-20261106/` on Beast.
+Guest pager and cache consumers remain open.
+
 ## Target baseline, 2026-11-06
 
 Three focused `fsbench` runs on DE25 used the selected release's kernel and

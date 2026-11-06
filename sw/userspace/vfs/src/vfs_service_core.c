@@ -1333,10 +1333,13 @@ write_file(AstraVfsService *service, AstraVfsOpenFile *file, uint64_t offset,
     if (!state_acquire(service))
         return ASTRA_VFS_ERR_IO;
     file_release(service, file);
-    if (status == ASTRA_VFS_OK && *moved > length)
-        *moved = length;
-    if (status == ASTRA_VFS_OK && *moved != 0u)
+    if (*moved != 0u)
         ++service->changes.nodes;
+    if (*moved > length) {
+        *moved = 0u;
+        *position = offset;
+        return ASTRA_VFS_ERR_IO;
+    }
     return status;
 }
 
