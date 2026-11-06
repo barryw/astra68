@@ -75,8 +75,14 @@ DE25 normal and controlled watchdog boots now prove exact GP preload values
 Preserved-state release `2e1fe6ef28b190ade4016b1e3ab6ca783ad21959b5d42b0419a5b5b8972a539f`
 is selected; its runtime retained `cause=watchdog-event` with the exact
 post-reset boot ID. User confirmed HDMI desktop and startup sound on the first
-candidate boot. Repeated physical HDMI/audio check after watchdog and a normal
-reboot proving the event bit clears remain open. See
+candidate boot. After controlled watchdog expiry, a normal DE25 reboot
+changed boot ID to `200c94a2-19c5-483a-817a-a05c7a6ff136` and loaded
+`astra.watchdog_preload=a57a68d0`; the selected runtime recorded
+`cause=no-watchdog-event-observed` for that boot. POST, stage 8, all three
+services with zero restarts, and only production loop0 passed, with 8.5 GiB
+free. User confirmed HDMI desktop and startup sound both normal on this
+repeat boot. Checksummed evidence is under
+`/home/barry/astra-evidence/watchdog-normal-boot-20261106/` on Beast. See
 `fpga/de25/TIMING_CLOSURE.md` for full source, route, and hardware evidence.
 References:
 Altera Agilex 5 CS/R1 HPS Register Map RC28,
@@ -105,8 +111,8 @@ policy revisions get distinct identities. Haiku reference
 `src/system/boot/loader/file_systems/packagefs/packagefs.cpp` reads immutable
 boot package content; Astra adapts that principle to its versioned SD boot
 selector. DE25 booted the new script with normal and watchdog-event GP values;
-the selected release retained the watchdog cause. Normal reboot event-clear
-check remains open.
+the selected release retained the watchdog cause, and a later normal reboot
+cleared the event.
 
 VFS retained metadata, 2026-11-06: Retained descriptions now use the existing
 backend `stat_node` path to recheck size and known identity after client

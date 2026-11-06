@@ -167,8 +167,17 @@
   `dbd8c871bfe38b27d600355855802fedf8e36921a23b0368ce0deb4976f7f65d`;
   selected-release evidence manifest SHA-256
   `4df0dd12575c451df070ca8c2fe4b4e20cd1a0b6d23f2e59814d104d45fcb0a2`.
-  User missed post-watchdog HDMI/audio window; repeated physical check remains
-  open. Normal reboot after watchdog should also prove event bit returns to 0.
+  User missed the immediate post-watchdog HDMI/audio window.
+- Follow-up normal DE25 reboot changed boot ID to
+  `200c94a2-19c5-483a-817a-a05c7a6ff136`. U-Boot passed
+  `astra.watchdog_preload=a57a68d0`; selected runtime atomically recorded
+  `cause=no-watchdog-event-observed` against that boot ID. POST, guest stage 8,
+  Astra/audio/remote services with zero restarts, only production loop0, and
+  8.5 GiB free passed. User observed normal physical HDMI desktop and startup
+  sound. Beast archive
+  `/home/barry/astra-evidence/watchdog-normal-boot-20261106/` verifies its
+  `SHA256SUMS`. Disposition: ACCEPT watchdog event retention and clear,
+  selected release boot, physical display, and audio gates.
 
 ## 2026-10-25: ADV7513 audio candidate aborted by Beast global OOM
 
