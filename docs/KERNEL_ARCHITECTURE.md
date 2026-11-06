@@ -441,6 +441,11 @@ Atlas gate and a 240-second DE25 private trial: Linux-side create and delete
 changed the open view from zero to one and back without Refresh. Atlas needed
 the `WORK:rw` bundle grant and matching trusted startup ceiling; the existing
 change ring and broker handled delivery. Literal USB cable replug remains.
+With guest paused, 80 Linux-side directory creates exceed the provider's
+64-record queue. The full Beast Atlas gate and a 240-second DE25 private trial
+showed the open `/work` view reload from zero to 80 folders, then return to
+zero after removal without Refresh. Watch-resource loss and provider restart
+still need end-to-end UI recovery gates.
 `OPEN_CREATE` can open an existing file; the rooted provider probes atomic
 exclusive creation first and retries the requested flags when that probe
 fails. Only a successful exclusive creation emits an exact create record.

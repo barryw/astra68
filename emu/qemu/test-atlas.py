@@ -220,6 +220,7 @@ def main():
             shared = os.path.join(machine.reader.hostfs_root, "work", "atlas-host-change")
             os.mkdir(shared)
             host_file = os.path.join(shared, "from-linux.txt")
+            burst = []
             try:
                 before = machine.sequence()
                 command_output(machine,
@@ -236,12 +237,35 @@ def main():
                 os.unlink(host_file)
                 wait_root(machine, "/work/atlas-host-change", 0, 0, 0,
                           before, args.deadline)
+
+                # A paused guest cannot drain the 64-record change ring.
+                # Host-side overflow must invalidate and reload the open view.
+                burst = [os.path.join(shared, "overflow-%03d" % index)
+                         for index in range(80)]
+                before = machine.sequence()
+                machine.qmp.execute("stop")
+                try:
+                    for path in burst:
+                        os.mkdir(path)
+                    time.sleep(1.0)
+                finally:
+                    machine.qmp.execute("cont")
+                wait_root(machine, "/work/atlas-host-change", len(burst),
+                          len(burst), 0, before, args.deadline)
+                before = machine.sequence()
+                for path in burst:
+                    os.rmdir(path)
+                wait_root(machine, "/work/atlas-host-change", 0, 0, 0,
+                          before, args.deadline)
                 close_atlas(machine)
                 check_retired(machine, args.deadline, drawer)
-                print("ATLAS host-shared Linux create/remove without Refresh PASS", flush=True)
+                print("ATLAS host-shared Linux create/remove and overflow recovery without Refresh PASS", flush=True)
             finally:
                 if os.path.exists(host_file):
                     os.unlink(host_file)
+                for path in burst:
+                    if os.path.isdir(path):
+                        os.rmdir(path)
                 os.rmdir(shared)
 
             if args.overflow:

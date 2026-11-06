@@ -2,6 +2,21 @@
 
 Status: active continuation map, 2026-11-06
 
+Atlas notification overflow recovery, 2026-11-06: The Atlas gate now pauses
+the guest while Linux creates 80 directories in an open `/work` view. The
+provider's independently tested 64-record queue returns GAP after this burst;
+Atlas must reload from the directory rather than trust stale entry events.
+The full Beast Atlas gate passed 0 to 80 to 0 entries without Refresh. A
+240-second DE25 private trial repeated that sequence; RFB showed 80 folders
+and later an empty view. Board and Beast SHA-256 hashes match for the console,
+syslog, and both RFB frames under
+`/home/barry/astra-evidence/atlas-gap-de25-20261106/` on Beast. The selected
+release was restored, Astra reached stage 8, all three services were active,
+trial state was removed, and 7.8 GiB remained free. Watch-resource loss and
+provider restart still need end-to-end UI recovery gates; literal USB cable
+replug awaits the user. Notification performance qualification follows those
+correctness gates.
+
 Host-shared Atlas notification gate, 2026-11-06: Atlas now requests `WORK:rw`
 in its bundle and trusted startup ceiling. The existing HostFS change ring and
 broker needed no new notification path. The full Beast Atlas gate opened
@@ -14,9 +29,7 @@ guest log confirmed removal. Checksummed console, syslog, and RFB frames are
 under `/home/barry/astra-evidence/atlas-work-candidate-20261106/de25/` on
 Beast. The selected release was restored, Astra reached stage 8, all three
 services were active, trial state was removed, and 7.8 GiB remained free.
-Literal USB cable replug
-and notification loss-recovery gates remain; performance qualification follows
-correctness.
+Overflow recovery is qualified above; literal USB cable replug remains.
 
 Provider blocked-I/O gate, 2026-11-05: The existing confined-provider QEMU
 fixture now freezes only its disposable loop-mounted ext4 system volume, starts
