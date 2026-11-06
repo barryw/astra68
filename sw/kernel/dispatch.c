@@ -260,8 +260,13 @@ KernelDispatchTarget dispatch_user_fault_fast(const uint32_t *registers,
         schedule_process_worker();
         return KERNEL_DISPATCH_WORKER;
     }
-    if (next == NULL)
-        kernel_panic("user fault left no context to resume");
+    if (next == NULL) {
+        if (kernel_worker_try_select())
+            return KERNEL_DISPATCH_WORKER;
+        next = kernel_process_resume_idle();
+        if (next == NULL)
+            return KERNEL_DISPATCH_RESUME;
+    }
     return kernel_dispatch_user_target(next);
 }
 

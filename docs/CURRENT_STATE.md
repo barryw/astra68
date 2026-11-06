@@ -2,6 +2,35 @@
 
 Status: active continuation map, 2026-11-06
 
+Blocked-fault scheduler handoff, 2026-11-06: `sw/kernel/dispatch.c` now uses
+the syscall dispatch's existing worker/idle selection when a user fault
+returns `NO_RUNNABLE` without process maintenance. Host dispatch tests cover
+idle, worker, and wake-before-idle results; the full Beast kernel host suite
+and MC68040 build passed. Beast K1 qualification on current QEMU passed 13
+markers with zero cycle overruns, including the unchanged 21,950/125,000
+user-fault sample. The same K1 ROM passed on DE25 without a storage image:
+all markers reached `KERNEL MULTITASKING`, zero cycle overruns and no panic.
+K1 ROM SHA-256 was
+`2e229974c0d891e484887ce49673f52dfa078a90c684f91e2d9e2af0ab16c0d9`;
+board/Beast log SHA-256 matched at
+`3b5f9a880b6ffe33abb0f93dfd5399d9783732399bfd0d827d91397336db921b`.
+Checksummed evidence is under
+`/home/barry/astra-evidence/pager-fault-idle-20261106/` on Beast. The normal
+ROM build was restored; DE25's selected release and storage image were not
+changed. Trial files were removed; a fresh production boot reached stage 8,
+Astra, audio, and remote desktop stayed active with zero restarts, only loop0
+was mounted, and 8.5 GiB was free. This certifies dispatch behavior and normal
+fault regression, not a live pager request or file mapping.
+
+File-cache pager handoff review, 2026-11-06: `docs/FILE_CACHE_DESIGN.md`
+now specifies how a VFS-owned reserved area can use the existing port send
+endpoint, reply capability, call donation, and area frame ownership for a
+blocked page fault. The current fault dispatcher only resumes an immediately
+runnable context, and ordinary `deliver_reply()` writes to a user buffer;
+neither is yet a pager continuation. No guest mapping or pager code has been
+selected. Haiku reference: `src/system/kernel/vm/vm.cpp` and
+`src/system/kernel/cache/file_cache.cpp`.
+
 VFS writeback boundary, 2026-11-06: Ordinary and retained writes now reject a
 backend count larger than the requested length with I/O error and zero
 published bytes. A backend-reported mutation still advances the node change

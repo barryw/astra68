@@ -46,6 +46,7 @@ static uint32_t cpu_cycle_count;
 static uint32_t cpu_cycle_step;
 static KernelProcessStatus syscall_result;
 static KernelProcessStatus fault_result;
+static bool fault_maintenance;
 static const uint32_t *timer_registers;
 static const void *timer_frame;
 static uint32_t timer_user_stack;
@@ -121,6 +122,7 @@ static void reset_fakes(void)
     cpu_cycle_step = 37u;
     syscall_result = KERNEL_PROCESS_OK;
     fault_result = KERNEL_PROCESS_OK;
+    fault_maintenance = true;
     timer_registers = NULL;
     timer_frame = NULL;
     timer_user_stack = 0u;
@@ -239,7 +241,7 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
     (void)user_stack;
     (void)raw_frame;
     ++fault_calls;
-    maintenance_pending = true;
+    maintenance_pending = fault_maintenance;
     *next_context = fault_result == KERNEL_PROCESS_OK ? &timer_context : NULL;
     if (fault_result == KERNEL_PROCESS_NO_RUNNABLE)
         process_is_active = false;
@@ -784,6 +786,37 @@ static void test_last_process_fault_selects_worker(void)
     assert(kernel_dispatch_user_fault_irqoff_max_cycles() == 37u);
 }
 
+static void test_blocked_fault_enters_idle_or_worker(void)
+{
+    uint32_t registers[15] = {0u};
+    uint8_t frame[8];
+
+    reset_fakes();
+    fault_result = KERNEL_PROCESS_NO_RUNNABLE;
+    fault_maintenance = false;
+    make_frame(frame, 0x0000u, 4u * 4u);
+    assert(kernel_exception_entry_dispatch(registers, frame, 0x70000f80u) ==
+           KERNEL_DISPATCH_RESUME);
+    assert(worker_select_calls == 1u && idle_resume_calls == 1u);
+    assert(worker_schedule_calls == 0u && !process_is_active);
+
+    reset_fakes();
+    fault_result = KERNEL_PROCESS_NO_RUNNABLE;
+    fault_maintenance = false;
+    worker_select_result = true;
+    assert(kernel_exception_entry_dispatch(registers, frame, 0x70000f80u) ==
+           KERNEL_DISPATCH_WORKER);
+    assert(worker_select_calls == 1u && idle_resume_calls == 0u);
+
+    reset_fakes();
+    fault_result = KERNEL_PROCESS_NO_RUNNABLE;
+    fault_maintenance = false;
+    idle_resume_result = &timer_context;
+    assert(kernel_exception_entry_dispatch(registers, frame, 0x70000f80u) ==
+           kernel_dispatch_user_target(&timer_context));
+    assert(worker_select_calls == 1u && idle_resume_calls == 1u);
+}
+
 static void test_nonexit_syscall_resumes_user(void)
 {
     uint32_t registers[15] = {0u};
@@ -936,6 +969,7 @@ int main(void)
     test_scheduler_transition_irq_resumes_supervisor();
     test_last_process_exit_selects_worker();
     test_last_process_fault_selects_worker();
+    test_blocked_fault_enters_idle_or_worker();
     test_nonexit_syscall_resumes_user();
     test_thread_lifecycle_uses_dedicated_metrics();
     test_shared_ipc_uses_dedicated_metrics();

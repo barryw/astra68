@@ -240,6 +240,65 @@ pressure and tail latency remain unmeasured.
    filesystem I/O inside the allocator or fault handler. Failure leaves
    dirty pages resident and visible in accounting.
 
+## Pager wiring through existing native objects
+
+The VFS service creates one reserved area per cache object and binds its own
+port's send endpoint to that area. `kernel_port_handle_retain()` keeps the
+endpoint alive until the area retires; receiver death makes sends fail with
+`PEER_DEAD`. VFS transfers only the area handle to mapping clients. The
+kernel checks an existing area mapping on a fault, so a client cannot fault
+an ungranted file into memory. Unknown backend identity gets a separate area
+per retained description; complete volume/inode/birth identity permits area
+sharing. The VFS description stays retained while the area or a pending page
+request exists.
+
+For a missing page, the kernel installs its existing reply capability in the
+faulting process's handle table and sends a request to the bound port with
+`kernel_port_send_narrowed()`. The faulting thread then uses
+`kernel_thread_call_begin/block/assign()` and `schedule_next(SWITCH_BLOCK)`,
+the same donation and deadline machinery as `ASTRA_SYSCALL_PORT_CALL`. A full
+port queue must wait for writable capacity and retry the unsent request; it
+cannot resume the faulting instruction with the page still absent. The
+exception dispatcher must accept a blocked fault with no runnable user thread
+and select the existing worker/idle path, as syscall dispatch already does.
+
+The VFS pager reads through its retained description into a separate,
+already committed transfer area. Its reply carries that area handle, offset,
+valid byte count, and status. `deliver_reply()` recognizes a pending fault
+before its ordinary user-buffer branch, looks up the transfer area in the
+replier's handle table, copies a checked page into a zeroed kernel-owned frame,
+and publishes the frame only after the complete result and current area,
+volume, and file generation pass validation. No reply handle is imported into
+the client and no user address is fabricated. A second thread faulting the
+same page waits on that page's pending operation rather than issuing a second
+read. Successful completion wakes all waiters only after publication.
+
+Reply-capability release, deadline expiry, cancellation, service death, and
+process exit each retire the pending fault once. Failure leaves no published
+page and terminates the faulting access with an inspectable crash result;
+retrying the same unresolved instruction indefinitely is invalid. The
+transfer area is never the file's mapped area: writing into a published shared
+page while it is being filled would expose partial data to other processes.
+
+This wiring uses existing `sw/kernel/area.c` mapping authority and frame
+ownership, `sw/kernel/port.c` transfer, `sw/kernel/thread.c` call donation,
+and `sw/kernel/process.c` reply capability. Haiku's
+`src/system/kernel/vm/vm.cpp` resolves faults against area/cache ownership,
+while `src/system/kernel/cache/file_cache.cpp` keeps data I/O behind the vnode
+cache; Astra adapts those rules to its userspace VFS service. No new IPC
+implementation or Linux-visible file-mapping API is needed.
+
+The first scheduler prerequisite now passes: fault dispatch accepts
+`NO_RUNNABLE` with no maintenance and chooses the existing worker/idle path.
+Host tests cover all three outcomes. Beast and DE25 K1 qualification passed on
+the same ROM (SHA-256
+`2e229974c0d891e484887ce49673f52dfa078a90c684f91e2d9e2af0ab16c0d9`)
+with zero cycle overruns; Beast's normal user-fault sample remained
+21,950/125,000 cycles. Evidence:
+`/home/barry/astra-evidence/pager-fault-idle-20261106/` on Beast. No pager
+request can block yet; pending-fault state, reply delivery, cache pages, and
+mapping API remain open.
+
 ## Implementation order and release gates
 
 1. Measure current fault, area-map, VFS read, and pressure-worker cycles on
