@@ -19,6 +19,10 @@
 #include <string.h>
 #if defined(ASTRA_VFS_PROCESS_TEST)
 #include <stdlib.h>
+uint32_t astra_vfs_test_mutex_lock(volatile uint32_t *state);
+uint32_t astra_vfs_test_mutex_unlock(volatile uint32_t *state);
+#define astra_mutex_lock(state) astra_vfs_test_mutex_lock(state)
+#define astra_mutex_unlock(state) astra_vfs_test_mutex_unlock(state)
 #endif
 
 static AstraAssignTable assigns;

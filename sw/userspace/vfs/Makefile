@@ -386,22 +386,26 @@ PORT_THREAD_TEST := build/host/test_vfs_port_threads
 
 $(PORT_TEST): src/vfs_port_transport.c src/vfs_service_core.c \
 		src/vfs_client.c src/vfs_local_transport.c tests/test_vfs_port.c \
+		tests/test_vfs_mutex.c \
 		$(UTF8_OBJECT) $(HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(PORT_CPPFLAGS) $(VFS_TEST_CPPFLAGS) \
 		$(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) \
 		src/vfs_port_transport.c src/vfs_service_core.c src/vfs_client.c \
-		src/vfs_local_transport.c src/vfs_path.c $(UTF8_OBJECT) tests/test_vfs_port.c -o $@
+		src/vfs_local_transport.c src/vfs_path.c $(UTF8_OBJECT) \
+		tests/test_vfs_port.c tests/test_vfs_mutex.c -o $@
 
 $(PORT_THREAD_TEST): src/vfs_port_transport.c \
-		$(UTF8_OBJECT) tests/test_vfs_port_threads.c $(HEADERS)
+		$(UTF8_OBJECT) tests/test_vfs_port_threads.c \
+		tests/test_vfs_mutex.c $(HEADERS)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+	$(HOST_CC) $(PORT_CPPFLAGS) $(VFS_TEST_CPPFLAGS) \
+		$(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) -ffunction-sections -Wl,--gc-sections \
 		-DASTRA_VFS_EMBEDDED_THREAD_STATE=1 \
 		src/vfs_port_transport.c src/vfs_path.c $(UTF8_OBJECT) \
-		tests/test_vfs_port_threads.c -o $@
+		tests/test_vfs_port_threads.c tests/test_vfs_mutex.c -o $@
 
 PATH_TEST := build/host/test_vfs_path
 PROCESS_TEST := build/host/test_vfs_process
@@ -425,22 +429,23 @@ $(PATH_TEST): src/vfs_path.c $(UTF8_OBJECT) tests/test_vfs_path.c $(HEADERS)
 
 $(PROCESS_TEST): src/vfs_process.c src/process_filesystem.c \
 		src/vfs_provider_index.c src/vfs_path.c $(UTF8_OBJECT) \
-		tests/test_vfs_process.c $(HEADERS)
+		tests/test_vfs_process.c tests/test_vfs_mutex.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_THREAD_FLAGS) \
 		-DASTRA_VFS_PROCESS_TEST -ffunction-sections -Wl,--gc-sections \
 		src/vfs_process.c src/process_filesystem.c src/vfs_provider_index.c \
 		src/vfs_path.c $(UTF8_OBJECT) \
-		tests/test_vfs_process.c -o $@
+		tests/test_vfs_process.c tests/test_vfs_mutex.c -o $@
 
 $(PROCESS_SANITIZE_TEST): src/vfs_process.c src/process_filesystem.c \
 		src/vfs_provider_index.c src/vfs_path.c $(UTF8_OBJECT) \
-		tests/test_vfs_process.c $(HEADERS)
+		tests/test_vfs_process.c tests/test_vfs_mutex.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_THREAD_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_VFS_PROCESS_TEST -ffunction-sections -Wl,--gc-sections \
 		src/vfs_process.c src/process_filesystem.c src/vfs_provider_index.c \
-		src/vfs_path.c $(UTF8_OBJECT) tests/test_vfs_process.c -o $@
+		src/vfs_path.c $(UTF8_OBJECT) tests/test_vfs_process.c \
+		tests/test_vfs_mutex.c -o $@
 
 $(READER_TEST): src/vfs_reader.c src/vfs_provider_index.c \
 		tests/test_vfs_reader.c $(HEADERS) \
@@ -582,7 +587,7 @@ sanitize: $(PROCESS_SANITIZE_TEST)
 		$(HOST_THREAD_FLAGS) $(SANITIZER_FLAGS) \
 		src/vfs_port_transport.c src/vfs_service_core.c \
 		src/vfs_client.c src/vfs_local_transport.c src/vfs_path.c $(UTF8_OBJECT) \
-		tests/test_vfs_port.c \
+		tests/test_vfs_port.c tests/test_vfs_mutex.c \
 		-o build/host/test_vfs_port_sanitize
 	./build/host/test_vfs_port_sanitize
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
@@ -630,6 +635,7 @@ tsan:
 		$(THREAD_SANITIZER_FLAGS) src/vfs_port_transport.c \
 		src/vfs_service_core.c src/vfs_client.c src/vfs_local_transport.c \
 		src/vfs_path.c $(UTF8_OBJECT) tests/test_vfs_port.c \
+		tests/test_vfs_mutex.c \
 		-o build/host/test_vfs_port_tsan
 	setarch x86_64 -R ./build/host/test_vfs_port_tsan
 

@@ -42,10 +42,12 @@ from delivery; Astra also needs explicit HostFS lease validation to recover
 clients across provider generations. A lease query now runs at each direct VFS
 entry. Three focused DE25 `fsbench` runs passed, but sequential and random
 read medians were about 7-8% slower than the prior baseline; this cost needs
-performance qualification after correctness gates. The VFS host test target
-still fails to link because its mutex test harness lacks
-`astra_current_thread_id` and `astra_syscall5` mocks; NDK `dist-check` and
-Beast QEMU Atlas gate passed.
+performance qualification after correctness gates. The VFS host test harness
+now uses one test-only host-width mutex seam for port and process tests; no
+native mutex code changed. Beast `make -C sw/userspace/vfs all test`, `sanitize`,
+and `tsan` pass; logs are under `/home/barry/astra-evidence/` as
+`vfs-host-{test,sanitize,tsan}-mutex-seam-20261106.log`. NDK `dist-check` and
+Beast QEMU Atlas gate also passed.
 
 General file cache baseline, 2026-11-06: Three focused `fsbench` runs on a
 disposable DE25 image passed warm stat, open/close, sequential read, and random

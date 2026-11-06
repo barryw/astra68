@@ -35,7 +35,11 @@ typedef AstraVfsPortThreadState AstraVfsPortCallState;
 
 #ifdef ASTRA_VFS_TEST_HOOKS
 void astra_vfs_test_port_lane_lookup(AstraVfsClient *client);
+uint32_t astra_vfs_test_mutex_lock(volatile uint32_t *state);
+uint32_t astra_vfs_test_mutex_unlock(volatile uint32_t *state);
 #define test_port_lane_lookup(client) astra_vfs_test_port_lane_lookup(client)
+#define astra_mutex_lock(state) astra_vfs_test_mutex_lock(state)
+#define astra_mutex_unlock(state) astra_vfs_test_mutex_unlock(state)
 #else
 #define test_port_lane_lookup(client) ((void)(client))
 #endif
