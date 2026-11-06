@@ -56,8 +56,11 @@ state_release(AstraVfsService *service)
 }
 
 static int
-file_acquire(AstraVfsService *service, AstraVfsOpenFile *file)
+file_acquire_for(AstraVfsService *service, AstraVfsOpenFile *file,
+                 uint8_t allowed_state)
 {
+    if (file->state != allowed_state)
+        return 0;
     while (file->active != 0u) {
         uint32_t expected = file->sequence;
         int waited;
@@ -70,11 +73,17 @@ file_acquire(AstraVfsService *service, AstraVfsOpenFile *file)
         --file->waiters;
         if (!waited)
             return 0;
-        if (file->state != ASTRA_VFS_FILE_OPEN)
+        if (file->state != allowed_state)
             return 0;
     }
     file->active = 1u;
     return 1;
+}
+
+static int
+file_acquire(AstraVfsService *service, AstraVfsOpenFile *file)
+{
+    return file_acquire_for(service, file, ASTRA_VFS_FILE_OPEN);
 }
 
 static void
@@ -476,7 +485,8 @@ find_file(AstraVfsService *service, uint32_t session, AstraVfsFile handle,
 }
 
 static void
-finish_file_close(AstraVfsService *service, AstraVfsOpenFile *file)
+finish_file_close(AstraVfsService *service, AstraVfsOpenFile *file,
+                  uint8_t already_detached)
 {
     AstraVfsSessionSlot *slot = find_session(service, file->session);
 
@@ -486,6 +496,7 @@ finish_file_close(AstraVfsService *service, AstraVfsOpenFile *file)
     file->kind = ASTRA_VFS_KIND_UNKNOWN;
     file->state = ASTRA_VFS_FILE_FREE;
     file->active = 0u;
+    file->retained = 0u;
     ++file->sequence;
     if (service->state_wake != NULL)
         service->state_wake(service->state_lock_context, &file->sequence);
@@ -493,9 +504,11 @@ finish_file_close(AstraVfsService *service, AstraVfsOpenFile *file)
     if (file->generation == 0u)
         file->generation = 1u;
     --service->open_files;
-    if (slot != NULL && slot->open_files != 0u)
-        --slot->open_files;
-    ++service->stats.files_closed;
+    if (!already_detached) {
+        if (slot != NULL && slot->open_files != 0u)
+            --slot->open_files;
+        ++service->stats.files_closed;
+    }
 }
 
 /* Called with the state lock held; returns with it held. */
@@ -512,12 +525,22 @@ close_file(AstraVfsService *service, AstraVfsOpenFile *file)
         file->state = ASTRA_VFS_FILE_OPEN;
         return ASTRA_VFS_ERR_IO;
     }
+    if (file->retained != 0u) {
+        AstraVfsSessionSlot *slot = find_session(service, file->session);
+
+        file->session = 0u;
+        file->state = ASTRA_VFS_FILE_DETACHED;
+        if (slot != NULL && slot->open_files != 0u)
+            --slot->open_files;
+        ++service->stats.files_closed;
+        return ASTRA_VFS_OK;
+    }
     state_release(service);
     test_transition(service, ASTRA_VFS_TEST_DURING_CLOSE);
     status = service->backend.ops->close(service->backend.context, node);
     if (!state_acquire(service))
         return ASTRA_VFS_ERR_IO;
-    finish_file_close(service, file);
+    finish_file_close(service, file, 0u);
     return status;
 }
 
@@ -900,6 +923,7 @@ handle_open(AstraVfsService *service, uint32_t session,
         service->files[index].kind = ASTRA_VFS_KIND_UNKNOWN;
         service->files[index].state = ASTRA_VFS_FILE_FREE;
         service->files[index].active = 0u;
+        service->files[index].retained = 0u;
     }
     if (index >= service->file_capacity) {
         reply->status = ASTRA_VFS_ERR_LIMIT;
@@ -1106,6 +1130,127 @@ astra_vfs_service_read_into(AstraVfsService *service, uint32_t session,
     status = read_into_unlocked(service, session, handle, offset, buffer,
                                 length, moved);
     finish_session_request(service, slot);
+    state_release(service);
+    return status;
+}
+
+static AstraVfsOpenFile *
+find_retained(AstraVfsService *service, AstraVfsFile token)
+{
+    uint32_t slot;
+    AstraVfsOpenFile *file;
+
+    if (token == ASTRA_VFS_FILE_INVALID ||
+        (token & HANDLE_SLOT_MASK) == 0u)
+        return NULL;
+    slot = HANDLE_SLOT(token);
+    if (slot >= service->file_high_water)
+        return NULL;
+    file = &service->files[slot];
+    if (file->retained == 0u ||
+        file->generation != HANDLE_GENERATION(token) ||
+        (file->state != ASTRA_VFS_FILE_OPEN &&
+         file->state != ASTRA_VFS_FILE_DETACHED))
+        return NULL;
+    return file;
+}
+
+uint32_t
+astra_vfs_service_retain_file(AstraVfsService *service, uint32_t session,
+                              AstraVfsFile handle, AstraVfsFile *retained)
+{
+    AstraVfsOpenFile *file;
+    uint32_t status;
+
+    if (service == NULL || retained == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    *retained = ASTRA_VFS_FILE_INVALID;
+    if (!state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    file = find_file(service, session, handle, &status);
+    if (file != NULL) {
+        if (file->kind != ASTRA_VFS_KIND_FILE ||
+            (file->flags & ASTRA_VFS_OPEN_READ) == 0u)
+            status = ASTRA_VFS_ERR_ACCESS;
+        else if (file->retained != 0u)
+            status = ASTRA_VFS_ERR_BUSY;
+        else {
+            file->retained = 1u;
+            *retained = handle;
+        }
+    }
+    state_release(service);
+    return status;
+}
+
+uint32_t
+astra_vfs_service_read_retained(AstraVfsService *service,
+                                AstraVfsFile retained, uint64_t offset,
+                                void *buffer, uint32_t length, uint32_t *moved)
+{
+    AstraVfsOpenFile *file;
+    uint8_t state;
+    uint32_t status;
+
+    if (service == NULL || buffer == NULL || moved == NULL || length == 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    *moved = 0u;
+    if (!state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    file = find_retained(service, retained);
+    if (file == NULL) {
+        state_release(service);
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    }
+    state = file->state;
+    if (!file_acquire_for(service, file, state)) {
+        state_release(service);
+        return ASTRA_VFS_ERR_BUSY;
+    }
+    state_release(service);
+    status = service->backend.ops->read(service->backend.context, file->node,
+                                        offset, buffer, length, moved);
+    if (!state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    file_release(service, file);
+    state_release(service);
+    if (status == ASTRA_VFS_OK && *moved > length)
+        *moved = length;
+    return status;
+}
+
+uint32_t
+astra_vfs_service_release_retained(AstraVfsService *service,
+                                    AstraVfsFile retained)
+{
+    AstraVfsOpenFile *file;
+    uintptr_t node;
+    uint32_t status;
+
+    if (service == NULL || !state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    file = find_retained(service, retained);
+    if (file == NULL) {
+        state_release(service);
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    }
+    if (file->state == ASTRA_VFS_FILE_OPEN) {
+        file->retained = 0u;
+        state_release(service);
+        return ASTRA_VFS_OK;
+    }
+    file->state = ASTRA_VFS_FILE_CLOSING;
+    if (!file_wait_idle(service, file)) {
+        file->state = ASTRA_VFS_FILE_DETACHED;
+        state_release(service);
+        return ASTRA_VFS_ERR_IO;
+    }
+    node = file->node;
+    state_release(service);
+    status = service->backend.ops->close(service->backend.context, node);
+    if (!state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    finish_file_close(service, file, 1u);
     state_release(service);
     return status;
 }

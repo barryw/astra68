@@ -44,13 +44,16 @@ typedef struct AstraVfsOpenFile {
     uint16_t waiters;
     uint8_t state;
     uint8_t active;
+    /* shortcut: one cache owner per open, add shared references with VM cache. */
+    uint8_t retained;
 } AstraVfsOpenFile;
 
 enum {
     ASTRA_VFS_FILE_FREE = 0,
     ASTRA_VFS_FILE_OPENING,
     ASTRA_VFS_FILE_OPEN,
-    ASTRA_VFS_FILE_CLOSING
+    ASTRA_VFS_FILE_CLOSING,
+    ASTRA_VFS_FILE_DETACHED
 };
 
 typedef struct AstraVfsSessionSlot {
@@ -231,6 +234,16 @@ uint32_t astra_vfs_service_read_into(AstraVfsService *service,
                                      uint32_t session, AstraVfsFile file,
                                      uint64_t offset, void *buffer,
                                      uint32_t length, uint32_t *moved);
+
+/* One cache owner can retain an open description across client close. The
+ * returned token is internal to VFS, never an application file handle. */
+uint32_t astra_vfs_service_retain_file(AstraVfsService *service,
+    uint32_t session, AstraVfsFile file, AstraVfsFile *retained);
+uint32_t astra_vfs_service_read_retained(AstraVfsService *service,
+    AstraVfsFile retained, uint64_t offset, void *buffer,
+    uint32_t length, uint32_t *moved);
+uint32_t astra_vfs_service_release_retained(AstraVfsService *service,
+    AstraVfsFile retained);
 
 /* The write-side twin: bytes come from the session's bound transfer area. */
 uint32_t astra_vfs_service_write_from(AstraVfsService *service,

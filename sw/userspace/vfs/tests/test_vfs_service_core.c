@@ -1308,6 +1308,60 @@ test_session_release_waits_for_pinned_file(void)
     assert(pthread_mutex_destroy(&state_mutex) == 0);
 }
 
+static void
+test_retained_description_survives_client_close(void)
+{
+    const AstraVfsMountOps writable = {mount_flush, mount_unmount};
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    AstraVfsFile handle, retained;
+    FakeNode *node;
+    MountProbe probe = {0};
+    uint8_t bytes[8];
+    uint32_t moved, session;
+
+    reset();
+    node = fake_create("/mapped", ASTRA_VFS_KIND_FILE);
+    assert(node != NULL);
+    memcpy(node->bytes, "cache", 5u);
+    node->size = 5u;
+    session = open_session();
+    begin_request(&request, session, "/mapped");
+    request.flags = ASTRA_VFS_OPEN_READ;
+    fixture_dispatch(&service, ASTRA_VFS_OP_OPEN, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    handle = reply.file;
+    assert(astra_vfs_service_retain_file(&service, session, handle,
+                                         &retained) == ASTRA_VFS_OK);
+    assert(retained == handle);
+    assert(astra_vfs_service_retain_file(&service, session, handle,
+                                         &retained) == ASTRA_VFS_ERR_BUSY);
+    begin_request(&request, session, NULL);
+    request.file = handle;
+    fixture_dispatch(&service, ASTRA_VFS_OP_CLOSE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    assert(fake.closes == 0u && service.open_files == 1u);
+    fixture_dispatch(&service, ASTRA_VFS_OP_READ, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_BAD_HANDLE);
+    astra_vfs_service_release_session(&service, session);
+    assert(astra_vfs_service_shutdown(&service, &writable, &probe) ==
+           ASTRA_VFS_ERR_BUSY);
+    assert(probe.calls == 0u);
+    assert(astra_vfs_service_read_retained(&service, handle, 0u, bytes,
+                                           sizeof(bytes), &moved) == ASTRA_VFS_OK);
+    assert(moved == 5u && memcmp(bytes, "cache", 5u) == 0);
+    assert(astra_vfs_service_release_retained(&service, handle) == ASTRA_VFS_OK);
+    assert(fake.closes == 1u && service.open_files == 0u);
+    assert(astra_vfs_service_shutdown(&service, &writable, &probe) ==
+           ASTRA_VFS_OK);
+    assert(probe.calls == 2u);
+    assert(astra_vfs_service_read_retained(&service, handle, 0u, bytes,
+                                           sizeof(bytes), &moved) ==
+           ASTRA_VFS_ERR_BAD_HANDLE);
+    assert(astra_vfs_service_release_retained(&service, handle) ==
+           ASTRA_VFS_ERR_BAD_HANDLE);
+}
+
 #define MODEL_WORKERS 4u
 #define MODEL_OPERATIONS_PER_WORKER 250000u
 #define MODEL_BYTES 64u
@@ -2501,6 +2555,7 @@ main(void)
     test_same_session_independent_request_overtakes_held_backend();
     test_close_waits_for_active_file_operation();
     test_session_release_waits_for_pinned_file();
+    test_retained_description_survives_client_close();
     test_forced_switch_model();
     puts("astra vfs service core: PASS");
     return 0;

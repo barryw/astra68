@@ -2,6 +2,40 @@
 
 Status: active continuation map, 2026-11-06
 
+Exact DE25 stop-job deadline, 2026-11-06: A disposable systemd service loaded
+`JobRunningTimeoutSec=180s`, `JobTimeoutAction=reboot-force`, an infinite
+service stop timeout, and an `ExecStop` that remained blocked. Astra, audio,
+and remote desktop were stopped cleanly and storage synced before the trial.
+The stop job began at 16:35:12 UTC; the board rebooted at 16:38:25 UTC,
+193 seconds later, within the configured three-minute deadline plus systemd
+and boot transition time. Boot ID changed from
+`b6df2583-1eda-4116-af0e-be1c7264e234` to
+`aa9a291c-a2cc-4677-8d1b-76dbb88e581f`. The selected release passed
+storage POST (mount, journal recovery, write, reread, unmount), reached stage
+8, and returned Astra, audio, and remote desktop with zero service restarts.
+Only production loop0 remained and 7.9 GiB was free. The trial binary was
+removed from the board. Checksummed trigger, boot, journal, and service
+evidence is under `/home/barry/astra-evidence/stop-job-180s-de25-20261106/`
+on Beast. The prior real blocked-provider gate used a ten-second job limit;
+this trial closes the exact production policy deadline. Hardware reset-cause
+attribution remains open because DE25 exposes no retained cause through its
+current Linux watchdog driver.
+
+VFS retained-description slice, 2026-11-06: The service core can hold one
+cache-owned reference to an open backend description after its client file
+handle and session close. The old handle becomes unusable immediately; the
+retained token reads the same node until explicit release. A retained node
+continues to count as open, so safe unmount returns BUSY. Host service-core
+tests, the full Beast VFS target build, host suite, and sanitizers passed.
+An AArch64 build of the same core test ran on DE25 and passed one million
+forced-switch operations plus the retained-description test; board and Beast
+binary SHA-256 values matched at
+`7b8df7034c264927ce5d5b2cd644377f3343d293c9c90823255caafbc5331428`.
+The board trial binary was removed; Astra, audio, and remote desktop stayed
+active, with only production loop0 and 7.9 GiB free. This is a lifetime seam,
+not a file cache or mapping implementation. Pager handoff, frame ownership,
+dirty writeback, and native/guest mapping gates remain open.
+
 Provider blocked-I/O forced reboot and stop guard, 2026-11-06: A disposable
 DE25 provider mounted a private ext4 image and held a QEMU writer in Linux
 `D` state. A matched transient service, whose SIGTERM handler waited for
@@ -26,7 +60,8 @@ Checksummed pre/post evidence and both failed trial logs are under
 `/home/barry/astra-evidence/provider-blocked-reboot-20261106/` on Beast.
 Previous-boot journal is volatile on DE25, so timeout attribution rests on
 the controlled stop, matching unit policy, and boot ID change; retained reset
-cause and exact production 180-second timeout remain open. Haiku
+cause remains open. The exact production 180-second deadline passed the
+disposable stop-job gate above. Haiku
 `src/system/kernel/shutdown.cpp` synchronizes before shutdown, but has no
 Linux storage-provider cgroup boundary; Astra uses its existing systemd job
 and cgroup rather than another watchdog.

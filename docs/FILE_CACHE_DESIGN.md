@@ -1,6 +1,7 @@
 # General file cache and file-backed mappings
 
-Status: design contract; implementation and certification open.
+Status: design contract; VFS description-retention slice passed host and DE25
+AArch64 core gates. Pager, cache, mapping, and guest certification open.
 
 ## Existing owners
 
@@ -25,6 +26,19 @@ zeroes bytes beyond EOF, and drops clean unmapped pages under pressure.
 lifetime. `src/system/kernel/vm/vm_page_writer.cpp` keeps dirty writeback
 separate from clean-page eviction. Astra keeps those contracts while VFS
 remains a userspace service.
+
+First implementation slice, 2026-11-06: `AstraVfsOpenFile` can retain one
+cache-owned reference after its session closes. The public handle is revoked,
+but the backend description remains readable through the internal retained
+token; it is still counted as open for safe unmount. The final release closes
+the backend node and frees its slot. Tests cover stale public handle, data
+after session close, exact backend close, duplicate release, and BUSY unmount.
+The Beast target build, host suite, and sanitizers passed. The same service
+core test passed on DE25's AArch64 HPS; board and Beast binary SHA-256 matched
+at `7b8df7034c264927ce5d5b2cd644377f3343d293c9c90823255caafbc5331428`.
+Evidence is under `/home/barry/astra-evidence/stop-job-180s-de25-20261106/`
+on Beast. This retained description is one necessary VFS lifetime rule; no
+guest mapping or page cache consumes it yet.
 
 ## Target baseline, 2026-11-06
 
