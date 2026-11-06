@@ -173,6 +173,9 @@ reflection, blending, collisions, CDC publication skew, command validation,
 ring backpressure, completion and reset, the complete blitter, virtual-sprite
 groups, geometry, pattern and bounded flood operations, every AFNT format,
 copper execution and timing classes, and integrated pipeline behavior.
+The command-processor test holds a posted AXI write response through abort,
+checks the bounded fatal fault, then drains the response and verifies rebase
+and a fresh command.
 
 On DE25, `astra-render-certify --timeout-recovery` checks physical command
 deadline and local reset after pixels were written, then verifies the next

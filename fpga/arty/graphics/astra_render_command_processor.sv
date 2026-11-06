@@ -107,6 +107,7 @@ module astra_render_command_processor #(
         `ASTRA_RENDER_COMMAND_BYTES * `ASTRA_RENDER_RING_ENTRIES;
     localparam [31:0] COMPLETION_RING_BYTES =
         `ASTRA_RENDER_COMPLETION_BYTES * `ASTRA_RENDER_RING_ENTRIES;
+    localparam [31:0] ABORT_WAIT_TIMEOUT_US = 32'd100;
 
     localparam [5:0] ST_IDLE = 6'd0;
     localparam [5:0] ST_COMMAND_AR = 6'd1;
@@ -3696,7 +3697,11 @@ reg [31:0] completion_end_cycle_q;
                     ST_EXECUTE: begin
                         if ((soft_reset || deadline_expired_q) &&
                             command_active) begin
-                            deadline_active <= 1'b0;
+                            deadline_remaining_us_q <= ABORT_WAIT_TIMEOUT_US;
+                            deadline_subcycle_q <=
+                                {DEADLINE_SUBCYCLE_WIDTH{1'b0}};
+                            deadline_expired_q <= 1'b0;
+                            deadline_active <= 1'b1;
                             if (engine_geometry_q)
                                 geometry_abort <= 1'b1;
                             else if (command_is_flood_q)
@@ -3870,6 +3875,17 @@ reg [31:0] completion_end_cycle_q;
                             (!engine_geometry_q && !command_is_flood_q &&
                              !command_is_glyph_q && !command_is_triangles_q &&
                              blitter_done)) begin
+                            deadline_active <= 1'b0;
+                            local_engine_reset <= 1'b1;
+                            reset_hold_count <= RESET_HOLD_CYCLES - 1;
+                            state <= ST_ENGINE_RESET_HOLD;
+                        end else if (deadline_expired_q) begin
+                            // AXI did not answer abort. Keep the command
+                            // failed closed until outstanding writes drain.
+                            deadline_active <= 1'b0;
+                            configuration_fault <= 1'b1;
+                            last_fault_detail <= 32'h00080001;
+                            completion_fatal_q <= 1'b1;
                             local_engine_reset <= 1'b1;
                             reset_hold_count <= RESET_HOLD_CYCLES - 1;
                             state <= ST_ENGINE_RESET_HOLD;

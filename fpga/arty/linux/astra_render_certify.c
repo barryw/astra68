@@ -10,6 +10,7 @@
 #include "astra_render_protocol.h"
 
 #include <astra/graphics.h>
+#include <astra/render_batch.h>
 #include <astra/texture_reference.h>
 
 #include <errno.h>
@@ -92,7 +93,7 @@ enum {
     FEATURE_MASK_PITCH = 2u,
     FEATURE_XRGB_PITCH = 32u,
     FEATURE_PIXEL_COUNT = 43u,
-    FRAME_DATA_OFFSET = 0x00800000u,
+    FRAME_DATA_OFFSET = ASTRA_RENDER_BATCH_WORKSPACE_LIMIT,
     CAPTURE_DATA_OFFSET =
         ASTRA_GRAPHICS_ARENA_BYTES - ASTRA_CAPTURE_FRAME_BYTES,
     RESOURCE_GENERATION = 0x00000017u,

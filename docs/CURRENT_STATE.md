@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-11-06
 
+Renderer abort bound, 2026-11-06: `ST_ABORT_WAIT` now uses the existing
+deadline timer for a 100 us abort grace period. A missing AXI write response
+then latches control fault `0x00080001`, ends local reset, and fails closed
+until the outstanding response drains and queue rebase succeeds. The directed
+sim holds a real posted B response across abort, proves bounded fatal state,
+then drains and completes a fresh command; the full Beast graphics suite
+passed. Haiku's `src/add-ons/accelerants/intel_extreme/Ports.cpp:46-80`
+uses finite waits for hardware status; Astra adapts that rule to its existing
+renderer timer and fatal latch. Beast Quartus 26.1.1 full route closed with
+41,053/46,800 ALMs, worst setup +0.062 ns, hold +0.000 ns, and zero final
+high-severity Design Assistant violations. Candidate RBF SHA-256
+`731e04858072271076e96d4018d9863120d3a0882017401f8836a12b3443ffa8`
+passed two DE25 POST/storage/stage-8 boots, exact JTAG identity, full renderer
+certification, and in-flight timeout recovery. Its RFB desktop looks normal;
+physical HDMI monitor confirmation and literal stalled AXI injection remain.
+The renderer certification framebuffer was moved to the named media-RAM
+offset beyond the host-read aperture after an identical fixture failure on
+both old and new fabrics. Board trial files were removed; all three services
+are active with zero restarts, only production loop0 remains, and 8.5 GiB is
+free. Verified Beast evidence:
+`/home/barry/astra-evidence/render-abort-bound-20261106/`.
+
 Blocked-wait completion seam, 2026-11-06: `sw/kernel/thread.c` now invokes one
 bounded observer on wake, RPC reply, timeout, cancellation, or process
 retirement. Registration requires an already blocked thread and is cleared

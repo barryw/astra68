@@ -658,6 +658,7 @@ localparam [31:0] VERTICES = 32'h00080000;
     integer before_backpressure;
     integer before_timeouts;
     integer before_resets;
+    integer before_completed;
     integer before_blitter_dispatches;
     integer before_geometry_dispatches;
     integer before_flood_dispatches;
@@ -2260,6 +2261,76 @@ localparam [31:0] VERTICES = 32'h00080000;
                    commands_submitted, commands_completed);
         if (commands_failed == 32'd0)
             $fatal(1, "failure accounting was not observable");
+
+        // A slave that never returns a posted write response must not hold
+        // the renderer reset state forever. The control fault remains
+        // visible while the completion ring shares that stalled AXI port.
+        before_timeouts = timeout_count;
+        before_resets = reset_count;
+        before_completed = commands_completed;
+        sub_pointer = submission_consumer;
+        comp_pointer = completion_producer;
+        write_surface(DESTINATION_DESCRIPTOR, GENERATION,
+            DESTINATION_DATA, 32'd256, 32'd16, 16'd16, 16'd16,
+            `ASTRA_RENDER_FORMAT_INDEX8, `ASTRA_RENDER_SURFACE_WRITE);
+        write_fill_command(sub_pointer[10:0], 32'd999, GENERATION, 32'd200,
+            DESTINATION_DESCRIPTOR, 16'sd0, 16'sd0, 16'd16, 16'd16,
+            32'hcc);
+        if (read_be32(SUBMISSION_OFFSET +
+            ({22'd0, sub_pointer[9:0]} << 6) + 8) !== 32'd999)
+            $fatal(1, "stalled AXI fixture did not write command");
+        sub_pointer = sub_pointer + 1;
+        publish(sub_pointer[10:0]);
+        wait_for_state(6'd14);
+        wait (memory_i.b_count != 0);
+        stall_writes = 1'b1;
+        repeat (1200) @(posedge clk);
+        if (!configuration_fault || last_fault_detail != 32'h00080001 ||
+            dut.state != 6'd22 || engine_reset_active ||
+            timeout_count != before_timeouts + 1 ||
+            reset_count != before_resets + 1 ||
+            commands_completed != before_completed)
+            $fatal(1, "stalled AXI abort was not bounded state=%0d fault=%h",
+                   dut.state, last_fault_detail);
+        stall_writes = 1'b0;
+        repeat (100) @(posedge clk);
+        if (dut.engine_issued_q != dut.engine_acked_q)
+            $fatal(1, "stale AXI response was not drained");
+        pulse_rebase();
+        if (configuration_fault)
+            $fatal(1, "rebase did not clear stalled AXI fault");
+        sub_pointer = submission_consumer;
+        comp_pointer = completion_producer;
+        write_fill_command(sub_pointer[10:0], 32'd1000, GENERATION,
+            32'd1000, DESTINATION_DESCRIPTOR, 16'sd0, 16'sd0,
+            16'd1, 16'd1, 32'hdd);
+        sub_pointer = sub_pointer + 1;
+        comp_pointer = comp_pointer + 1;
+        publish(sub_pointer[10:0]);
+        wait_for_completion(comp_pointer[10:0], `ASTRA_RENDER_OP_FILL,
+            `ASTRA_RENDER_STATUS_OK, 32'd1000, 32'd1, GENERATION);
+        if (memory_i.read_byte(DESTINATION_DATA) !== 8'hdd)
+            $fatal(1, "render did not recover after stalled AXI abort");
+
+        // A same-surface upward scroll must read each source row before a
+        // prior destination write can replace it.
+        write_surface(DESTINATION_DESCRIPTOR, GENERATION,
+            DESTINATION_DATA, 32'd256, 32'd16, 16'd16, 16'd16,
+            `ASTRA_RENDER_FORMAT_INDEX8,
+            `ASTRA_RENDER_SURFACE_READ | `ASTRA_RENDER_SURFACE_WRITE);
+        for (column = 0; column < 256; column = column + 1)
+            memory_i.write_byte(DESTINATION_DATA + column, column / 16);
+        write_blit_command(sub_pointer[10:0], 32'd1001, 32'd1000,
+            DESTINATION_DESCRIPTOR, DESTINATION_DESCRIPTOR,
+            16'sd0, 16'sd4, 16'sd0, 16'sd0,
+            16'd16, 16'd8, 16'd16, 16'd8);
+        sub_pointer = sub_pointer + 1;
+        comp_pointer = comp_pointer + 1;
+        publish(sub_pointer[10:0]);
+        wait_for_completion(comp_pointer[10:0], `ASTRA_RENDER_OP_BLIT,
+            `ASTRA_RENDER_STATUS_OK, 32'd1001, 32'd128, GENERATION);
+        check_byte(DESTINATION_DATA, 8'd4);
+        check_byte(DESTINATION_DATA + 32'd7 * 32'd16, 8'd11);
         $display("astra render command processor tests passed: submitted=%0d failed=%0d reads=%0d writes=%0d",
                  commands_submitted, commands_failed,
                  read_transactions, write_transactions);

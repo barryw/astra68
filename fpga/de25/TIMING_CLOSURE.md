@@ -1,5 +1,66 @@
 # DE25-Nano Timing Closure
 
+## 2026-11-06: bounded renderer abort after stalled AXI response
+
+- Source base `358ceb4b`; changed
+  `fpga/arty/graphics/astra_render_command_processor.sv` SHA-256
+  `e09e879dcd281d13fc21ae9b54b6bc4094350519efe3d33ef9a48e80566922c9`.
+  Beast Quartus Pro 26.1.1 Build 130, isolated tree
+  `build/de25-render-abort/astra-shell.incoming`. Existing renderer deadline
+  timer now bounds `ST_ABORT_WAIT` to 100 us. If engine cannot finish abort,
+  control fault `0x00080001` latches, local engine reset ends, and command
+  intake fails closed until outstanding writes drain and queue rebase. The
+  simulation holds a real posted AXI write response through the abort window,
+  then drains it and completes a fresh command after rebase.
+- Synthesis checkpoint at 22:21:31 UTC: successful, 44,520/46,800 estimated
+  ALMs (95%) and 67 estimated DSPs. These are pre-fit estimates, not resource
+  or clock acceptance. Disposition: continue fit; selected DE25 bitstream
+  unchanged.
+- Placement checkpoint: `golden_top.fit.place.rpt` reports 41,053/46,800 ALMs
+  needed (88%), 3,640,768 block-memory bits, 317 M20Ks, and 67 DSP blocks.
+  Constrained-clock result and failed cone: pending full route. Disposition:
+  continue route; selected DE25 bitstream unchanged.
+- Full fit checkpoint at 22:31:57 UTC: successful on final device timing model,
+  41,053/46,800 ALMs, 74,266 dedicated registers, 3,640,768/7,331,840
+  block-memory bits, 317/358 RAM blocks, and 67/376 DSP blocks. All production
+  clocks are constrained. Worst setup slack +0.062 ns, hold +0.000 ns,
+  recovery +2.398 ns, removal +0.131 ns, minimum pulse width +0.220 ns; no
+  failed cone. Final Design Assistant reports zero high-severity violations.
+  Full build and `BUILD_SHA256SUMS` verification passed. Directed graphics
+  suite exit 0, including stalled AXI response/rebase regression; log SHA-256
+  `4e8f275fb447a1a92ca8a0ebddf77982ab06e77214bab71d245cd9791ea0b3fe`.
+  Route log SHA-256
+  `141fcb438c1220bd6276108819ee2af17a04384984b2a0c25c7c2c48817c577e`;
+  candidate RBF SHA-256
+  `731e04858072271076e96d4018d9863120d3a0882017401f8836a12b3443ffa8`.
+  Disposition: accept full-route timing/CDC; physical DE25 gates remain.
+- Physical trial: active boot fabric and boot script were backed up to Beast
+  and SHA-256 verified before install. Candidate RBF booted DE25 twice
+  (`c6a509b6-7f67-4603-ab01-e4b713d82724`, then
+  `f30b01c7-8acd-438b-95fa-89e04062954e`). Both boots passed POST, mounted
+  and verified storage, and reached guest stage 8. JTAG matched the exact
+  routed shell after the second boot. The full renderer certification passed
+  completion, virtual sprites, geometry, AFNT, bounded flood, 1920x644
+  same-surface BLIT, lanes, compositor, scaling, and texture. In-flight
+  deadline recovery passed with one timeout, one local reset, and a correct
+  next pixel. Astra, audio, and remote desktop are active with zero restarts;
+  only production loop0 remains, and 8.5 GiB is free after trial cleanup.
+  RFB capture SHA-256
+  `7e2a3a9c48d1f6f10b64c31ba92c9cc2d6a07181fe1c49ed5babe0c6f8c3d687`
+  shows the normal desktop and volumes. Physical HDMI monitor confirmation is
+  pending; no board-level stalled AXI slave injection exists. Evidence on
+  Beast: `/home/barry/astra-evidence/render-abort-bound-20261106/`, verified
+  manifest SHA-256
+  `d57f681293810a56b1999a06ee0f250532029c64d087cc9baf7109ae5c656a00`.
+- The first full renderer gate failed identically on candidate and prior
+  selected fabric because the certification framebuffer was at arena offset
+  `0x00800000`, inside the DE25 host-read aperture. The CPU wrote media RAM
+  while the renderer read HPS memory. The fixture now uses
+  `ASTRA_RENDER_BATCH_WORKSPACE_LIMIT` (`0x01000000`), the first media-RAM
+  offset outside that aperture. The corrected fixture passed on both fabrics;
+  no renderer RTL was changed for this test fault. Fixture source SHA-256
+  `130f2a98ed70fe91ccfae82fb5456693666f44bba803b83e999ce0823b0aea62`.
+
 ## 2026-11-06: watchdog reset conduit candidates
 
 - Source base `e4e1dbae918d1441de2d3c483844a0c33609cfa1`; watchdog RTL
