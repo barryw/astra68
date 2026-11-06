@@ -27,6 +27,17 @@ General file cache and file-backed mappings, physical media-load scheduler
 qualification, literal USB cable replug, and fault-injected recovery gates
 remain. Notification performance audit follows correctness.
 
+Media-load observation, 2026-11-05: On the promoted release, Chocolate Quake
+ran for a 60-second DE25 `astra-top` window. Guest idle time was 10.0%; Quake
+used 72.4% and Display 9.7% of guest CPU. Display presented 17.4 frames/s.
+Audio host reported zero underruns and zero software gaps. RFB showed live
+game rendering; the app was closed afterward, with all three services active
+and 7.9 GiB free. Beast retains `astra-media-quake.png` and
+`astra-media-after-quit.png` under `/home/barry/astra-evidence/`. HDMI was
+disconnected, so audible continuity and the 30-frame/s target remain
+unqualified. This is scheduler coexistence evidence, not a completed media
+performance gate.
+
 Media-band scheduler checkpoint, 2026-11-05: Priority 24-27 threads now share
 one 15 ms CPU budget per 20 ms period. Exhaustion caps their base priority at
 19 until replenishment, allowing priority 20-23 services to run; inherited and
