@@ -1,7 +1,7 @@
 # General file cache and file-backed mappings
 
-Status: design contract; VFS description-retention and metadata slices passed
-host and DE25 AArch64 core gates. Pager, cache, mapping, and guest
+Status: design contract; VFS description-retention, metadata, and writeback
+seams passed host and DE25 AArch64 core gates. Pager, cache, mapping, and guest
 certification open.
 
 ## Existing owners
@@ -53,6 +53,21 @@ The board trial binary was removed; all three production services stayed
 active, only production loop0 remained, and 7.9 GiB was free. Evidence:
 `/home/barry/astra-evidence/vfs-retained-stat-aarch64.bin` and
 `vfs-retained-stat-de25.txt` on Beast. No guest pager consumes this API yet.
+
+Third slice, 2026-11-06: retained descriptions can use the existing backend
+write and sync operations after client close, with the original open rights,
+write limit, short-write result, mutation generation, and backend error
+propagation. The ordinary write and sync paths share the same helpers. A
+retained token is rechecked after waiting for an active file, so slot reuse
+cannot redirect cache I/O. Tests cover read-only refusal, short write,
+write/sync failure, stale token, and one million forced switches. Beast VFS
+target build, host suite, and sanitizers passed. The AArch64 core test passed
+on DE25; board and Beast binary SHA-256 matched at
+`67aadef4430e16096229e99ae8809736a9acdb003adb7ffbc6029c78c27584be`.
+Board trial file was removed; production services stayed active, only loop0
+remained, and 7.9 GiB was free. Checksummed evidence:
+`/home/barry/astra-evidence/vfs-retained-write-de25-20261106/` on Beast.
+This is VFS writeback access, not a guest pager or file mapping.
 
 ## Target baseline, 2026-11-06
 

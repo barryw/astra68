@@ -1155,6 +1155,27 @@ find_retained(AstraVfsService *service, AstraVfsFile token)
     return file;
 }
 
+/* Waiting for a busy file can release the lock while its slot is retired. */
+static uint32_t
+acquire_retained(AstraVfsService *service, AstraVfsFile token,
+                 AstraVfsOpenFile **result)
+{
+    AstraVfsOpenFile *file = find_retained(service, token);
+    uint8_t state;
+
+    if (file == NULL)
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    state = file->state;
+    if (!file_acquire_for(service, file, state))
+        return ASTRA_VFS_ERR_BUSY;
+    if (find_retained(service, token) != file) {
+        file_release(service, file);
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    }
+    *result = file;
+    return ASTRA_VFS_OK;
+}
+
 uint32_t
 astra_vfs_service_retain_file(AstraVfsService *service, uint32_t session,
                               AstraVfsFile handle, AstraVfsFile *retained)
@@ -1189,7 +1210,6 @@ astra_vfs_service_read_retained(AstraVfsService *service,
                                 void *buffer, uint32_t length, uint32_t *moved)
 {
     AstraVfsOpenFile *file;
-    uint8_t state;
     uint32_t status;
 
     if (service == NULL || buffer == NULL || moved == NULL || length == 0u)
@@ -1197,15 +1217,10 @@ astra_vfs_service_read_retained(AstraVfsService *service,
     *moved = 0u;
     if (!state_acquire(service))
         return ASTRA_VFS_ERR_IO;
-    file = find_retained(service, retained);
-    if (file == NULL) {
+    status = acquire_retained(service, retained, &file);
+    if (status != ASTRA_VFS_OK) {
         state_release(service);
-        return ASTRA_VFS_ERR_BAD_HANDLE;
-    }
-    state = file->state;
-    if (!file_acquire_for(service, file, state)) {
-        state_release(service);
-        return ASTRA_VFS_ERR_BUSY;
+        return status;
     }
     state_release(service);
     status = service->backend.ops->read(service->backend.context, file->node,
@@ -1224,7 +1239,6 @@ astra_vfs_service_stat_retained(AstraVfsService *service,
                                 AstraVfsFile retained, AstraVfsNodeInfo *info)
 {
     AstraVfsOpenFile *file;
-    uint8_t state;
     uint32_t status;
 
     if (service == NULL || info == NULL)
@@ -1232,15 +1246,10 @@ astra_vfs_service_stat_retained(AstraVfsService *service,
     node_info_clear(info);
     if (!state_acquire(service))
         return ASTRA_VFS_ERR_IO;
-    file = find_retained(service, retained);
-    if (file == NULL) {
+    status = acquire_retained(service, retained, &file);
+    if (status != ASTRA_VFS_OK) {
         state_release(service);
-        return ASTRA_VFS_ERR_BAD_HANDLE;
-    }
-    state = file->state;
-    if (!file_acquire_for(service, file, state)) {
-        state_release(service);
-        return ASTRA_VFS_ERR_BUSY;
+        return status;
     }
     state_release(service);
     status = service->backend.ops->stat_node(service->backend.context,
@@ -1290,7 +1299,8 @@ astra_vfs_service_release_retained(AstraVfsService *service,
 
 static uint32_t
 write_file(AstraVfsService *service, AstraVfsOpenFile *file, uint64_t offset,
-           uint32_t flags, uint64_t max_end, const void *buffer, uint32_t length,
+           uint8_t state, AstraVfsFile retained, uint32_t flags, uint64_t max_end,
+           const void *buffer, uint32_t length,
            uint32_t *moved, uint64_t *position)
 {
     uint32_t status;
@@ -1303,8 +1313,14 @@ write_file(AstraVfsService *service, AstraVfsOpenFile *file, uint64_t offset,
         return ASTRA_VFS_ERR_ACCESS;
     if (file->kind == ASTRA_VFS_KIND_DIRECTORY)
         return ASTRA_VFS_ERR_IS_DIR;
-    if (!file_acquire(service, file))
-        return ASTRA_VFS_ERR_IO;
+    if (!file_acquire_for(service, file, state))
+        return retained == ASTRA_VFS_FILE_INVALID ? ASTRA_VFS_ERR_IO :
+            ASTRA_VFS_ERR_BUSY;
+    if (retained != ASTRA_VFS_FILE_INVALID &&
+        find_retained(service, retained) != file) {
+        file_release(service, file);
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    }
     state_release(service);
     status = service->backend.ops->write(service->backend.context, file->node,
                                          offset, flags, max_end, buffer, length, moved,
@@ -1316,6 +1332,68 @@ write_file(AstraVfsService *service, AstraVfsOpenFile *file, uint64_t offset,
         *moved = length;
     if (status == ASTRA_VFS_OK && *moved != 0u)
         ++service->changes.nodes;
+    return status;
+}
+
+uint32_t
+astra_vfs_service_write_retained(AstraVfsService *service,
+                                 AstraVfsFile retained, uint64_t offset,
+                                 uint64_t max_end, const void *buffer,
+                                 uint32_t length, uint32_t *moved)
+{
+    AstraVfsOpenFile *file;
+    uint64_t position = offset;
+    uint32_t status;
+
+    if (service == NULL || buffer == NULL || moved == NULL || length == 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    *moved = 0u;
+    if (!state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    file = find_retained(service, retained);
+    status = file == NULL ? ASTRA_VFS_ERR_BAD_HANDLE :
+        write_file(service, file, offset, file->state, retained, 0u,
+                   max_end, buffer, length, moved, &position);
+    state_release(service);
+    return status;
+}
+
+/* Called with the service state lock held; returns with it held. */
+static uint32_t
+sync_file(AstraVfsService *service, AstraVfsOpenFile *file,
+          uint8_t state, AstraVfsFile retained)
+{
+    uint32_t status;
+
+    if (!file_acquire_for(service, file, state))
+        return retained == ASTRA_VFS_FILE_INVALID ? ASTRA_VFS_ERR_IO :
+            ASTRA_VFS_ERR_BUSY;
+    if (retained != ASTRA_VFS_FILE_INVALID &&
+        find_retained(service, retained) != file) {
+        file_release(service, file);
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    }
+    state_release(service);
+    status = service->backend.ops->sync(service->backend.context, file->node);
+    if (!state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    file_release(service, file);
+    return status;
+}
+
+uint32_t
+astra_vfs_service_sync_retained(AstraVfsService *service,
+                                AstraVfsFile retained)
+{
+    AstraVfsOpenFile *file;
+    uint32_t status;
+
+    if (service == NULL || !state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    file = find_retained(service, retained);
+    status = file == NULL ? ASTRA_VFS_ERR_BAD_HANDLE :
+        sync_file(service, file, file->state, retained);
+    state_release(service);
     return status;
 }
 
@@ -1342,7 +1420,9 @@ write_from_unlocked(AstraVfsService *service, uint32_t session,
     file = find_file(service, slot->id, handle, &status);
     if (file == NULL)
         return status;
-    return write_file(service, file, offset, flags, max_end, buffer, length, moved,
+    return write_file(service, file, offset, ASTRA_VFS_FILE_OPEN,
+                      ASTRA_VFS_FILE_INVALID,
+                      flags, max_end, buffer, length, moved,
                       position);
 }
 
@@ -1444,7 +1524,9 @@ handle_write(AstraVfsService *service, AstraVfsOpenFile *file,
         reply->status = ASTRA_VFS_ERR_INVALID;
         return;
     }
-    reply->status = write_file(service, file, request->offset, request->flags, request->write_limit,
+    reply->status = write_file(service, file, request->offset,
+                               ASTRA_VFS_FILE_OPEN, ASTRA_VFS_FILE_INVALID,
+                               request->flags, request->write_limit,
                                request->body.payload, request->length,
                                &moved, &position);
     if (reply->status == ASTRA_VFS_OK) {
@@ -1617,14 +1699,9 @@ dispatch_unlocked(AstraVfsService *service, uint32_t owner, uint32_t grant,
         file = find_file(service, slot->id, request->file, &status);
         if (file == NULL) {
             reply->status = status;
-        } else if (!file_acquire(service, file)) {
-            reply->status = ASTRA_VFS_ERR_IO;
         } else {
-            state_release(service);
-            reply->status = service->backend.ops->sync(
-                service->backend.context, file->node);
-            (void)state_acquire(service);
-            file_release(service, file);
+            reply->status = sync_file(service, file, ASTRA_VFS_FILE_OPEN,
+                                      ASTRA_VFS_FILE_INVALID);
         }
         break;
     case ASTRA_VFS_OP_TRY_LOCK:

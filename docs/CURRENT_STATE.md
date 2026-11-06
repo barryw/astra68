@@ -2,6 +2,32 @@
 
 Status: active continuation map, 2026-11-06
 
+VFS retained writeback seam, 2026-11-06: Retained descriptions now use the
+existing backend write/sync operations after client close, preserving open
+rights, limits, short writes, errors, and node-change generation. The same
+helpers serve ordinary VFS writes and sync. Beast target build, host suite,
+and sanitizers passed; DE25 AArch64 core test passed one million forced
+switches. Board/Beast binary SHA-256 matched at
+`67aadef4430e16096229e99ae8809736a9acdb003adb7ffbc6029c78c27584be`.
+The board trial binary was removed; Astra, audio, and remote desktop stayed
+active, only production loop0 remained, and 7.9 GiB was free. Checksummed
+evidence is under
+`/home/barry/astra-evidence/vfs-retained-write-de25-20261106/` on Beast.
+Kernel pager handoff, cached frames, writeback worker, and guest mappings
+remain open.
+
+DE25 SDM status probe, 2026-11-06: The running Linux kernel has the Intel
+Stratix10 RSU service and an exact-version `stratix10-rsu` module. A read-only
+load bound to the existing `stratix10-rsu.0` platform device, but its SDM
+status, error, and image sysfs fields all read zero. The kernel logged
+`COMMAND_RSU_STATUS returned 0x7`, a retry-counter failure, and missing SPTs.
+Current firmware therefore did not provide usable watchdog-cause evidence
+through this interface. The module was unloaded after the probe; Astra, audio,
+and remote desktop remained active, only production loop0 remained, and 7.9
+GiB was free. Probe output and SHA-256 check are under
+`/home/barry/astra-evidence/rsu-reset-cause-de25-20261106/` on Beast. Exact
+hardware reset-cause attribution remains open; no FPGA change was selected.
+
 DE25 reset-cause investigation, 2026-11-06: The official Agilex 5 CS/R1 HPS
 register map puts `Reset_Mgr.stat` at `0x10d11000`. Bits 16-20 record L4
 watchdog *warm* reset requests; bits 0-2 include SDM cold, SDM warm, and

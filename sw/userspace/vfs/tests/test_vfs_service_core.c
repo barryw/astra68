@@ -47,6 +47,8 @@ typedef struct FakeFs {
     uint32_t closes;
     uint32_t read_mode;
     uint32_t close_status;
+    uint32_t write_status;
+    uint32_t sync_status;
 } FakeFs;
 
 static FakeFs fake;
@@ -207,6 +209,8 @@ fake_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags, uint6
         offset = found->size;
     *moved = 0u;
     *position = offset;
+    if (fake.write_status != ASTRA_VFS_OK)
+        return fake.write_status;
     if (length != 0u && offset >= max_end)
         return ASTRA_VFS_ERR_FILE_TOO_LARGE;
     if (offset < max_end && length > max_end - offset)
@@ -226,7 +230,7 @@ fake_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags, uint6
 static uint32_t fake_sync(void *context, uintptr_t node)
 {
     (void)context;
-    return node == 0u ? ASTRA_VFS_ERR_BAD_HANDLE : ASTRA_VFS_OK;
+    return node == 0u ? ASTRA_VFS_ERR_BAD_HANDLE : fake.sync_status;
 }
 
 static uint32_t fake_truncate(void *context, uintptr_t node, uint64_t size)
@@ -1328,7 +1332,7 @@ test_retained_description_survives_client_close(void)
     node->size = 5u;
     session = open_session();
     begin_request(&request, session, "/mapped");
-    request.flags = ASTRA_VFS_OPEN_READ;
+    request.flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE;
     fixture_dispatch(&service, ASTRA_VFS_OP_OPEN, &request, &reply);
     assert(reply.status == ASTRA_VFS_OK);
     handle = reply.file;
@@ -1358,6 +1362,22 @@ test_retained_description_survives_client_close(void)
     assert(astra_vfs_service_stat_retained(&service, handle, &info) ==
            ASTRA_VFS_OK);
     assert(info.size == 3u);
+    assert(astra_vfs_service_write_retained(&service, handle, 1u, 2u,
+                                            "XY", 2u, &moved) == ASTRA_VFS_OK);
+    assert(moved == 1u && node->size == 3u);
+    assert(node->bytes[0] == 'c' && node->bytes[1] == 'X');
+    assert(service.changes.nodes == 1u);
+    fake.write_status = ASTRA_VFS_ERR_NO_SPACE;
+    assert(astra_vfs_service_write_retained(&service, handle, 2u, UINT64_MAX,
+                                            "Z", 1u, &moved) ==
+           ASTRA_VFS_ERR_NO_SPACE);
+    assert(moved == 0u && node->bytes[2] == 'c' &&
+           service.changes.nodes == 1u);
+    fake.write_status = ASTRA_VFS_OK;
+    assert(astra_vfs_service_sync_retained(&service, handle) == ASTRA_VFS_OK);
+    fake.sync_status = ASTRA_VFS_ERR_IO;
+    assert(astra_vfs_service_sync_retained(&service, handle) == ASTRA_VFS_ERR_IO);
+    fake.sync_status = ASTRA_VFS_OK;
     assert(astra_vfs_service_release_retained(&service, handle) == ASTRA_VFS_OK);
     assert(fake.closes == 1u && service.open_files == 0u);
     assert(astra_vfs_service_shutdown(&service, &writable, &probe) ==
@@ -1370,6 +1390,32 @@ test_retained_description_survives_client_close(void)
            ASTRA_VFS_ERR_BAD_HANDLE);
     assert(astra_vfs_service_stat_retained(&service, handle, &info) ==
            ASTRA_VFS_ERR_BAD_HANDLE);
+    assert(astra_vfs_service_write_retained(&service, handle, 0u, UINT64_MAX,
+                                            "x", 1u, &moved) ==
+           ASTRA_VFS_ERR_BAD_HANDLE);
+    assert(astra_vfs_service_sync_retained(&service, handle) ==
+           ASTRA_VFS_ERR_BAD_HANDLE);
+
+    reset();
+    assert(fake_create("/readonly", ASTRA_VFS_KIND_FILE) != NULL);
+    session = open_session();
+    begin_request(&request, session, "/readonly");
+    request.flags = ASTRA_VFS_OPEN_READ;
+    fixture_dispatch(&service, ASTRA_VFS_OP_OPEN, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    handle = reply.file;
+    assert(astra_vfs_service_retain_file(&service, session, handle,
+                                         &retained) == ASTRA_VFS_OK);
+    begin_request(&request, session, NULL);
+    request.file = handle;
+    fixture_dispatch(&service, ASTRA_VFS_OP_CLOSE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    assert(astra_vfs_service_write_retained(&service, retained, 0u, UINT64_MAX,
+                                            "x", 1u, &moved) ==
+           ASTRA_VFS_ERR_ACCESS);
+    assert(moved == 0u && service.changes.nodes == 0u);
+    assert(astra_vfs_service_release_retained(&service, retained) ==
+           ASTRA_VFS_OK);
 }
 
 #define MODEL_WORKERS 4u
