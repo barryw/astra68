@@ -389,9 +389,11 @@ Display 10.01%, 11.71% idle, 16.13 presents/s, and zero host audio underruns
 or software gaps. User saw smooth gameplay and heard continuous effects, but
 no music. Native Terminal showed `/store/id1/music` absent; Quake music tracks
 are user supplied, so this run cannot certify music playback. RFB captured
-live gameplay. This checks physical scheduler coexistence; media-band budget
-exhaustion under competing priority-20 service load and Quake's 30 FPS target
-remain open. Checksummed evidence:
+live gameplay. The earlier DE25 K1 qualification passed all 13 required
+markers, including `K2 MEDIA BUDGET PASS`, which forces a spinning priority-24
+thread to yield to a priority-20 service. Together these close the physical
+media-budget correctness gate. Quake's 30 FPS target remains open.
+Checksummed evidence:
 `/home/barry/astra-evidence/media-scheduler-hdmi-20261106/` on Beast.
 During cleanup, a root-run temporary diagnostic imported a Python script from
 the installed release and wrote one `__pycache__` file there. Release
