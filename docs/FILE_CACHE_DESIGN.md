@@ -103,6 +103,27 @@ pressure and tail latency remain unmeasured.
    has no pending pager-reply state or blocking userspace handoff.
    Pager service memory needed to answer a fault must be resident or otherwise
    avoid faulting on the same cache object.
+
+   The existing `ASTRA_SYSCALL_PORT_CALL` path in `sw/kernel/process.c`
+   starts a `kernel_thread_call_*` wait, transfers a reply capability, and
+   donates priority to the receiver. Its `deliver_reply()` writes the answer
+   into the caller's user buffer. A pager call must reuse that wait, reply
+   capability, and donation lifecycle while retaining its answer in kernel
+   state; it cannot put a fabricated user address in `call_reply`. The fault
+   dispatcher currently requires an immediately runnable context and the
+   fault handler retires every unresolved access. Add a blocked-fault
+   scheduler handoff and a pending-fault continuation before sending any
+   pager request. Reply, timeout, cancellation, pager death, and process exit
+   must each retire that continuation exactly once.
+
+   `AstraVfsOpenFile` in `sw/userspace/vfs/src/vfs_service_core.c` is owned by
+   one session. `close_file()` closes its backend node and invalidates its
+   generation. A mapping therefore cannot hold only this session token:
+   VFS must retain a separate backend description until its final cache or
+   mapping reference retires, including after session close. Its identity
+   comes from `AstraVfsNodeMeta.valid`; only the complete volume, inode, and
+   birth-generation triple permits cross-open sharing.
+
 3. Ordinary reads and writes and mapped access use the same cached pages.
    Partial writes preserve untouched bytes; short reads zero the remainder of
    the final page. `MAP_PRIVATE` uses existing COW. `MAP_SHARED` writes mark
