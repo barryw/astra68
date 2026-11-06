@@ -497,6 +497,20 @@ fault injection and subsequent storage recovery check remain open. Haiku's
 kernel has no HPS storage-provider boundary; this gate uses systemd's existing
 unit job mechanism instead of a second Astra watchdog.
 
+Forced stop-job action gate, 2026-11-05: after cleanly stopping Astra, audio,
+and remote desktop and syncing storage, a disposable systemd unit used the
+same infinite service stop and `reboot-force` job action with a three-second
+limit. Its `ExecStop=/bin/sleep infinity` stop job timed out in four seconds;
+the board rebooted. Boot ID changed from
+`19742b10-0bd5-4fba-ba04-231e117d9b4f` to
+`1ca515ab-3677-49a3-8c90-832310743416`. Startup POST mounted the volume,
+recovered its journal, wrote and re-read its test data, and unmounted it.
+Astra then reached stage 8 with zero service restarts; Astra, audio, and
+remote desktop were active with 7.9 GiB free. Evidence is under
+`/home/barry/astra-evidence/stop-job-reboot-20261105/` on Beast. This proves
+systemd's forced action and subsequent storage recovery; an actual provider
+blocked in uninterruptible I/O remains untested.
+
 Guest watchdog checkpoint, 2026-11-05: the initial-image supervisor now sends
 one authenticated `PROGRESS` heartbeat per second from its existing timed wait
 loop. The kernel writes a dedicated Vesta heartbeat register; QEMU exposes its
