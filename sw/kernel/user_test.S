@@ -6,6 +6,8 @@
 	.globl  _k1_survivor_image_start
 	.globl  _k1_survivor_image_entry
 	.globl  _k2_sibling_image_entry
+	.globl  _k2_media_image_entry
+	.globl  _k2_media_service_image_entry
 	.globl  _k1_survivor_image_end
 	.globl  _k1_offender_image_start
 	.globl  _k1_offender_image_entry
@@ -15,6 +17,9 @@ _k1_survivor_image_start:
 _k1_survivor_image_entry:
 	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
 	move.l  #0x53555256, (%a0)
+	cmpi.l  #KERNEL_QUALIFICATION_MEDIA_RESULT, \
+		KERNEL_QUALIFICATION_MEDIA_RESULT_OFFSET(%a0)
+	bne     .Lmain_fail
 
 	| Two runnable threads of equal priority, neither yielding: the quantum
 	| is the only thing that can separate them, and the milestone asserts a
@@ -1185,6 +1190,42 @@ _k2_sibling_image_entry:
 	moveq   #ASTRA_SYSCALL_EXIT, %d0
 	trap    #ASTRA_SYSCALL_TRAP
 	bra     .Lsibling_fail
+
+_k2_media_image_entry:
+	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
+	moveq   #ASTRA_SYSCALL_CLOCK_MONOTONIC, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmedia_fail
+	move.l  %d2, %d5
+.Lmedia_spin:
+	moveq   #ASTRA_SYSCALL_CLOCK_MONOTONIC, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmedia_fail
+	sub.l   %d5, %d2
+	cmpi.l  #KERNEL_QUALIFICATION_MEDIA_SPIN_NS, %d2
+	blo     .Lmedia_spin
+	| Priority 20 service must run before priority 24 media reaches 16 ms.
+	cmpi.l  #1, KERNEL_QUALIFICATION_MEDIA_SERVICE_OFFSET(%a0)
+	bne     .Lmedia_fail
+	move.l  #KERNEL_QUALIFICATION_MEDIA_RESULT, \
+		KERNEL_QUALIFICATION_MEDIA_RESULT_OFFSET(%a0)
+	moveq   #0, %d1
+	moveq   #ASTRA_SYSCALL_THREAD_EXIT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+.Lmedia_fail:
+	moveq   #ASTRA_SYSCALL_PROCESS_EXIT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	bra     .Lmedia_fail
+
+_k2_media_service_image_entry:
+	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
+	moveq   #1, %d1
+	move.l  %d1, KERNEL_QUALIFICATION_MEDIA_SERVICE_OFFSET(%a0)
+	moveq   #ASTRA_SYSCALL_THREAD_EXIT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	bra     .Lmedia_fail
 _k1_survivor_image_end:
 
 	.balign 4

@@ -127,10 +127,13 @@ from the manifest's `priority=N`. `ASTRA_LAUNCH_FLAG_ESSENTIAL` (`required`,
 `critical`) is memory authority and restart policy only and does not change
 priority.
 
-**PLANNED:** a replenished CPU budget for the media band. Exhausting it
-demotes the thread to 23 until the next period, so a runaway audio thread
-cannot starve input, display, init, and debugger services. Deferred while the
-media service is the band's only, trusted, occupant.
+**CURRENT:** media-band threads share a 15 ms CPU budget per 20 ms period.
+Exhaustion caps their base priority at 19 until replenishment so priority
+20-23 system services can run. Inherited and RPC-donated priority still win
+when a higher-priority caller depends on a media thread. K1 qualification
+exercises exhaustion with a spinning media thread and a priority-20 service.
+DE25 disposable-image stage-8 trial passed; physical media-load qualification
+remains open.
 
 ## Nonpreemptible regions
 

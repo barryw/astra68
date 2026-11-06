@@ -4269,6 +4269,160 @@ static void test_priority_selection_and_equal_priority_rotation(void)
     assert_switch_causes_sum(&stats);
 }
 
+static void test_media_budget_replenishes_and_covers_new_threads(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x60u, 0xfcu};
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t thread_id;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    for (uint32_t index = 0u; index < 2u; ++index)
+        assert(kernel_process_create_thread(process_id, 0u, index + 1u, 24u,
+                                            &thread_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_create_thread(process_id, 0u, 3u, 20u,
+                                        &thread_id) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, 80u, KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    for (uint32_t tick = 0u; tick < 6u; ++tick) {
+        KernelThread *running = NULL;
+
+        for (uint32_t slot = 0u; slot < 5u; ++slot) {
+            KernelThread *candidate = kernel_thread_at(slot);
+
+            if (candidate != NULL && candidate->state == KERNEL_THREAD_RUNNING) {
+                assert(running == NULL);
+                running = candidate;
+            }
+        }
+        assert(running != NULL);
+        advance_quantum();
+        assert(kernel_process_on_timer(registers, running->user_stack_top - 16u,
+                                       frame, &next) == KERNEL_PROCESS_OK);
+        if (tick == 3u) {
+            assert(kernel_thread_at(1u)->budget_throttled != 0u &&
+                   kernel_thread_at(2u)->budget_throttled != 0u);
+            assert(kernel_thread_at(1u)->effective_priority == 19u &&
+                   kernel_thread_at(2u)->effective_priority == 19u);
+            assert(kernel_thread_at(3u)->state == KERNEL_THREAD_RUNNING);
+            assert(kernel_thread_set_priority(kernel_thread_at(3u), 24u) ==
+                   KERNEL_THREAD_OK &&
+                   kernel_thread_at(3u)->effective_priority == 19u);
+            assert(kernel_thread_set_priority(kernel_thread_at(3u), 20u) ==
+                   KERNEL_THREAD_OK);
+            assert(kernel_process_create_thread(process_id, 0u, 4u, 24u,
+                                                &thread_id) == KERNEL_PROCESS_OK);
+            assert(kernel_thread_at(4u)->budget_throttled != 0u &&
+                   kernel_thread_at(4u)->effective_priority == 19u);
+        }
+        if (tick == 4u) {
+            assert(kernel_thread_at(1u)->budget_throttled == 0u &&
+                   kernel_thread_at(2u)->budget_throttled == 0u &&
+                   kernel_thread_at(4u)->budget_throttled == 0u);
+            assert(kernel_thread_at(1u)->state == KERNEL_THREAD_RUNNING ||
+                   kernel_thread_at(2u)->state == KERNEL_THREAD_RUNNING ||
+                   kernel_thread_at(4u)->state == KERNEL_THREAD_RUNNING);
+        }
+    }
+    assert(kernel_thread_at(1u)->budget_throttled == 0u &&
+           kernel_thread_at(2u)->budget_throttled == 0u);
+    assert(kernel_thread_at(1u)->effective_priority == 24u &&
+           kernel_thread_at(2u)->effective_priority == 24u &&
+           kernel_thread_at(4u)->effective_priority == 24u);
+    assert(kernel_thread_at(1u)->state == KERNEL_THREAD_RUNNING ||
+           kernel_thread_at(2u)->state == KERNEL_THREAD_RUNNING ||
+           kernel_thread_at(4u)->state == KERNEL_THREAD_RUNNING);
+}
+
+static void test_media_budget_is_shared_across_processes(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x60u, 0xfcu};
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t first, second, thread_id;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &first) == KERNEL_PROCESS_OK);
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &second) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(kernel_process_create_thread(first, 0u, 1u, 24u,
+                                        &thread_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_create_thread(second, 0u, 2u, 24u,
+                                        &thread_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_create_thread(first, 0u, 3u, 20u,
+                                        &thread_id) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, 80u, KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    for (uint32_t tick = 0u; tick < 4u; ++tick) {
+        KernelThread *running = NULL;
+
+        for (uint32_t slot = 0u; slot < 5u; ++slot) {
+            KernelThread *candidate = kernel_thread_at(slot);
+
+            if (candidate != NULL && candidate->state == KERNEL_THREAD_RUNNING) {
+                assert(running == NULL);
+                running = candidate;
+            }
+        }
+        assert(running != NULL);
+        advance_quantum();
+        assert(kernel_process_on_timer(registers, running->user_stack_top - 16u,
+                                       frame, &next) == KERNEL_PROCESS_OK);
+    }
+    assert(kernel_thread_at(2u)->budget_throttled != 0u &&
+           kernel_thread_at(3u)->budget_throttled != 0u);
+    assert(kernel_thread_at(2u)->effective_priority == 19u &&
+           kernel_thread_at(3u)->effective_priority == 19u);
+    assert(kernel_thread_at(4u)->state == KERNEL_THREAD_RUNNING);
+}
+
+static void test_media_budget_charges_priority_changes(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x60u, 0xfcu};
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id, thread_id;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    for (uint32_t index = 0u; index < 3u; ++index)
+        assert(kernel_process_create_thread(process_id, 0u, index + 1u, 24u,
+                                            &thread_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_create_thread(process_id, 0u, 4u, 20u,
+                                        &thread_id) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, 80u, KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    advance_quantum();
+    assert(kernel_process_on_timer(registers,
+                                   kernel_thread_at(0u)->user_stack_top - 16u,
+                                   frame, &next) == KERNEL_PROCESS_OK);
+    for (uint32_t tick = 0u; tick < 3u; ++tick) {
+        KernelThread *running = NULL;
+
+        for (uint32_t slot = 1u; slot <= 3u; ++slot)
+            if (kernel_thread_at(slot)->state == KERNEL_THREAD_RUNNING)
+                running = kernel_thread_at(slot);
+        assert(running != NULL);
+        assert(kernel_thread_set_priority(running, 16u) == KERNEL_THREAD_OK);
+        advance_quantum();
+        assert(kernel_process_on_timer(registers,
+                                       running->user_stack_top - 16u,
+                                       frame, &next) == KERNEL_PROCESS_OK);
+        assert(kernel_thread_set_priority(running, 24u) == KERNEL_THREAD_OK);
+    }
+    assert(kernel_thread_at(4u)->state == KERNEL_THREAD_RUNNING);
+    for (uint32_t slot = 1u; slot <= 3u; ++slot)
+        assert(kernel_thread_at(slot)->effective_priority == 19u);
+}
+
 static void test_interrupt_wakeup_preserves_equal_priority_quantum(void)
 {
     static const uint8_t image[] = {0x4eu, 0x71u, 0x60u, 0xfcu};
@@ -16791,6 +16945,9 @@ int main(void)
     test_qualification_authorization_follows_process_capacity();
     test_private_irq_qualification_control();
     test_priority_selection_and_equal_priority_rotation();
+    test_media_budget_replenishes_and_covers_new_threads();
+    test_media_budget_is_shared_across_processes();
+    test_media_budget_charges_priority_changes();
     test_interrupt_wakeup_preserves_equal_priority_quantum();
     test_thread_stack_address_space_is_exhausted_and_reclaimable();
     test_last_runnable_timed_wait_wakes_from_supervisor_idle(false);

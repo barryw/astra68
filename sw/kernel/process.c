@@ -432,10 +432,16 @@ static void reply_export_observer(KernelObjectType type, void *object,
                                   void *context);
 static KernelProcessMaintenanceDiagnostics maintenance_diagnostics;
 static KernelThread *current_thread;
+#define MEDIA_PERIOD_CYCLES (KERNEL_PLATFORM_CPU_HZ / 50u)
+#define MEDIA_BUDGET_CYCLES (MEDIA_PERIOD_CYCLES * 3u / 4u)
 static uint64_t quantum_deadline;
+static uint64_t media_period_deadline;
+static uint32_t media_used_cycles;
+static uint8_t media_throttled;
 static uint32_t scheduler_quantum_cycles;
 static uint32_t runtime_started_cycles;
 static uint8_t runtime_active;
+static uint8_t runtime_started_media;
 static uint8_t scheduler_initialized;
 static uint8_t scheduler_started;
 static uint8_t quantum_active;
@@ -1277,18 +1283,77 @@ static uint64_t interval_timer_earliest(void)
     return earliest;
 }
 
-static void runtime_stop(KernelProcess *process, KernelThread *thread)
+static KernelProcessStatus media_set_throttled(uint8_t throttled)
+{
+    if (media_throttled == throttled)
+        return KERNEL_PROCESS_OK;
+    for (uint32_t slot = 0u; slot < kernel_thread_slot_limit(); ++slot) {
+        KernelThread *thread = kernel_thread_at(slot);
+
+        if (thread != NULL && thread->state != KERNEL_THREAD_DEAD &&
+            kernel_thread_set_budget_throttled(thread, throttled != 0u) !=
+                KERNEL_THREAD_OK)
+            return KERNEL_PROCESS_CORRUPT;
+    }
+    media_throttled = throttled;
+    return KERNEL_PROCESS_OK;
+}
+
+static KernelProcessStatus media_budget_charge(uint64_t now,
+                                               uint32_t elapsed)
+{
+    if (media_period_deadline == 0u || now >= media_period_deadline) {
+        uint64_t previous = media_period_deadline;
+
+        if (previous != 0u && now - previous < MEDIA_PERIOD_CYCLES) {
+            uint64_t current = now - previous;
+
+            if (current < elapsed)
+                elapsed = (uint32_t)current;
+            media_period_deadline = previous + MEDIA_PERIOD_CYCLES;
+        } else {
+            uint64_t start = elapsed < MEDIA_PERIOD_CYCLES && now >= elapsed ?
+                now - elapsed : now;
+
+            media_period_deadline = start + MEDIA_PERIOD_CYCLES;
+        }
+        media_used_cycles = 0u;
+        if (media_set_throttled(0u) != KERNEL_PROCESS_OK)
+            return KERNEL_PROCESS_CORRUPT;
+    }
+    media_used_cycles = UINT32_MAX - media_used_cycles < elapsed ?
+        UINT32_MAX : media_used_cycles + elapsed;
+    if (media_used_cycles >= MEDIA_BUDGET_CYCLES)
+        return media_set_throttled(1u);
+    return KERNEL_PROCESS_OK;
+}
+
+static KernelProcessStatus media_replenish_due(uint64_t now)
+{
+    if (media_throttled == 0u || now < media_period_deadline)
+        return KERNEL_PROCESS_OK;
+    media_used_cycles = 0u;
+    media_period_deadline = 0u;
+    return media_set_throttled(0u);
+}
+
+static KernelProcessStatus runtime_stop(KernelProcess *process,
+                                        KernelThread *thread)
 {
     uint32_t now;
     uint32_t elapsed;
 
     if (runtime_active == 0u || process == NULL || thread == NULL)
-        return;
+        return KERNEL_PROCESS_OK;
     now = kernel_platform_cpu_cycles_low();
     elapsed = (uint32_t)(now - runtime_started_cycles);
     process->runtime_cycles += elapsed;
     thread->runtime_cycles += elapsed;
     runtime_active = 0u;
+    if (runtime_started_media != 0u ||
+        thread->base_priority >= KERNEL_THREAD_PRIORITY_MEDIA)
+        return media_budget_charge(scheduler_cycles(), elapsed);
+    return KERNEL_PROCESS_OK;
 }
 
 static void signal_deliver(KernelThread *thread)
@@ -1381,6 +1446,8 @@ static KernelCpuContext *runtime_resume(KernelThread *thread)
     signal_deliver(thread);
     if (runtime_active == 0u) {
         runtime_started_cycles = kernel_platform_cpu_cycles_low();
+        runtime_started_media =
+            thread->base_priority >= KERNEL_THREAD_PRIORITY_MEDIA ? 1u : 0u;
         runtime_active = 1u;
     }
     return &thread->context;
@@ -1402,6 +1469,8 @@ static void scheduler_timer_rearm_at(uint64_t now)
         target = deadline;
     if (interval_next_deadline < target)
         target = interval_next_deadline;
+    if (media_throttled != 0u && media_period_deadline < target)
+        target = media_period_deadline;
     if (target == KERNEL_THREAD_DEADLINE_NEVER) {
         delta = scheduler_quantum_cycles;
     } else if (target <= now) {
@@ -1450,6 +1519,9 @@ static KernelProcessStatus scheduler_expire_due(
     uint32_t expired_timers = 0u;
     uint32_t timer_wakeups = 0u;
     uint8_t highest = 0u;
+
+    if (media_replenish_due(now) != KERNEL_PROCESS_OK)
+        return KERNEL_PROCESS_CORRUPT;
 
     if (kernel_thread_next_deadline(&deadline) && deadline <= now) {
         if (kernel_thread_expire_deadlines(now, &expired, &highest) !=
@@ -1564,7 +1636,9 @@ KernelProcessStatus activate_fast(KernelThread *next, SwitchCause cause,
         if (kernel_vm_switch(&next_process->address_space) != KERNEL_VM_OK)
             return KERNEL_PROCESS_CORRUPT;
         kernel_time_page_update();
-        runtime_stop(process_for_thread(previous), previous);
+        if (runtime_stop(process_for_thread(previous), previous) !=
+            KERNEL_PROCESS_OK)
+            return KERNEL_PROCESS_CORRUPT;
         count_switch(previous == NULL ? SWITCH_IDLE : cause);
         if (previous != NULL) {
             if (previous->process_slot == next->process_slot)
@@ -1660,6 +1734,9 @@ static KernelProcessStatus schedule_next(SwitchCause cause,
 
     if (next_context == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
+    if (runtime_stop(process_for_thread(current_thread), current_thread) !=
+        KERNEL_PROCESS_OK)
+        return KERNEL_PROCESS_CORRUPT;
     switch (kernel_thread_take_next(&next)) {
     case KERNEL_THREAD_OK:
         return activate(next, cause, next_context);
@@ -1670,7 +1747,9 @@ static KernelProcessStatus schedule_next(SwitchCause cause,
          * becomes a no-op instead of invalidating the ATC twice for one wait.
          * The reaper moves URP to the empty root before destroying the space.
          */
-        runtime_stop(process_for_thread(current_thread), current_thread);
+        if (runtime_stop(process_for_thread(current_thread), current_thread) !=
+            KERNEL_PROCESS_OK)
+            return KERNEL_PROCESS_CORRUPT;
         current_thread = NULL;
         runtime_active = 0u;
         quantum_active = 0u;
@@ -1713,6 +1792,9 @@ static KernelProcessStatus schedule_pending(KernelCpuContext **next_context,
     if (next_context == NULL || process_for_thread(previous) == NULL ||
         previous->state != KERNEL_THREAD_RUNNING)
         return KERNEL_PROCESS_INVALID_STATE;
+    if (runtime_stop(process_for_thread(previous), previous) !=
+        KERNEL_PROCESS_OK)
+        return KERNEL_PROCESS_CORRUPT;
     if (quantum_preempt_pending == 0u &&
         deadline_preempt_pending == 0u &&
         !ready_thread_preempts(previous, allow_equal_priority)) {
@@ -3993,8 +4075,9 @@ static KernelProcessStatus retire_process(KernelProcess *retiring,
     shutdown_initial = (reason == KERNEL_PROCESS_EXIT_SHUTDOWN ||
                         reason == KERNEL_PROCESS_EXIT_RESTART) &&
                        retiring->id == initial_image_process_id;
-    if (retires_current)
-        runtime_stop(retiring, current_thread);
+    if (retires_current && runtime_stop(retiring, current_thread) !=
+        KERNEL_PROCESS_OK)
+        return KERNEL_PROCESS_CORRUPT;
     retiring->process_state = KERNEL_PROCESS_EXITING;
     ++exiting_process_count;
     retiring->suspended = 0u;
@@ -4220,7 +4303,11 @@ void kernel_process_init(void)
     current_thread = NULL;
     runtime_started_cycles = 0u;
     runtime_active = 0u;
+    runtime_started_media = 0u;
     quantum_deadline = 0u;
+    media_period_deadline = 0u;
+    media_used_cycles = 0u;
+    media_throttled = 0u;
     scheduler_quantum_cycles = kernel_platform_quantum_cycles();
     if (scheduler_quantum_cycles == 0u)
         scheduler_quantum_cycles = 1u;
@@ -4700,6 +4787,9 @@ static KernelProcessStatus commit_thread(KernelPreparedThread *prepared,
         thread->stack_slot != prepared->stack_slot ||
         thread->self_handle != prepared->handle ||
         (process->tls.memory_size != 0u) != (thread->tls_pages != 0u))
+        return KERNEL_PROCESS_CORRUPT;
+    if (media_throttled != 0u &&
+        kernel_thread_set_budget_throttled(thread, true) != KERNEL_THREAD_OK)
         return KERNEL_PROCESS_CORRUPT;
     if (kernel_thread_publish(thread) != KERNEL_THREAD_OK)
         return KERNEL_PROCESS_CORRUPT;
@@ -9086,8 +9176,10 @@ bool kernel_process_worker_enter(void)
     if (scheduler_initialized == 0u || worker_active != 0u)
         return false;
 
+    if (runtime_stop(process_for_thread(current_thread), current_thread) !=
+        KERNEL_PROCESS_OK)
+        return false;
     worker_active = 1u;
-    runtime_stop(process_for_thread(current_thread), current_thread);
     quantum_active = 0u;
     scheduler_timer_rearm();
     return true;
@@ -9143,6 +9235,8 @@ KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
                              &current, &previous);
     if (status != KERNEL_PROCESS_OK)
         return status;
+    if (runtime_stop(current, previous) != KERNEL_PROCESS_OK)
+        return KERNEL_PROCESS_CORRUPT;
     (void)current;
     now = scheduler_cycles();
     status = scheduler_expire_due(now, &expired, &highest);
@@ -12158,6 +12252,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         KernelThread *next = NULL;
 
         thread->context.data[0] = ASTRA_SYSCALL_OK;
+        if (runtime_stop(current, thread) != KERNEL_PROCESS_OK)
+            return KERNEL_PROCESS_CORRUPT;
         if (kernel_thread_make_ready(thread) != KERNEL_THREAD_OK ||
             kernel_thread_take_next(&next) != KERNEL_THREAD_OK ||
             next == NULL)

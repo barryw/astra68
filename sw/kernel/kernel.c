@@ -61,6 +61,8 @@ extern uint8_t _kernel_vectors[];
 extern uint8_t _k1_survivor_image_start[];
 extern uint8_t _k1_survivor_image_entry[];
 extern uint8_t _k2_sibling_image_entry[];
+extern uint8_t _k2_media_image_entry[];
+extern uint8_t _k2_media_service_image_entry[];
 extern uint8_t _k1_survivor_image_end[];
 extern uint8_t _k1_offender_image_start[];
 extern uint8_t _k1_offender_image_entry[];
@@ -1781,6 +1783,7 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     }
     if (performance_mask == KERNEL_PERFORMANCE_RELEASE_MASK)
         console_puts("K10 PERFORMANCE PASS\n");
+    console_puts("K2 MEDIA BUDGET PASS\n");
     console_puts("K2 PERFORMANCE PASS\n");
     console_puts("\nK8 SHARED BULK IPC PASS\n");
     console_puts("\nK7 MESSAGE PORTS PASS\n");
@@ -1903,6 +1906,8 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     uint32_t process_id;
     uint32_t survivor_process_id;
     uint32_t sibling_thread_id;
+    uint32_t media_thread_id;
+    uint32_t media_service_thread_id;
     KernelHandle offender_process_handle;
     uint32_t offender_image_size;
     uint32_t offender_entry_offset;
@@ -2115,6 +2120,10 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         (uint32_t)(_k1_survivor_image_entry - _k1_survivor_image_start);
     sibling_entry_offset =
         (uint32_t)(_k2_sibling_image_entry - _k1_survivor_image_start);
+    uint32_t media_entry_offset =
+        (uint32_t)(_k2_media_image_entry - _k1_survivor_image_start);
+    uint32_t media_service_entry_offset =
+        (uint32_t)(_k2_media_service_image_entry - _k1_survivor_image_start);
     offender_image_size =
         (uint32_t)(_k1_offender_image_end - _k1_offender_image_start);
     offender_entry_offset =
@@ -2134,6 +2143,16 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
             KERNEL_THREAD_PRIORITY_NORMAL + 1u, &sibling_thread_id) !=
             KERNEL_PROCESS_OK || sibling_thread_id == 0u)
         kernel_panic("sibling thread creation failed");
+    if (kernel_process_create_thread(
+            survivor_process_id, media_entry_offset, 0u,
+            KERNEL_THREAD_PRIORITY_MEDIA, &media_thread_id) !=
+            KERNEL_PROCESS_OK || media_thread_id == 0u ||
+        kernel_process_create_thread(
+            survivor_process_id, media_service_entry_offset, 0u,
+            KERNEL_THREAD_PRIORITY_SYSTEM,
+            &media_service_thread_id) != KERNEL_PROCESS_OK ||
+        media_service_thread_id == 0u)
+        kernel_panic("media budget qualification thread creation failed");
 #if ASTRA_KERNEL_SOAK_SELFTEST
     if (!kernel_memory_stats(&soak_baseline))
         kernel_panic("K1 soak baseline unavailable");
@@ -2169,7 +2188,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     console_puts(" pages\n");
 #endif
     console_puts("User processes ...... 2 ready, cache isolation armed\n");
-    console_puts("User threads ........ 3 ready, priority scheduler armed\n");
+    console_puts("User threads ........ 5 ready, priority scheduler armed\n");
 #endif
 #if ASTRA_KERNEL_K1_QUALIFICATION
     /*

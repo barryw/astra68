@@ -1458,6 +1458,7 @@ KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
     candidate->effective_priority = priority;
     candidate->inherited_priority = 0u;
     candidate->call_priority = 0u;
+    candidate->budget_throttled = 0u;
     candidate->call_receiver_slot = KERNEL_THREAD_SLOT_NONE;
     candidate->call_donor_head = KERNEL_THREAD_SLOT_NONE;
     candidate->call_donor_previous = KERNEL_THREAD_SLOT_NONE;
@@ -1769,8 +1770,10 @@ KernelThreadStatus kernel_thread_make_ready(KernelThread *thread)
 }
 
 static uint8_t priority_effective(uint8_t base, uint8_t inherited,
-                                  uint8_t call_priority)
+                                  uint8_t call_priority, uint8_t throttled)
 {
+    if (throttled != 0u && base >= KERNEL_THREAD_PRIORITY_MEDIA)
+        base = KERNEL_THREAD_PRIORITY_APPLICATION_MAX;
     uint8_t effective = base > inherited ? base : inherited;
 
     return effective > call_priority ? effective : call_priority;
@@ -1778,7 +1781,8 @@ static uint8_t priority_effective(uint8_t base, uint8_t inherited,
 
 static KernelThreadStatus change_priority(KernelThread *thread,
                                           uint8_t base, uint8_t inherited,
-                                          uint8_t call_priority)
+                                          uint8_t call_priority,
+                                          uint8_t throttled)
 {
     KernelThreadWaitQueue *queues[KERNEL_THREAD_WAIT_MEMBER_MAX];
     uint8_t effective;
@@ -1787,7 +1791,7 @@ static KernelThreadStatus change_priority(KernelThread *thread,
     if (!valid_thread(thread) ||
         base >= KERNEL_THREAD_PRIORITY_LEVELS ||
         inherited >= KERNEL_THREAD_PRIORITY_LEVELS ||
-        call_priority >= KERNEL_THREAD_PRIORITY_LEVELS)
+        call_priority >= KERNEL_THREAD_PRIORITY_LEVELS || throttled > 1u)
         return KERNEL_THREAD_INVALID_ARGUMENT;
     if (thread->state == KERNEL_THREAD_DEAD)
         return KERNEL_THREAD_INVALID_STATE;
@@ -1796,19 +1800,22 @@ static KernelThreadStatus change_priority(KernelThread *thread,
         thread->base_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
         thread->inherited_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
         thread->call_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
+        thread->budget_throttled > 1u ||
         thread->effective_priority != priority_effective(
             thread->base_priority, thread->inherited_priority,
-            thread->call_priority))
+            thread->call_priority, thread->budget_throttled))
         return KERNEL_THREAD_CORRUPT;
     if (thread->base_priority == base &&
         thread->inherited_priority == inherited &&
-        thread->call_priority == call_priority)
+        thread->call_priority == call_priority &&
+        thread->budget_throttled == throttled)
         return KERNEL_THREAD_OK;
-    effective = priority_effective(base, inherited, call_priority);
+    effective = priority_effective(base, inherited, call_priority, throttled);
     if (thread->effective_priority == effective) {
         thread->base_priority = base;
         thread->inherited_priority = inherited;
         thread->call_priority = call_priority;
+        thread->budget_throttled = throttled;
         return KERNEL_THREAD_OK;
     }
     if (thread->state == KERNEL_THREAD_READY &&
@@ -1827,6 +1834,7 @@ static KernelThreadStatus change_priority(KernelThread *thread,
     thread->base_priority = base;
     thread->inherited_priority = inherited;
     thread->call_priority = call_priority;
+    thread->budget_throttled = throttled;
     thread->effective_priority = effective;
     if (thread->state == KERNEL_THREAD_READY &&
         thread->suspended == 0u &&
@@ -1881,7 +1889,8 @@ static KernelThreadStatus refresh_call_receivers(KernelThread *receiver)
         }
         before = receiver->effective_priority;
         status = change_priority(receiver, receiver->base_priority,
-                                 receiver->inherited_priority, inherited);
+                                 receiver->inherited_priority, inherited,
+                                 receiver->budget_throttled);
         if (status != KERNEL_THREAD_OK || before == receiver->effective_priority)
             return status;
         KernelThread *next = call_receiver(receiver);
@@ -1952,7 +1961,8 @@ KernelThreadStatus kernel_thread_set_priority(KernelThread *thread,
     uint8_t before = thread != NULL ? thread->effective_priority : 0u;
     KernelThreadStatus status = change_priority(
         thread, priority, thread != NULL ? thread->inherited_priority : 0u,
-        thread != NULL ? thread->call_priority : 0u);
+        thread != NULL ? thread->call_priority : 0u,
+        thread != NULL ? thread->budget_throttled : 0u);
 
     if (status == KERNEL_THREAD_OK && before != thread->effective_priority)
         status = refresh_call_receivers(call_receiver(thread));
@@ -1965,7 +1975,22 @@ KernelThreadStatus kernel_thread_set_inherited_priority(KernelThread *thread,
     uint8_t before = thread != NULL ? thread->effective_priority : 0u;
     KernelThreadStatus status = change_priority(
         thread, thread != NULL ? thread->base_priority : 0u, priority,
-        thread != NULL ? thread->call_priority : 0u);
+        thread != NULL ? thread->call_priority : 0u,
+        thread != NULL ? thread->budget_throttled : 0u);
+
+    if (status == KERNEL_THREAD_OK && before != thread->effective_priority)
+        status = refresh_call_receivers(call_receiver(thread));
+    return status;
+}
+
+KernelThreadStatus kernel_thread_set_budget_throttled(KernelThread *thread,
+                                                      bool throttled)
+{
+    uint8_t before = thread != NULL ? thread->effective_priority : 0u;
+    KernelThreadStatus status = change_priority(
+        thread, thread != NULL ? thread->base_priority : 0u,
+        thread != NULL ? thread->inherited_priority : 0u,
+        thread != NULL ? thread->call_priority : 0u, throttled ? 1u : 0u);
 
     if (status == KERNEL_THREAD_OK && before != thread->effective_priority)
         status = refresh_call_receivers(call_receiver(thread));
@@ -1990,9 +2015,10 @@ kernel_thread_set_process_priority(uint16_t process_slot, uint8_t priority)
             thread->base_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
             thread->inherited_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
             thread->call_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
+            thread->budget_throttled > 1u ||
             thread->effective_priority != priority_effective(
                 thread->base_priority, thread->inherited_priority,
-                thread->call_priority))
+                thread->call_priority, thread->budget_throttled))
             return KERNEL_THREAD_CORRUPT;
     }
 

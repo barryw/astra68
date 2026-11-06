@@ -2,6 +2,27 @@
 
 Status: active continuation map, 2026-11-05
 
+Media-band scheduler checkpoint, 2026-11-05: Priority 24-27 threads now share
+one 15 ms CPU budget per 20 ms period. Exhaustion caps their base priority at
+19 until replenishment, allowing priority 20-23 services to run; inherited and
+RPC-donated priority still take precedence. Runtime accounting retains the
+priority at slice start, so lowering priority before timer delivery cannot
+evade charge. Haiku reference: `src/system/kernel/scheduler/scheduler_thread.cpp`
+keeps scheduling priority distinct from thread ownership; Astra adapts that
+separation to the existing single-core priority queues. Host process/thread
+tests pass, including cross-process sharing, newly created or reprioritized
+threads, and donation. Beast MC68040 QEMU K1 qualification exercised the media
+exhaustion path and passed 13 markers; timer dispatch 689/50000 cycles,
+scheduler pick 38/10000, zero sampled overruns. Coherent release
+`65ccb3c1c15c99204a5aef04634d20fe2aa686781c96abd7c363738869c5d016`
+passed a 90-second DE25 disposable-image stage-8 trial. Logs were copied and
+checksum-verified under
+`/home/barry/astra-evidence/media-global-budget-de25-trial-20261105/` on Beast.
+Selected release and Astra, audio, and remote-desktop services recovered;
+disposable board state was removed, restoring 7.9 GiB free. Physical media
+load and long-running target scheduler performance qualification remain open.
+Notification performance qualification follows correctness.
+
 Linux external entry identity, 2026-11-05: Storage protocol 14 and HostFS
 change-record schema 2 carry the child inode supplied by a fanotify target
 handle for create and rename entry events. The rooted provider resolves the

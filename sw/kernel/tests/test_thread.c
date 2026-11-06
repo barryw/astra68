@@ -239,6 +239,40 @@ static void test_inherited_priority_reorders_and_preserves_base(void)
     assert(kernel_thread_pool_valid());
 }
 
+static void test_media_budget_throttle_preserves_donation(void)
+{
+    KernelThread *media;
+    KernelThread *service;
+    KernelThread *selected;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u, 24u,
+                                  &media) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(2u, 0x10000002u, 1u, 0x00100010u,
+                                  0x70011000u, 0u, 20u,
+                                  &service) == KERNEL_THREAD_OK);
+    publish_thread(media);
+    publish_thread(service);
+    assert(kernel_thread_set_budget_throttled(NULL, true) ==
+           KERNEL_THREAD_INVALID_ARGUMENT);
+    assert(kernel_thread_set_budget_throttled(media, true) ==
+           KERNEL_THREAD_OK);
+    assert(media->base_priority == 24u &&
+           media->effective_priority == KERNEL_THREAD_PRIORITY_APPLICATION_MAX);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK &&
+           selected == service);
+    assert(kernel_thread_set_inherited_priority(media, 25u) ==
+           KERNEL_THREAD_OK && media->effective_priority == 25u);
+    assert(kernel_thread_set_inherited_priority(media, 0u) ==
+           KERNEL_THREAD_OK &&
+           media->effective_priority == KERNEL_THREAD_PRIORITY_APPLICATION_MAX);
+    assert(kernel_thread_set_budget_throttled(media, false) ==
+           KERNEL_THREAD_OK && media->effective_priority == 24u);
+    assert(kernel_thread_pool_valid());
+}
+
 static void test_call_donation_chain_and_withdrawal(void)
 {
     KernelThread *caller;
@@ -1451,6 +1485,7 @@ int main(void)
     test_process_priority_reorders_ready_and_blocked_threads();
     test_thread_priority_changes_only_target();
     test_inherited_priority_reorders_and_preserves_base();
+    test_media_budget_throttle_preserves_donation();
     test_call_donation_chain_and_withdrawal();
     test_call_donation_multiple_callers_and_receiver_death();
     test_process_suspend_preserves_wait_state();
