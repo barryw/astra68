@@ -245,7 +245,7 @@ uint32_t astra_vfs_host_change_next(AstraVfsHostBackend *backend,
              (record->parent_inode == 0u || record->name[0] == '\0' ||
               memchr(record->name, '\0', sizeof(record->name)) == NULL)) ||
             (record->kind == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED &&
-             (record->inode != 0u || record->parent_inode == 0u ||
+             (record->parent_inode == 0u ||
               record->name[0] == '\0' ||
               memchr(record->name, '\0', sizeof(record->name)) == NULL)))
             return ASTRA_VFS_ERR_PROTOCOL;

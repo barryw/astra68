@@ -495,7 +495,7 @@ static int watch_fid(const struct fanotify_event_info_header *info,
 }
 
 static void watch_emit(AstraStorageProvider *provider, const WatchFid *fid,
-                       uint32_t kind)
+                       const WatchFid *child, uint32_t kind)
 {
     for (AstraStorageResource *entry = provider->resources; entry != NULL;
          entry = entry->next) {
@@ -517,6 +517,30 @@ static void watch_emit(AstraStorageProvider *provider, const WatchFid *fid,
             O_PATH | O_CLOEXEC |
             (kind == ASTRA_HOST_FS_CHANGE_NODE ? 0 : O_DIRECTORY));
         int opened_error = errno;
+        uint64_t child_inode = 0u;
+        if (object >= 0 && child != NULL) {
+            if (memcmp(&child->info->fsid, &fid->info->fsid,
+                       sizeof(fid->info->fsid)) != 0) {
+                close(object);
+                close(mount);
+                watch_gap(provider);
+                continue;
+            }
+            int target = open_by_handle_at(mount,
+                (struct file_handle *)child->handle, O_PATH | O_CLOEXEC);
+            if (target >= 0) {
+                struct stat target_info;
+                if (fstat(target, &target_info) != 0) {
+                    close(target);
+                    close(object);
+                    close(mount);
+                    watch_gap(provider);
+                    continue;
+                }
+                child_inode = (uint64_t)target_info.st_ino;
+                close(target);
+            }
+        }
         close(mount);
         if (object < 0) {
             if (opened_error != EXDEV && opened_error != EINVAL)
@@ -533,7 +557,8 @@ static void watch_emit(AstraStorageProvider *provider, const WatchFid *fid,
             continue;
         }
         watch_append(provider, record->id, record->generation, kind,
-            kind == ASTRA_HOST_FS_CHANGE_NODE ? (uint64_t)info.st_ino : 0u,
+            kind == ASTRA_HOST_FS_CHANGE_NODE ?
+                (uint64_t)info.st_ino : child_inode,
             kind == ASTRA_HOST_FS_CHANGE_NODE ? 0u : (uint64_t)info.st_ino,
             fid->name);
     }
@@ -572,22 +597,31 @@ static void watch_event(AstraStorageProvider *provider,
         offset += info->len;
     }
     WatchFid fid;
+    WatchFid child;
+    const WatchFid *child_ref = NULL;
+    if (target != NULL) {
+        if (watch_fid(target, 0, &child) != 0) goto gap;
+        child_ref = &child;
+    }
     if ((meta->mask & FAN_RENAME) != 0u) {
         if (watch_fid(old, 1, &fid) != 0) goto gap;
-        watch_emit(provider, &fid, ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED);
+        watch_emit(provider, &fid, child_ref,
+                   ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED);
         if (watch_fid(new_parent, 1, &fid) != 0) goto gap;
-        watch_emit(provider, &fid, ASTRA_HOST_FS_CHANGE_ENTRY_CREATED);
+        watch_emit(provider, &fid, child_ref,
+                   ASTRA_HOST_FS_CHANGE_ENTRY_CREATED);
         return;
     }
     if ((meta->mask & (FAN_CREATE | FAN_DELETE)) != 0u) {
         if (watch_fid(parent, 1, &fid) != 0) goto gap;
-        watch_emit(provider, &fid, (meta->mask & FAN_DELETE) != 0u ?
+        watch_emit(provider, &fid, child_ref,
+            (meta->mask & FAN_DELETE) != 0u ?
             ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED :
             ASTRA_HOST_FS_CHANGE_ENTRY_CREATED);
     }
     if ((meta->mask & (FAN_MODIFY | FAN_ATTRIB)) != 0u) {
-        if (watch_fid(target, 0, &fid) != 0) goto gap;
-        watch_emit(provider, &fid, ASTRA_HOST_FS_CHANGE_NODE);
+        if (child_ref == NULL) goto gap;
+        watch_emit(provider, child_ref, NULL, ASTRA_HOST_FS_CHANGE_NODE);
     }
     return;
 gap:

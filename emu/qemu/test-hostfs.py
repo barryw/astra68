@@ -1114,7 +1114,7 @@ def run(qtest, root, outside, external=False):
 
     def next_change(cursor):
         answer = execute(qtest, [Command(generation, FS_CHANGE_NEXT,
-            offset=cursor, value=1, capacity=CHANGE_RECORD_SIZE,
+            offset=cursor, value=2, capacity=CHANGE_RECORD_SIZE,
             session=work)])[0]
         assert status(answer) == STATUS_OK
         kind = get32(answer.raw, 56)

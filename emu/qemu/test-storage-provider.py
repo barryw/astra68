@@ -48,7 +48,7 @@ def external_change_gate(gate, qtest, root, outside):
         return answer
 
     def next_change(cursor):
-        answer = call(gate.FS_CHANGE_NEXT, offset=cursor, value=1,
+        answer = call(gate.FS_CHANGE_NEXT, offset=cursor, value=2,
                       capacity=gate.CHANGE_RECORD_SIZE)
         kind = gate.get32(answer.raw, 56)
         data = gate.output(qtest, answer, gate.CHANGE_RECORD_SIZE) if kind in (
@@ -82,6 +82,7 @@ def external_change_gate(gate, qtest, root, outside):
         directory.mkdir()
         data = await_change(gate.CHANGE_ENTRY_CREATED, b"linux-origin")
         assert gate.get64(data, 32) == parent_inode
+        assert gate.get64(data, 24) == directory.stat().st_ino
         assert data[48:].split(b"\0", 1)[0] == b"linux-origin"
 
         outsider.write_bytes(b"outside")

@@ -1276,7 +1276,9 @@ static void external_changes(AstraStorageProvider *provider, int root)
     assert(astra_storage_provider_poll(provider) >= 0);
     uint64_t cursor = provider->watch_sequence;
     int file = openat(root, "inside-event", O_CREAT | O_EXCL | O_RDWR, 0600);
-    assert(file >= 0 && write(file, "x", 1) == 1 && close(file) == 0);
+    struct stat created_info;
+    assert(file >= 0 && fstat(file, &created_info) == 0 &&
+        write(file, "x", 1) == 1 && close(file) == 0);
     char outside[] = "/var/tmp/astra-storage-watch-outside.XXXXXX";
     assert(mkdtemp(outside) != NULL);
     char sibling[128];
@@ -1295,7 +1297,10 @@ static void external_changes(AstraStorageProvider *provider, int root)
         assert(change.mount == mount && change.generation == 1u &&
             strcmp(change.change.name, "outside-event") != 0);
         if (change.change.kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED &&
-            strcmp(change.change.name, "inside-event") == 0) ++created;
+            strcmp(change.change.name, "inside-event") == 0) {
+            assert(change.change.inode == (uint64_t)created_info.st_ino);
+            ++created;
+        }
         if (change.change.kind == ASTRA_HOST_FS_CHANGE_NODE) ++modified;
         cursor = next;
     }

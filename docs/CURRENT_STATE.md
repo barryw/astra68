@@ -2,6 +2,26 @@
 
 Status: active continuation map, 2026-11-05
 
+Linux external entry identity, 2026-11-05: Storage protocol 14 and HostFS
+change-record schema 2 carry the child inode supplied by a fanotify target
+handle for create and rename entry events. The rooted provider resolves the
+target only after validating its filesystem identity against the parent; it
+keeps the exact parent inode and leaf name when a deleted target can no longer
+be opened. Haiku reference: `src/system/kernel/fs/node_monitor.cpp:1180-1270`
+carries node identity separately from parent-directory identity. Existing
+bounded change ring, VFS validation, and Messaging broker remain the owners.
+Beast provider, ASan/UBSan, VFS backend, and full unprivileged QEMU HostFS
+gates passed, including exact child identity for a Linux-originated create.
+Coherent release `1b6d975fabefc67bbe76b60e14ad4cb75c699e89aea7814cae24591727be1cf0`
+passed a 90-second DE25 disposable-image trial at stage 8; original release
+selector and all three services recovered. Board trial logs are archived under
+`/home/barry/astra-evidence/child-inode-de25-trial-20261105/` on Beast;
+staged release and build log are under `/home/barry/astra-evidence/`.
+Disposable board tree was removed and free space returned to 7.9 GiB.
+Literal cable replug, general file cache and mappings, user mutex ownership,
+media CPU budgets, and actual stuck-provider fault gates remain open.
+Notification performance qualification follows correctness.
+
 exFAT external notification integration, 2026-11-05: DE25's private exFAT
 mount rejects filesystem FID fanotify (`EOPNOTSUPP`), so the root provider now
 uses bounded recursive inotify there. Each watch retains a rooted directory FD;

@@ -271,10 +271,10 @@ enum {
 #define ASTRA_HOST_FS_CHANGE_GAP 2u
 /** Exact created entry, including parent and leaf; child inode if available. */
 #define ASTRA_HOST_FS_CHANGE_ENTRY_CREATED 3u
-/** Exact removed entry, including parent inode and leaf; child inode unknown. */
+/** Exact removed entry, including parent and leaf; child inode if available. */
 #define ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED 4u
 /** CHANGE_NEXT record schema; request value_lo must match. */
-#define ASTRA_HOST_FS_CHANGE_RECORD_VERSION 1u
+#define ASTRA_HOST_FS_CHANGE_RECORD_VERSION 2u
 
 /** Big-endian data span returned by CHANGE_NEXT for an exact mutation. */
 typedef struct AstraHostFsChangeRecord {
