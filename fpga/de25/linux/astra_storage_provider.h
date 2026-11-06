@@ -31,6 +31,7 @@ typedef struct AstraStorageProvider {
     int inotify_fd;
     AstraStorageWatch *watches;
     size_t watch_count;
+    uint32_t inotify_generation;
     pid_t peer_pid;
     uint64_t watch_sequence;
     AstraStorageChangeRecord watch_records[64];

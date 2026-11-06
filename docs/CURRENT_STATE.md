@@ -22,6 +22,23 @@ Literal cable replug, general file cache and mappings, user mutex ownership,
 media CPU budgets, and actual stuck-provider fault gates remain open.
 Notification performance qualification follows correctness.
 
+Shared exFAT binding notifications, 2026-11-05: The provider now arms the
+existing bounded inotify fallback for host-shared bindings as well as physical
+mounts. Linux can return one watch descriptor for the same inode in multiple
+bindings; one event therefore reaches every matching, rooted binding, while a
+subtree binding excludes events outside its root. Directory removal resets
+watches after all matching bindings receive the event, and a watch generation
+prevents buffered events from an old inotify instance reaching a recycled FD.
+Beast provider and ASan/UBSan exFAT gates passed with exact shared-root and
+nested-subtree delivery. Coherent protocol-14 release
+`ca2c10f883a4ada98152525d7b3cd46f68cd1922315d25466e5c7fc509fb1194`
+passed a 90-second disposable-image DE25 stage-8 private trial. The selected
+release and Astra, audio, and remote-desktop services recovered; trial logs
+were checksum-verified under
+`/home/barry/astra-evidence/exfat-binding-de25-trial-20261105/` on Beast.
+Disposable board tree was removed and free space returned to 7.9 GiB. Physical
+cable replug and notification performance qualification remain open.
+
 exFAT external notification integration, 2026-11-05: DE25's private exFAT
 mount rejects filesystem FID fanotify (`EOPNOTSUPP`), so the root provider now
 uses bounded recursive inotify there. Each watch retains a rooted directory FD;

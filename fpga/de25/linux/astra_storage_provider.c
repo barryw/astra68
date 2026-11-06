@@ -199,7 +199,7 @@ static void watch_mount(AstraStorageProvider *provider,
         entry->watch_state = WATCH_FID;
     } else {
         int error = provider->watch_fd < 0 ? ENOTSUP : errno;
-        if (error == EOPNOTSUPP && record->kind == ASTRA_VOLUME_MOUNT) {
+        if (error == EOPNOTSUPP) {
             int directory = provider->inotify_fd < 0 ? -1 :
                 openat(entry->mounted.root, ".",
                     O_RDONLY | O_DIRECTORY | O_CLOEXEC);
@@ -235,7 +235,7 @@ static void watch_append(AstraStorageProvider *provider, uint64_t mount,
         (sizeof(provider->watch_records) / sizeof(provider->watch_records[0]))] = change;
 }
 
-/* Protocol 13 defines GAP as global; scoped GAP is rejected by transport. */
+/* GAP is global; scoped GAP is rejected by transport. */
 static void watch_gap(AstraStorageProvider *provider)
 {
     watch_append(provider, 0u, 0u, ASTRA_HOST_FS_CHANGE_GAP, 0u, 0u, NULL);
@@ -243,6 +243,7 @@ static void watch_gap(AstraStorageProvider *provider)
 
 static void watch_reset_inotify(AstraStorageProvider *provider)
 {
+    ++provider->inotify_generation;
     if (provider->inotify_fd >= 0) close(provider->inotify_fd);
     provider->inotify_fd = -1;
     while (provider->watches != NULL) {
@@ -360,19 +361,6 @@ static void watch_inotify_event(AstraStorageProvider *provider,
         watch_reset_inotify(provider);
         return;
     }
-    AstraStorageWatch *watch = provider->watches;
-    while (watch != NULL && watch->descriptor != event->wd) watch = watch->next;
-    if (watch == NULL) return;
-    AstraStorageResource *entry = resource(provider, watch->mount);
-    const AstraStorageRecord *record = astra_storage_find(&provider->catalog,
-        watch->mount);
-    if (entry == NULL || record == NULL ||
-        (entry->watch_state != WATCH_INOTIFY &&
-         entry->watch_state != WATCH_DEGRADED) ||
-        record->generation != watch->generation ||
-        record->state != ASTRA_VOLUME_MOUNTED ||
-        astra_resolve_rooted(entry->mounted.root, watch->directory) != 0)
-        return;
     const char *name = NULL;
     if (event->len != 0u) {
         name = memchr(event->name, '\0', event->len);
@@ -386,55 +374,73 @@ static void watch_inotify_event(AstraStorageProvider *provider,
         }
         name = event->name;
     }
-    if ((event->mask & (IN_CREATE | IN_MOVED_TO | IN_DELETE |
-                        IN_MOVED_FROM)) != 0u) {
-        uint32_t kind = (event->mask & (IN_DELETE | IN_MOVED_FROM)) != 0u ?
-            ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED :
-            ASTRA_HOST_FS_CHANGE_ENTRY_CREATED;
-        if (name == NULL) {
-            watch_gap(provider);
-            return;
-        }
-        watch_append(provider, record->id, record->generation, kind,
-            0u, watch->inode, name);
-        /* exFAT retains removed directory watches while our FD stays open. */
-        if ((event->mask & (IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO)) != 0u &&
-            (event->mask & IN_ISDIR) != 0u) {
-            watch_reset_inotify(provider);
-            return;
-        }
-        if ((event->mask & (IN_CREATE | IN_MOVED_TO)) != 0u &&
-            (event->mask & IN_ISDIR) != 0u) {
-            int child = openat(watch->directory, name,
-                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-            int error = child < 0 ? errno :
-                watch_add_directory(provider, entry, child);
-            if (error == 0) error = watch_scan(provider, entry);
-            if (error != 0) {
-                entry->watch_state = WATCH_DEGRADED;
-                entry->watch_gap_deadline_ns = 0u;
-            }
-            watch_gap(provider);
-        }
-    }
-    if ((event->mask & (IN_MODIFY | IN_ATTRIB)) != 0u) {
-        uint64_t inode = watch->inode;
-        if (name != NULL) {
-            int child = openat(watch->directory, name,
-                O_PATH | O_NOFOLLOW | O_CLOEXEC);
-            struct stat info;
-            if (child < 0 || fstat(child, &info) != 0 ||
-                astra_resolve_rooted(entry->mounted.root, child) != 0) {
-                if (child >= 0) close(child);
+    int reset = 0, gap = 0;
+    for (AstraStorageWatch *watch = provider->watches, *next; watch != NULL;
+         watch = next) {
+        next = watch->next;
+        if (watch->descriptor != event->wd) continue;
+        AstraStorageResource *entry = resource(provider, watch->mount);
+        const AstraStorageRecord *record = astra_storage_find(&provider->catalog,
+            watch->mount);
+        if (entry == NULL || record == NULL ||
+            (entry->watch_state != WATCH_INOTIFY &&
+             entry->watch_state != WATCH_DEGRADED) ||
+            record->generation != watch->generation ||
+            record->state != ASTRA_VOLUME_MOUNTED ||
+            astra_resolve_rooted(entry->mounted.root, watch->directory) != 0)
+            continue;
+        if ((event->mask & (IN_CREATE | IN_MOVED_TO | IN_DELETE |
+                            IN_MOVED_FROM)) != 0u) {
+            uint32_t kind = (event->mask & (IN_DELETE | IN_MOVED_FROM)) != 0u ?
+                ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED :
+                ASTRA_HOST_FS_CHANGE_ENTRY_CREATED;
+            if (name == NULL) {
                 watch_gap(provider);
                 return;
             }
-            inode = (uint64_t)info.st_ino;
-            close(child);
+            watch_append(provider, record->id, record->generation, kind,
+                0u, watch->inode, name);
+            /* exFAT retains removed directory watches while our FD stays open. */
+            if ((event->mask & (IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO)) != 0u &&
+                (event->mask & IN_ISDIR) != 0u) {
+                reset = 1;
+                continue;
+            }
+            if ((event->mask & (IN_CREATE | IN_MOVED_TO)) != 0u &&
+                (event->mask & IN_ISDIR) != 0u) {
+                int child = openat(watch->directory, name,
+                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+                int error = child < 0 ? errno :
+                    watch_add_directory(provider, entry, child);
+                if (error == 0) error = watch_scan(provider, entry);
+                if (error != 0) {
+                    entry->watch_state = WATCH_DEGRADED;
+                    entry->watch_gap_deadline_ns = 0u;
+                }
+                gap = 1;
+            }
         }
-        watch_append(provider, record->id, record->generation,
-            ASTRA_HOST_FS_CHANGE_NODE, inode, 0u, NULL);
+        if ((event->mask & (IN_MODIFY | IN_ATTRIB)) != 0u) {
+            uint64_t inode = watch->inode;
+            if (name != NULL) {
+                int child = openat(watch->directory, name,
+                    O_PATH | O_NOFOLLOW | O_CLOEXEC);
+                struct stat info;
+                if (child < 0 || fstat(child, &info) != 0 ||
+                    astra_resolve_rooted(entry->mounted.root, child) != 0) {
+                    if (child >= 0) close(child);
+                    watch_gap(provider);
+                    return;
+                }
+                inode = (uint64_t)info.st_ino;
+                close(child);
+            }
+            watch_append(provider, record->id, record->generation,
+                ASTRA_HOST_FS_CHANGE_NODE, inode, 0u, NULL);
+        }
     }
+    if (gap) watch_gap(provider);
+    if (reset) watch_reset_inotify(provider);
 }
 
 static void watch_inotify_drain(AstraStorageProvider *provider)
@@ -446,14 +452,14 @@ static void watch_inotify_drain(AstraStorageProvider *provider)
         if (length < 0 && errno == EINTR) continue;
         if (length < 0 && errno == EAGAIN) return;
         if (length <= 0) goto reset;
-        int descriptor = provider->inotify_fd;
+        uint32_t generation = provider->inotify_generation;
         size_t offset = 0u;
         while (offset + sizeof(struct inotify_event) <= (size_t)length) {
             const struct inotify_event *event = (const void *)(buffer + offset);
             size_t size = sizeof(*event) + event->len;
             if (size > (size_t)length - offset) goto reset;
             watch_inotify_event(provider, event);
-            if (provider->inotify_fd != descriptor) return;
+            if (provider->inotify_generation != generation) return;
             offset += size;
         }
         if (offset != (size_t)length) goto reset;

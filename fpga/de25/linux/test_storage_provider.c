@@ -763,6 +763,80 @@ static void exfat_external_changes(AstraStorageProvider *provider,
             change.mount == 0u && change.generation == 0u);
         assert(unlinkat(root, "astra-watch-cap", AT_REMOVEDIR) == 0);
     }
+    assert(mkdirat(root, "astra-bound-dir", 0700) == 0);
+    int subtree = openat(root, "astra-bound-dir",
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    assert(subtree >= 0);
+    AstraStorageChangeRecord drained;
+    uint64_t drained_next;
+    assert(astra_storage_provider_change_next(provider, provider->watch_sequence,
+        &drained, &drained_next) == 0);
+    assert(astra_storage_provider_poll(provider) >= 0);
+    uint64_t first, second, nested;
+    assert(astra_storage_provider_export(provider, root, "/exfat-first",
+        0u, &first) == 0);
+    assert(astra_storage_provider_export(provider, root, "/exfat-second",
+        0u, &second) == 0);
+    assert(astra_storage_provider_export(provider, subtree, "/exfat-nested",
+        0u, &nested) == 0);
+    assert(astra_storage_provider_poll(provider) >= 0);
+    cursor = provider->watch_sequence;
+    int shared = openat(root, "astra-shared-event",
+        O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+    assert(shared >= 0 && close(shared) == 0);
+    unsigned seen_first = 0u, seen_second = 0u, seen_nested = 0u;
+    for (unsigned at = 0u; at < 64u; ++at) {
+        AstraStorageChangeRecord change;
+        uint64_t next;
+        assert(astra_storage_provider_change_next(provider, cursor, &change,
+            &next) == 0);
+        if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
+        if (change.change.kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED &&
+            change.change.parent_inode == (uint64_t)parent.st_ino &&
+            strcmp(change.change.name, "astra-shared-event") == 0) {
+            if (change.mount == first) ++seen_first;
+            if (change.mount == second) ++seen_second;
+            if (change.mount == nested) ++seen_nested;
+        }
+        cursor = next;
+    }
+    assert(seen_first == 1u && seen_second == 1u && seen_nested == 0u);
+    struct stat nested_info;
+    assert(fstat(subtree, &nested_info) == 0);
+    cursor = provider->watch_sequence;
+    shared = openat(subtree, "astra-subtree-event",
+        O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+    assert(shared >= 0 && close(shared) == 0);
+    seen_first = seen_second = seen_nested = 0u;
+    for (unsigned at = 0u; at < 64u; ++at) {
+        AstraStorageChangeRecord change;
+        uint64_t next;
+        assert(astra_storage_provider_change_next(provider, cursor, &change,
+            &next) == 0);
+        if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
+        if (change.change.kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED &&
+            change.change.parent_inode == (uint64_t)nested_info.st_ino &&
+            strcmp(change.change.name, "astra-subtree-event") == 0) {
+            if (change.mount == first) ++seen_first;
+            if (change.mount == second) ++seen_second;
+            if (change.mount == nested) ++seen_nested;
+        }
+        cursor = next;
+    }
+    assert(seen_first == 1u && seen_second == 1u && seen_nested == 1u);
+    assert(unlinkat(subtree, "astra-subtree-event", 0) == 0);
+    assert(unlinkat(root, "astra-shared-event", 0) == 0);
+    close(subtree);
+    assert(astra_storage_provider_loss(provider, nested, 1u) == 0);
+    assert(unmount_wait(provider, nested, 2u) == 0);
+    assert(astra_storage_provider_release(provider, nested) == 0);
+    assert(astra_storage_provider_loss(provider, first, 1u) == 0);
+    assert(unmount_wait(provider, first, 2u) == 0);
+    assert(astra_storage_provider_release(provider, first) == 0);
+    assert(astra_storage_provider_loss(provider, second, 1u) == 0);
+    assert(unmount_wait(provider, second, 2u) == 0);
+    assert(astra_storage_provider_release(provider, second) == 0);
+    assert(unlinkat(root, "astra-bound-dir", AT_REMOVEDIR) == 0);
 }
 
 static void usb_format(AstraStorageProvider *provider, const char *path,

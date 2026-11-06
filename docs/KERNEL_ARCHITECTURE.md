@@ -430,6 +430,12 @@ are capability gaps, not instructions to move Astra's services into the kernel.
 | User crash capture | CLOSED: `sw/kernel/process.c` retains a 96-byte faulting-thread register and selected mapping snapshot while a process handle lives; launcher and clone-parent handles carry `CRASH`, while query-only handles cannot read it. Supervisor emits a compact fault summary. Beast kernel, runtime, supervisor, and NDK tests and the DE25 native fault/readback gate passed; evidence is under `/mnt/Documents/astra68/crash-snapshot-20261105/` on Beast. | `src/system/kernel/debug/user_debugger.cpp` and `debug/core_dump.cpp` preserve inspectable thread context and selected mappings. Astra retains the bounded native snapshot before the address space is retired, without collecting arbitrary process memory. |
 
 Exact entry events require mutation identity from the backend's own operation.
+Host-shared exFAT bindings use the same bounded inotify fallback as physical
+exFAT mounts. Multiple bindings can share one Linux watch descriptor, so the
+provider delivers each event to every matching rooted binding. An independently
+rooted subtree excludes events outside its root. The Beast exFAT and sanitizer
+gates exercised shared and nested bindings; a coherent protocol-14 release
+passed a DE25 stage-8 private trial. Literal cable replug remains open.
 `OPEN_CREATE` can open an existing file; the rooted provider probes atomic
 exclusive creation first and retries the requested flags when that probe
 fails. Only a successful exclusive creation emits an exact create record.
