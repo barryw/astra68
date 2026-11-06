@@ -34,6 +34,7 @@ for required in (
     "systemd/astra-remote-desktop.service=",
     "systemd/astra-audio-host.service=",
     "systemd/astra.service=",
+    "systemd/90-astra-stop-guard.conf=",
     "systemd/90-astra-watchdog.conf=",
     "getconf _NPROCESSORS_ONLN",
     "qemu/lib/libpixman-1.so.0=",
@@ -45,6 +46,7 @@ for required in (
     "bin/astra-mkfs.fat=",
     "bin/astra-mkfs.exfat=",
     "bin/storage_image.py=",
+    "bin/astra-stop-guard.sh=",
     "bin/astra-system-image-migrate.py=",
     "kernel/package/$relative=",
     "kernel/package/SHA256SUMS=",
@@ -78,6 +80,9 @@ assert "RuntimeDirectory=astra" in remote_unit
 assert "RuntimeDirectoryPreserve=yes" in remote_unit
 assert "After=astra.service" not in remote_unit
 assert "Requires=astra.service" not in remote_unit
+guard_unit = (Path(__file__).parents[2] /
+              "fpga/de25/astra-stop-guard.conf").read_text()
+assert "ExecStopPost=/usr/local/sbin/astra-stop-guard" in guard_unit
 
 # Execute the actual constructor with fresh build outputs. The fake make
 # follows the Linux Makefile's default OUT, so omitting the explicit provider
@@ -98,12 +103,14 @@ for stale_provider in (False, True):
             shutil.copyfile(repository / name, target)
         for name in (
             "fpga/de25/astra.service", "fpga/de25/astra-watchdog.conf",
+            "fpga/de25/astra-stop-guard.conf",
             "fpga/de25/astra-audio-host.service",
             "fpga/de25/astra-remote-desktop.service", "fpga/de25/99-astra-qemu.rules",
             "fpga/de25/linux/kernel/install-production-storage.py",
             "emu/qemu/storage_image.py", "emu/qemu/migrate-system-image.py",
             "emu/qemu/astra-input-hotplug.py",
             "emu/qemu/run-arty.sh", "emu/qemu/runtime-supervisor.py",
+            "emu/qemu/astra-stop-guard.sh",
             "emu/qemu/astra-top.py", "emu/qemu/de25-ab.sh", "emu/qemu/de25-rfb.py",
             "emu/qemu/fs-baseline.py",
             "sw/userspace/services/media/build/soundfonts/default",
@@ -112,6 +119,7 @@ for stale_provider in (False, True):
             target = tree / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("fixture " + name + "\n")
+        (tree / "emu/qemu/astra-stop-guard.sh").chmod(0o755)
         (tree / "fpga/arty/linux").mkdir(parents=True)
         (tree / "fpga/de25/linux").mkdir(exist_ok=True)
         formatter_build = tree / "third_party/storage-format/build.sh"
@@ -211,6 +219,9 @@ for product in products:
             assert selector.stat().st_mode & 0o111 == 0
             assert (output / "bin/astra-system-image-migrate.py").read_text() == \
                 "fixture emu/qemu/migrate-system-image.py\n"
+            assert (output / "bin/astra-stop-guard.sh").read_text() == \
+                "fixture emu/qemu/astra-stop-guard.sh\n"
+            assert (output / "bin/astra-stop-guard.sh").stat().st_mode & 0o111
             assert provider.read_bytes() == (output / "bin/astra-storage").read_bytes()
             assert (output / "bin/astra-font-worker").read_bytes() == \
                 b"fresh astra-font-worker-aarch64\n"
@@ -220,6 +231,8 @@ for product in products:
                 b"fresh astra-network-manager-aarch64\n"
             assert (output / "systemd/90-astra-watchdog.conf").read_text() == \
                 "fixture fpga/de25/astra-watchdog.conf\n"
+            assert (output / "systemd/90-astra-stop-guard.conf").read_text() == \
+                "fixture fpga/de25/astra-stop-guard.conf\n"
             subprocess.run(["python3", str(tree / "tools/astra_release.py"),
                             "verify", str(output)], check=True, stdout=subprocess.DEVNULL)
         finally:

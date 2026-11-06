@@ -23,6 +23,9 @@ assert "'$STORE/current/bin/astra-release.py'" in script
 assert "'$STORE/current'" in script
 assert "'$STORE/current/systemd/astra-remote-desktop.service'" in script
 assert "'$STORE/current/systemd/astra.service'" in script
+assert "'$STORE/current/systemd/90-astra-stop-guard.conf'" in script
+assert "'$STORE/current/bin/astra-stop-guard.sh'" in script
+assert script.index("/usr/local/sbin/astra-stop-guard") < script.rindex("systemctl daemon-reexec")
 assert "'$STORE/current/systemd/90-astra-watchdog.conf'" in script
 assert "systemctl daemon-reexec" in script
 assert "systemctl show -p RuntimeWatchdogUSec --value" in script

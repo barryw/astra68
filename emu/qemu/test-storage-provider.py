@@ -127,7 +127,7 @@ def external_change_gate(gate, qtest, root, outside):
         call(gate.FS_SESSION_CLOSE)
 
 
-def blocked_io_gate(gate, qtest, process, qemu_pid):
+def blocked_io_gate(gate, qtest, process, qemu_pid, reboot_ready=None, scratch=None):
     """A frozen disposable system volume must retain its provider until thawed."""
     mounts = Path(f"/proc/{qemu_pid}/mountinfo").read_text().splitlines()
     targets = [fields[4] for line in mounts
@@ -146,11 +146,19 @@ def blocked_io_gate(gate, qtest, process, qemu_pid):
     assert gate.status(opened) == gate.STATUS_OK
     handle = gate.get32(opened.raw, 16)
     freeze = ["nsenter", "-t", str(qemu_pid), "-m", "fsfreeze"]
-    # Detached rescue thaws the private mount even if the test runner dies.
-    rescue = subprocess.Popen(["sh", "-c",
-        'sleep 30; nsenter -t "$1" -m fsfreeze -u "$2"',
-        "astra-thaw", str(qemu_pid), target], start_new_session=True,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # A reboot trial needs rescue outside the service cgroup being stopped.
+    if reboot_ready is not None:
+        rescue_unit = f"astra-blocked-thaw-{qemu_pid}"
+        subprocess.run(["systemd-run", "--quiet", f"--unit={rescue_unit}",
+                        "--on-active=120s", "nsenter", "-t", str(qemu_pid),
+                        "-m", "fsfreeze", "-u", target], check=True)
+        rescue = None
+    else:
+        rescue_unit = None
+        rescue = subprocess.Popen(["sh", "-c",
+            'sleep 30; nsenter -t "$1" -m fsfreeze -u "$2"',
+            "astra-thaw", str(qemu_pid), target], start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     outcome = {}
     def write():
         try:
@@ -160,6 +168,14 @@ def blocked_io_gate(gate, qtest, process, qemu_pid):
             outcome["error"] = error
     writer = threading.Thread(target=write, daemon=True)
     writer_started = False
+    armed = False
+    stop_requested = threading.Event()
+    if reboot_ready is not None:
+        # Match runtime-supervisor: stop remains pending until provider exits.
+        def request_stop(_number, _frame):
+            process.terminate()
+            stop_requested.set()
+        signal.signal(signal.SIGTERM, request_stop)
     try:
         subprocess.run(freeze + ["-f", target], check=True, timeout=10)
         writer.start()
@@ -179,12 +195,23 @@ def blocked_io_gate(gate, qtest, process, qemu_pid):
         assert process.poll() is None, "provider retired while storage write was blocked"
         assert target in Path(f"/proc/{qemu_pid}/mountinfo").read_text()
         print("PASS actual frozen-volume write blocks provider retirement")
+        if reboot_ready is not None:
+            reboot_ready.write_text(f"{scratch}\n{qemu_pid}\n{target}\n")
+            print("READY blocked provider for forced reboot", flush=True)
+            armed = True
+            stop_requested.wait()
+            process.wait()
     finally:
-        subprocess.run(freeze + ["-u", target], check=True, timeout=10)
-        os.killpg(rescue.pid, signal.SIGTERM)
-        rescue.wait(timeout=5)
-        if writer_started:
-            writer.join(timeout=10)
+        if not armed:
+            subprocess.run(freeze + ["-u", target], check=True, timeout=10)
+            if rescue is not None:
+                os.killpg(rescue.pid, signal.SIGTERM)
+                rescue.wait(timeout=5)
+            if rescue_unit is not None:
+                subprocess.run(["systemctl", "stop", f"{rescue_unit}.timer"],
+                               check=True)
+            if writer_started:
+                writer.join(timeout=10)
     assert not writer.is_alive(), "guest write remained blocked after thaw"
     assert process.wait(timeout=15) == 0
     print("PASS thaw retires provider and releases disposable system volume")
@@ -196,11 +223,16 @@ def main(argv=None):
     parser.add_argument("provider", type=Path)
     parser.add_argument("--uid", type=int, required=True)
     parser.add_argument("--gid", type=int, required=True)
-    parser.add_argument("--scenario", choices=("full", "serial", "budgets", "memory", "provider_loss", "external", "blocked_io"), default="full")
+    parser.add_argument("--scenario", choices=("full", "serial", "budgets", "memory", "provider_loss", "external", "blocked_io", "blocked_io_reboot"), default="full")
     parser.add_argument("--budget-out", type=Path)
+    parser.add_argument("--reboot-ready", type=Path)
     args = parser.parse_args(argv)
     if args.scenario == "memory" and args.budget_out is None:
         parser.error("memory scenario requires --budget-out")
+    if args.scenario == "blocked_io_reboot" and (args.reboot_ready is None or
+            args.reboot_ready.parent != Path("/run") or
+            not args.reboot_ready.name.startswith("astra-blocked-provider-")):
+        parser.error("blocked_io_reboot requires --reboot-ready /run/astra-blocked-provider-*")
     here = Path(__file__).resolve().parent
     spec = importlib.util.spec_from_file_location("hostfs", here / "test-hostfs.py")
     gate = importlib.util.module_from_spec(spec)
@@ -299,8 +331,10 @@ def main(argv=None):
                     gate.provider_loss(qtest, str(root), qmp_path)
                 elif args.scenario == "external":
                     external_change_gate(gate, qtest, root, outside)
-                elif args.scenario == "blocked_io":
-                    blocked_io_gate(gate, qtest, process, pid)
+                elif args.scenario in ("blocked_io", "blocked_io_reboot"):
+                    blocked_io_gate(gate, qtest, process, pid,
+                        args.reboot_ready if args.scenario == "blocked_io_reboot" else None,
+                        work)
                 else:
                     gate.run(qtest, str(root / "work"), str(outside), external=True)
                     qtest.write32(gate.HACC_RESET, 1)
@@ -691,7 +725,7 @@ def main(argv=None):
                     wait_record(admitted, None)
                     print("PASS native ISO: authenticated retained readonly file, label/CD0, UTF-8 tree, busy backing/source/directory, readonly writes, actual detach and lease release")
                 # Proper QEMU quit lets the provider perform real cleanup.
-                if args.scenario != "blocked_io":
+                if args.scenario not in ("blocked_io", "blocked_io_reboot"):
                     qmp = QmpClient(qmp_path)
                     try:
                         qmp.execute("quit")

@@ -198,6 +198,17 @@ if [ "$ACTIVE" != "$IDENTITY" ]; then
 fi
 $SSH "$BOARD" "
 set -eu
+install -d -m 0755 /usr/local/sbin /etc/systemd/system/astra.service.d
+guard_temporary=/usr/local/sbin/.astra-stop-guard.\$\$
+trap 'rm -f \"\$guard_temporary\"' EXIT HUP INT TERM
+install -m 0755 '$STORE/current/bin/astra-stop-guard.sh' \"\$guard_temporary\"
+mv -f \"\$guard_temporary\" /usr/local/sbin/astra-stop-guard
+trap - EXIT HUP INT TERM
+guard_unit_temporary=/etc/systemd/system/astra.service.d/.90-stop-guard.conf.\$\$
+trap 'rm -f \"\$guard_unit_temporary\"' EXIT HUP INT TERM
+install -m 0644 '$STORE/current/systemd/90-astra-stop-guard.conf' \"\$guard_unit_temporary\"
+mv -f \"\$guard_unit_temporary\" /etc/systemd/system/astra.service.d/90-stop-guard.conf
+trap - EXIT HUP INT TERM
 runtime_unit_source='$STORE/current/systemd/astra.service'
 runtime_unit_target=/etc/systemd/system/astra.service
 runtime_unit_temporary=/etc/systemd/system/.astra.service.\$\$

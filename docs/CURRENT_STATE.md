@@ -2,6 +2,35 @@
 
 Status: active continuation map, 2026-11-06
 
+Provider blocked-I/O forced reboot and stop guard, 2026-11-06: A disposable
+DE25 provider mounted a private ext4 image and held a QEMU writer in Linux
+`D` state. A matched transient service, whose SIGTERM handler waited for
+provider retirement like `runtime-supervisor.py`, kept its stop job pending;
+the 10-second `JobRunningTimeoutSec` plus `JobTimeoutAction=reboot-force`
+rebooted the HPS. Boot ID changed from
+`1ca515ab-3677-49a3-8c90-832310743416` to
+`b6df2583-1eda-4116-af0e-be1c7264e234`. The selected release returned
+with zero service restarts, storage POST mounted, recovered, wrote, read, and
+unmounted the volume, then reached stage 8. Astra, audio, and remote desktop
+were active; only production loop0 remained, trial state was removed, and
+7.9 GiB was free. An earlier trial exposed a second condition: if the
+supervisor exits before its blocked child, systemd can mark the unit stopped
+while that child and its mount remain. The new `astra-stop-guard.sh` waits for
+other processes in its own cgroup from `ExecStopPost`. A DE25 trial killed the
+supervisor with its QEMU child still in `D`; the stop job stayed in
+`stop-post` until the disposable mount was thawed, then the guard exited.
+A normal Astra restart with the installed live guard completed in two
+seconds and reached stage 8. Release creation and deployment now package
+and install the same guard and drop-in, including rollback retention.
+Checksummed pre/post evidence and both failed trial logs are under
+`/home/barry/astra-evidence/provider-blocked-reboot-20261106/` on Beast.
+Previous-boot journal is volatile on DE25, so timeout attribution rests on
+the controlled stop, matching unit policy, and boot ID change; retained reset
+cause and exact production 180-second timeout remain open. Haiku
+`src/system/kernel/shutdown.cpp` synchronizes before shutdown, but has no
+Linux storage-provider cgroup boundary; Astra uses its existing systemd job
+and cgroup rather than another watchdog.
+
 exFAT watch-loss recovery, 2026-11-06: The existing provider fixture now
 removes a watched directory, requires a global GAP, checks that inotify watch
 count returns to baseline, then creates a file and requires its exact parent
