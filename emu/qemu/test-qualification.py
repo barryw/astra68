@@ -137,7 +137,8 @@ def main():
                  arguments.memory, arguments.deadline)
     elapsed = time.monotonic() - started
     for line in lines:
-        if line.startswith("K2 PERF "):
+        if line.startswith(("K2 PERF ", "K8 PERF ", "K10 PERF ",
+                            "K PERF RAW ")):
             print(line)
 
     failures = []

@@ -50,9 +50,31 @@ Beast K1 qualification measured user-fault dispatch at 21,930 CPU cycles
 against its 125,000-cycle budget, with zero overruns
 (`mutex-k1-baseline-20261105.log`). These readings define the unchanged-path
 regression comparison; they do not measure a future pager or file-cache hit.
-Direct target measurements of area-map commit and pressure-worker dispatch,
-plus separate budgets for new fault handoff and pager completion, remain
-required before those paths become dependencies.
+Target-representative area-map measurements are recorded below. Direct
+pressure-worker measurement and separate budgets for new fault handoff and
+pager completion remain required before those paths become dependencies.
+
+The existing K1 qualification harness already records area-map and pressure
+worker metrics. Its output now retains those lines and raw sample counts.
+At source commit `6301cabc`, Beast MC68040 QEMU with `-icount shift=4` passed
+all 13 markers: user fault 21,950/125,000 cycles (one sample), area map
+1,415/125,000 cycles maximum (two samples), and area unmap 562/100,000 cycles
+(one sample). No pressure reclaim ran, so this gate supplies no pressure-worker
+latency baseline. Log:
+`/home/barry/astra-evidence/file-cache-k1-baseline-20261106.log` on Beast;
+qualification ROM SHA-256:
+`eb2081ce8fea6401601b8ad781f620fe618408f022d0cb391f797970764e92b3`.
+The same qualification ROM and harness ran on DE25's AArch64 HPS against a
+disposable copied image. All 13 markers passed in 55.6 seconds, with user fault
+21,950 cycles and area-map maximum 1,415 cycles. The board and archived Beast
+log have matching SHA-256
+`47309d311c12bf2e667998128499209012c47195b05cd9c78708b472fea8ac35`;
+evidence is under `/home/barry/astra-evidence/file-cache-k1-de25-20261106/`.
+Astra, audio host, and remote desktop were restored; only production loop0
+remained, staged board files were removed, and 7.9 GiB was free. These are
+instruction-timed MC68040 samples on the real host, not wall-clock HPS
+latencies. Two area-map samples cannot establish tail latency. No pressure
+reclaim ran, so pressure-worker measurement remains open.
 
 ## Native contract
 
