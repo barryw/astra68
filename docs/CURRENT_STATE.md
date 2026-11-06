@@ -2,6 +2,21 @@
 
 Status: active continuation map, 2026-11-06
 
+exFAT watch-loss recovery, 2026-11-06: The existing provider fixture now
+removes a watched directory, requires a global GAP, checks that inotify watch
+count returns to baseline, then creates a file and requires its exact parent
+and leaf event after rearm. This exercises `IN_DELETE_SELF`/`IN_IGNORED` loss
+through the existing 64-record change ring; it adds no event path. Beast
+exFAT and DE25 AArch64 provider gates passed against disposable loop images.
+Board and Beast test binaries/script and gate log had matching SHA-256 values;
+log is archived under `/home/barry/astra-evidence/watch-loss-de25-20261106/`
+on Beast. Only production loop0 remained, Astra/audio/remote desktop stayed
+active, staged board files were removed, and 7.9 GiB remained free. Haiku
+reference: `src/system/kernel/fs/node_monitor.cpp:1170-1275` keeps parent and
+node identity separate from notification delivery. Atlas UI recovery from
+watch loss and provider restart still needs end-to-end gates; literal USB
+cable replug awaits user readiness.
+
 General file cache baseline, 2026-11-06: Three focused `fsbench` runs on a
 disposable DE25 image passed warm stat, open/close, sequential read, and random
 read workloads. Sequential 4 MiB reads measured 22.95-23.99 MB/s; random

@@ -723,17 +723,48 @@ static void exfat_external_changes(AstraStorageProvider *provider,
     }
     assert(created == 1u && moved == 2u && removed == 1u);
     close(directory);
+    cursor = provider->watch_sequence;
     assert(unlinkat(root, "astra-notify-dir", AT_REMOVEDIR) == 0);
-    assert(astra_storage_provider_change_next(provider, cursor,
-        &(AstraStorageChangeRecord){0}, &(uint64_t){0}) == 0);
     if (fallback) {
+        int gap = 0;
+        for (unsigned at = 0u; at < 64u; ++at) {
+            AstraStorageChangeRecord change;
+            uint64_t next;
+            assert(astra_storage_provider_change_next(provider, cursor,
+                &change, &next) == 0);
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_GAP &&
+                change.mount == 0u && change.generation == 0u) ++gap;
+            cursor = next;
+        }
+        assert(gap >= 1);
         assert(astra_storage_provider_poll(provider) >= 0 &&
             provider->watch_count == baseline_watches);
+        cursor = provider->watch_sequence;
+        int recovered = openat(root, "astra-after-watch-reset",
+            O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+        assert(recovered >= 0 && close(recovered) == 0);
+        int seen = 0;
+        for (unsigned at = 0u; at < 64u; ++at) {
+            AstraStorageChangeRecord change;
+            uint64_t next;
+            assert(astra_storage_provider_change_next(provider, cursor,
+                &change, &next) == 0);
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED &&
+                change.mount == mount &&
+                change.change.parent_inode == (uint64_t)parent.st_ino &&
+                strcmp(change.change.name, "astra-after-watch-reset") == 0)
+                ++seen;
+            cursor = next;
+        }
+        assert(seen == 1);
+        assert(unlinkat(root, "astra-after-watch-reset", 0) == 0);
         size_t limit = provider->resource_limit;
         provider->resource_limit = provider->resource_bytes;
         cursor = provider->watch_sequence;
         assert(mkdirat(root, "astra-watch-cap", 0700) == 0);
-        int gap = 0;
+        gap = 0;
         for (unsigned at = 0u; at < 64u; ++at) {
             AstraStorageChangeRecord change;
             uint64_t next;
