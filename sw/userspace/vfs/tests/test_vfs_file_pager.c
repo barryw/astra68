@@ -105,7 +105,9 @@ uint32_t astra_vfs_backend_read_page(const AstraVfsBackend *backend,
            identity->volume == 3u &&
            identity->inode == (call->request.cookie == 44u ? 5u : 6u) &&
            identity->generation == 7u &&
-           offset == call->request.offset);
+           offset == (call->request.cookie == 45u ?
+                       UINT64_C(0x100000000) : 0u) +
+                     call->request.offset);
     ++read_count;
     *valid_bytes = call->source_valid;
     memcpy(page, "story", 5u);
@@ -145,14 +147,20 @@ int main(void)
     uint8_t page[ASTRA_MEMORY_PAGE_SIZE];
 
     assert(!astra_vfs_file_page_source_init(&sources[0], &backend, 55u,
-        NULL, 2u * ASTRA_MEMORY_PAGE_SIZE, 44u));
+        NULL, 0u, 2u * ASTRA_MEMORY_PAGE_SIZE, 44u));
     assert(!astra_vfs_file_page_source_init(&sources[0], &backend, 55u,
-        &identity, ASTRA_MEMORY_PAGE_SIZE + 1u, 44u));
+        &identity, 0u, ASTRA_MEMORY_PAGE_SIZE + 1u, 44u));
+    assert(!astra_vfs_file_page_source_init(&sources[0], &backend, 55u,
+        &identity, 1u, ASTRA_MEMORY_PAGE_SIZE, 44u));
+    assert(!astra_vfs_file_page_source_init(&sources[0], &backend, 55u,
+        &identity, UINT64_MAX - ASTRA_MEMORY_PAGE_SIZE + 1u,
+        ASTRA_MEMORY_PAGE_SIZE, 44u));
     assert(astra_vfs_file_page_source_init(&sources[0], &backend, 55u,
-        &identity, 2u * ASTRA_MEMORY_PAGE_SIZE, 44u));
+        &identity, 0u, 2u * ASTRA_MEMORY_PAGE_SIZE, 44u));
     second_identity.inode = 6u;
     assert(astra_vfs_file_page_source_init(&sources[1], &backend, 56u,
-        &second_identity, ASTRA_MEMORY_PAGE_SIZE, 45u));
+        &second_identity, UINT64_C(0x100000000),
+        ASTRA_MEMORY_PAGE_SIZE, 45u));
     assert(!astra_vfs_file_pager_init(&pager, 77u, 99u, page, 1u,
         acquire, release, sources));
     assert(!astra_vfs_file_pager_init(&pager, 77u, 99u, page,

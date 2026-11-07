@@ -5,6 +5,18 @@ VM page publication, and synthetic guest pager with CPU budgets passed host
 and DE25 gates. VFS pager service, cache, mappings, and file I/O certification
 remain open.
 
+File windows, 2026-11-07: a reserved area has a bounded span, while a file can
+be larger. The shared page source now carries a page-aligned 64-bit file base;
+kernel request offsets remain area-relative and the VFS reader receives
+`base + offset`. Initialization rejects unaligned bases and overflow of the
+full span. One pager port can therefore serve separate windows of one large
+file. Beast target build, host suite, sanitizers, and static DE25 AArch64
+fixture passed; SHA-256 evidence is under
+`/home/barry/astra-evidence/vfs-file-window-20261107/` on Beast. Haiku
+`src/system/kernel/cache/file_cache.cpp:345-375` also reads at
+the requested file offset, independent of virtual mapping placement. HostFS
+has not yet created or handed out any file windows.
+
 VFS pager reply pump, 2026-11-07: the shared service-side pump validates
 kernel page requests and answers from cache-owned backend descriptions via
 one receive port, one scratch data area, and cookie lookup. This avoids a

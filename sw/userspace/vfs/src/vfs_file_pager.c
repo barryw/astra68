@@ -8,17 +8,20 @@
 int
 astra_vfs_file_page_source_init(AstraVfsFilePageSource *source,
     const AstraVfsBackend *backend, uintptr_t node,
-    const AstraVfsNodeMeta *identity, uint32_t span, uint32_t cookie)
+    const AstraVfsNodeMeta *identity, uint64_t base, uint32_t span,
+    uint32_t cookie)
 {
     if (source == NULL || backend == NULL || backend->ops == NULL ||
         backend->ops->read == NULL || backend->ops->stat_node == NULL ||
         node == 0u || !astra_vfs_node_identity_equal(identity, identity) ||
+        (base & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
         span == 0u || (span & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
+        base > UINT64_MAX - span ||
         cookie == 0u)
         return 0;
     *source = (AstraVfsFilePageSource){
         .backend = *backend, .identity = *identity, .node = node,
-        .span = span, .cookie = cookie,
+        .base = base, .span = span, .cookie = cookie,
     };
     return 1;
 }
@@ -88,7 +91,8 @@ astra_vfs_file_pager_pump(AstraVfsFilePager *pager, uint32_t budget)
             reply.status = source == NULL ? ASTRA_STATUS_LOST :
                 request.offset >= source->span ? ASTRA_STATUS_PROTOCOL :
                 astra_vfs_backend_read_page(&source->backend, source->node,
-                    &source->identity, request.offset, pager->page, &valid);
+                    &source->identity, source->base + request.offset,
+                    pager->page, &valid);
             if (reply.status == ASTRA_STATUS_OK) {
                 if (valid == 0u || valid > ASTRA_MEMORY_PAGE_SIZE)
                     reply.status = ASTRA_STATUS_IO;

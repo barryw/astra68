@@ -8,6 +8,7 @@ typedef struct AstraVfsFilePageSource {
     AstraVfsBackend backend;
     AstraVfsNodeMeta identity;
     uintptr_t node;
+    uint64_t base;
     uint32_t span;
     uint32_t cookie;
 } AstraVfsFilePageSource;
@@ -32,7 +33,8 @@ typedef struct AstraVfsFilePager {
 
 int astra_vfs_file_page_source_init(AstraVfsFilePageSource *source,
     const AstraVfsBackend *backend, uintptr_t node,
-    const AstraVfsNodeMeta *identity, uint32_t span, uint32_t cookie);
+    const AstraVfsNodeMeta *identity, uint64_t base, uint32_t span,
+    uint32_t cookie);
 int astra_vfs_file_pager_init(AstraVfsFilePager *pager, uint32_t receive,
     uint32_t data_area, void *page, uint32_t page_size,
     AstraVfsFilePageAcquire acquire, AstraVfsFilePageRelease release,

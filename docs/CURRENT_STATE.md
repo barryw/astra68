@@ -2,6 +2,21 @@
 
 Status: active continuation map, 2026-11-07
 
+VFS pager file windows, 2026-11-07: the shared page source now carries a
+page-aligned 64-bit file base. Kernel request offsets remain relative to the
+bounded area; coherent backend reads use the checked file base plus offset.
+Tests reject unaligned and overflowing windows and exercise a file base above
+4 GiB. Beast target service, VFS host suite, and ASan/UBSan passed. Matching
+static AArch64 fixture passed on DE25; board and Beast SHA-256 matched at
+`5614b2873ff24376cd6d9dbec84fce815ebf9566d0e5264a39c62344852eb124`.
+Board log SHA-256 was
+`b2db6c2edb54f0dbec7f40b617a035a04974c79a1e7c132377013ced4ad8fb79`.
+Evidence is under `/home/barry/astra-evidence/vfs-file-window-20261107/` on
+Beast. Trial binary was removed; three production services remained active
+with 8.5 GiB free. This is necessary for files larger than one area. HostFS
+does not yet create or map file windows. Haiku `src/system/kernel/cache/file_cache.cpp:345-375`
+keeps backing file offsets separate from virtual mapping placement.
+
 Pager source lifetime, 2026-11-07: the shared VFS pump now requires an acquire
 and release pair for each cookie. Acquire pins the cache-owned description;
 release runs after the reply send, including BUSY, invalid span, dead caller,
