@@ -38,6 +38,7 @@ ASTRA_FILESYSTEM_16.0 {
         astra_filesystem_chmod_at;
         astra_filesystem_chmod_file;
         astra_filesystem_close;
+        astra_filesystem_file_area;
         astra_filesystem_detach;
         astra_filesystem_directory_close;
         astra_filesystem_directory_open;

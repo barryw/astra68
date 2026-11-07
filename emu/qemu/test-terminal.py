@@ -829,9 +829,15 @@ class Machine:
         self.qmp_path = os.path.join(self.runtime_directory, "qmp.sock")
         self.gdb_path = (os.path.join(self.runtime_directory, "gdb.sock")
                          if debug_guest else None)
+        controller_image = os.path.join(self.runtime_directory, "controller.img")
+        with open(controller_image, "wb"):
+            pass
+        if socket_owner is not None:
+            os.chown(controller_image, *socket_owner)
         command = list(launcher) + ([qemu, "-M", "astra68", "-m",
                     MEMORY if memory is None else memory,
                     "-bios", launch_rom,
+                    "-drive", "if=none,format=raw,file=%s" % controller_image,
                     "-display", "none", "-monitor", "none", "-serial", "stdio",
                     "-no-reboot",
                     "-qmp", "unix:%s,server=on,wait=off" % self.qmp_path] +
@@ -1082,11 +1088,12 @@ def open_terminal(machine, boot_deadline, command_deadline):
     """Boots to the desktop and opens a terminal the way a person does."""
     if not machine.wait_for_serial(BOOT_MARKER, boot_deadline):
         print("FAIL: never reached the desktop; last serial lines:")
-        for line in machine.log[-8:]:
+        for line in machine.log[-100:]:
             print("    %s" % line)
-        print("last trace records:")
-        for line in machine.recent_trace(80):
-            print("    %s" % line)
+        if machine.process.poll() is None:
+            print("last trace records:")
+            for line in machine.recent_trace(80):
+                print("    %s" % line)
         return False
     return open_terminal_window(machine, command_deadline)
 

@@ -24,6 +24,7 @@ OBJECT := build/m68k/main.o
 # HostFS publishes SYSTEM before any shared library can be loaded. It and
 # the ROM Supervisor are the canonical static bootstrap images.
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
+VFS_SERVICE_LIB := $(VFS)/build/m68k/libastravfs-service.a
 METRICS_LIB := $(METRICS)/build/m68k/libastrametric.a
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 SYSTEM_LIB := $(SYSTEM)/build/m68k/libastra.a
@@ -35,11 +36,11 @@ ASTRA_PROGRAM_OWNER_TARGETS := $(RUNTIME):all $(VFS):all $(METRICS):all \
 	$(SYSTEM):all $(CONFIG):build/m68k/config_document.o
 include ../../program.mk
 
-$(TARGET): $(OBJECT) $(CONFIG_OBJECT) $(CRT0) $(VFS_LIB) $(METRICS_LIB) \
+$(TARGET): $(OBJECT) $(CONFIG_OBJECT) $(CRT0) $(VFS_LIB) $(VFS_SERVICE_LIB) $(METRICS_LIB) \
 		$(SYSTEM_LIB) $(RUNTIME_LIB) $(ASTRA_STATIC_USER_LD_INPUTS)
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(CRT0) $(OBJECT) \
-		$(CONFIG_OBJECT) $(METRICS_LIB) $(VFS_LIB) $(SYSTEM_LIB) $(RUNTIME_LIB) -lgcc
+		$(CONFIG_OBJECT) $(METRICS_LIB) $(VFS_SERVICE_LIB) $(VFS_LIB) $(SYSTEM_LIB) $(RUNTIME_LIB) -lgcc
 
 $(IMAGE): $(TARGET)
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
@@ -55,9 +56,9 @@ HOST_CC ?= cc
 HOST_TEST_CPPFLAGS := $(filter-out -I$(RUNTIME)/freestanding,$(CPPFLAGS))
 HOST_TEST_FLAGS := -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 
-build/host/test_settings: tests/test_settings.c main.c $(CONFIG)/src/config_document.c $(SYSTEM)/src/manifest.c ../../../common/utf8.c $(RUNTIME)/src/string.c $(VFS)/src/volume.c
+build/host/test_settings: tests/test_settings.c main.c $(CONFIG)/src/config_document.c $(SYSTEM)/src/manifest.c ../../../common/utf8.c $(RUNTIME)/src/string.c $(VFS)/src/volume.c $(VFS)/src/vfs_file_pager.c
 	@mkdir -p $(@D)
-	$(HOST_CC) $(HOST_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_TEST_FLAGS) $< $(CONFIG)/src/config_document.c $(SYSTEM)/src/manifest.c ../../../common/utf8.c $(RUNTIME)/src/string.c $(VFS)/src/volume.c -o $@
+	$(HOST_CC) $(HOST_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_TEST_FLAGS) $< $(CONFIG)/src/config_document.c $(SYSTEM)/src/manifest.c ../../../common/utf8.c $(RUNTIME)/src/string.c $(VFS)/src/volume.c $(VFS)/src/vfs_file_pager.c -o $@
 
 test: build/host/test_settings
 	./build/host/test_settings
@@ -66,7 +67,7 @@ sanitize:
 	@mkdir -p build/host
 	$(HOST_CC) $(HOST_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_TEST_FLAGS) \
 		-fsanitize=address,undefined -fno-omit-frame-pointer tests/test_settings.c \
-		$(CONFIG)/src/config_document.c $(SYSTEM)/src/manifest.c ../../../common/utf8.c $(RUNTIME)/src/string.c $(VFS)/src/volume.c -o build/host/test_settings_sanitize
+		$(CONFIG)/src/config_document.c $(SYSTEM)/src/manifest.c ../../../common/utf8.c $(RUNTIME)/src/string.c $(VFS)/src/volume.c $(VFS)/src/vfs_file_pager.c -o build/host/test_settings_sanitize
 	./build/host/test_settings_sanitize
 
 analyze:

@@ -21,6 +21,7 @@ static uint32_t readdir_file_calls;
 static uint32_t readdir_file_mode;
 static uint32_t last_readdir_capacity;
 static uint32_t write_calls;
+static uint32_t file_area_calls;
 static uint32_t bulk_write_calls;
 static uint32_t last_write_flags;
 static uint32_t last_unlink_flags;
@@ -85,6 +86,16 @@ uint32_t astra_vfs_client_connect_service(AstraVfsClient *value,
 uint32_t astra_vfs_disconnect(AstraVfsClient *value)
 {
     (void)value;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_vfs_file_area(AstraVfsClient *value, AstraVfsFile file,
+    uint64_t base, uint32_t span, uint32_t *area, uint64_t *size)
+{
+    assert(value == &client && file == 1u && base == 0u &&
+           span == ASTRA_MEMORY_PAGE_SIZE);
+    ++file_area_calls;
+    *area = 42u; *size = 8192u;
     return ASTRA_VFS_OK;
 }
 
@@ -1129,7 +1140,16 @@ int main(void)
     assert(astra_filesystem_open(&single_filesystem, "/work/note",
                          ASTRA_VFS_OPEN_READ, &file) == ASTRA_VFS_OK);
     assert(stat_calls == 0u && open_calls == 1u);
+    {
+        uint32_t area = 0u;
+        uint64_t size = 0u;
+        assert(astra_filesystem_file_area(&file, 0u,
+            ASTRA_MEMORY_PAGE_SIZE, &area, &size) == ASTRA_VFS_OK);
+        assert(area == 42u && size == 8192u && file_area_calls == 1u);
+    }
     assert(astra_filesystem_close(&file) == ASTRA_VFS_OK);
+    assert(astra_filesystem_file_area(&file, 0u,
+        ASTRA_MEMORY_PAGE_SIZE, NULL, NULL) == ASTRA_VFS_ERR_BAD_HANDLE);
     assert(astra_filesystem_open(&single_filesystem, "/work/note",
                          ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_NONBLOCK,
                          &file) == ASTRA_VFS_OK);

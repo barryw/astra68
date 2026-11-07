@@ -1,9 +1,24 @@
 # General file cache and file-backed mappings
 
-Status: design contract; VFS description-retention, metadata, writeback,
-VM page publication, and synthetic guest pager with CPU budgets passed host
-and DE25 gates. VFS pager service, cache, mappings, and file I/O certification
-remain open.
+Status: design contract; VFS description-retention, metadata, VM page
+publication, and read-only HostFS file areas passed host and DE25 gates.
+Ordinary I/O still does not share mapped resident frames; dirty writeback,
+truncate semantics, pressure reclaim, and POSIX `mmap` remain open.
+
+HostFS file-area integration, 2026-11-07: cache-owned exact-node windows use
+one shared pager port and scratch page, retain the provider description and
+grant session across client close, and retire only after area handle, mapping,
+and in-flight fault counts allow it. Provider node/gap notifications mark
+windows stale and trigger resident-page reclaim. Beast full guest and DE25
+native `fssem file-map` passed two-page fault, close-before-map, and
+write/invalidation/refault checks. A coherent ABI-3 DE25 private release held
+stage 8 for 300 seconds; its post-trial image passed read-only `e2fsck`.
+Checked evidence is under
+`/home/barry/astra-evidence/file-map-de25-20261107/` on Beast. Selected DE25
+production ROM still uses syscall ABI 2, so incremental ABI-3 HostFS install
+cannot be used there; the matched private trial restored the selected release
+afterward. Haiku `src/system/kernel/cache/file_cache.cpp:345-430` and
+`vm/VMCache.cpp:1616-1644` guided backing-source and consumer lifetimes.
 
 File-area control protocol, 2026-11-07: the existing grant port now accepts
 one additive `FILE_AREA` operation. Client's direct lane makes a one-use share

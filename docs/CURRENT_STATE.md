@@ -2,6 +2,34 @@
 
 Status: active continuation map, 2026-11-07
 
+HostFS read-only file areas, 2026-11-07: HostFS now owns exact-node,
+page-aligned file windows, a retained provider description and grant session,
+one shared VFS pager thread/port/scratch page, and one owner area handle until
+all client handles, mappings, and in-flight faults retire. Provider node/gap
+notifications mark matching windows stale; maintenance reclaims resident pages
+so a later fault rereads the coherent backend source. `filesystem.library.16`
+exposes native `astra_filesystem_file_area`. Beast HostFS host tests and
+sanitizers, VFS tests, NDK dist-check, and full guest `fssem file-map` passed.
+The guest gate closed its file before mapping, faulted two pages, wrote through
+ordinary file I/O, and observed the new byte after invalidation. DE25 ran the
+same gate through native Terminal and passed a 300-second coherent ABI-3
+private release trial at stage 8. The archived post-trial image passed
+read-only `e2fsck`; board and Beast post-image SHA-256 matched at
+`943b8d91f4aab631228691c814df59b5cce836830439f4d3cf048067ff766993`.
+Evidence, including the terminal capture, trial console, and checked hashes,
+is under `/home/barry/astra-evidence/file-map-de25-20261107/` on Beast.
+Trial files were removed; selected production release returned to stage 8 with
+Astra/audio/remote active, zero Astra restarts, only production loop0, and
+8.5 GiB free. An earlier incremental attempt failed because selected ROM used
+syscall ABI 2 while new HostFS used ABI 3; production image was restored from
+its verified pre-trial backup before the coherent private release was built.
+Read-only mappings now work; ordinary I/O still does not share these resident
+frames, and dirty writeback, truncate semantics, pressure reclaim, and POSIX
+`mmap` remain open. Haiku `src/system/kernel/cache/file_cache.cpp:345-430`
+shares vnode-backed pages with ordinary I/O; `vm/VMCache.cpp:1616-1644`
+separates consumer and backing-store lifetimes. Astra adopted those lifetime
+rules at HostFS's userspace cache boundary.
+
 Read-only file-area control path, 2026-11-07: VFS protocol 40 now appends
 `FILE_AREA` operation 45 without changing existing messages. A direct-lane
 client shares its open description once, then asks the same grant control port

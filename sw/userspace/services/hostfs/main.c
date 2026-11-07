@@ -4,6 +4,7 @@
 #include <astra/metrics.h>
 #include <astra/metrics_vfs.h>
 #include <astra/messaging.h>
+#include <astra/pager_service.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/secret_memory.h>
@@ -11,6 +12,7 @@
 #include <astra/status.h>
 #include <astra/vfs_host_backend.h>
 #include <astra/vfs_host_transport.h>
+#include <astra/vfs_file_pager.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_process.h>
 #include <astra/vfs_service_core.h>
@@ -138,10 +140,30 @@ typedef struct HostfsGrant {
     uint32_t requester;            /* kernel-stamped creation/recovery provenance */
     uint32_t retiring;             /* charged until actual scope/session/port retirement */
     uint32_t scope_revoked;
+    uint32_t file_areas;           /* backing session stays live through faults */
     AstraVolumeReference volume;
     char root[ASTRA_HOST_FS_PATH_MAX]; /* recorded volume-relative recovery path */
     AstraVfsNodeMeta root_meta;
 } HostfsGrant;
+
+typedef struct HostfsFileArea {
+    struct HostfsFileArea *next;
+    HostfsGrant *grant;
+    AstraVfsHostBackend backend;
+    AstraVfsFilePageSource source;
+    uint32_t area;
+    uint32_t pins;
+    uint8_t stale;
+} HostfsFileArea;
+
+static HostfsFileArea *file_areas;
+static AstraVfsFilePager file_pager;
+static uint32_t file_pager_send;
+static uint32_t file_pager_thread;
+static uint32_t file_pager_cookie = 1u;
+static volatile uint32_t file_pager_stop;
+static uint32_t file_pager_failed;
+static void *file_pager_page;
 
 /*
  * The grant table grows on demand: no count is compiled in or configured
@@ -195,12 +217,16 @@ static uint32_t volume_noop_unmount(void *context)
 
 static AstraVfsPortService *grant_host(const HostfsGrant *grant);
 static int grant_retire(uint32_t at);
+static void file_areas_maintain(void);
+static void file_pager_stop_and_close(void);
 
 static uint32_t finish_hostfs(void)
 {
     const AstraVfsMountOps metrics_mount = {NULL, volume_noop_unmount};
     uint32_t status;
 
+    file_areas_maintain();
+    if (file_areas != NULL) return ASTRA_VFS_ERR_BUSY;
     astra_volume_port_destroy(&volume_port);
     while (astra_vfs_port_service_worker_pump(&metrics_port,
                                                &metrics_worker, 1u) != 0u) {}
@@ -213,6 +239,7 @@ static uint32_t finish_hostfs(void)
     for (HostfsVolume *volume = volumes; volume != NULL; volume = volume->next)
         if (volume->port.stalled != 0u)
             return ASTRA_STATUS_IO;
+    file_pager_stop_and_close();
     /* Normal retirement is also the shutdown owner; failed cleanup remains
        charged until retry or canonical process/provider teardown. */
     while (grant_count != 0u)
@@ -559,6 +586,8 @@ static uint32_t grant_add(HostfsVolume *owner, uint32_t session,
     }
     grant->port.features = ASTRA_VFS_FEATURE_RESOLVES | ASTRA_VFS_FEATURE_NODE_META |
                            ASTRA_VFS_FEATURE_DESCRIPTIONS | ASTRA_VFS_FEATURE_DIRECTORY_PATH;
+    if (!owner->config_store && file_pager_thread != 0u)
+        grant->port.features |= ASTRA_VFS_FEATURE_FILE_AREAS;
     if (owner->config_store)
         grant->port.features |= ASTRA_VFS_FEATURE_CONFIG_CRYPT;
     if (added != NULL)
@@ -690,6 +719,271 @@ done:
     return status;
 }
 
+static const AstraVfsFilePageSource *file_page_acquire(void *context,
+    uint32_t cookie)
+{
+    const AstraVfsFilePageSource *source = NULL;
+    (void)context;
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return NULL;
+    for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next)
+        if (entry->source.cookie == cookie) {
+            ++entry->pins;
+            source = &entry->source;
+            break;
+        }
+    astra_vfs_state_lock_release(&state_lock);
+    return source;
+}
+
+static void file_page_release(void *context,
+    const AstraVfsFilePageSource *source)
+{
+    (void)context;
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return;
+    for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next)
+        if (&entry->source == source) {
+            --entry->pins;
+            break;
+        }
+    astra_vfs_state_lock_release(&state_lock);
+}
+
+static void file_pager_run(uint32_t argument)
+{
+    (void)argument;
+    while (!file_pager_stop) {
+        uint32_t status = astra_wait_one(file_pager.receive,
+            astra_clock_monotonic() + UINT64_C(1000000000), NULL);
+        if (file_pager_stop) break;
+        if (status == ASTRA_SYSCALL_CANCELLED ||
+            status == ASTRA_SYSCALL_TIMED_OUT) continue;
+        if (status != ASTRA_SYSCALL_OK) {
+            file_pager.stalled = status;
+            break;
+        }
+        (void)astra_vfs_file_pager_pump(&file_pager, 8u);
+        if (file_pager.stalled != 0u) break;
+    }
+    if (file_pager.stalled != 0u)
+        __atomic_store_n(&file_pager_failed, file_pager.stalled,
+                         __ATOMIC_RELEASE);
+}
+
+static uint32_t file_pager_start(void)
+{
+    uint32_t scratch = 0u, mapped = 0u;
+    uint32_t status = astra_rt_port_create(queue_messages,
+        queue_messages * (uint32_t)sizeof(AstraPagerPageRequest),
+        &file_pager.receive, &file_pager_send);
+    if (status != ASTRA_SYSCALL_OK) return ASTRA_VFS_ERR_LIMIT;
+    status = astra_rt_area_create(ASTRA_MEMORY_PAGE_SIZE,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+        ASTRA_RIGHT_TRANSFER, &scratch);
+    if (status == ASTRA_SYSCALL_OK)
+        status = astra_rt_area_map(scratch,
+            ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+            &file_pager_page, &mapped);
+    if (status != ASTRA_SYSCALL_OK || mapped < ASTRA_MEMORY_PAGE_SIZE ||
+        !astra_vfs_file_pager_init(&file_pager, file_pager.receive,
+            scratch, file_pager_page, mapped,
+            file_page_acquire, file_page_release, NULL)) {
+        if (file_pager_page != NULL) (void)astra_rt_area_unmap(file_pager_page);
+        if (scratch != 0u) (void)astra_close(scratch);
+        (void)astra_close(file_pager_send);
+        (void)astra_close(file_pager.receive);
+        file_pager_send = file_pager.receive = 0u;
+        file_pager_page = NULL;
+        return ASTRA_VFS_ERR_LIMIT;
+    }
+    AstraThreadStart start = {file_pager_run, 0u};
+    status = astra_rt_thread_create(&start, ASTRA_PROCESS_PRIORITY_NORMAL,
+        ASTRA_RIGHT_WAIT | ASTRA_RIGHT_ADMINISTER, &file_pager_thread, NULL);
+    if (status != ASTRA_SYSCALL_OK) {
+        (void)astra_rt_area_unmap(file_pager_page);
+        (void)astra_close(file_pager.data_area);
+        (void)astra_close(file_pager_send);
+        (void)astra_close(file_pager.receive);
+        file_pager = (AstraVfsFilePager){0};
+        file_pager_page = NULL;
+        file_pager_send = 0u;
+        return ASTRA_VFS_ERR_LIMIT;
+    }
+    return ASTRA_VFS_OK;
+}
+
+static void file_pager_stop_and_close(void)
+{
+    file_pager_stop = 1u;
+    if (file_pager_thread != 0u) {
+        (void)astra_rt_cancel_wait(file_pager_thread);
+        (void)astra_wait_one_restart(file_pager_thread, ASTRA_DEADLINE_FOREVER, NULL);
+        (void)astra_close(file_pager_thread);
+        file_pager_thread = 0u;
+    }
+    if (file_pager_page != NULL) (void)astra_rt_area_unmap(file_pager_page);
+    if (file_pager.data_area != 0u) (void)astra_close(file_pager.data_area);
+    if (file_pager_send != 0u) (void)astra_close(file_pager_send);
+    if (file_pager.receive != 0u) (void)astra_close(file_pager.receive);
+    file_pager = (AstraVfsFilePager){0};
+    file_pager_page = NULL;
+    file_pager_send = 0u;
+}
+
+static uint32_t hostfs_file_area(void *context,
+    const AstraVfsPortGrant *port, uint32_t requester, uint64_t token,
+    uint64_t base, uint32_t span, uint32_t *area, uint64_t *file_size)
+{
+    HostfsGrant *grant = (HostfsGrant *)(void *)port;
+    const AstraVfsBackendOps *ops = astra_vfs_host_ops();
+    AstraVfsNodeInfo info = {0};
+    AstraVfsHostBackend backend;
+    HostfsFileArea *entry;
+    uintptr_t node = 0u;
+    uint32_t status;
+
+    (void)context;
+    (void)requester;
+    *area = 0u;
+    *file_size = 0u;
+    if (grant->retiring || file_pager_thread == 0u ||
+        __atomic_load_n(&file_pager_failed, __ATOMIC_ACQUIRE) != 0u ||
+        file_pager_cookie == UINT32_MAX)
+        return ASTRA_VFS_ERR_BUSY;
+    if (!astra_vfs_host_init(&backend, &transport,
+                             transport.generation, grant->session))
+        return ASTRA_VFS_ERR_LOST;
+    status = ops->adopt(&backend, token, 0u, &node);
+    if (status != ASTRA_VFS_OK) return status;
+    status = ops->stat_node(&backend, node, &info);
+    if (status != ASTRA_VFS_OK || info.kind != ASTRA_VFS_KIND_FILE ||
+        base >= info.size ||
+        !astra_vfs_node_identity_equal(&info.meta, &info.meta)) {
+        (void)ops->close(&backend, node);
+        return status != ASTRA_VFS_OK ? status : ASTRA_VFS_ERR_INVALID;
+    }
+    if (!astra_vfs_state_lock_acquire(&state_lock)) {
+        (void)ops->close(&backend, node);
+        return ASTRA_VFS_ERR_IO;
+    }
+    for (entry = file_areas; entry != NULL; entry = entry->next)
+        if (entry->grant == grant && !entry->stale &&
+            entry->source.base == base && entry->source.span == span &&
+            astra_vfs_node_identity_equal(&entry->source.identity,
+                                           &info.meta)) {
+            status = astra_rt_handle_duplicate(entry->area,
+                ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
+                area);
+            astra_vfs_state_lock_release(&state_lock);
+            (void)ops->close(&backend, node);
+            if (status == ASTRA_SYSCALL_OK) *file_size = info.size;
+            return status == ASTRA_SYSCALL_OK ? ASTRA_VFS_OK : ASTRA_VFS_ERR_LIMIT;
+        }
+    astra_vfs_state_lock_release(&state_lock);
+    entry = astra_runtime_callocate(1u, sizeof(*entry));
+    if (entry == NULL) {
+        (void)ops->close(&backend, node);
+        return ASTRA_VFS_ERR_LIMIT;
+    }
+    entry->backend = backend;
+    entry->grant = grant;
+    if (!astra_vfs_file_page_source_init(&entry->source,
+        &(AstraVfsBackend){ops, &entry->backend}, node, &info.meta,
+        base, span, file_pager_cookie))
+        status = ASTRA_VFS_ERR_INVALID;
+    else if (astra_rt_area_create_flagged(span,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER |
+        ASTRA_RIGHT_ADMINISTER, ASTRA_AREA_CREATE_RESERVED,
+        &entry->area) != ASTRA_SYSCALL_OK)
+        status = ASTRA_VFS_ERR_LIMIT;
+    else if (astra_rt_area_bind_pager(entry->area, file_pager_send,
+                                      file_pager_cookie) != ASTRA_SYSCALL_OK)
+        status = ASTRA_VFS_ERR_IO;
+    else if (astra_rt_handle_duplicate(entry->area,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
+        area) != ASTRA_SYSCALL_OK)
+        status = ASTRA_VFS_ERR_LIMIT;
+    else
+        status = ASTRA_VFS_OK;
+    if (status != ASTRA_VFS_OK) {
+        if (entry->area != 0u) (void)astra_close(entry->area);
+        (void)ops->close(&entry->backend, node);
+        astra_runtime_deallocate(entry);
+        return status;
+    }
+    ++file_pager_cookie;
+    if (!astra_vfs_state_lock_acquire(&state_lock)) {
+        (void)astra_close(*area);
+        *area = 0u;
+        (void)astra_close(entry->area);
+        (void)ops->close(&entry->backend, node);
+        astra_runtime_deallocate(entry);
+        return ASTRA_VFS_ERR_IO;
+    }
+    entry->next = file_areas;
+    file_areas = entry;
+    ++grant->file_areas;
+    astra_vfs_state_lock_release(&state_lock);
+    *file_size = info.size;
+    return ASTRA_VFS_OK;
+}
+
+static void file_areas_invalidate(HostfsVolume *volume, uint32_t kind,
+    uint64_t inode)
+{
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return;
+    for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next)
+        if (entry->grant->owner == volume &&
+            (kind != ASTRA_HOST_FS_CHANGE_NODE ||
+             entry->source.identity.inode == inode))
+            entry->stale = 1u;
+    astra_vfs_state_lock_release(&state_lock);
+}
+
+static void file_areas_maintain(void)
+{
+    HostfsFileArea **slot = &file_areas;
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return;
+    while (*slot != NULL) {
+        HostfsFileArea *entry = *slot;
+        uint32_t handles = 0u, mappings = 0u, children = 0u, released = 0u;
+        uint32_t status = astra_rt_area_references(entry->area,
+            &handles, &mappings, &children);
+        if (status == ASTRA_SYSCALL_OK && handles == 1u &&
+            mappings == 0u && children == 0u && entry->pins == 0u) {
+            *slot = entry->next;
+            astra_vfs_state_lock_release(&state_lock);
+            status = entry->source.node == 0u ? ASTRA_VFS_OK :
+                astra_vfs_host_ops()->close(&entry->backend, entry->source.node);
+            if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_LOST ||
+                status == ASTRA_VFS_ERR_BAD_HANDLE)
+                entry->source.node = 0u;
+            status = entry->source.node == 0u ?
+                astra_close(entry->area) : ASTRA_SYSCALL_IO_ERROR;
+            if (entry->source.node == 0u &&
+                (status == ASTRA_SYSCALL_OK ||
+                 status == ASTRA_SYSCALL_INVALID_HANDLE)) {
+                --entry->grant->file_areas;
+                astra_runtime_deallocate(entry);
+            } else {
+                if (!astra_vfs_state_lock_acquire(&state_lock)) return;
+                entry->next = file_areas;
+                file_areas = entry;
+                astra_vfs_state_lock_release(&state_lock);
+                return;
+            }
+            if (!astra_vfs_state_lock_acquire(&state_lock)) return;
+            slot = &file_areas;
+            continue;
+        }
+        if (entry->stale && status == ASTRA_SYSCALL_OK &&
+            astra_rt_area_reclaim(entry->area, 0u, entry->source.span,
+                                   &released) == ASTRA_SYSCALL_OK)
+            entry->stale = 0u;
+        slot = &entry->next;
+    }
+    astra_vfs_state_lock_release(&state_lock);
+}
+
 /* The grant's last holder closed its handle, or its deriver's session
  * ended. Revoke its scope -- every channel bound to it stops at once --
  * then end its sessions with their reply lanes, and its provider session,
@@ -722,11 +1016,13 @@ static int grant_retire(uint32_t at)
         if (status == ASTRA_SYSCALL_OK || status == ASTRA_SYSCALL_INVALID_HANDLE)
             grant->port.scope = 0u;
     }
-    if ((grant->port.scope == 0u || grant->scope_revoked) && grant->session != 0u) {
+    if (grant->file_areas == 0u &&
+        (grant->port.scope == 0u || grant->scope_revoked) && grant->session != 0u) {
         status = close_owned_session(&grant->session);
         if (status != ASTRA_VFS_OK) (void)astra_log_failure("hostfs grant session close", status);
     }
-    if (grant->port.scope != 0u || grant->session != 0u || grant->port.receive != 0u)
+    if (grant->port.scope != 0u || grant->session != 0u ||
+        grant->port.receive != 0u || grant->file_areas != 0u)
         return 0;
     astra_runtime_deallocate(grant);
     grants[at] = grants[--grant_count];
@@ -992,6 +1288,10 @@ static void publish_filesystem_changes(uint32_t messaging)
             if (kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED ||
                 kind == ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED)
                 memcpy(change.name, record.name, sizeof(change.name));
+            if (kind == ASTRA_HOST_FS_CHANGE_NODE ||
+                kind == ASTRA_HOST_FS_CHANGE_GAP ||
+                kind == ASTRA_HOST_FS_CHANGE_NONE)
+                file_areas_invalidate(volume, kind, record.inode);
             /* BUSY leaves both sequence and generation pending for retry. */
             AstraResult result = astra_messaging_publish_reliable(messaging,
                 ASTRA_FILESYSTEM_CHANGE_TOPIC, &change, sizeof(change),
@@ -1065,6 +1365,8 @@ static uint32_t volume_add(const AstraVolumeReference *reference, const char *na
          !astra_vfs_port_service_set_state_lock(&volume->port, astra_vfs_state_lock_acquire,
              astra_vfs_state_lock_release, &state_lock) ||
          !astra_vfs_port_service_set_derive(&volume->port, hostfs_derive, NULL) ||
+         (!volume->config_store && !astra_vfs_port_service_set_file_area(
+             &volume->port, hostfs_file_area, NULL)) ||
          (volume->config_store && !astra_vfs_port_service_set_config_crypt(
              &volume->port, hostfs_config_crypt, NULL))))
         status = HOSTFS_FAIL_PORT;
@@ -1414,6 +1716,7 @@ int astra_main(const AstraStartupInfo *startup)
             status = closed;
     }
     if (status == ASTRA_STATUS_OK) status = configured_ram_source(&ram_source);
+    if (status == ASTRA_STATUS_OK) status = file_pager_start();
     for (uint32_t index = 0u; index < 5u && status == ASTRA_STATUS_OK; ++index) {
         AstraVolumeReference reference;
         status = astra_vfs_host_lookup_mount(&transport, transport.generation,
@@ -1497,6 +1800,9 @@ int astra_main(const AstraStartupInfo *startup)
         uint32_t count = 0u;
         uint32_t selected = ASTRA_WAIT_INDEX_NONE;
 
+        if (__atomic_load_n(&file_pager_failed, __ATOMIC_ACQUIRE) != 0u)
+            return (int)ASTRA_STATUS_IO;
+
         uint64_t now = astra_clock_monotonic();
         if (now >= catalog_deadline) {
             astra_volume_port_poll(&volume_port);
@@ -1510,6 +1816,7 @@ int astra_main(const AstraStartupInfo *startup)
             }
             retire_orphans();
             publish_filesystem_changes(messaging->handle);
+            file_areas_maintain();
             catalog_deadline = now + UINT64_C(1000000000);
         }
 
@@ -1557,6 +1864,13 @@ int astra_main(const AstraStartupInfo *startup)
 
             if (result != ASTRA_SYSCALL_OK)
                 return (int)ASTRA_STATUS_PROTOCOL;
+            file_areas_maintain();
+            if (file_areas != NULL) {
+                (void)astra_shutdown_respond(reply,
+                    request.header.transaction_id,
+                    ASTRA_SHUTDOWN_CANCEL, ASTRA_VFS_ERR_BUSY);
+                continue;
+            }
             result = finish_hostfs();
             (void)astra_shutdown_respond(
                 reply, request.header.transaction_id,

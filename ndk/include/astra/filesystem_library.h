@@ -251,6 +251,18 @@ uint32_t astra_filesystem_open_at_mode(AstraFilesystem *filesystem, const AstraF
     uint16_t create_mode, AstraFile *file);
 /** Close an open file. @param file Open state. @return ASTRA_VFS_* status. */
 uint32_t astra_filesystem_close(AstraFile *file);
+/**
+ * Acquire a read-only, demand-paged window of an open regular file.
+ * Close returned area when finished; mapping remains valid after closing file.
+ * @param file Open file with read access.
+ * @param base Page-aligned file offset.
+ * @param span Nonzero page-aligned area size.
+ * @param area Receives READ|MAP area capability.
+ * @param file_size Receives current file size.
+ * @return ASTRA_VFS_* status; UNSUPPORTED for providers without file areas.
+ */
+uint32_t astra_filesystem_file_area(const AstraFile *file, uint64_t base,
+    uint32_t span, uint32_t *area, uint64_t *file_size);
 /** Make an open file durable. @param file Open state. @return ASTRA_VFS_* status. */
 uint32_t astra_filesystem_sync(AstraFile *file);
 /** Set an open file's length. @param file Open state. @param size New byte length. @return ASTRA_VFS_* status. */

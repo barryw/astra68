@@ -52,7 +52,7 @@ CASES = ["basic", "durable-save", "volume-catalog", "volume-root", "raw-lane", "
          "raw-onward", "raw-orphans", "raw-orphans-death",
          "symlink-in-volume", "symlink-cross-volume", "dotdot-at-root",
          "escape-relative", "link-edges", "alias-identity", "continuation-limit", "path-boundaries",
-         "shared-description", "exec-inherit", "append-race", "file-size-limit", "cwd-identity",
+         "shared-description", "file-map", "exec-inherit", "append-race", "file-size-limit", "cwd-identity",
          "many-lanes", "owner-sessions", "owner-files"]
 # Orchestrated checks: name -> function(machine, provider_mount). Later tasks
 # add entries; each prints "PASS <name>" or calls fail().
@@ -451,12 +451,16 @@ def main():
                 for name in sorted(arguments.check or CHECKS, key=lambda name: (name in FINAL_CHECKS, name)):
                     CHECKS[name](machine, mount)
         except BaseException:
-            print("native kernel failure trace:")
-            for line in machine.trace()[-500:]:
+            print("native failure serial:")
+            for line in machine.log[-250:]:
                 print(line)
-            print("native failure trace:")
-            for line in machine.trace_with_syslog()[-250:]:
-                print(line)
+            if machine.process.poll() is None:
+                print("native kernel failure trace:")
+                for line in machine.trace()[-500:]:
+                    print(line)
+                print("native failure trace:")
+                for line in machine.trace_with_syslog()[-250:]:
+                    print(line)
             raise
         finally:
             machine.close()

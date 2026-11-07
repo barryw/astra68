@@ -2063,6 +2063,70 @@ done:
     return result;
 }
 
+static int file_map_gate(const char *directory)
+{
+    AstraProcessFilesystem native = ASTRA_PROCESS_FILESYSTEM_INIT;
+    AstraFile file = ASTRA_FILE_INIT;
+    char path[192];
+    uint32_t area = 0u, mapped_size = 0u;
+    uint64_t file_size = 0u;
+    void *mapping = NULL;
+    int fd = -1, result = 2;
+    const char *stage = "create";
+
+    if (snprintf(path, sizeof(path), "%s/fssem-map-%ld", directory,
+                 (long)getpid()) >= (int)sizeof(path))
+        return fail("file-map path too long");
+    fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd < 0) goto done;
+    char bytes[ASTRA_MEMORY_PAGE_SIZE * 2u];
+    memset(bytes, 'a', sizeof(bytes));
+    stage = "write";
+    if (write(fd, bytes, sizeof(bytes)) != (ssize_t)sizeof(bytes) ||
+        fsync(fd) != 0) goto done;
+    close(fd); fd = -1;
+    stage = "attach";
+    if (astra_process_filesystem_open(&native, astra_posix_startup()) !=
+        ASTRA_VFS_OK) goto done;
+    stage = "open";
+    if (astra_filesystem_open(&native.filesystem, path,
+        ASTRA_VFS_OPEN_READ, &file) != ASTRA_VFS_OK) goto done;
+    stage = "area";
+    if (astra_filesystem_file_area(&file, 0u, sizeof(bytes),
+        &area, &file_size) != ASTRA_VFS_OK || file_size != sizeof(bytes))
+        goto done;
+    if (astra_filesystem_close(&file) != ASTRA_VFS_OK) goto done;
+    stage = "map";
+    if (astra_rt_area_map(area, ASTRA_AREA_MAP_READ, &mapping,
+        &mapped_size) != ASTRA_SYSCALL_OK || mapped_size < sizeof(bytes))
+        goto done;
+    stage = "fault";
+    if (((volatile const char *)mapping)[0] != 'a' ||
+        ((volatile const char *)mapping)[ASTRA_MEMORY_PAGE_SIZE] != 'a')
+        goto done;
+    stage = "mutation";
+    fd = open(path, O_WRONLY);
+    if (fd < 0 || pwrite(fd, "b", 1u, 0) != 1 || fsync(fd) != 0)
+        goto done;
+    close(fd); fd = -1;
+    stage = "invalidate";
+    uint64_t deadline = astra_clock_monotonic() + UINT64_C(4000000000);
+    while (((volatile const char *)mapping)[0] != 'b' &&
+           astra_clock_monotonic() < deadline)
+        (void)astra_rt_thread_sleep(UINT64_C(10000000),
+            ASTRA_THREAD_SLEEP_RELATIVE, 0u, NULL);
+    if (((volatile const char *)mapping)[0] != 'b') goto done;
+    result = 0;
+done:
+    if (fd >= 0) close(fd);
+    if (mapping != NULL) (void)astra_rt_area_unmap(mapping);
+    if (area != 0u) (void)astra_close(area);
+    if (file._private_client != NULL) (void)astra_filesystem_close(&file);
+    astra_process_filesystem_close(&native);
+    (void)unlink(path);
+    return result == 0 ? 0 : fail("file-map %s", stage);
+}
+
 static int flood(const char *directory, uint32_t limit, int wait)
 {
     AstraProcessFilesystem native = ASTRA_PROCESS_FILESYSTEM_INIT;
@@ -2332,6 +2396,8 @@ static int case_volume_root(const char *directory)
     return 0;
 }
 
+static int file_map_gate(const char *directory);
+
 static const struct {
     const char *name;
     FssemCase run;
@@ -2351,6 +2417,7 @@ static const struct {
     {"raw-lane", case_raw_lane},
     {"lane-fork-exec", case_lane_fork_exec},
     {"shared-description", case_shared_description},
+    {"file-map", file_map_gate},
     {"exec-inherit", case_exec_inherit},
     {"append-race", case_append_race},
     {"file-size-limit", case_file_size_limit},
