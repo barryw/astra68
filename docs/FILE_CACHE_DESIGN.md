@@ -226,6 +226,26 @@ HostFS notification delivery can lag a direct external write, so the future
 cache must also consume node and gap notifications before reusing pages.
 This slice does not create a file mapping or pager service.
 
+Pager reclaim slice, 2026-11-07: Existing address-based `AREA_DECOMMIT`
+refuses pager-bound areas, so a file cache could not return clean resident
+frames under pressure. Native `AREA_RECLAIM` now requires an ADMINISTER area
+handle, aligned offset and length, and no in-flight child fault. It calls
+the existing page withdrawal path, which clears every shared mapping before
+releasing the frame. A later access faults through the same pager. Kernel
+tests cover absent pages, alignment, in-flight refusal, withdrawal, and
+refault; syscall and Runtime tests cover wrong handle and rights. K1 samples
+the operation against a 125,000-cycle budget. Beast and DE25 K1 passed all
+15 markers with zero overruns; both measured 200 cycles. Matching ROM SHA-256
+is `57778de14b12ac03c47034103feae8018444d8e9b6c9591f7c5ecbc5b81262a9`;
+DE25 log SHA-256 is
+`2860eebcfe1f93cc93eae34d596a21f7f7037c8ac093620f544b136492608dc3`.
+Evidence is under `/home/barry/astra-evidence/area-reclaim-k1-20261107/`
+on Beast. Haiku `src/system/kernel/cache/file_cache.cpp:306-341` checks
+clean and unmapped state before eviction; Astra's pager areas cannot have
+writable mappings, and VFS must write back dirty content before reclaim.
+VFS cache ownership, notification-driven invalidation, and reclaim policy
+remain open.
+
 Pager candidate, 2026-11-07: a bound-area fault now sends the page request
 through the existing port call/reply machinery, keeps the area pinned while
 waiting, reads the reply's transfer area, and publishes only a checked,

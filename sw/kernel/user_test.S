@@ -904,6 +904,15 @@ _k1_survivor_image_entry:
 	trap    #ASTRA_SYSCALL_TRAP
 	tst.l   %d0
 	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	move.l  #4096, %d3
+	moveq   #ASTRA_SYSCALL_AREA_RECLAIM, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #1, %d1
+	bne     .Lmain_fail
 
 	move.l  KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0), %d1
 	moveq   #ASTRA_SYSCALL_AREA_UNMAP, %d0

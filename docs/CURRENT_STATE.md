@@ -2,6 +2,25 @@
 
 Status: active continuation map, 2026-11-07
 
+Pager-page reclaim, 2026-11-07: WIP branch adds ADMINISTER-only
+`AREA_RECLAIM` for pager-bound reserved areas. It uses the existing shared
+page-withdrawal path, refuses an in-flight fault with WOULD_BLOCK, and
+returns the exact number of reclaimed pages. The old address-based
+`AREA_DECOMMIT` still refuses pager areas. Kernel/Runtime tests, target
+builds, kernel verify, and NDK dist-check passed on Beast. Beast and DE25
+K1 each passed all 15 markers with zero overruns; both measured reclaim at
+200/125,000 MC68040 cycles. ROM SHA-256 is
+`57778de14b12ac03c47034103feae8018444d8e9b6c9591f7c5ecbc5b81262a9`;
+DE25 serial log SHA-256 is
+`2860eebcfe1f93cc93eae34d596a21f7f7037c8ac093620f544b136492608dc3`.
+Evidence is under `/home/barry/astra-evidence/area-reclaim-k1-20261107/`
+on Beast. DE25 private trial used QEMU's qualification clock; normal
+production Astra was restarted after trial. No VFS cache yet owns a mapped
+area or decides which pages are clean enough to evict. Haiku
+`src/system/kernel/cache/file_cache.cpp:306-341` drops only clean, unmapped
+pages under pressure; Astra permits mapped read-only pager pages because its
+shared page-table withdrawal invalidates all mappings before frame release.
+
 VFS retained page reads now check HostFS provider node-change generation and
 known nanosecond timestamps around fill, using the existing backend change
 snapshot and notification source. Beast VFS target, tests, and sanitizers

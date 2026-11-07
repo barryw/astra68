@@ -1119,6 +1119,18 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
     byte = 0u;
     assert(kernel_area_read(area, 0u, &byte, 1u) == KERNEL_AREA_OK);
     assert(byte == 0xa5u);
+    assert(kernel_area_reclaim(other, 0u, KERNEL_PAGE_SIZE, &released) ==
+           KERNEL_AREA_OK && released == 0u);
+    assert(kernel_area_reclaim(area, 1u, KERNEL_PAGE_SIZE, &released) ==
+           KERNEL_AREA_INVALID_ARGUMENT && released == 0u);
+    assert(kernel_area_reclaim(area, 0u, 0u, &released) ==
+           KERNEL_AREA_INVALID_ARGUMENT && released == 0u);
+    assert(kernel_area_pager_request(317u, &client,
+                                     base + KERNEL_PAGE_SIZE, &request) ==
+           KERNEL_AREA_OK);
+    assert(kernel_area_reclaim(area, 0u, KERNEL_PAGE_SIZE, &released) ==
+           KERNEL_AREA_BUSY && released == 0u);
+    assert(kernel_area_child_release(request.area) == KERNEL_AREA_OK);
     {
         uint8_t across[2] = {0x7eu, 0x7eu};
 
@@ -1126,6 +1138,13 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
                                 sizeof(across)) == KERNEL_AREA_INVALID_STATE);
         assert(across[0] == 0x7eu && across[1] == 0x7eu);
     }
+    assert(kernel_area_reclaim(area, 0u, KERNEL_PAGE_SIZE, &released) ==
+           KERNEL_AREA_OK && released == 1u);
+    assert(kernel_area_read(area, 0u, &byte, 1u) ==
+           KERNEL_AREA_INVALID_STATE);
+    assert(kernel_area_pager_request(317u, &client, base, &request) ==
+           KERNEL_AREA_OK && request.offset == 0u);
+    assert(kernel_area_child_release(request.area) == KERNEL_AREA_OK);
     assert(kernel_area_pool_valid());
     assert(kernel_area_unmap(317u, &client, base) == KERNEL_AREA_OK);
     assert(kernel_area_unmap(317u, &client, other_base) == KERNEL_AREA_OK);

@@ -1514,6 +1514,49 @@ static bool drop_page(KernelArea *area, uint32_t page)
     return true;
 }
 
+static KernelAreaStatus decommit_range(KernelArea *area, uint32_t offset,
+                                       uint32_t byte_size,
+                                       uint32_t *released_pages)
+{
+    uint32_t first, last, released = 0u;
+
+    if (byte_size == 0u || byte_size > area->byte_size ||
+        offset > area->byte_size - byte_size)
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    first = (offset + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
+    last = (offset + byte_size) / KERNEL_PAGE_SIZE;
+    for (uint32_t page = first; page < last; ++page) {
+        if (!page_committed(area, page))
+            continue;
+        if (!drop_page(area, page))
+            return KERNEL_AREA_CORRUPT;
+        ++released;
+    }
+    pool_stats.decommit_operations += released != 0u ? 1u : 0u;
+    pool_stats.decommit_pages += released;
+    *released_pages = released;
+    return KERNEL_AREA_OK;
+}
+
+KernelAreaStatus kernel_area_reclaim(KernelArea *area, uint32_t offset,
+                                     uint32_t byte_size,
+                                     uint32_t *released_pages)
+{
+    if (released_pages == NULL || !valid_area(area))
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    *released_pages = 0u;
+    if (area->state != KERNEL_AREA_LIVE)
+        return KERNEL_AREA_PEER_DEAD;
+    if (area->pager == NULL || area->reserved_form == 0u)
+        return KERNEL_AREA_INVALID_STATE;
+    if ((offset & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
+        (byte_size & (KERNEL_PAGE_SIZE - 1u)) != 0u)
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    if (area->child_references != 0u)
+        return KERNEL_AREA_BUSY;
+    return decommit_range(area, offset, byte_size, released_pages);
+}
+
 KernelAreaStatus kernel_area_decommit(uint32_t process_id,
                                       KernelAddressSpace *space,
                                       uint32_t address, uint32_t byte_size,
@@ -1521,10 +1564,7 @@ KernelAreaStatus kernel_area_decommit(uint32_t process_id,
 {
     KernelAreaMapping *mapping;
     KernelArea *area;
-    uint32_t first;
-    uint32_t last;
     uint32_t offset;
-    uint32_t released = 0u;
 
     if (released_pages == NULL || byte_size == 0u)
         return KERNEL_AREA_INVALID_ARGUMENT;
@@ -1543,22 +1583,8 @@ KernelAreaStatus kernel_area_decommit(uint32_t process_id,
     if (area->reserved_form == 0u)
         return KERNEL_AREA_INVALID_STATE;
     offset = address - mapping->virtual_base;
-    if (byte_size > area->byte_size || offset > area->byte_size - byte_size)
-        return KERNEL_AREA_INVALID_ARGUMENT;
     /* Round inward: a partly covered page keeps whatever else is in it. */
-    first = (offset + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
-    last = (offset + byte_size) / KERNEL_PAGE_SIZE;
-    for (uint32_t page = first; page < last; ++page) {
-        if (!page_committed(area, page))
-            continue;
-        if (!drop_page(area, page))
-            return KERNEL_AREA_CORRUPT;
-        ++released;
-    }
-    pool_stats.decommit_operations += released != 0u ? 1u : 0u;
-    pool_stats.decommit_pages += released;
-    *released_pages = released;
-    return KERNEL_AREA_OK;
+    return decommit_range(area, offset, byte_size, released_pages);
 }
 
 KernelAreaStatus kernel_area_unmap(uint32_t process_id,

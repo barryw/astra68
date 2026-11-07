@@ -439,6 +439,7 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_VM_PRIVATE_COMMIT &&
         number != ASTRA_SYSCALL_VM_PRIVATE_DECOMMIT &&
         number != ASTRA_SYSCALL_AREA_BIND_PAGER &&
+        number != ASTRA_SYSCALL_AREA_RECLAIM &&
         number != ASTRA_SYSCALL_RING_CREATE &&
         number != ASTRA_SYSCALL_RING_READ_TRY &&
         number != ASTRA_SYSCALL_RING_WRITE_TRY &&
@@ -923,6 +924,13 @@ test_syscall_wrappers(void)
         assert(handles == 2u && mappings == 1u && children == 0u);
         assert(astra_rt_area_references(7u, NULL, &mappings,
                                         &children) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+        assert(astra_rt_area_reclaim(7u, 0u, 4096u, &handles) ==
+               ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_AREA_RECLAIM);
+        assert(mock_argument0 == 7u && mock_argument1 == 0u &&
+               mock_argument2 == 4096u);
+        assert(astra_rt_area_reclaim(7u, 0u, 4096u, NULL) ==
+               ASTRA_SYSCALL_INVALID_ARGUMENT);
     }
     assert(astra_rt_semaphore_create(
                1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,

@@ -1086,6 +1086,14 @@
  * are zero and no new handle is being transferred.
  */
 #define ASTRA_SYSCALL_AREA_REFERENCES 117
+/**
+ * Reclaim complete resident pages of a pager-bound area through an
+ * ADMINISTER handle. data[1] is the area handle, data[2] a page-aligned
+ * offset, data[3] a nonzero page-aligned length. Returns released page count
+ * in D1. An in-flight page request returns WOULD_BLOCK without eviction.
+ * The pager owner must write back dirty data before calling this operation.
+ */
+#define ASTRA_SYSCALL_AREA_RECLAIM    118
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */

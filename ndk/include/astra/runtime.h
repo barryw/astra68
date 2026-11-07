@@ -274,6 +274,16 @@ uint32_t astra_rt_area_bind_pager(uint32_t area, uint32_t port,
  */
 uint32_t astra_rt_area_references(uint32_t area, uint32_t *handles,
                                   uint32_t *mappings, uint32_t *children);
+/** Reclaim clean pages of a pager-bound area through ADMINISTER authority.
+ * In-flight page faults return WOULD_BLOCK; caller keeps its backing source.
+ * @param area Pager-bound area handle with ADMINISTER rights.
+ * @param offset Page-aligned byte offset within area.
+ * @param byte_size Nonzero page-aligned byte span.
+ * @param released_pages Receives number of pages returned to allocator.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_area_reclaim(uint32_t area, uint32_t offset,
+                               uint32_t byte_size, uint32_t *released_pages);
 /**
  * Decommit mapped pages while preserving the virtual reservation.
  * @param address Page-aligned address within a reserved area.

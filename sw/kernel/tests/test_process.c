@@ -8205,6 +8205,10 @@ static void test_pager_binding_retains_send_endpoint(void)
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     area = next->data[1];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_RECLAIM,
+                     area, 0u, KERNEL_PAGE_SIZE, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_REFERENCES,
                      receive, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
@@ -8216,6 +8220,10 @@ static void test_pager_binding_retains_send_endpoint(void)
         uint32_t reader = next->data[1];
         assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_REFERENCES,
                          reader, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_RECLAIM,
+                         reader, 0u, KERNEL_PAGE_SIZE, 0u, 0u) ==
+               KERNEL_PROCESS_OK);
         assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
         assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_REFERENCES,
                          area, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
@@ -8250,6 +8258,18 @@ static void test_pager_binding_retains_send_endpoint(void)
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     base = next->data[1];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_RECLAIM,
+                     receive, 0u, KERNEL_PAGE_SIZE, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_RECLAIM,
+                     area, 1u, KERNEL_PAGE_SIZE, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_RECLAIM,
+                     area, 0u, KERNEL_PAGE_SIZE, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK && next->data[1] == 0u);
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_REFERENCES,
                      area, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK &&

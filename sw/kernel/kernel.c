@@ -1085,6 +1085,12 @@ static void report_kernel_performance(
     console_putc('/');
     console_dec32(KERNEL_PERFORMANCE_BUDGET_AREA_REFERENCES);
     console_putc('\n');
+    console_puts("K8 PERF area reclaim=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_AREA_RECLAIM].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_AREA_RECLAIM);
+    console_putc('\n');
     console_puts("K10 PERF irq=");
     console_dec32(performance->metric[
         KERNEL_PERFORMANCE_HARD_IRQ].maximum_cycles);

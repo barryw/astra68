@@ -284,6 +284,20 @@ uint32_t astra_rt_area_references(uint32_t area, uint32_t *handles,
     return result.status;
 }
 
+uint32_t astra_rt_area_reclaim(uint32_t area, uint32_t offset,
+                               uint32_t byte_size, uint32_t *released_pages)
+{
+    AstraSyscallResult result;
+
+    if (released_pages == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_AREA_RECLAIM, area, offset, byte_size,
+                   0u, 0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK)
+        *released_pages = result.value0;
+    return result.status;
+}
+
 uint32_t
 astra_rt_area_decommit(void *address, uint32_t byte_size,
                     uint32_t *released_pages)

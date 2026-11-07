@@ -53,6 +53,7 @@ typedef enum KernelAreaStatus {
     KERNEL_AREA_NOT_MAPPED,
     KERNEL_AREA_ACCESS_DENIED,
     KERNEL_AREA_PEER_DEAD,
+    KERNEL_AREA_BUSY,
     KERNEL_AREA_CORRUPT
 } KernelAreaStatus;
 
@@ -158,6 +159,11 @@ KernelAreaStatus kernel_area_decommit(uint32_t process_id,
                                       KernelAddressSpace *space,
                                       uint32_t address, uint32_t byte_size,
                                       uint32_t *released_pages);
+/* ADMINISTER caller reclaims complete pages of a pager-bound area. Pending
+ * faults block eviction; the pager supplies bytes again on the next fault. */
+KernelAreaStatus kernel_area_reclaim(KernelArea *area, uint32_t offset,
+                                     uint32_t byte_size,
+                                     uint32_t *released_pages);
 void kernel_area_abandon_unpublished(KernelArea *area);
 bool kernel_area_handle_retain(void *object, void *context);
 void kernel_area_handle_release(void *object, void *context);

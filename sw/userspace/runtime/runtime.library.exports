@@ -128,6 +128,7 @@ ASTRA_RUNTIME_3.0 {
         astra_rt_area_decommit;
         astra_rt_area_map;
         astra_rt_area_references;
+        astra_rt_area_reclaim;
         astra_rt_area_unmap;
         astra_rt_cancel_wait;
         astra_rt_event_create;

@@ -52,8 +52,7 @@ static void test_bounded_sampling_windows_and_totals(void)
     assert(stats.metric[KERNEL_PERFORMANCE_SCHEDULER_PICK].calls == 4u);
     assert(stats.metric[KERNEL_PERFORMANCE_SCHEDULER_PICK].samples == 3u);
     assert(!kernel_performance_start_window(0u));
-    assert(!kernel_performance_start_window(
-        1u << KERNEL_PERFORMANCE_METRIC_COUNT));
+    assert(KERNEL_PERFORMANCE_VALID_MASK == UINT32_MAX);
     assert(kernel_performance_start_window(
         KERNEL_PERFORMANCE_METRIC_MASK(
             KERNEL_PERFORMANCE_SCHEDULER_PICK) |
@@ -147,6 +146,8 @@ static void test_required_metrics_and_budget_failure(void)
            KERNEL_PERFORMANCE_BUDGET_PAGER_HANDOFF);
     assert(stats.metric[KERNEL_PERFORMANCE_AREA_REFERENCES].budget_cycles ==
            KERNEL_PERFORMANCE_BUDGET_AREA_REFERENCES);
+    assert(stats.metric[KERNEL_PERFORMANCE_AREA_RECLAIM].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_AREA_RECLAIM);
     assert((KERNEL_PERFORMANCE_REQUIRED_MASK &
             KERNEL_PERFORMANCE_PAGER_MASK) ==
            KERNEL_PERFORMANCE_PAGER_MASK);
