@@ -8481,6 +8481,7 @@ static void test_same_page_faults_wake_together(void)
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
     uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
     KernelCpuContext *next;
+    KernelPortSnapshot port_snapshot;
     AstraPagerPageRequest request;
     AstraPagerPageReply reply = {0};
     uint32_t process_id, receive, send, source, source_base, target;
@@ -8540,6 +8541,8 @@ static void test_same_page_faults_wake_together(void)
     assert(kernel_process_on_fault(registers, peer_stack, frame, &next) ==
            KERNEL_PROCESS_OK);
     assert(kernel_thread_at(1u)->state == KERNEL_THREAD_BLOCKED);
+    assert(kernel_port_snapshot(0u, &port_snapshot));
+    assert(port_snapshot.queued_messages == 1u);
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
                KERNEL_PROCESS_CODE_BASE + 2u, 0u);
     assert(test_trap(service_stack, frame, &next,

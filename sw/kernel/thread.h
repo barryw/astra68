@@ -252,6 +252,7 @@ typedef struct KernelThread {
     uint16_t pager_fault_vector;
     uint16_t pager_fault_status;
     uint8_t pager_failed;
+    uint8_t pager_primary;
     uint32_t exit_status;
     uint32_t terminal_result;
     uint64_t deadline_cycles;
@@ -471,6 +472,8 @@ KernelThreadStatus kernel_thread_wake_all_detail(
     bool write_one_detail, uint32_t *woken_threads);
 KernelThreadStatus kernel_thread_cancel_wait(KernelThread *thread,
                                              uint32_t result);
+KernelThreadStatus kernel_thread_complete_wait(KernelThread *thread,
+                                               uint32_t result);
 /* Called once when this blocked wait completes, expires, cancels, or retires.
  * Observer runs inside scheduler state: it must not block or allocate. */
 KernelThreadStatus kernel_thread_observe_wait(KernelThread *thread,

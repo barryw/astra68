@@ -2536,15 +2536,23 @@ KernelThreadStatus kernel_thread_cancel_wait(KernelThread *thread,
 {
     KernelThreadStatus status;
 
-    if (!valid_thread(thread) || result == 0u)
+    if (result == 0u)
+        return KERNEL_THREAD_INVALID_ARGUMENT;
+    status = kernel_thread_complete_wait(thread, result);
+    if (status == KERNEL_THREAD_OK)
+        ++pool_stats.wait_cancellations;
+    return status;
+}
+
+KernelThreadStatus kernel_thread_complete_wait(KernelThread *thread,
+                                               uint32_t result)
+{
+    if (!valid_thread(thread))
         return KERNEL_THREAD_INVALID_ARGUMENT;
     if (thread->state != KERNEL_THREAD_BLOCKED ||
         thread->wait_member_count == 0u)
         return KERNEL_THREAD_INVALID_STATE;
-    status = complete_wait(thread, NULL, NULL, result, 0u, false);
-    if (status == KERNEL_THREAD_OK)
-        ++pool_stats.wait_cancellations;
-    return status;
+    return complete_wait(thread, NULL, NULL, result, 0u, false);
 }
 
 KernelThreadStatus kernel_thread_observe_wait(KernelThread *thread,

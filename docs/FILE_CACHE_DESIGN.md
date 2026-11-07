@@ -172,12 +172,13 @@ waiting, reads the reply's transfer area, and publishes only a checked,
 zero-tailed page. Wait completion restores the faulting registers and releases
 the pin. Invalid replies produce the ordinary inspectable user-fault verdict.
 Focused host tests cover success, invalid reply, and two threads faulting the
-same page; Beast kernel tests, target build, `verify`, and 14-marker K1 gate
+same page; the latter queues one request and wakes both after publication.
+Beast kernel tests, target build, `verify`, and 14-marker K1 gate
 pass. Haiku `src/system/kernel/vm/VMCache.cpp:950-966,1563-1577` tracks page
 waiters and wakes them after publication; Astra currently reuses its native
 thread wait observer and port reply capability. This candidate is not a
-release: same-page faults still send duplicate requests, a full-port wake
-re-enters user mode before retrying the absent page, VFS does not yet serve
+release: a full-port wake re-enters user mode before retrying the absent page,
+VFS does not yet serve
 pager requests, and no DE25 guest pager gate has run. Resolve those lifecycle
 gaps before merging or enabling file mappings.
 

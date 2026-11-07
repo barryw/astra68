@@ -434,6 +434,7 @@ static void reply_export_observer(KernelObjectType type, void *object,
 static KernelProcessMaintenanceDiagnostics maintenance_diagnostics;
 static KernelThread *current_thread;
 static KernelThread *pager_waiting;
+static KernelThreadWaitQueue pager_shared_waiters;
 /* One processor creates one pager request at a time; transfer detaches each
  * reply before another fault can enter. App handle quotas stay independent. */
 static KernelHandleTable pager_handles KERNEL_TABLES;
@@ -4336,6 +4337,7 @@ void kernel_process_init(void)
     kernel_bytes_clear(processes, sizeof(processes));
     executable_loads = NULL;
     pager_waiting = NULL;
+    kernel_thread_wait_queue_init(&pager_shared_waiters);
     kernel_handle_table_init(&pager_handles);
     kernel_bytes_clear(&scheduler_stats, sizeof(scheduler_stats));
     kernel_thread_wait_queue_init(&sleep_waiters);
@@ -10206,26 +10208,6 @@ static KernelProcessStatus deliver_pager_reply(
         }
     }
     caller->pager_failed = caller_result != ASTRA_SYSCALL_OK;
-    if (kernel_area_page_resident(caller->pager_area,
-                                  caller->pager_offset)) {
-        KernelThread *peer = pager_waiting;
-
-        while (peer != NULL) {
-            KernelThread *next = peer->pager_next;
-
-            if (peer != caller && peer->pager_area == caller->pager_area &&
-                peer->pager_offset == caller->pager_offset &&
-                peer->state == KERNEL_THREAD_BLOCKED) {
-                KernelThreadStatus wake = peer->call != 0u ?
-                    kernel_thread_call_complete(peer, ASTRA_SYSCALL_OK,
-                                                0u, 0u, 0u) :
-                    kernel_thread_cancel_wait(peer, ASTRA_SYSCALL_OK);
-                if (wake != KERNEL_THREAD_OK)
-                    return KERNEL_PROCESS_CORRUPT;
-            }
-            peer = next;
-        }
-    }
     if (kernel_handle_set_context(replier->handles, reply_handle,
                                   KERNEL_OBJECT_REPLY, NULL) !=
             KERNEL_HANDLE_OK ||
@@ -15326,6 +15308,8 @@ static void pager_wait_done(KernelThread *thread, uint32_t result,
 {
     KernelArea *area = context;
     bool resident = kernel_area_page_resident(area, thread->pager_offset);
+    bool primary = thread->pager_primary != 0u;
+    uint32_t offset = thread->pager_offset;
     KernelThread **link = &pager_waiting;
 
     while (*link != NULL && *link != thread)
@@ -15335,16 +15319,56 @@ static void pager_wait_done(KernelThread *thread, uint32_t result,
     else
         *link = thread->pager_next;
     thread->pager_next = NULL;
+    thread->pager_primary = 0u;
 
     if (resident)
         thread->pager_failed = 0u;
-    else if (result != ASTRA_SYSCALL_OK)
+    else if (result != ASTRA_SYSCALL_OK || primary)
         thread->pager_failed = 1u;
     kernel_bytes_copy(thread->context.data, thread->pager_saved_data,
                       sizeof(thread->pager_saved_data));
     thread->pager_area = NULL;
     if (kernel_area_child_release(area) != KERNEL_AREA_OK)
         process_pool_corrupt = 1u;
+    if (primary) {
+        KernelThread *peer = pager_waiting;
+
+        while (peer != NULL) {
+            KernelThread *next = peer->pager_next;
+
+            if (peer->pager_area == area && peer->pager_offset == offset &&
+                peer->state == KERNEL_THREAD_BLOCKED) {
+                uint32_t wake_result = resident ? ASTRA_SYSCALL_OK :
+                    (result == ASTRA_SYSCALL_OK ? ASTRA_SYSCALL_IO_ERROR :
+                                                 result);
+                KernelThreadStatus wake = peer->call != 0u ?
+                    kernel_thread_call_complete(peer, wake_result,
+                                                0u, 0u, 0u) :
+                    kernel_thread_complete_wait(peer, wake_result);
+
+                if (wake != KERNEL_THREAD_OK)
+                    process_pool_corrupt = 1u;
+            }
+            peer = next;
+        }
+    }
+}
+
+static void pager_wait_prepare(KernelThread *thread,
+                               const KernelAreaPagerRequest *request,
+                               const KernelExceptionFrame *frame,
+                               bool primary)
+{
+    kernel_bytes_copy(thread->pager_saved_data, thread->context.data,
+                      sizeof(thread->pager_saved_data));
+    thread->pager_area = request->area;
+    thread->pager_offset = request->offset;
+    thread->pager_cookie = request->cookie;
+    thread->pager_fault_address = frame->fault_address;
+    thread->pager_fault_vector = (uint16_t)(frame->vector_offset >> 2);
+    thread->pager_fault_status = frame->special_status;
+    thread->pager_failed = 0u;
+    thread->pager_primary = primary ? 1u : 0u;
 }
 
 /* A port-full fault sleeps on the existing writable queue, then retries the
@@ -15365,6 +15389,7 @@ static KernelProcessStatus request_pager_page(
     uint64_t now_ns, now_cycles, deadline;
     uint32_t call, woken = 0u, sequence;
     KernelThread *receiver = NULL;
+    KernelThread *peer;
 
     *handled = false;
     area_status = kernel_area_pager_request(
@@ -15383,6 +15408,26 @@ static KernelProcessStatus request_pager_page(
             (int64_t)(now_ns + UINT64_C(30000000000)), &deadline))
         goto release;
     now_cycles = scheduler_cycles();
+    for (peer = pager_waiting; peer != NULL; peer = peer->pager_next) {
+        if (peer->pager_primary == 0u || peer->pager_area != request.area ||
+            peer->pager_offset != request.offset ||
+            peer->state != KERNEL_THREAD_BLOCKED)
+            continue;
+        sequence = kernel_thread_wait_queue_sequence(&pager_shared_waiters);
+        pager_wait_prepare(thread, &request, frame, false);
+        thread_status = kernel_thread_block_until(
+            thread, &pager_shared_waiters, sequence, now_cycles, deadline,
+            ASTRA_SYSCALL_TIMED_OUT);
+        if (thread_status != KERNEL_THREAD_OK ||
+            kernel_thread_observe_wait(thread, pager_wait_done,
+                                       request.area) != KERNEL_THREAD_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        thread->pager_next = pager_waiting;
+        pager_waiting = thread;
+        *handled = true;
+        scheduler_timer_rearm();
+        return schedule_next(SWITCH_BLOCK, next_context);
+    }
     thread_status = kernel_thread_call_begin(thread, &call);
     if (thread_status == KERNEL_THREAD_OUT_OF_MEMORY)
         goto release;
@@ -15429,15 +15474,8 @@ static KernelProcessStatus request_pager_page(
         if (port_status != KERNEL_PORT_WOULD_BLOCK)
             goto release;
     }
-    kernel_bytes_copy(thread->pager_saved_data, thread->context.data,
-                      sizeof(thread->pager_saved_data));
-    thread->pager_area = request.area;
-    thread->pager_offset = request.offset;
-    thread->pager_cookie = request.cookie;
-    thread->pager_fault_address = frame->fault_address;
-    thread->pager_fault_vector = (uint16_t)(frame->vector_offset >> 2);
-    thread->pager_fault_status = frame->special_status;
-    thread->pager_failed = 0u;
+    pager_wait_prepare(thread, &request, frame,
+                       port_status == KERNEL_PORT_OK);
     thread_status = port_status == KERNEL_PORT_OK ?
         kernel_thread_call_block(thread, now_cycles, deadline) :
         kernel_thread_block_until(thread, wait.queue, wait.sequence,
