@@ -2,6 +2,26 @@
 
 Status: active continuation map, 2026-11-07
 
+Pager source lifetime, 2026-11-07: the shared VFS pump now requires an acquire
+and release pair for each cookie. Acquire pins the cache-owned description;
+release runs after the reply send, including BUSY, invalid span, dead caller,
+and failed send paths. Unknown cookies return LOST without a release. This
+lets the future HostFS worker read without holding its cache lock while grant
+retirement waits for an in-flight fault. The focused test checks pinning
+through provider read and reply send, exactly paired release, and rejects a
+missing release callback. Beast target service, host suite, and ASan/UBSan
+passed. Matching static AArch64 fixture passed on DE25; board and Beast SHA-256
+matched at `41d0c7e1adc89f54a3d09e8b0261928c275cbf2c28740433d1294790d331a62b`.
+Board log SHA-256 was
+`b2db6c2edb54f0dbec7f40b617a035a04974c79a1e7c132377013ced4ad8fb79`.
+Evidence is under `/home/barry/astra-evidence/vfs-file-pager-pin-20261107/`
+on Beast. Board trial binary was removed; three production services remain
+active with 8.5 GiB free. Production HostFS does not yet own mapped-file cache
+entries. Haiku
+`src/system/kernel/vm/VMCache.cpp:1616-1644` releases a store reference after
+removing a consumer and outside the cache lock; Astra uses that lifetime and
+lock-order rule at the service boundary.
+
 Backend-neutral VFS pager reply pump, 2026-11-07: the VFS service archive now
 contains one pager-protocol receive pump and scratch data area for all cache
 objects. A cookie lookup selects the cache-owned backend description, exact

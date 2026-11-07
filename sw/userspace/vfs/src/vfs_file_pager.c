@@ -26,14 +26,15 @@ astra_vfs_file_page_source_init(AstraVfsFilePageSource *source,
 int
 astra_vfs_file_pager_init(AstraVfsFilePager *pager, uint32_t receive,
     uint32_t data_area, void *page, uint32_t page_size,
-    AstraVfsFilePageLookup lookup, void *context)
+    AstraVfsFilePageAcquire acquire, AstraVfsFilePageRelease release,
+    void *context)
 {
     if (pager == NULL || receive == 0u || data_area == 0u || page == NULL ||
-        page_size < ASTRA_MEMORY_PAGE_SIZE || lookup == NULL)
+        page_size < ASTRA_MEMORY_PAGE_SIZE || acquire == NULL || release == NULL)
         return 0;
     *pager = (AstraVfsFilePager){
         .receive = receive, .data_area = data_area, .page = page,
-        .lookup = lookup, .context = context,
+        .acquire = acquire, .release = release, .context = context,
     };
     return 1;
 }
@@ -44,11 +45,12 @@ astra_vfs_file_pager_pump(AstraVfsFilePager *pager, uint32_t budget)
     uint32_t consumed = 0u;
 
     if (pager == NULL || pager->receive == 0u || pager->page == NULL ||
-        pager->lookup == NULL)
+        pager->acquire == NULL || pager->release == NULL)
         return 0u;
     while (consumed < budget) {
         AstraPagerPageRequest request = {0};
         AstraPagerPageReply reply = {0};
+        const AstraVfsFilePageSource *source = NULL;
         uint32_t handle = 0u, size = 0u, count = 0u, valid = 0u;
         uint32_t status = astra_port_receive(pager->receive, &request,
             sizeof(request), &handle, 1u, &size, &count);
@@ -82,8 +84,7 @@ astra_vfs_file_pager_pump(AstraVfsFilePager *pager, uint32_t budget)
             request.cookie != 0u &&
             request.reserved[0] == 0u && request.reserved[1] == 0u &&
             (request.offset & (ASTRA_MEMORY_PAGE_SIZE - 1u)) == 0u) {
-            const AstraVfsFilePageSource *source =
-                pager->lookup(pager->context, request.cookie);
+            source = pager->acquire(pager->context, request.cookie);
             reply.status = source == NULL ? ASTRA_STATUS_LOST :
                 request.offset >= source->span ? ASTRA_STATUS_PROTOCOL :
                 astra_vfs_backend_read_page(&source->backend, source->node,
@@ -101,6 +102,7 @@ astra_vfs_file_pager_pump(AstraVfsFilePager *pager, uint32_t budget)
         if (status != ASTRA_SYSCALL_OK &&
             status != ASTRA_SYSCALL_PEER_DEAD)
             pager->stalled = status;
+        if (source != NULL) pager->release(pager->context, source);
         (void)astra_close(handle);
         if (pager->stalled != 0u)
             break;

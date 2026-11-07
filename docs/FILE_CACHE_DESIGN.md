@@ -14,12 +14,22 @@ byte count, and dead caller are covered by focused tests. Beast service
 archive build, host suite, and ASan/UBSan passed; the static AArch64 fixture
 passed on DE25 with matching binary/log SHA-256 under
 `/home/barry/astra-evidence/vfs-file-pager-shared-20261107/` on Beast. The pump
-borrows cache descriptions, pager receive endpoint, mapped scratch page, and
-data area. HostFS must own and retire those resources using area reference counts
+acquires and releases each cache description around provider read and reply
+send; it borrows the pager receive endpoint, mapped scratch page, and data
+area. HostFS must own and retire those resources using area reference counts
 and grant-session lifetime; it has not yet connected the pump to a guest file
 mapping. Haiku `src/system/kernel/cache/file_cache.cpp:345-375,386-427`
 performs vnode-backed fill and zero-tail; Astra uses VFS's coherent read and
 the kernel's atomic zero-tailed publication.
+
+Pager source pin, 2026-11-07: cookie lookup now acquires a cache-owner
+reference and the pump releases it after the reply send. Even BUSY, invalid
+span, peer death, and send failure retire exactly one acquired reference;
+unknown cookies acquire none. This prevents concurrent cache retirement from
+closing a description during provider read. Haiku
+`src/system/kernel/vm/VMCache.cpp:1616-1644` drops the store reference after
+consumer removal and outside the cache lock; HostFS must use the same ordering
+when its worker and grant retirement run concurrently.
 
 Transient source mutation, 2026-11-07: a valid pager reply with BUSY now
 retries the same fault through the existing bounded kernel pager path, keeping
