@@ -300,7 +300,15 @@ call that native contract. Joined-assign opens use the member selected by
 lookup, including dangling-link shadowing. Rename/link retain namespace
 escapes instead of conflating them with a cross-device operation.
 
-## Syscall ABI 0x00020000: independent host channels and protected credentials
+## Syscall ABI 0x00030000: pager cache identity
+
+`AREA_BIND_PAGER` now takes a nonzero service-owned cache cookie in `D3`.
+One pager port can serve distinct file areas without confusing equal offsets.
+Runtime 3.0 carries the argument through `astra_rt_area_bind_pager`; all
+in-tree producers, consumers, and package dependencies require the new major.
+No compatibility entry point remains for the old two-argument call.
+
+## Syscall ABI 0x00020000: independent host channels and protected credentials (historical)
 
 Runtime 2.0 selects a host channel by its returned page address for
 `HOST_CHANNEL_CLOSE`, `HOST_CHANNEL_WAIT`, and `HOST_SCOPE_ATTACH`. A thread
@@ -600,7 +608,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x00020000`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x00030000`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | CURRENT | `D1` = monotonic progress value; or, from the initial image only, a boot command `0x4253xyyy` (`x`=1 SERVICES with N=`yyy`, `x`=2 SERVICE with result 0 ready / 1 failed / 2 skipped) that drives the boot progress record (`sw/include/astra/boot_progress.h`); a boot command from any other process answers `ACCESS_DENIED`, and one the record refuses answers `INVALID_ARGUMENT` |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -673,6 +681,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 95 | `LIBRARY_ATTACH_RESIDENT` | CURRENT CANDIDATE | `D1=pointer to fixed-size zero-padded ABI identity`; maps the sole matching resident library, returning `WOULD_BLOCK` when absent or ambiguous so userspace resolves an exact provider and retries with `LIBRARY_ATTACH` |
 | 96 | `VM_PRIVATE_COMMIT` | CURRENT CANDIDATE | `D1=address`, `D2=length`; commits every touched page in an existing writable private reservation, with allocation bounded only by available charged frames |
 | 112 | `HOST_SCOPE_LIMIT` | CURRENT CANDIDATE | `D1=scope with ADMINISTER`, `D2=owner handle/token limit (0 unlimited)`; INVALID_ARGUMENT while any channel carries that scope |
+| 116 | `AREA_BIND_PAGER` | CURRENT CANDIDATE | `D1=reserved area with ADMINISTER`, `D2=pager send port with SIGNAL`, `D3=nonzero service-owned cache cookie`; retains the send endpoint until area retirement |
 
 Areas are at most 4 MiB. This is an address-map allocation unit, not an
 application-size policy; the VM publishes and rolls back every MC68040 table
@@ -680,7 +689,7 @@ touched by the mapping as one transaction. VFS bulk transfers use this same
 bound instead of imposing a smaller protocol limit.
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x00020000`; a later revision may add
+not panic. `QUERY_ABI` reports revision `0x00030000`; a later revision may add
 feature bits before additional calls freeze.
 
 Process and thread priorities are one number, 1 through 27, with 16 as

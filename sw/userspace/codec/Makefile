@@ -13,7 +13,7 @@ FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic \
 TARGET := build/m68k/libraries/codec.library.1
 OBJECTS := build/m68k/codec_library.o build/m68k/codec_library_identity.o
 EXPORTS := codec.library.exports
-RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
+RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.3
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 
 all: $(TARGET) library-contract
@@ -33,7 +33,7 @@ $(TARGET): $(OBJECTS) $(EXPORTS) $(ASTRA_SHARED_LINK_INPUTS) | runtime-library-r
 		-Wl,-soname,codec.library.1 -o $@ \
 		-Wl,--version-script=$(EXPORTS) $(OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
-		-Wl,--no-as-needed -Wl,-l:runtime.library.2 \
+		-Wl,--no-as-needed -Wl,-l:runtime.library.3 \
 		-Wl,-l:compiler.library.2 $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(TARGET)

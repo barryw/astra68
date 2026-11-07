@@ -6,5 +6,5 @@ version 3.0.0
 provides graphics.library 3 3.0.0
 provides font.library 5 5.0.0
 requires compiler.library 2 2.0.0
-requires runtime.library 2 2.0.0
+requires runtime.library 3 3.0.0
 requires system.library 4 4.0.0

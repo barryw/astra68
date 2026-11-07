@@ -233,18 +233,18 @@ dist-check: $(DIST_ARCHIVE) result-test
 	@set -eu; checker=$(DIST_DIR)/check/$(DIST_NAME)/tools/check_dynamic_executable.py; \
 		build=$(DIST_DIR)/cmake-smoke; \
 		python3 $$checker --readelf $(CROSS)readelf \
-			--needed streams.library.1 --needed runtime.library.2 \
+			--needed streams.library.1 --needed runtime.library.3 \
 			--needed compiler.library.2 $$build/native; \
 		python3 $$checker --readelf $(CROSS)readelf \
-			--needed runtime.library.2 --needed compiler.library.2 \
+			--needed runtime.library.3 --needed compiler.library.2 \
 			--needed libc.library.4 $$build/posix; \
 		python3 $$checker --readelf $(CROSS)readelf \
-			--needed runtime.library.2 --needed compiler.library.2 \
+			--needed runtime.library.3 --needed compiler.library.2 \
 			--needed libc.library.4 --needed cxx.library.2 \
 			--needed unwind.library.1 $$build/cxx; \
 		python3 $$checker --readelf $(CROSS)readelf \
 			--needed SDL2_net.library.2 --needed SDL2_image.library.2 \
-			--needed SDL2_mixer.library.3 --needed runtime.library.2 \
+			--needed SDL2_mixer.library.3 --needed runtime.library.3 \
 			--needed compiler.library.2 --needed libc.library.4 \
 			--needed SDL2.library.3 --needed SDL2_ttf.library.2 $$build/sdl
 

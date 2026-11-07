@@ -2,6 +2,40 @@
 
 Status: active continuation map, 2026-11-06
 
+Pager ABI correction, 2026-11-06: Pager binding's nonzero cookie adds `D3` to
+a previously two-argument native call. Syscall ABI and Runtime library now
+move to major 3 together, with every in-tree client, manifest, link target,
+version export, NDK distribution, and current ABI document updated. Beast
+runtime tests/library contract, NDK `dist-check`, full userspace build and
+symbol-ownership check, kernel tests/build/verify, image provider tests, and
+K1 14-marker qualification passed. K1 ROM SHA-256
+`4d5bcc43eff0c3d152ee2d789bfe8cb814115b5c008e103e786f05d8e750168e`
+passed DE25 to `KERNEL MULTITASKING`. Coherent private release
+`48d3b72730cd4550e4fb15aa6cb6c2dae9d423be64c9864653ada433fbf0a74a`
+passed a 120-second DE25 stage-8 trial and restored the selected release.
+Board/Beast trial and console SHA-256 matched at
+`a4dd899b8dd7c9b2aa01f31d94d8d621fecbf564272557f3f263187f03c9d7b3`
+and `354f4ed9ad766f3f4ff2f5edeccac71e8e119d5d585c69a0f3a82bad0a88618a`.
+Installer replacement now clears superseded files in system-owned bundles;
+an ext4 regression proves Runtime ABI 2 disappears when ABI 3 is installed.
+Haiku `src/add-ons/kernel/file_systems/packagefs/volume/Volume.cpp:965-1050`
+likewise removes old package content from its namespace. Exact final release
+`a3c3f3c151f9c050fb4e1d827a2c287f1e71b97bf4fa6e4d2c24227b140eea1f`
+passed a separate 120-second DE25 private stage-8 trial. Beast and board
+console SHA-256 matched at
+`5cd0a818e558718a3987b774855865c06f03f427bdf41ebc889e9cae62456767`;
+trial log SHA-256 is
+`fc1da780d5c1a55ca6c125a81382aa0ffbb3d0d52ca8b9d275a3ee1996699054`.
+All evidence is under `/home/barry/astra-evidence/abi3-20261106/` on Beast.
+Board trial files were removed; Astra, audio host, and remote desktop are
+active, only production loop0 remains, and 8.4 GiB is free. Top-level
+userspace `test` still stops at three existing source-boundary violations in
+Interface and AstraZ. Desktop-app gate first missed SDLTestDraw2 twice, then
+passed four consecutive five-app runs on the first image. Final image gate
+missed Fonts after Atlas opened multiple drawers; launch flakiness needs
+diagnosis. Quake HDMI trial: smooth gameplay and effects, no music on selected
+image, which lacks `/store/id1/music`.
+
 Pager request identity prerequisite, 2026-11-06: `AREA_BIND_PAGER` now
 requires a nonzero VFS-owned cookie, so one private port can distinguish
 missing pages from several file cache areas. Existing area-map authority

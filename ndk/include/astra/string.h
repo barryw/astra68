@@ -11,7 +11,7 @@
  * helpers return zero. Truncation always lands on a UTF-8 scalar boundary,
  * so a shortened string is still valid text.
  *
- * Provided by runtime.library (ASTRA_RUNTIME_2.0) and libastrart.
+ * Provided by runtime.library (ASTRA_RUNTIME_3.0) and libastrart.
  */
 
 #include <stdint.h>

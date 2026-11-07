@@ -67,7 +67,7 @@ LIBC_API_CHECK := ../../../tools/check_libc_api.py
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 PICOLIBC_LIB := $(PICOLIBC)/lib/libc.a
 PICOLIBC_MATH := $(PICOLIBC)/lib/libm.a
-RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
+RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.3
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 STREAMS_LIBRARY := $(STREAMS)/build/m68k/libraries/streams.library.1
 FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.16
@@ -211,7 +211,7 @@ $(LIBC_LIBRARY): $(LIBC_IDENTITY) $(LIBRARY_OBJECTS) \
 		-Wl,--no-as-needed \
 		-Wl,-l:streams.library.1 -Wl,-l:filesystem.library.16 \
 		-Wl,-l:network.library.1 \
-		-Wl,-l:runtime.library.2 -Wl,-l:compiler.library.2 \
+		-Wl,-l:runtime.library.3 -Wl,-l:compiler.library.2 \
 		-Wl,--start-group $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
 		-Wl,--end-group $(ASTRA_SHARED_LINK_END)
 
@@ -230,7 +230,7 @@ libc-library-contract: $(LIBC_LIBRARY)
 	@$(READELF) -A $(LIBC_LIBRARY) | grep -q 'Tag_GNU_M68K_ABI_FP: hard float'
 	@$(READELF) -dW $(LIBC_LIBRARY) | grep -Fq 'Library soname: [libc.library.4]'
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
-		grep -Fc 'Shared library: [runtime.library.2]')" = 1
+		grep -Fc 'Shared library: [runtime.library.3]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [streams.library.1]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
@@ -498,7 +498,7 @@ $(LINK_CONTRACT): tests/link_standard_main.c kit/program.c $(LIBC_LIBRARY) \
 	@$(READELF) -lW $@ | grep -q ' INTERP '
 	@$(READELF) -p .interp $@ | grep -q 'loader.library.1'
 	@python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
-		--needed libc.library.4 --needed runtime.library.2 \
+		--needed libc.library.4 --needed runtime.library.3 \
 		--needed compiler.library.2 $@
 	@echo "astra posix dynamic standard main link: PASS"
 

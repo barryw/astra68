@@ -203,12 +203,40 @@ with tempfile.TemporaryDirectory() as directory:
         assert "shipped twice" in str(error)
     else:
         raise AssertionError("duplicate application accepted")
+with tempfile.TemporaryDirectory(prefix="astra-kit-replacement-") as directory:
+    volume = os.path.join(directory, "volume.ext4")
+    source = os.path.join(directory, "Runtime.kit")
+    old = os.path.join(directory, "old")
+    runtime_directory = "/libs/Runtime.kit/libraries/runtime.library"
+    old_directory = runtime_directory + "/abi-2/2.0.0/m68k-68040"
+    with open(volume, "wb") as output:
+        output.truncate(16 << 20)
+    subprocess.run(["mkfs.ext4", "-q", "-F", "-O", "^orphan_file", volume],
+                   check=True)
+    for path in ("/libs", "/libs/Runtime.kit", "/libs/Runtime.kit/libraries",
+                 runtime_directory, runtime_directory + "/abi-2",
+                 runtime_directory + "/abi-2/2.0.0", old_directory):
+        astra_image._mkdir(volume, path, "kit replacement fixture")
+    with open(old, "wb") as output:
+        output.write(b"old ABI")
+    astra_image._debugfs(volume,
+        "write %s %s/runtime.library" % (old, old_directory),
+        "old runtime library")
+    new_directory = os.path.join(source, "libraries", "runtime.library",
+                                 "abi-3", "3.0.0", "m68k-68040")
+    os.makedirs(new_directory)
+    with open(os.path.join(new_directory, "runtime.library"), "wb") as output:
+        output.write(b"new ABI")
+    astra_image._install_bundle(volume, source, "/libs/Runtime.kit")
+    names = {name for name, _directory in
+             astra_image._directory_entries(volume, runtime_directory)}
+    assert names == {"abi-3"}, names
 with open(os.path.join(astra_image.REPOSITORY,
                        "sw/userspace/kits/Runtime.kit/manifest"),
           encoding="ascii") as manifest:
     runtime_manifest = manifest.read()
-    assert "version 2.2.0\n" in runtime_manifest
-    assert "provides runtime.library 2 2.0.0\n" in runtime_manifest
+    assert "version 3.0.0\n" in runtime_manifest
+    assert "provides runtime.library 3 3.0.0\n" in runtime_manifest
     assert "provides system.library 4 4.7.0\n" in runtime_manifest
     assert "version 1.6.0\n" not in runtime_manifest
     assert "provides runtime.library 1 1.6.0\n" not in runtime_manifest

@@ -168,7 +168,7 @@ $(SDL2_SHARED): $(SDL2_IDENTITY) $(SDL2_ARCHIVE) \
 		$(ASTRA_SHARED_LIBRARY_SEARCH_FLAGS) -Wl,--no-as-needed \
 		-Wl,-l:pcm.library.3 -Wl,-l:graphics.library.3 \
 		-Wl,-l:system.library.4 -Wl,-l:libc.library.4 \
-		-Wl,-l:runtime.library.2 -Wl,-l:compiler.library.2 \
+		-Wl,-l:runtime.library.3 -Wl,-l:compiler.library.2 \
 		$(SDL2_ARCHIVE) $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(SDL2_SHARED)
@@ -205,7 +205,7 @@ $(SDL_NET_SHARED): $(SDL_NET_IDENTITY) $(SDL_NET_OBJECTS) \
 		$(SDL_NET_IDENTITY) $(SDL_NET_OBJECTS) \
 		$(ASTRA_SHARED_LIBRARY_SEARCH_FLAGS) -Wl,--no-as-needed \
 		-Wl,-l:SDL2.library.3 -Wl,-l:libc.library.4 \
-		-Wl,-l:runtime.library.2 -Wl,-l:compiler.library.2 \
+		-Wl,-l:runtime.library.3 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
 
 net-library-contract: $(SDL_NET_SHARED)
@@ -255,7 +255,7 @@ $(SDL_IMAGE_SHARED): $(SDL_IMAGE_IDENTITY) $(SDL_IMAGE_OBJECTS) \
 		$(SDL_IMAGE_IDENTITY) $(SDL_IMAGE_OBJECTS) \
 		$(ASTRA_SHARED_LIBRARY_SEARCH_FLAGS) -Wl,--no-as-needed \
 		-Wl,-l:SDL2.library.3 -Wl,-l:libc.library.4 \
-		-Wl,-l:runtime.library.2 -Wl,-l:compiler.library.2 \
+		-Wl,-l:runtime.library.3 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
 
 image-library-contract: $(SDL_IMAGE_SHARED)
@@ -329,7 +329,7 @@ $(SDL_MIXER_SHARED): $(SDL_MIXER_IDENTITY) $(SDL_MIXER_OBJECTS) \
 		-Wl,-l:SDL2.library.3 -Wl,-l:pcm.library.3 \
 		-Wl,-l:codec.library.1 \
 		-Wl,-l:libc.library.4 \
-		-Wl,-l:runtime.library.2 -Wl,-l:compiler.library.2 \
+		-Wl,-l:runtime.library.3 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
 
 mixer-library-contract: $(SDL_MIXER_SHARED)
@@ -395,7 +395,7 @@ $(SDL_TTF_SHARED): $(SDL_TTF_IDENTITY) $(SDL_TTF_OBJECT) \
 		$(SDL_TTF_IDENTITY) $(SDL_TTF_OBJECT) $(FREETYPE_ARCHIVE) \
 		$(ASTRA_SHARED_LIBRARY_SEARCH_FLAGS) -Wl,--no-as-needed \
 		-Wl,-l:SDL2.library.3 -Wl,-l:libc.library.4 \
-		-Wl,-l:runtime.library.2 -Wl,-l:compiler.library.2 \
+		-Wl,-l:runtime.library.3 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
 
 ttf-library-contract: $(SDL_TTF_SHARED)
@@ -424,11 +424,11 @@ build/m68k/sdlttfprobe: tests/ttf_probe.c $(SDL_TTF_SHARED) \
 		-L$(dir $(SDL_TTF_SHARED)) \
 		-Wl,-rpath-link,$(dir $(SDL_TTF_SHARED)) \
 		-Wl,-l:SDL2_ttf.library.2 -Wl,-l:SDL2.library.3 \
-		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.2 \
+		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.3 \
 		-Wl,-l:compiler.library.2
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		--needed SDL2_ttf.library.2 --needed SDL2.library.3 \
-		--needed libc.library.4 --needed runtime.library.2 \
+		--needed libc.library.4 --needed runtime.library.3 \
 		--needed compiler.library.2 $@
 
 $(eval $(call astra_app_bundle,build,SDLTTFProbe,build/m68k/sdlttfprobe,tests/SDLTTFProbe.app/manifest,terminal,../graphics/fonts/atkinson-hyperlegible-next/AtkinsonHyperlegibleNext-Regular.ttf))
@@ -450,11 +450,11 @@ build/m68k/sdlmixerprobe: tests/mixer_probe.c $(SDL_MIXER_SHARED) \
 		-L$(dir $(SDL_MIXER_SHARED)) \
 		-Wl,-rpath-link,$(dir $(SDL_MIXER_SHARED)) \
 		-Wl,-l:SDL2_mixer.library.3 -Wl,-l:SDL2.library.3 \
-		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.2 \
+		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.3 \
 		-Wl,-l:compiler.library.2
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		--needed SDL2_mixer.library.3 --needed SDL2.library.3 \
-		--needed libc.library.4 --needed runtime.library.2 \
+		--needed libc.library.4 --needed runtime.library.3 \
 		--needed compiler.library.2 $@
 
 build/mixer-fixtures/sample.mp3:
@@ -498,11 +498,11 @@ build/m68k/sdlimageprobe: tests/image_probe.c $(SDL_IMAGE_SHARED) \
 		-L$(dir $(SDL_IMAGE_SHARED)) \
 		-Wl,-rpath-link,$(dir $(SDL_IMAGE_SHARED)) \
 		-Wl,-l:SDL2_image.library.2 -Wl,-l:SDL2.library.3 \
-		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.2 \
+		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.3 \
 		-Wl,-l:compiler.library.2
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		--needed SDL2_image.library.2 --needed SDL2.library.3 \
-		--needed libc.library.4 --needed runtime.library.2 \
+		--needed libc.library.4 --needed runtime.library.3 \
 		--needed compiler.library.2 $@
 
 # The image probe also opens a PNG under a .jpg name to test detection.
@@ -555,10 +555,10 @@ build/m68k/sdlprobe build/m68k/sdlvideoprobe build/m68k/sdlrenderprobe \
 		build/vendor/SDL2/libSDL2_test.a \
 		-L$(dir $(SDL2_SHARED)) -Wl,-rpath-link,$(dir $(SDL2_SHARED)) \
 		-Wl,-l:SDL2.library.3 -Wl,-l:libc.library.4 \
-		-Wl,-l:runtime.library.2 -Wl,-l:compiler.library.2
+		-Wl,-l:runtime.library.3 -Wl,-l:compiler.library.2
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		--needed SDL2.library.3 --needed libc.library.4 \
-		--needed runtime.library.2 --needed compiler.library.2 $@
+		--needed runtime.library.3 --needed compiler.library.2 $@
 
 build/m68k/showinterfaces: SDL_NET_EXAMPLE_SOURCE = build/vendor/SDL2_net/examples/showinterfaces.c
 build/m68k/chatd: SDL_NET_EXAMPLE_SOURCE = build/vendor/SDL2_net/examples/chatd.c
@@ -582,11 +582,11 @@ build/m68k/showinterfaces build/m68k/chatd build/m68k/chat: \
 		-L$(dir $(SDL_NET_SHARED)) \
 		-Wl,-rpath-link,$(dir $(SDL_NET_SHARED)) \
 		-Wl,-l:SDL2_net.library.2 -Wl,-l:SDL2.library.3 \
-		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.2 \
+		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.3 \
 		-Wl,-l:compiler.library.2
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		--needed SDL2_net.library.2 --needed SDL2.library.3 \
-		--needed libc.library.4 --needed runtime.library.2 \
+		--needed libc.library.4 --needed runtime.library.3 \
 		--needed compiler.library.2 $@
 
 build/m68k/sdlnetprobe: tests/net_probe.c $(SDL_NET_SHARED) \
@@ -605,11 +605,11 @@ build/m68k/sdlnetprobe: tests/net_probe.c $(SDL_NET_SHARED) \
 		-L$(dir $(SDL_NET_SHARED)) \
 		-Wl,-rpath-link,$(dir $(SDL_NET_SHARED)) \
 		-Wl,-l:SDL2_net.library.2 -Wl,-l:SDL2.library.3 \
-		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.2 \
+		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.3 \
 		-Wl,-l:compiler.library.2
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		--needed SDL2_net.library.2 --needed SDL2.library.3 \
-		--needed libc.library.4 --needed runtime.library.2 \
+		--needed libc.library.4 --needed runtime.library.3 \
 		--needed compiler.library.2 $@
 
 $(eval $(call astra_app_bundle,build,SDLNetProbe,build/m68k/sdlnetprobe,tests/SDLNetProbe.app/manifest,terminal,))

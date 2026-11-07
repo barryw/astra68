@@ -13,7 +13,7 @@ Programs run on a Motorola MC68040 with its FPU: the `m68k-astra` compiler
 generates hard-float code by default and tags every object with its float
 ABI, so a soft-float object cannot be linked in by accident. A program is a
 position-independent executable that the system loader binds to versioned
-shared libraries (`runtime.library.2`, `system.library.4`,
+shared libraries (`runtime.library.3`, `system.library.4`,
 `graphics.library.3`, and so on) before it starts.
 
 ## Building a program
@@ -35,7 +35,7 @@ hello: hello.c
 		-o $@ $(ASTRA_CRT0) $< -Wl,-l:streams.library.1 \
 		$(ASTRA_NATIVE_LIBS)
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
-		--needed runtime.library.2 --needed compiler.library.2 $@
+		--needed runtime.library.3 --needed compiler.library.2 $@
 ```
 
 A POSIX program keeps its standard `main` and links

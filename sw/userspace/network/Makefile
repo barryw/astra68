@@ -32,7 +32,7 @@ NETWORK_LIBRARY_OBJECTS := build/m68k/library/network_library_identity.o \
 	build/m68k/library/network_library.o \
 	build/m68k/library/network_core.o build/m68k/library/ping_core.o
 NETWORK_LIBRARY_MAP := network.library.exports
-RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
+RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.3
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 
@@ -80,7 +80,7 @@ $(NETWORK_LIBRARY): $(NETWORK_LIBRARY_OBJECTS) $(NETWORK_LIBRARY_MAP) \
 		-Wl,--version-script=$(NETWORK_LIBRARY_MAP) \
 		$(NETWORK_LIBRARY_OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
-		-Wl,--no-as-needed -Wl,-l:runtime.library.2 \
+		-Wl,--no-as-needed -Wl,-l:runtime.library.3 \
 		-Wl,-l:compiler.library.2 $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(NETWORK_LIBRARY)
@@ -95,7 +95,7 @@ library-contract: $(NETWORK_LIBRARY)
 	@python3 ../../../tools/library_info.py $(NETWORK_LIBRARY) | \
 		grep -q '^network.library.1 1.0.0 ABI 1.6$$'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [network.library.1]'
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.2]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.3]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 2
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'

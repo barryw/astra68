@@ -26,7 +26,7 @@ $(PROGRAM): prepare_source.py Makefile FORCE_SOURCE_CHECK
 	python3 $(NDK)/tools/check_dynamic_executable.py \
 		--readelf m68k-astra-readelf \
 		--needed SDL2_net.library.2 --needed SDL2_mixer.library.3 \
-		--needed runtime.library.2 \
+		--needed runtime.library.3 \
 		--needed compiler.library.2 --needed libc.library.4 \
 		--needed SDL2.library.3 $@
 

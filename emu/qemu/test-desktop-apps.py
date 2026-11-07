@@ -33,10 +33,11 @@ def display_count(machine, name):
 
 
 def open_application(machine, bundle, deadline):
+    icon = machine.application_icon(bundle, 30.0)
     before = machine.sequence()
     submissions = display_count(machine, "submissions")
     palette_blits = display_count(machine, "palette-blit-commands")
-    machine.qmp.double_click(*machine.application_icon(bundle, deadline))
+    machine.qmp.double_click(*icon)
     end = time.monotonic() + deadline
     while time.monotonic() < end:
         # desktop holds LOG (docs/SYSTEM_LOG.md section 7): its
@@ -61,9 +62,15 @@ def open_application(machine, bundle, deadline):
                 palette_blits):
             return
         time.sleep(0.25)
-    raise RuntimeError("%s launched no drawing or indexed icon within %.0fs: %s" %
-                       (bundle, deadline,
-                        machine.said_with_syslog(before)[0][-20:]))
+    lines, _ = machine.said_with_syslog(before)
+    relevant = [line for line in lines if bundle in line or
+                "launch" in line.lower() or "SDL" in line]
+    raise RuntimeError(
+        "%s launched no drawing or indexed icon within %.0fs: "
+        "submissions=%d/%d palette=%d/%d; events=%s" %
+        (bundle, deadline, submissions,
+         display_count(machine, "submissions"), palette_blits,
+         display_count(machine, "palette-blit-commands"), relevant[-20:]))
 
 
 # TestDraw2's 640x480 window opens centred; with the system theme's frame,

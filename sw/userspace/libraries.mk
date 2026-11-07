@@ -14,7 +14,7 @@ ASTRA_COMPILER_LIBRARY := \
 ASTRA_UNWIND_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/compiler/build/m68k/libraries/unwind.library.1
 ASTRA_RUNTIME_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/runtime/build/m68k/libraries/runtime.library.2
+	$(ASTRA_USERSPACE_ROOT)/runtime/build/m68k/libraries/runtime.library.3
 ASTRA_STREAMS_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/streams/build/m68k/libraries/streams.library.1
 ASTRA_FILESYSTEM_LIBRARY := \

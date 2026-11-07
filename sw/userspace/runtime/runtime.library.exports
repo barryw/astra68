@@ -1,4 +1,4 @@
-ASTRA_RUNTIME_2.0 {
+ASTRA_RUNTIME_3.0 {
     global:
         __m68k_read_tp;
         astra_activity_adopt;

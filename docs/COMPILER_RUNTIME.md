@@ -10,7 +10,7 @@ The split is a dependency boundary, not two competing runtimes:
 ```text
 compiler.library.2                 (no dependencies)
         |
-        +--> runtime.library.2
+        +--> runtime.library.3
         +--> libc.library.3
                   |
                   +--> unwind.library.1

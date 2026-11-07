@@ -695,6 +695,8 @@ def _providers(bundles):
 
 
 def _install_bundle(volume, source, destination):
+    _mkdir(volume, destination, "bundle directory")
+    _clear_directory(volume, destination)
     for root, directories, files in os.walk(source):
         if any(os.path.islink(os.path.join(root, name))
                for name in directories + files):
