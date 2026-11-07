@@ -1797,6 +1797,7 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     if (publish_cycles > KERNEL_AREA_PUBLISH_BUDGET_CYCLES)
         kernel_panic("K1 page publication budget exceeded");
     console_puts(" PASS\n");
+    console_puts("K8 PAGER GUEST PASS\n");
     if (performance_mask == KERNEL_PERFORMANCE_RELEASE_MASK)
         console_puts("K10 PERFORMANCE PASS\n");
     console_puts("K2 MEDIA BUDGET PASS\n");

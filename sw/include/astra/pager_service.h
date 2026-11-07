@@ -4,11 +4,12 @@
 #include <astra/message_abi.h>
 #include <astra/status.h>
 
-#define ASTRA_PAGER_PROTOCOL UINT32_C(0x50414752) /* PAGR */
-#define ASTRA_PAGER_PROTOCOL_VERSION UINT16_C(1)
+#define ASTRA_PAGER_PROTOCOL 0x50414752 /* PAGR */
+#define ASTRA_PAGER_PROTOCOL_VERSION 1
 #define ASTRA_PAGER_OPERATION_PAGE 1u
 #define ASTRA_PAGER_OPERATION_PAGE_REPLY 2u
 
+#ifndef __ASSEMBLER__
 /* Kernel requests one aligned page in a bound area. Reply capability is the
  * sole attached handle; cookie belongs to the service that bound the area. */
 typedef struct AstraPagerPageRequest {
@@ -35,5 +36,6 @@ _Static_assert(sizeof(AstraPagerPageRequest) == 40u,
                "pager request ABI changed");
 _Static_assert(sizeof(AstraPagerPageReply) == 52u,
                "pager reply ABI changed");
+#endif
 
 #endif

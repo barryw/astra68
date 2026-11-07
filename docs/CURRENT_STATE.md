@@ -2,6 +2,23 @@
 
 Status: active continuation map, 2026-11-07
 
+Pager guest gate, 2026-11-07: WIP branch now runs a real MC68040 user
+fault through a bound reserved area, native port request/reply, transfer
+area, zero-tailed page publication, and resumed instruction in K1. The
+survivor checks request identity and five source bytes plus both zero-tail
+positions, then checks service thread exit and closes all handles/mappings.
+Beast K1 passed 15 markers; the same ROM passed on DE25 with
+`K8 PAGER GUEST PASS` and `KERNEL MULTITASKING`. ROM SHA-256
+`9c6d52c1767a19ee8299fdd061247c41b18c5c00f6d8806834210416cfbe7c2a`,
+DE25 log SHA-256
+`528f44f29f6383d37d16d90096fb9f3fe57ab714fcb552d84a732388c152b104`;
+matching evidence is under
+`/home/barry/astra-evidence/pager-guest-k1-de25-20261107/` on Beast.
+The disposable board image and ROM were removed, production Astra was
+restored, only production loop0 remained, and 8.5 GiB was free. This proves
+kernel guest handoff with a synthetic service; VFS pager service, file
+mappings/cache, and separate pager cycle budgets remain open.
+
 File-cache candidate, 2026-11-07: on WIP branch
 `wip/pager-continuation-20261107`, kernel pager continuation and terminal
 lifecycle tests pass Beast host/target and K1 gates. VFS now has one retained

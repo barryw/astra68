@@ -1,4 +1,5 @@
 #include <astra/syscall.h>
+#include <astra/pager_service.h>
 #include "qualification.h"
 
 	.section .rodata.user_test, "a", @progbits
@@ -805,6 +806,127 @@ _k1_survivor_image_entry:
 	move.l  #KERNEL_QUALIFICATION_K8_RESULT, \
 		KERNEL_QUALIFICATION_K8_RESULT_OFFSET(%a0)
 
+	| Guest fault -> native port -> reply area -> published page -> resumed
+	| instruction. Haiku VMCache waits for page completion before wake; this
+	| exercises Astra's existing blocked-fault continuation on target CPU.
+	moveq   #1, %d1
+	moveq   #52, %d2
+	moveq   #ASTRA_SYSCALL_PORT_CREATE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, KERNEL_QUALIFICATION_PAGER_RECEIVE_OFFSET(%a0)
+	move.l  %d2, KERNEL_QUALIFICATION_PAGER_SEND_OFFSET(%a0)
+
+	move.l  #4096, %d1
+	moveq   #KERNEL_QUALIFICATION_PAGER_SOURCE_RIGHTS, %d2
+	moveq   #0, %d3
+	moveq   #ASTRA_SYSCALL_AREA_CREATE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, KERNEL_QUALIFICATION_PAGER_SOURCE_OFFSET(%a0)
+	moveq   #KERNEL_QUALIFICATION_K8_MAP_FLAGS, %d2
+	moveq   #ASTRA_SYSCALL_AREA_MAP, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0)
+	movea.l %d1, %a1
+	move.l  #0x50414745, (%a1)
+	move.b  #0x21, 4(%a1)
+
+	move.l  #4096, %d1
+	moveq   #KERNEL_QUALIFICATION_PAGER_AREA_RIGHTS, %d2
+	moveq   #1, %d3
+	moveq   #ASTRA_SYSCALL_AREA_CREATE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0)
+	move.l  KERNEL_QUALIFICATION_PAGER_SEND_OFFSET(%a0), %d2
+	move.l  #KERNEL_QUALIFICATION_PAGER_COOKIE, %d3
+	moveq   #ASTRA_SYSCALL_AREA_BIND_PAGER, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #1, %d2
+	moveq   #ASTRA_SYSCALL_AREA_MAP, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0)
+
+	move.l  #KERNEL_QUALIFICATION_CODE_BASE + \
+		(.Lpager_service_thread - _k1_survivor_image_start), %d1
+	move.l  #KERNEL_QUALIFICATION_PAGER_ARGUMENT, %d2
+	moveq   #KERNEL_QUALIFICATION_K8_THREAD_PRIORITY, %d3
+	moveq   #KERNEL_QUALIFICATION_THREAD_RIGHTS, %d4
+	moveq   #ASTRA_SYSCALL_THREAD_CREATE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, KERNEL_QUALIFICATION_PAGER_THREAD_OFFSET(%a0)
+
+	movea.l KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0), %a1
+	cmpi.l  #0x50414745, (%a1)
+	bne     .Lmain_fail
+	cmpi.b  #0x21, 4(%a1)
+	bne     .Lmain_fail
+	tst.b   5(%a1)
+	bne     .Lmain_fail
+	tst.b   4095(%a1)
+	bne     .Lmain_fail
+
+	move.l  KERNEL_QUALIFICATION_PAGER_THREAD_OFFSET(%a0), %d1
+	move.l  #ASTRA_DEADLINE_NONE_HI, %d2
+	moveq   #-1, %d3
+	moveq   #ASTRA_SYSCALL_WAIT_ONE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #KERNEL_QUALIFICATION_PAGER_EXIT_STATUS, %d1
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_THREAD_OFFSET(%a0), %d1
+	moveq   #ASTRA_SYSCALL_CLOSE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+
+	move.l  KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0), %d1
+	moveq   #ASTRA_SYSCALL_AREA_UNMAP, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d1
+	moveq   #ASTRA_SYSCALL_AREA_UNMAP, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #ASTRA_SYSCALL_CLOSE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_OFFSET(%a0), %d1
+	moveq   #ASTRA_SYSCALL_CLOSE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_SEND_OFFSET(%a0), %d1
+	moveq   #ASTRA_SYSCALL_CLOSE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_RECEIVE_OFFSET(%a0), %d1
+	moveq   #ASTRA_SYSCALL_CLOSE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  #KERNEL_QUALIFICATION_PAGER_RESULT, \
+		KERNEL_QUALIFICATION_PAGER_RESULT_OFFSET(%a0)
+
 	| K10: every present production device source uses one endpoint path.
 	move.l  #KERNEL_QUALIFICATION_COMMAND_QUERY_IRQS, %d1
 	moveq   #ASTRA_SYSCALL_PROGRESS, %d0
@@ -1078,6 +1200,96 @@ _k1_survivor_image_entry:
 	moveq   #ASTRA_SYSCALL_PROCESS_EXIT, %d0
 	trap    #ASTRA_SYSCALL_TRAP
 	bra     .Lk8_fail
+
+.Lpager_service_thread:
+	cmpi.l  #KERNEL_QUALIFICATION_PAGER_ARGUMENT, %d2
+	bne     .Lpager_fail
+	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
+	move.l  KERNEL_QUALIFICATION_PAGER_RECEIVE_OFFSET(%a0), %d1
+	move.l  #ASTRA_DEADLINE_NONE_HI, %d2
+	moveq   #-1, %d3
+	moveq   #ASTRA_SYSCALL_WAIT_ONE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lpager_fail
+
+	lea     -56(%sp), %sp
+	move.l  KERNEL_QUALIFICATION_PAGER_RECEIVE_OFFSET(%a0), %d1
+	move.l  %sp, %d2
+	moveq   #40, %d3
+	lea     52(%sp), %a1
+	move.l  %a1, %d4
+	moveq   #1, %d5
+	moveq   #ASTRA_SYSCALL_PORT_RECEIVE_TRY, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lpager_fail
+	cmpi.l  #40, %d1
+	bne     .Lpager_fail
+	cmpi.l  #1, %d2
+	bne     .Lpager_fail
+	cmpi.l  #40, 0(%sp)
+	bne     .Lpager_fail
+	cmpi.l  #0x00180000, 4(%sp)
+	bne     .Lpager_fail
+	cmpi.l  #ASTRA_PAGER_PROTOCOL, 8(%sp)
+	bne     .Lpager_fail
+	cmpi.l  #0x00010000, 12(%sp)
+	bne     .Lpager_fail
+	cmpi.l  #ASTRA_PAGER_OPERATION_PAGE, 16(%sp)
+	bne     .Lpager_fail
+	move.l  20(%sp), %d6
+	tst.l   %d6
+	beq     .Lpager_fail
+	cmpi.l  #KERNEL_QUALIFICATION_PAGER_COOKIE, 24(%sp)
+	bne     .Lpager_fail
+	tst.l   28(%sp)
+	bne     .Lpager_fail
+	tst.l   32(%sp)
+	bne     .Lpager_fail
+	tst.l   36(%sp)
+	bne     .Lpager_fail
+	move.l  52(%sp), %d7
+
+	move.l  #52, 0(%sp)
+	move.l  #0x00180000, 4(%sp)
+	move.l  #ASTRA_PAGER_PROTOCOL, 8(%sp)
+	move.l  #0x00010000, 12(%sp)
+	move.l  #ASTRA_PAGER_OPERATION_PAGE_REPLY, 16(%sp)
+	move.l  %d6, 20(%sp)
+	clr.l   24(%sp)
+	move.l  #KERNEL_QUALIFICATION_PAGER_COOKIE, 28(%sp)
+	clr.l   32(%sp)
+	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_OFFSET(%a0), %d1
+	move.l  %d1, 36(%sp)
+	clr.l   40(%sp)
+	move.l  #5, 44(%sp)
+	clr.l   48(%sp)
+	move.l  %d7, %d1
+	move.l  %sp, %d2
+	moveq   #52, %d3
+	moveq   #0, %d4
+	moveq   #0, %d5
+	moveq   #ASTRA_SYSCALL_PORT_SEND_TRY, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lpager_fail
+	move.l  %d7, %d1
+	moveq   #ASTRA_SYSCALL_CLOSE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lpager_fail
+	lea     56(%sp), %sp
+	move.l  #KERNEL_QUALIFICATION_PAGER_EXIT_STATUS, %d1
+	moveq   #ASTRA_SYSCALL_THREAD_EXIT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+.Lpager_fail:
+	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
+	move.l  #KERNEL_QUALIFICATION_PHASE_ERROR, \
+		KERNEL_QUALIFICATION_PHASE_OFFSET(%a0)
+	moveq   #ASTRA_SYSCALL_PROCESS_EXIT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	bra     .Lpager_fail
 
 _k2_sibling_image_entry:
 	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0

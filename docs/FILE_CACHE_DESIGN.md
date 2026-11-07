@@ -204,9 +204,23 @@ pass. Haiku `src/system/kernel/vm/VMCache.cpp:950-966,1563-1577` tracks page
 waiters and wakes them after publication; Astra currently reuses its native
 thread wait observer and port reply capability. A full-port wake now retries
 the unsent request in the kernel before the user instruction can run. This
-candidate is not a release: terminal lifecycle gates remain, VFS does not yet
-serve pager requests, and no DE25 guest pager gate has run. Resolve those gaps
-before merging or enabling file mappings.
+candidate was not a release: terminal lifecycle gates, VFS pager service,
+and DE25 guest qualification remained open at that checkpoint.
+
+Guest pager gate, 2026-11-07: K1 survivor creates a reserved area, binds
+its port and cookie, and faults on its read-only mapping. A second MC68040
+thread checks the request and answers with five bytes from a separate
+committed area. The faulting instruction resumes and verifies source bytes
+and zero-filled tail, then joins service and retires mappings and handles.
+This follows Haiku `src/system/kernel/vm/VMCache.cpp:950-966,1563-1577`
+page-wait ordering, using Astra's native port and area ownership. Beast
+and DE25 K1 gates passed all 15 markers; DE25 ROM SHA-256 is
+`9c6d52c1767a19ee8299fdd061247c41b18c5c00f6d8806834210416cfbe7c2a`.
+Checksummed log and ROM are under
+`/home/barry/astra-evidence/pager-guest-k1-de25-20261107/` on Beast.
+This gate uses a synthetic service; VFS page replies, general cached-file
+mapping lifecycle, dirty writeback, reclaim, and pager cycle budgets remain
+open.
 
 ## Target baseline, 2026-11-06
 
