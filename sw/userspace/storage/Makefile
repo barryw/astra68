@@ -129,7 +129,8 @@ $(HOST_TEST): $(SOURCES) tests/test_block_device.c $(HOST_HEADERS)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SOURCES) tests/test_block_device.c -o $@
 
-LEASE_TEST_SOURCES := src/lease_block.c tests/test_lease_block.c
+LEASE_TEST_SOURCES := src/lease_block.c tests/test_lease_block.c \
+	$(RUNTIME)/tests/uncontended_mutex.c
 
 build/host/test_lease_block: $(LEASE_TEST_SOURCES) $(HOST_HEADERS)
 	@mkdir -p $(@D)

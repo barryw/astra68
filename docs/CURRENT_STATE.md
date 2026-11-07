@@ -1,6 +1,27 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-11-06
+Status: active continuation map, 2026-11-07
+
+Userspace gate repair, 2026-11-07: Full `make -C sw/userspace test` and
+`all` now pass on Beast. The boundary check identifies declared private-state
+owners rather than mistaking Interface controls for VFS files; AstraZ uses
+the shared unaligned big-endian primitive; Interface host tests link the
+Runtime-owned string object. A shared single-threaded mutex fixture replaced
+duplicated Storage test stubs. ABI-3 VFS provider records, Fonts' current
+system role sizes, and host test link inputs are coherent. Fonts layout test
+checks visible scroll clips while allowing content wider than its viewport;
+Haiku `src/kits/tracker/FilePanelPriv.cpp:781` likewise keeps its file-panel
+content following the panel frame. Interface and Fonts sanitizers passed.
+The updated disposable image passed the five-app Beast desktop gate and exact
+release `ca789c2bc8f0be6c89adb2b32a046b55f7fa8f8fbe21a4132515a236c57f86ad`
+passed a 120-second DE25 stage-8 private trial. Console SHA-256
+`637ff649b05b91db6742cc8b24367026b108b5745614e5465469176d772a9b33`
+matched the Beast archive at
+`/home/barry/astra-evidence/userspace-clean-20261106/`; trial log SHA-256 is
+`b717bceff0ff7642409c6aff01fe99dd8b47ee08e0648c87ef0c37dfb214bdb5`.
+Selected release was restored, board trial files removed, Astra/audio/remote
+services active, and 8.5 GiB free. AstraZ Z6 picture drawing was not exercised
+on HDMI by this boot trial; pager fault IPC and general file cache remain open.
 
 Pager ABI correction, 2026-11-06: Pager binding's nonzero cookie adds `D3` to
 a previously two-argument native call. Syscall ABI and Runtime library now
@@ -28,9 +49,9 @@ trial log SHA-256 is
 `fc1da780d5c1a55ca6c125a81382aa0ffbb3d0d52ca8b9d275a3ee1996699054`.
 All evidence is under `/home/barry/astra-evidence/abi3-20261106/` on Beast.
 Board trial files were removed; Astra, audio host, and remote desktop are
-active, only production loop0 remains, and 8.4 GiB is free. Top-level
-userspace `test` still stops at three existing source-boundary violations in
-Interface and AstraZ. Desktop-app gate first missed SDLTestDraw2 twice, then
+active, only production loop0 remains, and 8.4 GiB is free. The top-level
+userspace `test` boundary failures in Interface and AstraZ were repaired in
+the 2026-11-07 gate pass above. Desktop-app gate first missed SDLTestDraw2 twice, then
 passed four consecutive five-app runs on the first image. The final image
 initially missed Fonts when the gate clicked its Atlas position before the
 new drawer had painted; the gate now pauses 250 ms between icon discovery and

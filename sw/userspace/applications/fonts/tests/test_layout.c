@@ -102,6 +102,9 @@ static void check_layout(void)
         const AstraControlFrame *frame = &control->_private_frame;
         if (frame->width == 0u || frame->height == 0u) continue;
         if (at == FONTS_LIST - 1u ||
+            at == FONTS_FILE_PANEL_FIRST - 1u + ASTRA_FILE_PANEL_PLACES_LIST ||
+            at == FONTS_FILE_PANEL_FIRST - 1u + ASTRA_FILE_PANEL_LIST ||
+            at == FONTS_FILE_PANEL_FIRST - 1u + ASTRA_FILE_PANEL_GRID ||
             (at >= FONTS_FILE_PANEL_FIRST - 1u &&
              (CONTROL(FONTS_FILE_PANEL_FIRST)->_private_state &
                 ASTRA_CONTROL_COLLAPSED) != 0u) ||
@@ -116,6 +119,23 @@ static void check_layout(void)
             fprintf(stderr, "overflow control %u: y=%d h=%u viewport=%u\n",
                 at + 1u, frame->y, frame->height, client_height);
         assert((uint64_t)(uint32_t)frame->y + frame->height <= client_height - 24u);
+    }
+    if (browsing && !showing_import) {
+        const uint32_t children[] = {
+            ASTRA_FILE_PANEL_PLACES_LIST, ASTRA_FILE_PANEL_LIST,
+            ASTRA_FILE_PANEL_GRID
+        };
+        for (uint32_t at = 0u; at < 3u; ++at) {
+            uint32_t index = FONTS_FILE_PANEL_FIRST - 1u + children[at];
+            AstraControlFrame frame, clip;
+            if (controls[index]._private_frame.width == 0u ||
+                (controls[index]._private_state & ASTRA_CONTROL_COLLAPSED) != 0u)
+                continue;
+            assert(astra_interface_ui_geometry(&ui, index, &frame, &clip) == ASTRA_OK);
+            assert(clip.x >= 24 && clip.y >= 24);
+            assert((uint64_t)(uint32_t)clip.x + clip.width <= client_width - 24u);
+            assert((uint64_t)(uint32_t)clip.y + clip.height <= client_height - 24u);
+        }
     }
 }
 

@@ -318,7 +318,7 @@ $(SIGNAL_TEST): src/signal.c tests/test_signal.c
 		-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
 		$(COMMON_FLAGS) -O2 src/signal.c tests/test_signal.c -o $@
 
-$(SOCKET_ADDRESS_TEST): src/inet.c $(NETWORK)/src/network_core.c tests/test_socket_address.c
+$(SOCKET_ADDRESS_TEST): src/inet.c $(NETWORK)/src/network_core.c ../../common/utf8.c tests/test_socket_address.c
 	@mkdir -p $(@D)
 	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
 		-I$(VFS)/include -I$(NETWORK)/include -I$(NDK)/include $(COMMON_FLAGS) -O2 $^ -o $@

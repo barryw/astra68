@@ -304,6 +304,15 @@ $(STRING_TEST): src/string.c tests/test_string.c \
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/string.c tests/test_string.c -o $@
 
+build/host/string.o: src/string.c $(NDK)/include/astra/string.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -c $< -o $@
+
+build/host/string_sanitize.o: src/string.c $(NDK)/include/astra/string.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) -c $< -o $@
+
 $(TIME_PAGE_TEST): tests/test_time_page.c ../../include/astra/time_page.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $< -o $@

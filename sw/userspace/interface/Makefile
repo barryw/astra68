@@ -33,6 +33,8 @@ INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
 	build/m68k/combo_box.o build/m68k/menu_multi.o
 INTERFACE_LIBRARY_MAP := interface.library.exports
 NDK_HOST_UTF8 := $(SYSTEM)/build/host/utf8.o
+RUNTIME_HOST_STRING := $(RUNTIME)/build/host/string.o
+RUNTIME_HOST_STRING_SANITIZE := $(RUNTIME)/build/host/string_sanitize.o
 GRAPHICS_LIBRARY := $(GRAPHICS)/build/m68k/libraries/graphics.library.3
 FONT_LIBRARY := $(GRAPHICS)/build/m68k/libraries/font.library.5
 SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.4
@@ -237,7 +239,7 @@ library-contract: $(INTERFACE_TARGET)
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET))
 
 $(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/display_widgets.c src/field_family.c src/settings_pane.c src/system_panels.c src/file_panel.c src/font_panel.c src/form_row.c src/columns.c src/toolbar.c src/toolbar_actions.c src/menu.c src/icon_tile.c src/image_view.c src/text_surface.c src/undo.c \
-		src/text_model.c src/scroll.c $(RUNTIME)/src/string.c ../../common/civil.c ../../common/divide.c $(NDK_HOST_UTF8) tests/test_interface.c \
+		src/text_model.c src/scroll.c $(RUNTIME_HOST_STRING) ../../common/civil.c ../../common/divide.c $(NDK_HOST_UTF8) tests/test_interface.c \
 		tests/test_layout.c src/text_surface_internal.h src/panel_internal.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -DASTRA_INTERFACE_TEST \
@@ -283,6 +285,9 @@ $(MENU_HOST_TEST): $(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS
 $(NDK_HOST_UTF8):
 	$(MAKE) -C $(SYSTEM) build/host/utf8.o
 
+$(RUNTIME_HOST_STRING) $(RUNTIME_HOST_STRING_SANITIZE): FORCE
+	$(MAKE) -C $(RUNTIME) $(patsubst $(RUNTIME)/%,%,$@)
+
 $(ICON_TILE_HOST_TEST): src/icon_tile.c tests/test_icon_tile.c $(NDK_HOST_UTF8)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
@@ -307,12 +312,12 @@ test: $(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
 	./$(ICON_TILE_HOST_TEST)
 	./$(IMAGE_VIEW_HOST_TEST)
 
-sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANITIZE)
+sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANITIZE) $(RUNTIME_HOST_STRING_SANITIZE)
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_SYSTEM_TEST \
 		-ffunction-sections -Wl,--gc-sections src/interface_library.c \
-		src/control.c src/display_widgets.c src/field_family.c src/settings_pane.c src/system_panels.c src/file_panel.c src/font_panel.c src/form_row.c src/columns.c src/toolbar.c src/toolbar_actions.c src/menu.c src/icon_tile.c src/text_surface.c src/undo.c src/text_model.c src/scroll.c $(RUNTIME)/src/string.c ../../common/civil.c ../../common/divide.c \
+		src/control.c src/display_widgets.c src/field_family.c src/settings_pane.c src/system_panels.c src/file_panel.c src/font_panel.c src/form_row.c src/columns.c src/toolbar.c src/toolbar_actions.c src/menu.c src/icon_tile.c src/image_view.c src/text_surface.c src/undo.c src/text_model.c src/scroll.c $(RUNTIME_HOST_STRING_SANITIZE) ../../common/civil.c ../../common/divide.c \
 		$(NDK_HOST_UTF8) \
 		tests/test_interface.c tests/test_layout.c \
 		-o build/host/test_interface_sanitize

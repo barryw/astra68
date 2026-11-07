@@ -143,7 +143,8 @@ UI_HOST_SOURCES := tests/test_layout.c ../../interface/src/control.c \
 	../../interface/src/text_model.c ../../interface/src/text_surface.c ../../interface/src/scroll.c \
 	../../graphics/src/surface.c ../../graphics/src/font_data.c \
 	../../graphics/src/render_builder.c \
-	../../common/directory_snapshot.c \
+	../../common/directory_snapshot.c ../../../common/civil.c \
+	../../../common/divide.c \
 	../../../common/utf8.c ../../../common/afnt.c ../../../common/json.c ../../../common/crc32.c \
 	$(RUNTIME)/src/string.c \
 	$(RUNTIME)/tests/uncontended_mutex.c

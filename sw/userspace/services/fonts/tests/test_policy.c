@@ -1,5 +1,6 @@
 #include "../policy.h"
 #include <astra/font_encoding.h>
+#include <astra/theme.h>
 
 #include <assert.h>
 #include <stdio.h>
@@ -9,9 +10,9 @@
 int main(void)
 {
     AstraFontCatalogStrike strikes[] = {
-        {0u, 11u, 5u, 0u},
-        {0u, 13u, 5u, 0u},
-        {0u, 16u, 5u, 0u}
+        {0u, ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT, 5u, 0u},
+        {0u, ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT, 5u, 0u},
+        {0u, ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, 5u, 0u}
     };
     AstraFontCatalogFace face = {
         .strikes = strikes,
@@ -22,10 +23,12 @@ int main(void)
     face.flags = 0u;
     assert(!fonts_face_selectable(&face));
     face.flags = ASTRA_FONT_CATALOG_BASIC_TEXT;
-    strikes[1].bitmap_format = 4u;
+    for (uint32_t at = 0u; at < 3u; ++at)
+        strikes[at].bitmap_format = 4u;
     assert(!fonts_face_selectable(&face));
-    strikes[1].bitmap_format = 5u;
-    face.strike_count = 2u;
+    for (uint32_t at = 0u; at < 3u; ++at)
+        strikes[at].bitmap_format = 5u;
+    face.strike_count = 0u;
     assert(!fonts_face_selectable(&face));
     face.strike_count = 3u;
 

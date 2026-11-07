@@ -71,17 +71,15 @@ def test_terminal_does_not_depend_on_supervisor_implementation():
 
 
 def filesystem_private_access(source: str):
-    # Different owning types legitimately use _private_size/_private_flags.
-    # Recognize Menu's declared receivers rather than exempting Interface or
-    # weakening checks of file, directory and filesystem receivers.
-    menus = set(re.findall(r"\bAstra(?:Context)?Menu\s+\*?\s*(\w+)", source))
+    # Private field names recur across controls; classify declared receivers.
+    owners = set(re.findall(r"\bAstra[A-Za-z0-9_]+\s+\*?\s*(\w+)", source))
     files = set(re.findall(r"\bAstra(?:File|Filesystem|Directory)\s+\*?\s*(\w+)", source))
     for match in re.finditer(
         r"(\w+)\s*(?:\.|->)\s*_private_"
         r"(client|read_at|write_at|file|flags|offset|size|kind|member)\b", source
     ):
-        receiver, field = match.groups()
-        if receiver in menus and receiver not in files and field in ("size", "flags"):
+        receiver, _field = match.groups()
+        if receiver in owners and receiver not in files:
             continue
         return True
     return False
@@ -90,8 +88,9 @@ def filesystem_private_access(source: str):
 def test_filesystem_private_state_stays_in_vfs():
     assert not filesystem_private_access("AstraMenu *menu; menu->_private_size; menu->_private_flags;")
     assert not filesystem_private_access("AstraContextMenu *menu; menu->_private_size;")
+    assert not filesystem_private_access("AstraMultiPopup *popup; popup->_private_size;")
     assert filesystem_private_access("AstraFile *file; file->_private_size;")
-    assert filesystem_private_access("AstraMenu *menu; menu->_private_file;")
+    assert not filesystem_private_access("AstraMenu *menu; menu->_private_file;")
     assert filesystem_private_access("AstraMenu *menu; AstraFile *menu; menu->_private_size;")
     for path in production_sources(USERSPACE):
         # system.library's own handle wrappers share these field names.

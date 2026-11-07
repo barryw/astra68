@@ -3,6 +3,8 @@
 #include <SDL.h>
 #include <SDL_image.h>
 
+#include <astra/endian.h>
+
 #include <limits.h>
 #include <stdint.h>
 #include <string.h>
@@ -10,12 +12,6 @@
 #define PNG_TAG UINT32_C(0x504e4720)
 #define JPEG_TAG UINT32_C(0x4a504547)
 #define RECT_TAG UINT32_C(0x52656374)
-
-static uint32_t be32(const uint8_t *p)
-{
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
-        ((uint32_t)p[2] << 8) | p[3];
-}
 
 static SDL_Surface *decode(const AstraZResource *resource)
 {
@@ -39,7 +35,8 @@ int astraz_picture_size(const AstraZResource *resource, int *height,
     *height = *width = 0;
     if (resource->format == RECT_TAG) {
         if (resource->length != 8u) return 0;
-        uint32_t w = be32(resource->bytes), h = be32(resource->bytes + 4u);
+        uint32_t w = astra_load_be32(resource->bytes);
+        uint32_t h = astra_load_be32(resource->bytes + 4u);
         if (w > INT_MAX || h > INT_MAX) return 0;
         *height = (int)h;
         *width = (int)w;
