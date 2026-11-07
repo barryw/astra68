@@ -10305,10 +10305,16 @@ static __attribute__((noinline)) KernelProcessStatus deliver_reply(
         *result = ASTRA_SYSCALL_PEER_DEAD;
         return KERNEL_PROCESS_OK;
     }
-    if (caller->pager_area != NULL)
-        return deliver_pager_reply(current, reply_handle, caller, call,
-                                   message, message_size, handle_count,
-                                   result);
+    if (caller->pager_area != NULL) {
+        KernelPerformanceToken performance = kernel_performance_begin(
+            KERNEL_PERFORMANCE_PAGER_REPLY);
+        KernelProcessStatus status = deliver_pager_reply(
+            current, reply_handle, caller, call, message, message_size,
+            handle_count, result);
+
+        kernel_performance_end(performance);
+        return status;
+    }
     if (handle_count != 0u) {
         handle_status = kernel_handle_transfer_prepare(
             current->handles, handles, handle_count, ASTRA_RIGHT_TRANSFER,
@@ -15353,6 +15359,8 @@ bool kernel_process_prepare_user_copy(uint32_t address, uint32_t size,
 static void pager_wait_done(KernelThread *thread, uint32_t result,
                             void *context)
 {
+    KernelPerformanceToken performance = kernel_performance_begin(
+        KERNEL_PERFORMANCE_PAGER_HANDOFF);
     KernelArea *area = context;
     bool resident = kernel_area_page_resident(area, thread->pager_offset);
     bool primary = thread->pager_primary != 0u;
@@ -15408,6 +15416,7 @@ static void pager_wait_done(KernelThread *thread, uint32_t result,
             peer = next;
         }
     }
+    kernel_performance_end(performance);
 }
 
 static void pager_wait_prepare(KernelThread *thread,
@@ -15613,8 +15622,12 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
     }
     if (frame.access_fault != 0u) {
         do {
+            KernelPerformanceToken performance = kernel_performance_begin(
+                KERNEL_PERFORMANCE_PAGER_REQUEST);
+
             status = request_pager_page(current, thread, &frame,
                                         &pager_disposition);
+            kernel_performance_end(performance);
             if (status != KERNEL_PROCESS_OK)
                 return status;
         } while (pager_disposition == PAGER_RETRY_NOW);

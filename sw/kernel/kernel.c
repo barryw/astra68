@@ -1063,6 +1063,22 @@ static void report_kernel_performance(
     console_puts(" overruns=");
     console_dec32(shared_ipc_overruns);
     console_putc('\n');
+    console_puts("K8 PERF pager request=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_PAGER_REQUEST].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_PAGER_REQUEST);
+    console_puts(" reply=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_PAGER_REPLY].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_PAGER_REPLY);
+    console_puts(" handoff=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_PAGER_HANDOFF].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_PAGER_HANDOFF);
+    console_putc('\n');
     console_puts("K10 PERF irq=");
     console_dec32(performance->metric[
         KERNEL_PERFORMANCE_HARD_IRQ].maximum_cycles);

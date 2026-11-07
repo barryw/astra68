@@ -1,8 +1,9 @@
 # General file cache and file-backed mappings
 
-Status: design contract; VFS description-retention, metadata, writeback, and
-VM page-publication seams passed host and DE25 gates. Pager, cache, mapping,
-and guest certification open.
+Status: design contract; VFS description-retention, metadata, writeback,
+VM page publication, and synthetic guest pager with CPU budgets passed host
+and DE25 gates. VFS pager service, cache, mappings, and file I/O certification
+remain open.
 
 Call lifecycle prerequisite, 2026-11-06: failed `PORT_CALL` sends and reply
 capability installation now abort their call number. Shared wait completion
@@ -222,6 +223,20 @@ This gate uses a synthetic service; VFS page replies, general cached-file
 mapping lifecycle, dirty writeback, reclaim, and pager cycle budgets remain
 open.
 
+Pager CPU budget gate, 2026-11-07: existing `kernel_performance` counters now
+measure fault request, pager reply/publication, and wait completion/handoff
+separately. Each is required by the K1 release mask, and the guest pager
+test supplies its sample. Beast and DE25 measured 1,291/50,000,
+2,981/75,000, and 79/25,000 MC68040 cycles. Earlier DE25 baseline at
+`6b715ab4` measured user-fault maximum 21,994 and standalone page
+publication 6,781 cycles; the instrumented gate measured 22,022 and 6,782.
+ROM and log SHA-256 are
+`ccab46d461c5fbe26925aca22a07c0a77df6068d38afc4783d4e96596814bf4c`
+and `0bbad1d850b9320ef6c49ed4776ff5382ce51a1d8674e46d3091d3dd39b8f15b`.
+Evidence: `/home/barry/astra-evidence/pager-cycle-budget-de25-20261107/`
+on Beast. CPU cycle budgets do not qualify asynchronous VFS, storage, or
+end-to-end page-fault latency; those await real file mapping.
+
 ## Target baseline, 2026-11-06
 
 Three focused `fsbench` runs on DE25 used the selected release's kernel and
@@ -429,9 +444,9 @@ receive-end closure, and two simultaneous faults on one page with both full
 and available send queues. Process exit with pending same-page faults retires
 their area references. Pager donation and restoration are asserted.
 Area child references return to zero on tested success and failure paths.
-K1 needs separate request, reply/publication, and terminal-handoff cycle budgets
-against the existing user-fault baseline before VFS mappings depend on this
-path.
+K1 now enforces separate request, reply/publication, and terminal-handoff
+CPU cycle budgets against the earlier user-fault baseline. End-to-end VFS
+page-fault latency remains unmeasured.
 
 This wiring uses existing `sw/kernel/area.c` mapping authority and frame
 ownership, `sw/kernel/port.c` transfer, `sw/kernel/thread.c` call donation,

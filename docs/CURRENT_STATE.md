@@ -2,6 +2,25 @@
 
 Status: active continuation map, 2026-11-07
 
+Pager cycle budget gate, 2026-11-07: K1 now records and enforces separate
+MC68040 CPU budgets for fault request (50,000 cycles), pager reply and page
+publication (75,000), and wait completion/handoff (25,000). The existing
+performance framework owns counters and sampling; the guest pager gate
+produces one successful sample for every new required metric. Beast and
+DE25 measured 1,291, 2,981, and 79 cycles respectively, all below budget.
+Prior DE25 K1 user-fault maximum was 21,994 cycles and page publication
+6,781; this candidate measured 22,022 and 6,782. All 15 markers passed.
+ROM SHA-256
+`ccab46d461c5fbe26925aca22a07c0a77df6068d38afc4783d4e96596814bf4c`,
+DE25 log SHA-256
+`0bbad1d850b9320ef6c49ed4776ff5382ce51a1d8674e46d3091d3dd39b8f15b`;
+matching evidence is under
+`/home/barry/astra-evidence/pager-cycle-budget-de25-20261107/` on Beast.
+Trial files were removed, production Astra returned to stage 8 with zero
+restarts and production loop0, and board free space returned to 8.5 GiB.
+These CPU samples do not include VFS service or storage wait time. General
+file cache and mappings remain open.
+
 Pager guest gate, 2026-11-07: WIP branch now runs a real MC68040 user
 fault through a bound reserved area, native port request/reply, transfer
 area, zero-tailed page publication, and resumed instruction in K1. The
@@ -16,8 +35,9 @@ matching evidence is under
 `/home/barry/astra-evidence/pager-guest-k1-de25-20261107/` on Beast.
 The disposable board image and ROM were removed, production Astra was
 restored, only production loop0 remained, and 8.5 GiB was free. This proves
-kernel guest handoff with a synthetic service; VFS pager service, file
-mappings/cache, and separate pager cycle budgets remain open.
+kernel guest handoff with a synthetic service; VFS pager service and file
+mappings/cache remained open at that checkpoint. Cycle budgets are recorded
+above.
 
 File-cache candidate, 2026-11-07: on WIP branch
 `wip/pager-continuation-20261107`, kernel pager continuation and terminal
@@ -31,8 +51,9 @@ Evidence is under
 `/home/barry/astra-evidence/vfs-page-source-de25-20261107/` on Beast.
 Board trial binary was removed; production services remained active with
 8.5 GiB free. This candidate is not merged or deployed: VFS pager service,
-file mappings, shared ordinary I/O, writeback, pressure reclaim, target pager
-cycle budgets, and DE25 guest pager certification remain open.
+file mappings, shared ordinary I/O, writeback, and pressure reclaim remain
+open. Guest pager certification and CPU cycle budgets were completed later,
+as recorded above.
 
 File-watch recovery, 2026-11-07: The storage provider now keeps emitting
 global GAP records while fanotify or inotify coverage is lost, retries failed
