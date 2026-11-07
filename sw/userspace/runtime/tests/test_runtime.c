@@ -484,6 +484,11 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         }
     }
     result->value2 = mock_thread_handle;
+    if (number == ASTRA_SYSCALL_AREA_REFERENCES) {
+        result->value0 = 2u;
+        result->value1 = 1u;
+        result->value2 = 0u;
+    }
     if (number == ASTRA_SYSCALL_CLOCK_MONOTONIC) {
         ++mock_clock_calls;
         result->value0 = (uint32_t)(mock_time_ns >> 32);
@@ -909,6 +914,16 @@ test_syscall_wrappers(void)
     assert(mock_number == ASTRA_SYSCALL_AREA_BIND_PAGER);
     assert(mock_argument0 == 7u && mock_argument1 == 8u &&
            mock_argument2 == 9u);
+    {
+        uint32_t handles = 0u, mappings = 0u, children = 1u;
+        assert(astra_rt_area_references(7u, &handles, &mappings,
+                                        &children) == ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_AREA_REFERENCES);
+        assert(mock_argument0 == 7u);
+        assert(handles == 2u && mappings == 1u && children == 0u);
+        assert(astra_rt_area_references(7u, NULL, &mappings,
+                                        &children) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    }
     assert(astra_rt_semaphore_create(
                1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
                &sync_handle) == ASTRA_SYSCALL_OK);

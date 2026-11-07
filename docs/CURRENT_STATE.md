@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-11-07
 
+Area ownership query, 2026-11-07: WIP branch adds an ADMINISTER-only native
+area reference query for the VFS file-cache owner. It atomically reports live
+handle, mapping, and in-flight child counts; VFS can retain its one owner
+handle and backend description until all external references are gone.
+Host tests cover wrong object, missing right, duplicate handle, live map,
+unmap, and cloned mapping retirement. Beast kernel/Runtime tests and target
+build passed; K1 passed 15 markers and measured 42/10,000 MC68040 cycles.
+Same ROM reached `KERNEL MULTITASKING` on DE25 and measured 43/10,000
+cycles. ROM SHA-256
+`03c2d892c1a0af8ee3a4d932d99b72f8da0ce34e7e442ae97c0eda9c5f493d1e`,
+DE25 log SHA-256
+`234e39f8b8e2687a0d943cc67c707662f49f6da6f8cf4083cb05e393a619960d`;
+checked evidence is under
+`/home/barry/astra-evidence/area-references-de25-20261107/` on Beast.
+The temporary trial wrapper returned failure after the guest completed because
+it required one timeout exit status; the archived serial log contains all
+qualification markers with no panic or overrun.
+Trial files were removed, production returned to stage 8, all three
+services active with zero Astra restarts, only loop0, and 8.5 GiB free.
+This query is a lifecycle prerequisite; VFS has not yet created a mapped
+file cache. Haiku `src/system/kernel/vm/VMCache.cpp:1616-1644` keeps
+consumer and backing-store references separate and releases store refs
+outside its cache lock. Astra adapts that rule at the VFS service boundary.
+
 Pager cycle budget gate, 2026-11-07: K1 now records and enforces separate
 MC68040 CPU budgets for fault request (50,000 cycles), pager reply and page
 publication (75,000), and wait completion/handoff (25,000). The existing

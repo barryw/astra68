@@ -267,6 +267,23 @@ uint32_t astra_rt_area_bind_pager(uint32_t area, uint32_t port,
     return result.status;
 }
 
+uint32_t astra_rt_area_references(uint32_t area, uint32_t *handles,
+                                  uint32_t *mappings, uint32_t *children)
+{
+    AstraSyscallResult result;
+
+    if (handles == NULL || mappings == NULL || children == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_AREA_REFERENCES, area, 0u, 0u, 0u, 0u,
+                   &result);
+    if (result.status == ASTRA_SYSCALL_OK) {
+        *handles = result.value0;
+        *mappings = result.value1;
+        *children = result.value2;
+    }
+    return result.status;
+}
+
 uint32_t
 astra_rt_area_decommit(void *address, uint32_t byte_size,
                     uint32_t *released_pages)

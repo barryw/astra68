@@ -197,6 +197,10 @@ bool kernel_area_range_live(const KernelArea *area, uint32_t offset,
 bool kernel_area_page_physical(const KernelArea *area, uint32_t offset,
                                uint32_t *physical);
 bool kernel_area_live(const KernelArea *area);
+/* One kernel section sees all three counts; the owner keeps a handle while
+ * deciding whether the final external mapping has gone away. */
+bool kernel_area_references(const KernelArea *area, uint32_t *handles,
+                            uint32_t *mappings, uint32_t *children);
 uint32_t kernel_area_creator(const KernelArea *area);
 uint32_t kernel_area_generation(const KernelArea *area);
 uint32_t kernel_area_size(const KernelArea *area);

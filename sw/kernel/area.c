@@ -1797,6 +1797,18 @@ bool kernel_area_live(const KernelArea *area)
     return valid_area(area) && area->state == KERNEL_AREA_LIVE;
 }
 
+bool kernel_area_references(const KernelArea *area, uint32_t *handles,
+                            uint32_t *mappings, uint32_t *children)
+{
+    if (!kernel_area_live(area) || handles == NULL || mappings == NULL ||
+        children == NULL)
+        return false;
+    *handles = area->handle_references;
+    *mappings = area->mapping_references;
+    *children = area->child_references;
+    return true;
+}
+
 uint32_t kernel_area_creator(const KernelArea *area)
 {
     return valid_area(area) ? area->creator : 0u;

@@ -501,6 +501,7 @@ static void test_process_clone_inherits_area_mappings(void)
     uint32_t size;
     uint32_t physical;
     uint32_t unmapped;
+    uint32_t handles, mappings, children;
 
     initialize_test();
     assert(kernel_vm_create_address_space(1300u, &parent) == KERNEL_VM_OK);
@@ -515,12 +516,18 @@ static void test_process_clone_inherits_area_mappings(void)
            KERNEL_VM_OK);
     assert(kernel_area_clone_process(1300u, &parent, 1301u, &child) ==
            KERNEL_AREA_OK);
+    assert(kernel_area_references(area, &handles, &mappings, &children));
+    assert(handles == 1u && mappings == 2u && children == 0u);
     assert(kernel_vm_switch(&child) == KERNEL_VM_OK);
     assert(kernel_vm_test_translate_current(base, true, &physical));
     assert(kernel_area_unmap_process(1301u, &unmapped) == KERNEL_AREA_OK);
     assert(unmapped == 1u);
+    assert(kernel_area_references(area, &handles, &mappings, &children));
+    assert(handles == 1u && mappings == 1u && children == 0u);
     assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
     assert(kernel_area_unmap(1300u, &parent, base) == KERNEL_AREA_OK);
+    assert(kernel_area_references(area, &handles, &mappings, &children));
+    assert(handles == 1u && mappings == 0u && children == 0u);
     kernel_area_handle_release(area, NULL);
     assert(kernel_vm_destroy_address_space(&parent) == KERNEL_VM_OK);
     assert(kernel_vm_destroy_address_space(&child) == KERNEL_VM_OK);

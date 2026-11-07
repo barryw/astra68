@@ -145,6 +145,8 @@ static void test_required_metrics_and_budget_failure(void)
            KERNEL_PERFORMANCE_BUDGET_PAGER_REPLY);
     assert(stats.metric[KERNEL_PERFORMANCE_PAGER_HANDOFF].budget_cycles ==
            KERNEL_PERFORMANCE_BUDGET_PAGER_HANDOFF);
+    assert(stats.metric[KERNEL_PERFORMANCE_AREA_REFERENCES].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_AREA_REFERENCES);
     assert((KERNEL_PERFORMANCE_REQUIRED_MASK &
             KERNEL_PERFORMANCE_PAGER_MASK) ==
            KERNEL_PERFORMANCE_PAGER_MASK);

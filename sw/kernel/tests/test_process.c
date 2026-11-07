@@ -8181,7 +8181,8 @@ static void test_pager_binding_retains_send_endpoint(void)
                                     0x4eu, 0x71u, 0x4eu, 0x71u};
     const uint32_t stack = KERNEL_PROCESS_STACK_TOP - 512u;
     const uint32_t rights = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
-                            ASTRA_RIGHT_MAP | ASTRA_RIGHT_ADMINISTER;
+                            ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER |
+                            ASTRA_RIGHT_ADMINISTER;
     KernelCpuContext *next;
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
     uint32_t process_id, area, receive, send, base;
@@ -8204,6 +8205,27 @@ static void test_pager_binding_retains_send_endpoint(void)
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     area = next->data[1];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_REFERENCES,
+                     receive, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_HANDLE_DUPLICATE,
+                     area, ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP,
+                     0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    {
+        uint32_t reader = next->data[1];
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_REFERENCES,
+                         reader, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_REFERENCES,
+                         area, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK &&
+               next->data[1] == 2u && next->data[2] == 0u &&
+               next->data[3] == 0u);
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                         reader, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+    }
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_BIND_PAGER,
                      area, receive, 1u, 0u, 0u) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
@@ -8228,9 +8250,19 @@ static void test_pager_binding_retains_send_endpoint(void)
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     base = next->data[1];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_REFERENCES,
+                     area, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK &&
+           next->data[1] == 1u && next->data[2] == 1u &&
+           next->data[3] == 0u);
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_UNMAP,
                      base, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_REFERENCES,
+                     area, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK &&
+           next->data[1] == 1u && next->data[2] == 0u &&
+           next->data[3] == 0u);
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE,
                      area, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);

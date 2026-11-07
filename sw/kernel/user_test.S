@@ -857,6 +857,17 @@ _k1_survivor_image_entry:
 	tst.l   %d0
 	bne     .Lmain_fail
 	move.l  %d1, KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0)
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #ASTRA_SYSCALL_AREA_REFERENCES, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #1, %d1
+	bne     .Lmain_fail
+	cmpi.l  #1, %d2
+	bne     .Lmain_fail
+	tst.l   %d3
+	bne     .Lmain_fail
 
 	move.l  #KERNEL_QUALIFICATION_CODE_BASE + \
 		(.Lpager_service_thread - _k1_survivor_image_start), %d1
@@ -898,6 +909,17 @@ _k1_survivor_image_entry:
 	moveq   #ASTRA_SYSCALL_AREA_UNMAP, %d0
 	trap    #ASTRA_SYSCALL_TRAP
 	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #ASTRA_SYSCALL_AREA_REFERENCES, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #1, %d1
+	bne     .Lmain_fail
+	tst.l   %d2
+	bne     .Lmain_fail
+	tst.l   %d3
 	bne     .Lmain_fail
 	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d1
 	moveq   #ASTRA_SYSCALL_AREA_UNMAP, %d0

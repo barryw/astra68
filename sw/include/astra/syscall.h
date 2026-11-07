@@ -1079,6 +1079,13 @@
  * retains the send endpoint; clients may map it read-only after binding.
  */
 #define ASTRA_SYSCALL_AREA_BIND_PAGER 116
+/**
+ * Read live area ownership counts using an ADMINISTER handle. Returns handle,
+ * mapping, and in-flight child reference counts in D1, D2, and D3. An owner
+ * retaining the sole handle may retire a pager source once the other counts
+ * are zero and no new handle is being transferred.
+ */
+#define ASTRA_SYSCALL_AREA_REFERENCES 117
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */

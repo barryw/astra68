@@ -265,6 +265,16 @@ uint32_t astra_rt_area_create_flagged(uint32_t byte_size, uint32_t rights,
 uint32_t astra_rt_area_bind_pager(uint32_t area, uint32_t port,
                                  uint32_t cookie);
 /**
+ * Read live owner counts through an ADMINISTER area handle.
+ * @param area Area handle with ASTRA_RIGHT_ADMINISTER.
+ * @param handles Receives handle reference count, including this handle.
+ * @param mappings Receives live mapping count.
+ * @param children Receives in-flight child reference count.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_area_references(uint32_t area, uint32_t *handles,
+                                  uint32_t *mappings, uint32_t *children);
+/**
  * Decommit mapped pages while preserving the virtual reservation.
  * @param address Page-aligned address within a reserved area.
  * @param byte_size Page-aligned span.

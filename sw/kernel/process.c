@@ -12970,6 +12970,28 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         break;
     }
+    case ASTRA_SYSCALL_AREA_REFERENCES: {
+        KernelArea *area = NULL;
+        KernelPerformanceToken performance = kernel_performance_begin(
+            KERNEL_PERFORMANCE_AREA_REFERENCES);
+        KernelHandleStatus handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1], KERNEL_OBJECT_AREA,
+            ASTRA_RIGHT_ADMINISTER, (void **)&area);
+
+        if (handle_status != KERNEL_HANDLE_OK) {
+            kernel_performance_end(performance);
+            if (!handle_status_to_syscall(handle_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        if (!kernel_area_references(area, &thread->context.data[1],
+                                    &thread->context.data[2],
+                                    &thread->context.data[3])) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+        }
+        kernel_performance_end(performance);
+        break;
+    }
     case ASTRA_SYSCALL_AREA_UNMAP: {
         KernelAreaStatus area_status;
         uint32_t virtual_base = thread->context.data[1];

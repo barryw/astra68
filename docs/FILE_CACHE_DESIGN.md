@@ -5,6 +5,20 @@ VM page publication, and synthetic guest pager with CPU budgets passed host
 and DE25 gates. VFS pager service, cache, mappings, and file I/O certification
 remain open.
 
+Area-lifetime prerequisite, 2026-11-07: an ADMINISTER-only native syscall
+returns area handle, mapping, and in-flight fault counts in one kernel
+section. A VFS cache owner can keep one area handle and retained file
+description while clients map or fault, then retire both when its handle is
+alone and the other counts reach zero. Guest K1 checks mapped and unmapped
+counts; Beast and DE25 measured 42 and 43 MC68040 cycles against a
+10,000-cycle budget. Host tests also cover capability checks, duplicated
+handles, and cloned mapping retirement. Checksummed DE25 evidence is under
+`/home/barry/astra-evidence/area-references-de25-20261107/` on Beast.
+No VFS cache consumes the query yet. Haiku
+`src/system/kernel/vm/VMCache.cpp:1616-1644` separates consumer and
+backing-store references and releases the store outside its cache lock;
+Astra applies that ordering across its native VFS service and kernel VM.
+
 Call lifecycle prerequisite, 2026-11-06: failed `PORT_CALL` sends and reply
 capability installation now abort their call number. Shared wait completion
 also retires call numbers on deadline and cancellation before wake. This
