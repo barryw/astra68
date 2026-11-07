@@ -154,6 +154,18 @@ DE25 with one million forced switches; checksummed evidence is under
 `/home/barry/astra-evidence/vfs-retain-shared-de25-20261107/` on Beast.
 Cache-object identity, guest pager, and file mappings remain open.
 
+Ninth slice, 2026-11-07: exact node identity comparison now lives in the
+existing VFS backend contract. HostFS grant-root revalidation uses it, so
+mount identity, inode, and birth generation must all be present and equal;
+zero mount identity cannot authorize a match. Future cache sharing will use
+this same predicate. Haiku `headers/os/storage/Node.h:18-29` names nodes by
+device and inode; Astra adds known birth generation because its backend can
+recycle inode numbers. Beast HostFS target build and host test passed. The
+same AArch64 identity fixture passed on DE25, with matching board/Beast binary
+SHA-256 `371a3a0a00a9618b800ed1fcecf3097c6ad63afe8ca1bf177a0ecdf3eead130c`;
+checksummed evidence is under
+`/home/barry/astra-evidence/vfs-identity-de25-20261107/` on Beast.
+
 ## Target baseline, 2026-11-06
 
 Three focused `fsbench` runs on DE25 used the selected release's kernel and

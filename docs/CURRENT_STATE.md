@@ -118,6 +118,19 @@ Trial binary was removed; all three production services are active with zero
 Astra restarts, only loop0 remains, and 8.5 GiB is free. Cache-object identity,
 guest pager, and file mappings remain open.
 
+Exact VFS node identity, 2026-11-07: the existing backend contract now owns
+one predicate for matching complete volume, inode, and birth generation.
+HostFS grant-root revalidation uses it, refusing unknown generation and zero
+mount identity. This is also the required cache-sharing identity; cache
+objects are not yet wired. Haiku `headers/os/storage/Node.h:18-29` uses device
+and inode; Astra includes birth generation to avoid stale inode reuse. Beast
+HostFS target build/test and a DE25 AArch64 fixture passed. Board/Beast binary
+SHA-256 matched at
+`371a3a0a00a9618b800ed1fcecf3097c6ad63afe8ca1bf177a0ecdf3eead130c`;
+evidence is under `/home/barry/astra-evidence/vfs-identity-de25-20261107/`.
+Trial binary was removed; Astra, audio, and remote desktop services are active
+with zero Astra restarts, only loop0 remains, and 8.5 GiB is free.
+
 Pager request identity prerequisite, 2026-11-06: `AREA_BIND_PAGER` now
 requires a nonzero VFS-owned cookie, so one private port can distinguish
 missing pages from several file cache areas. Existing area-map authority

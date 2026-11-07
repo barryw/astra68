@@ -58,6 +58,21 @@ typedef struct AstraVfsNodeInfo {
     AstraVfsNodeMeta meta;
 } AstraVfsNodeInfo;
 
+/* Exact node identity permits sharing only within one mount incarnation.
+ * Unknown birth generation leaves descriptions independent. */
+static inline int astra_vfs_node_identity_equal(const AstraVfsNodeMeta *left,
+                                                const AstraVfsNodeMeta *right)
+{
+    const uint32_t identity = ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_INODE |
+                              ASTRA_VFS_META_GENERATION;
+
+    return left != NULL && right != NULL &&
+           (left->valid & right->valid & identity) == identity &&
+           left->volume != 0u && left->volume == right->volume &&
+           left->inode == right->inode &&
+           left->generation == right->generation;
+}
+
 /* Publish known permissions and links, including real zero values. */
 static inline void astra_vfs_node_info_mode_links(AstraVfsNodeInfo *info,
                                                   uint16_t mode,

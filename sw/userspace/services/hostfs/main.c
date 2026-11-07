@@ -819,13 +819,9 @@ static void retire_orphans(void)
 
 static int grant_root_matches(const HostfsGrant *grant, const AstraVfsNodeMeta *meta)
 {
-    uint32_t identity = ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_INODE;
     /* Subdirectory authority needs node generation: reopening its spelling
      * must not select a replacement. Whole-volume grants use mount identity. */
-    identity |= ASTRA_VFS_META_GENERATION;
-    return (meta->valid & grant->root_meta.valid & identity) == identity &&
-        meta->volume == grant->root_meta.volume && meta->inode == grant->root_meta.inode &&
-        meta->generation == grant->root_meta.generation;
+    return astra_vfs_node_identity_equal(meta, &grant->root_meta);
 }
 
 /* Control-plane recovery keeps grant ports; old files and scopes stay lost. */

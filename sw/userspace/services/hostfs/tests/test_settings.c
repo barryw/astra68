@@ -169,6 +169,14 @@ int main(void)
     assert(grant_root_matches(&recovered, &same));
     ++same.generation;
     assert(!grant_root_matches(&recovered, &same));
+    same = recovered.root_meta;
+    ++same.volume;
+    assert(!grant_root_matches(&recovered, &same));
+    same = recovered.root_meta;
+    same.volume = 0u;
+    recovered.root_meta.volume = 0u;
+    assert(!grant_root_matches(&recovered, &same));
+    recovered.root_meta.volume = 55u;
     HostfsVolume first = {0}, second = {0};
     first.reference = (AstraVolumeReference){UINT64_MAX, UINT64_MAX, UINT64_MAX};
     assert(volume_metric_group(&first, "/ram0") && strcmp(first.metric_group, "hostfs.vfs.ram0") == 0);
