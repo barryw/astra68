@@ -2,6 +2,31 @@
 
 Status: active continuation map, 2026-11-07
 
+Pager BUSY reply retry, 2026-11-07: a coherent file-page source can refuse a
+page while its backing file changes. Kernel pager replies with
+`ASTRA_STATUS_BUSY` now reuse the existing bounded fault retry and original
+30-second deadline instead of killing the faulting process. The K1 guest
+pager sends BUSY once, then serves the original fault and a post-reclaim
+refault; all 15 markers passed on Beast and DE25. DE25 recorded three pager
+requests and replies, zero cycle-budget overruns, and maxima of 1,291/50,000
+request, 2,981/75,000 reply, and 79/25,000 handoff MC68040 cycles. ROM SHA-256
+`10d55f5d650dbfe696d158816a7cc207b6f2642bff0ff2ffb5d7227b4a84bec2`;
+DE25 wrapper log SHA-256
+`e5904a3c7c36ef18c560cf01cddc478a3b50361a2403450be699ea398a459a58`.
+Checked evidence is under
+`/home/barry/astra-evidence/pager-busy-retry-20261107/` on Beast. First private
+trial timed out while copying its 256 MiB isolated storage image; second
+reused that completed copy and reached K8 and `KERNEL MULTITASKING`. Its
+wrapper exited 1 after qualification because QEMU closed the provider control
+pipe; guest markers and performance records passed. Board trial state was
+removed, production returned to stage 8 with three services active and
+8.5 GiB free. The existing panic log dates to 2026-10-31; no new panic was
+seen. This makes transient source changes retryable; actual HostFS file-area
+ownership, pager service, and notification-driven invalidation remain open.
+Haiku `src/system/kernel/vm/VMCache.cpp:950-966,1563-1577` wakes page waiters
+only after coherent publication; Astra keeps shared waiters asleep across a
+primary BUSY retry and wakes them after a successful page or final failure.
+
 VFS direct page-source seam, 2026-11-07: HostFS production clients use a
 provider-direct data lane, so their open descriptions do not enter the VFS
 service's retained-file table. The coherent one-page reader now lives in the

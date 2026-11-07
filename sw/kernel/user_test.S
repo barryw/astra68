@@ -1243,7 +1243,7 @@ _k1_survivor_image_entry:
 	bne     .Lpager_fail
 	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
 	lea     -60(%sp), %sp
-	move.l  #2, 56(%sp)
+	move.l  #3, 56(%sp)
 .Lpager_wait:
 	move.l  KERNEL_QUALIFICATION_PAGER_RECEIVE_OFFSET(%a0), %d1
 	move.l  #ASTRA_DEADLINE_NONE_HI, %d2
@@ -1304,6 +1304,10 @@ _k1_survivor_image_entry:
 	clr.l   40(%sp)
 	move.l  #5, 44(%sp)
 	clr.l   48(%sp)
+	cmpi.l  #3, 56(%sp)
+	bne     .Lpager_reply_ready
+	move.l  #ASTRA_STATUS_BUSY, 24(%sp)
+.Lpager_reply_ready:
 	move.l  %d7, %d1
 	move.l  %sp, %d2
 	moveq   #52, %d3

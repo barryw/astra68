@@ -10255,9 +10255,12 @@ static KernelProcessStatus deliver_pager_reply(
                                                caller->pager_offset)))
                     caller_result = ASTRA_SYSCALL_OK;
             }
+        } else if (reply->status == ASTRA_STATUS_BUSY) {
+            caller_result = ASTRA_SYSCALL_WOULD_BLOCK;
         }
     }
-    caller->pager_failed = caller_result != ASTRA_SYSCALL_OK;
+    caller->pager_failed = caller_result != ASTRA_SYSCALL_OK &&
+                           caller_result != ASTRA_SYSCALL_WOULD_BLOCK;
     if (kernel_handle_set_context(replier->handles, reply_handle,
                                   KERNEL_OBJECT_REPLY, NULL) !=
             KERNEL_HANDLE_OK ||
@@ -15442,7 +15445,8 @@ static void pager_wait_done(KernelThread *thread, uint32_t result,
         thread->pager_failed = 0u;
         thread->pager_retry = 0u;
         thread->pager_deadline = 0u;
-    } else if (send_wait && result == ASTRA_SYSCALL_OK) {
+    } else if ((send_wait && result == ASTRA_SYSCALL_OK) ||
+               (primary && result == ASTRA_SYSCALL_WOULD_BLOCK)) {
         thread->pager_retry = 1u;
     } else {
         thread->pager_failed = 1u;

@@ -5,6 +5,21 @@ VM page publication, and synthetic guest pager with CPU budgets passed host
 and DE25 gates. VFS pager service, cache, mappings, and file I/O certification
 remain open.
 
+Transient source mutation, 2026-11-07: a valid pager reply with BUSY now
+retries the same fault through the existing bounded kernel pager path, keeping
+its original 30-second deadline. The primary waiter keeps other same-page
+waiters asleep until publication or terminal failure. K1 guest sends BUSY
+before the first successful page and later refaults after reclaim; Beast and
+DE25 passed all 15 markers with three pager replies and zero cycle overruns.
+DE25 maxima were 1,291 request, 2,981 reply, and 79 handoff MC68040 cycles,
+within existing budgets. Checked ROM and DE25 log are under
+`/home/barry/astra-evidence/pager-busy-retry-20261107/` on Beast. This is
+needed because the shared VFS backend page source returns BUSY if a file or
+provider change sequence moves during fill. Haiku
+`src/system/kernel/vm/VMCache.cpp:950-966,1563-1577` keeps page waiters behind
+one publisher; Astra uses its existing port-call retry and waiter list.
+No production VFS mapping consumes this yet.
+
 Direct HostFS page source, 2026-11-07: production HostFS clients use provider
 descriptions through the direct data lane, outside the VFS service slot table.
 The existing coherent retained-page reader was factored into one shared
