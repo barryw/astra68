@@ -2,6 +2,41 @@
 
 Status: active continuation map, 2026-11-07
 
+Physical USB replug and mapped-file shrink, 2026-11-07: On the selected
+coherent ABI-3 DE25 release, native Terminal unmounted both SanDisk Cruzer
+partitions. Their Desktop icons disappeared; Linux confirmed the cable
+disconnect and new USB device on reconnect. Both partitions auto-mounted
+writable at their stable `/usb0` exFAT and `/usb2` FAT32 paths. An already-open
+Atlas window updated its volume sidebar and enumerated the FAT32 root without
+Refresh. A long-standing FAT32 dirty flag, already reported on earlier board
+mounts, required an offline `fsck.fat -a` on this disposable drive. The first
+read-only recheck raced a new automatic mount after the repair changed the
+device; after native unmount and confirmation that the provider held no FAT
+mount, offline `fsck.fat -vn` was clean. A fresh native FAT32 mount/unmount
+cycle also left it clean. Both volumes were restored; no new FAT warning
+appeared. Screenshots, USB kernel log, board state, and checked hashes are
+under `/home/barry/astra-evidence/usb-replug-de25-20261107/` on Beast.
+Haiku `src/system/kernel/fs/vfs.cpp` and `fs/node_monitor.cpp` keep unmount
+ownership and mount events at their respective owners; Astra used its existing
+native volume lifecycle and broker rather than a second hotplug path.
+
+The native `fssem file-map` gate now checks shrink to one byte, mapped zero
+tail, and refault after re-extension through ordinary file I/O. Beast guest
+reported `FSSEM PASS file-map`; its unrelated scoped-lane performance check
+missed its background-adjusted threshold under host load, so that combined
+gate did not reach its final image check. A focused rerun with provider-reset
+passed `FSSEM PASS file-map`, `FSSEM LOSS PASS`, provider reset, and post-run
+`e2fsck`, ending `ASTRA FS SEMANTICS PASS`. The same updated `fssem` ran through
+DE25 Terminal and reported `FSSEM DONE passed 1 failed 0`. Test-only command
+was removed with targeted dev deploy. All three board services are active
+with zero restarts, stage 8 reached, USB icons restored, and 8.5 GiB free.
+Checksummed evidence is under
+`/home/barry/astra-evidence/file-map-truncate-de25-20261107/` on Beast.
+Haiku `src/system/kernel/cache/file_cache.cpp:1387-1400` resizes cache with
+file size; this gate exercises Astra's existing provider-change invalidation.
+Shared ordinary I/O pages, writeback, full EOF/truncate mapping semantics,
+pressure reclaim, and POSIX `mmap` remain open.
+
 HostFS read-only file areas, 2026-11-07: HostFS now owns exact-node,
 page-aligned file windows, a retained provider description and grant session,
 one shared VFS pager thread/port/scratch page, and one owner area handle until

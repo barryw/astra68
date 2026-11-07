@@ -2063,6 +2063,16 @@ done:
     return result;
 }
 
+static int wait_mapped_byte(const volatile char *mapping, size_t offset,
+                            char expected)
+{
+    uint64_t deadline = astra_clock_monotonic() + UINT64_C(4000000000);
+    while (mapping[offset] != expected && astra_clock_monotonic() < deadline)
+        (void)astra_rt_thread_sleep(UINT64_C(10000000),
+            ASTRA_THREAD_SLEEP_RELATIVE, 0u, NULL);
+    return mapping[offset] == expected;
+}
+
 static int file_map_gate(const char *directory)
 {
     AstraProcessFilesystem native = ASTRA_PROCESS_FILESYSTEM_INIT;
@@ -2110,12 +2120,21 @@ static int file_map_gate(const char *directory)
         goto done;
     close(fd); fd = -1;
     stage = "invalidate";
-    uint64_t deadline = astra_clock_monotonic() + UINT64_C(4000000000);
-    while (((volatile const char *)mapping)[0] != 'b' &&
-           astra_clock_monotonic() < deadline)
-        (void)astra_rt_thread_sleep(UINT64_C(10000000),
-            ASTRA_THREAD_SLEEP_RELATIVE, 0u, NULL);
-    if (((volatile const char *)mapping)[0] != 'b') goto done;
+    if (!wait_mapped_byte(mapping, 0u, 'b')) goto done;
+    stage = "truncate";
+    fd = open(path, O_WRONLY);
+    if (fd < 0 || ftruncate(fd, 1) != 0 || fsync(fd) != 0)
+        goto done;
+    close(fd); fd = -1;
+    stage = "zero-tail";
+    if (!wait_mapped_byte(mapping, 1u, '\0')) goto done;
+    stage = "extend";
+    fd = open(path, O_WRONLY);
+    if (fd < 0 || pwrite(fd, "c", 1u, 1) != 1 || fsync(fd) != 0)
+        goto done;
+    close(fd); fd = -1;
+    stage = "refault";
+    if (!wait_mapped_byte(mapping, 1u, 'c')) goto done;
     result = 0;
 done:
     if (fd >= 0) close(fd);
