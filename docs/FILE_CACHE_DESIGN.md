@@ -315,6 +315,40 @@ retrying the same unresolved instruction indefinitely is invalid. The
 transfer area is never the file's mapped area: writing into a published shared
 page while it is being filled would expose partial data to other processes.
 
+Fault-continuation control-flow audit, 2026-11-07: `sw/kernel/process.c`
+already retains a call number, reply capability, receiver donation, deadline,
+and a wait observer, but its ordinary reply copies into a user address. A
+pager continuation must instead keep the pinned area and aligned offset on
+the faulting thread, accept a service-owned transfer-area handle in its reply,
+read the page through the existing area API, and publish it before completing
+the call. The reply handle is consumed; the transfer-area handle stays in the
+service and is never imported into the client. The wait observer releases the
+area pin exactly once on reply, timeout, cancellation, or process exit.
+
+The observer runs inside `sw/kernel/thread.c:complete_wait()`, before the
+thread is enqueued. It must not retire the process reentrantly. A failed
+continuation instead needs one common return-to-user gate in
+`sw/kernel/dispatch.c`: retire each selected failed-fault process with the
+original fault snapshot, select another runnable thread or existing idle/
+worker path, and only then return a user context. This avoids fabricated user
+addresses, invalid-PC traps, silent zero pages, and unbounded recursive
+scheduling. A full pager port cannot be treated as a failed page-in or resume
+the unresolved instruction: retain the unsent call, block on the existing
+port-send wait sequence, and retry from that same kernel continuation before
+returning to user mode. One pending operation owns each `(area, page)`; later
+faults wait for its publication or terminal failure through existing thread
+wait queues. Haiku `src/system/kernel/vm/vm.cpp:3705-3780` keeps fault
+authority while resolving a page, and `src/system/kernel/cache/file_cache.cpp`
+publishes only complete, zero-tailed data. Astra adapts those contracts to
+its current area, port, and scheduler owners.
+
+The first executable gate must cover success, malformed and stale replies,
+full send queue, timeout, pager death, client exit, two simultaneous faults
+on one page, and donation. It must assert zero leaked area children and no
+user resume after failure. K1 needs separate request, reply/publication, and
+terminal-handoff cycle budgets against the existing user-fault baseline
+before VFS mappings depend on this path.
+
 This wiring uses existing `sw/kernel/area.c` mapping authority and frame
 ownership, `sw/kernel/port.c` transfer, `sw/kernel/thread.c` call donation,
 and `sw/kernel/process.c` reply capability. Haiku's
