@@ -383,7 +383,11 @@ initially missed Fonts when the gate clicked its Atlas position before the
 new drawer had painted; the gate now pauses 250 ms between icon discovery and
 input. Four consecutive five-app runs passed on the final image. Quake HDMI
 trial: smooth gameplay and effects, no music on selected image, which lacks
-`/store/id1/music`.
+`/store/id1/music`. A user-owned `track02.ogg` was staged through WORK, but
+Terminal cannot create the destination because its launch ceiling lacks
+`STORE:rw`; the staged copy was removed without changing production storage.
+Music asset import needs a supported Astra path through that capability
+boundary.
 
 VFS retained-description ownership, 2026-11-07: one open file can now hold
 multiple internal cache references. Closing its client session revokes public
