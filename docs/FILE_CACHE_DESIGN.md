@@ -6,14 +6,16 @@ and DE25 gates. VFS pager service, cache, mappings, and file I/O certification
 remain open.
 
 VFS pager reply pump, 2026-11-07: the shared service-side pump validates
-kernel page requests and answers from a cache-owned backend description via
-the coherent one-page VFS reader. BUSY, LOST, malformed request, short valid
+kernel page requests and answers from cache-owned backend descriptions via
+one receive port, one scratch data area, and cookie lookup. This avoids a
+wait-set entry per file. It uses the coherent one-page VFS reader. BUSY, LOST,
+malformed request, short valid
 byte count, and dead caller are covered by focused tests. Beast service
 archive build, host suite, and ASan/UBSan passed; the static AArch64 fixture
 passed on DE25 with matching binary/log SHA-256 under
-`/home/barry/astra-evidence/vfs-file-pager-20261107/` on Beast. The pump
-borrows its description, pager receive endpoint, mapped scratch page, and data
-area. HostFS must own and retire those resources using area reference counts
+`/home/barry/astra-evidence/vfs-file-pager-shared-20261107/` on Beast. The pump
+borrows cache descriptions, pager receive endpoint, mapped scratch page, and
+data area. HostFS must own and retire those resources using area reference counts
 and grant-session lifetime; it has not yet connected the pump to a guest file
 mapping. Haiku `src/system/kernel/cache/file_cache.cpp:345-375,386-427`
 performs vnode-backed fill and zero-tail; Astra uses VFS's coherent read and

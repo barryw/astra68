@@ -3,26 +3,28 @@
 Status: active continuation map, 2026-11-07
 
 Backend-neutral VFS pager reply pump, 2026-11-07: the VFS service archive now
-contains a pager-protocol pump that accepts one cache-owned backend description,
-exact node identity, reserved-area span, and borrowed page buffer/data area.
-It validates kernel page requests, uses the existing coherent backend page
+contains one pager-protocol receive pump and scratch data area for all cache
+objects. A cookie lookup selects the cache-owned backend description, exact
+node identity, and reserved-area span without adding one wait-set entry per
+mapped file. It validates kernel page requests, uses the coherent backend page
 reader, sends success bytes or BUSY/LOST/IO status through the one-use reply
 capability, and records unexpected receive/send failures. The cache owner must
 retain these resources through all mappings and in-flight faults; HostFS does
 not yet create or register them. Beast target service build, VFS host suite,
-and focused ASan/UBSan passed. Matching static AArch64 fixture ran on DE25:
+and ASan/UBSan passed. Matching static AArch64 fixture ran on DE25 and proved
+two cookies select distinct backend nodes through the shared port:
 binary SHA-256
-`736e7816a9c716b625e4aae061a6c35456bf3dd139bb8fab2994436ea0cbf922`,
+`5245308a83f7e731c6693517dd65d376753b16d04261a32e6245773fdb845eb4`,
 log SHA-256
 `b2db6c2edb54f0dbec7f40b617a035a04974c79a1e7c132377013ced4ad8fb79`.
-Evidence is under `/home/barry/astra-evidence/vfs-file-pager-20261107/` on
+Evidence is under `/home/barry/astra-evidence/vfs-file-pager-shared-20261107/` on
 Beast. Board fixture removed; Astra, audio host, and remote desktop stayed
 active with 8.5 GiB free. This checks service-side protocol logic on the
 DE25 HPS, not a real guest file-backed fault. HostFS mapping ownership,
 grant-session retention, change invalidation, and guest runtime gate remain.
-Haiku `src/system/kernel/cache/file_cache.cpp:345-375,386-427` reads from a
-backing vnode and clears the page tail; Astra delegates the coherent read to
-VFS and the tail to kernel atomic page publication.
+Haiku `src/system/kernel/cache/file_cache.cpp:345-375,386-427` reads from one
+backing vnode cache and clears the page tail; Astra dispatches cookies to
+cache-owned sources and delegates the tail to kernel atomic publication.
 
 Pager BUSY reply retry, 2026-11-07: a coherent file-page source can refuse a
 page while its backing file changes. Kernel pager replies with

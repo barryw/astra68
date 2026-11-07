@@ -6,22 +6,34 @@
 #include <string.h>
 
 int
-astra_vfs_file_pager_init(AstraVfsFilePager *pager,
+astra_vfs_file_page_source_init(AstraVfsFilePageSource *source,
     const AstraVfsBackend *backend, uintptr_t node,
-    const AstraVfsNodeMeta *identity, uint32_t span, uint32_t cookie,
-    uint32_t receive, uint32_t data_area, void *page, uint32_t page_size)
+    const AstraVfsNodeMeta *identity, uint32_t span, uint32_t cookie)
 {
-    if (pager == NULL || backend == NULL || backend->ops == NULL ||
+    if (source == NULL || backend == NULL || backend->ops == NULL ||
         backend->ops->read == NULL || backend->ops->stat_node == NULL ||
         node == 0u || !astra_vfs_node_identity_equal(identity, identity) ||
         span == 0u || (span & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
-        cookie == 0u || receive == 0u || data_area == 0u || page == NULL ||
-        page_size < ASTRA_MEMORY_PAGE_SIZE)
+        cookie == 0u)
+        return 0;
+    *source = (AstraVfsFilePageSource){
+        .backend = *backend, .identity = *identity, .node = node,
+        .span = span, .cookie = cookie,
+    };
+    return 1;
+}
+
+int
+astra_vfs_file_pager_init(AstraVfsFilePager *pager, uint32_t receive,
+    uint32_t data_area, void *page, uint32_t page_size,
+    AstraVfsFilePageLookup lookup, void *context)
+{
+    if (pager == NULL || receive == 0u || data_area == 0u || page == NULL ||
+        page_size < ASTRA_MEMORY_PAGE_SIZE || lookup == NULL)
         return 0;
     *pager = (AstraVfsFilePager){
-        .backend = *backend, .identity = *identity, .node = node,
-        .page = page, .span = span, .cookie = cookie,
-        .receive = receive, .data_area = data_area,
+        .receive = receive, .data_area = data_area, .page = page,
+        .lookup = lookup, .context = context,
     };
     return 1;
 }
@@ -31,7 +43,8 @@ astra_vfs_file_pager_pump(AstraVfsFilePager *pager, uint32_t budget)
 {
     uint32_t consumed = 0u;
 
-    if (pager == NULL || pager->receive == 0u || pager->page == NULL)
+    if (pager == NULL || pager->receive == 0u || pager->page == NULL ||
+        pager->lookup == NULL)
         return 0u;
     while (consumed < budget) {
         AstraPagerPageRequest request = {0};
@@ -66,13 +79,15 @@ astra_vfs_file_pager_pump(AstraVfsFilePager *pager, uint32_t budget)
             request.header.protocol_version == ASTRA_PAGER_PROTOCOL_VERSION &&
             request.header.operation == ASTRA_PAGER_OPERATION_PAGE &&
             request.header.transaction_id != 0u &&
-            request.cookie == pager->cookie &&
+            request.cookie != 0u &&
             request.reserved[0] == 0u && request.reserved[1] == 0u &&
-            (request.offset & (ASTRA_MEMORY_PAGE_SIZE - 1u)) == 0u &&
-            request.offset < pager->span) {
-            reply.status = astra_vfs_backend_read_page(&pager->backend,
-                pager->node, &pager->identity, request.offset,
-                pager->page, &valid);
+            (request.offset & (ASTRA_MEMORY_PAGE_SIZE - 1u)) == 0u) {
+            const AstraVfsFilePageSource *source =
+                pager->lookup(pager->context, request.cookie);
+            reply.status = source == NULL ? ASTRA_STATUS_LOST :
+                request.offset >= source->span ? ASTRA_STATUS_PROTOCOL :
+                astra_vfs_backend_read_page(&source->backend, source->node,
+                    &source->identity, request.offset, pager->page, &valid);
             if (reply.status == ASTRA_STATUS_OK) {
                 if (valid == 0u || valid > ASTRA_MEMORY_PAGE_SIZE)
                     reply.status = ASTRA_STATUS_IO;

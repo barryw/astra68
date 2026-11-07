@@ -20,6 +20,14 @@ static AstraPagerPageReply replies[7];
 static uint32_t call_count, next_call, send_count, close_count, read_count;
 static uint32_t receive_error;
 
+static const AstraVfsFilePageSource *lookup(void *context, uint32_t cookie)
+{
+    const AstraVfsFilePageSource *sources = context;
+    if (cookie == 44u) return &sources[0];
+    if (cookie == 45u) return &sources[1];
+    return NULL;
+}
+
 uint32_t astra_port_receive(uint32_t receive, void *message, uint32_t capacity,
     uint32_t *handles, uint32_t handle_capacity, uint32_t *size,
     uint32_t *handle_count)
@@ -74,8 +82,10 @@ uint32_t astra_vfs_backend_read_page(const AstraVfsBackend *backend,
     void *page, uint32_t *valid_bytes)
 {
     const PageCall *call = &calls[next_call - 1u];
-    assert(backend->context == &calls && node == 55u &&
-           identity->volume == 3u && identity->inode == 5u &&
+    assert(backend->context == &calls &&
+           node == (call->request.cookie == 44u ? 55u : 56u) &&
+           identity->volume == 3u &&
+           identity->inode == (call->request.cookie == 44u ? 5u : 6u) &&
            identity->generation == 7u &&
            offset == call->request.offset);
     ++read_count;
@@ -111,38 +121,52 @@ int main(void)
                  ASTRA_VFS_META_GENERATION,
         .volume = 3u, .inode = 5u, .generation = 7u,
     };
+    AstraVfsNodeMeta second_identity = identity;
+    AstraVfsFilePageSource sources[2];
     AstraVfsFilePager pager;
     uint8_t page[ASTRA_MEMORY_PAGE_SIZE];
 
-    assert(!astra_vfs_file_pager_init(&pager, &backend, 55u, NULL,
-        2u * ASTRA_MEMORY_PAGE_SIZE, 44u, 77u, 99u, page, sizeof(page)));
-    assert(!astra_vfs_file_pager_init(&pager, &backend, 55u, &identity,
-        ASTRA_MEMORY_PAGE_SIZE + 1u, 44u, 77u, 99u, page, sizeof(page)));
-    assert(astra_vfs_file_pager_init(&pager, &backend, 55u, &identity,
-        2u * ASTRA_MEMORY_PAGE_SIZE, 44u, 77u, 99u, page, sizeof(page)));
+    assert(!astra_vfs_file_page_source_init(&sources[0], &backend, 55u,
+        NULL, 2u * ASTRA_MEMORY_PAGE_SIZE, 44u));
+    assert(!astra_vfs_file_page_source_init(&sources[0], &backend, 55u,
+        &identity, ASTRA_MEMORY_PAGE_SIZE + 1u, 44u));
+    assert(astra_vfs_file_page_source_init(&sources[0], &backend, 55u,
+        &identity, 2u * ASTRA_MEMORY_PAGE_SIZE, 44u));
+    second_identity.inode = 6u;
+    assert(astra_vfs_file_page_source_init(&sources[1], &backend, 56u,
+        &second_identity, ASTRA_MEMORY_PAGE_SIZE, 45u));
+    assert(!astra_vfs_file_pager_init(&pager, 77u, 99u, page, 1u,
+        lookup, sources));
+    assert(astra_vfs_file_pager_init(&pager, 77u, 99u, page,
+        sizeof(page), lookup, sources));
 
     add_call(0u, ASTRA_VFS_OK, 5u, ASTRA_SYSCALL_OK);
     add_call(ASTRA_MEMORY_PAGE_SIZE, ASTRA_VFS_ERR_BUSY, 0u, ASTRA_SYSCALL_OK);
     add_call(0u, ASTRA_VFS_OK, 5u, ASTRA_SYSCALL_OK);
     calls[2].request.cookie = 45u;
-    add_call(0u, ASTRA_VFS_ERR_LOST, 0u, ASTRA_SYSCALL_OK);
+    add_call(0u, ASTRA_VFS_OK, 5u, ASTRA_SYSCALL_OK);
+    calls[3].request.cookie = 46u;
     add_call(2u * ASTRA_MEMORY_PAGE_SIZE, ASTRA_VFS_OK, 5u,
              ASTRA_SYSCALL_OK);
     add_call(0u, ASTRA_VFS_OK, ASTRA_MEMORY_PAGE_SIZE + 1u,
              ASTRA_SYSCALL_PEER_DEAD);
-    assert(astra_vfs_file_pager_pump(&pager, 6u) == 6u);
-    assert(next_call == 6u && send_count == 6u && close_count == 6u &&
-           read_count == 4u && pager.stalled == 0u);
+    add_call(0u, ASTRA_VFS_ERR_LOST, 0u, ASTRA_SYSCALL_OK);
+    assert(astra_vfs_file_pager_pump(&pager, 7u) == 7u);
+    assert(next_call == 7u && send_count == 7u && close_count == 7u &&
+           read_count == 5u && pager.stalled == 0u);
     assert(replies[0].status == ASTRA_STATUS_OK &&
            replies[0].cookie == 44u && replies[0].offset == 0u &&
            replies[0].data_area == 99u && replies[0].valid_bytes == 5u &&
            memcmp(page, "story", 5u) == 0);
     assert(replies[1].status == ASTRA_STATUS_BUSY &&
            replies[1].data_area == 0u && replies[1].valid_bytes == 0u);
-    assert(replies[2].status == ASTRA_STATUS_PROTOCOL &&
+    assert(replies[2].status == ASTRA_STATUS_OK &&
+           replies[2].cookie == 45u && replies[2].data_area == 99u &&
+           replies[2].valid_bytes == 5u &&
            replies[3].status == ASTRA_STATUS_LOST &&
            replies[4].status == ASTRA_STATUS_PROTOCOL &&
-           replies[5].status == ASTRA_STATUS_IO);
+           replies[5].status == ASTRA_STATUS_IO &&
+           replies[6].status == ASTRA_STATUS_LOST);
     assert(astra_vfs_file_pager_pump(&pager, 1u) == 0u);
     receive_error = ASTRA_SYSCALL_IO_ERROR;
     assert(astra_vfs_file_pager_pump(&pager, 1u) == 0u &&
