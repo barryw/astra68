@@ -1306,14 +1306,7 @@ astra_vfs_backend_read_page(const AstraVfsBackend *backend,
         return ASTRA_VFS_ERR_LOST;
     /* shortcut: unrelated writes can force retry; use per-node generation
      * once cache objects own mutation state. */
-    if (after.size != before.size || after.mtime != before.mtime ||
-        ((after.meta.valid ^ before.meta.valid) &
-         (ASTRA_VFS_META_MTIME | ASTRA_VFS_META_CTIME)) != 0u ||
-        ((before.meta.valid & after.meta.valid & ASTRA_VFS_META_MTIME) != 0u &&
-         before.meta.mtime_nsec != after.meta.mtime_nsec) ||
-        ((before.meta.valid & after.meta.valid & ASTRA_VFS_META_CTIME) != 0u &&
-         (before.meta.ctime != after.meta.ctime ||
-          before.meta.ctime_nsec != after.meta.ctime_nsec)) ||
+    if (!astra_vfs_node_revision_equal(&before, &after) ||
         provider_nodes_after != provider_nodes_before)
         return ASTRA_VFS_ERR_BUSY;
     *valid_bytes = copied;

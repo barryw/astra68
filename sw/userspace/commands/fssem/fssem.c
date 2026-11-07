@@ -4,7 +4,7 @@
  *
  *   fssem CASE...
  *
- * Each case runs in a fresh directory /work/fssem-<pid>-<case> and prints
+ * Each case runs in a fresh directory /work/fssem-<pid>-<case>-XXXXXX and prints
  * "FSSEM PASS <case>" or "FSSEM FAIL <case>: <detail>". The last line is
  * "FSSEM DONE passed P failed F"; the exit status is 0 only when F is 0.
  * Cases use the POSIX layer unless their name says otherwise; the raw-*
@@ -2142,7 +2142,14 @@ done:
     if (area != 0u) (void)astra_close(area);
     if (file._private_client != NULL) (void)astra_filesystem_close(&file);
     astra_process_filesystem_close(&native);
-    (void)unlink(path);
+    if (unlink(path) != 0 && errno != ENOENT && result == 0) {
+        stage = "cleanup file";
+        result = 2;
+    }
+    if (rmdir(directory) != 0 && result == 0) {
+        stage = "cleanup directory";
+        result = 2;
+    }
     return result == 0 ? 0 : fail("file-map %s", stage);
 }
 
@@ -2644,11 +2651,11 @@ int main(int argc, char **argv)
             ++failed;
             continue;
         }
-        (void)snprintf(directory, sizeof(directory), "/work/fssem-%ld-%s",
+        (void)snprintf(directory, sizeof(directory), "/work/fssem-%ld-%s-XXXXXX",
                        (long)getpid(), cases[at].name);
         failure[0] = '\0';
-        if (mkdir(directory, 0755) != 0) {
-            printf("FSSEM FAIL %s: mkdir %s: %s\n", cases[at].name,
+        if (mkdtemp(directory) == NULL) {
+            printf("FSSEM FAIL %s: mkdtemp %s: %s\n", cases[at].name,
                    directory, strerror(errno));
             ++failed;
             continue;

@@ -100,6 +100,7 @@ typedef struct HostfsVolume {
     AstraVfsService service;
     AstraVfsChangeSnapshot published_changes;
     uint64_t published_change_sequence;
+    uint64_t observed_cache_nodes;
     AstraVfsSessionSlot sessions[ASTRA_VFS_SESSION_MAX];
     AstraVfsPortService port;
     AstraArea storage;
@@ -151,6 +152,7 @@ typedef struct HostfsFileArea {
     HostfsGrant *grant;
     AstraVfsHostBackend backend;
     AstraVfsFilePageSource source;
+    AstraVfsNodeInfo snapshot;
     uint32_t area;
     uint32_t pins;
     uint8_t stale;
@@ -869,7 +871,8 @@ static uint32_t hostfs_file_area(void *context,
         if (entry->grant == grant && !entry->stale &&
             entry->source.base == base && entry->source.span == span &&
             astra_vfs_node_identity_equal(&entry->source.identity,
-                                           &info.meta)) {
+                                           &info.meta) &&
+            astra_vfs_node_revision_equal(&entry->snapshot, &info)) {
             status = astra_rt_handle_duplicate(entry->area,
                 ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
                 area);
@@ -886,6 +889,7 @@ static uint32_t hostfs_file_area(void *context,
     }
     entry->backend = backend;
     entry->grant = grant;
+    entry->snapshot = info;
     if (!astra_vfs_file_page_source_init(&entry->source,
         &(AstraVfsBackend){ops, &entry->backend}, node, &info.meta,
         base, span, file_pager_cookie))
@@ -927,16 +931,24 @@ static uint32_t hostfs_file_area(void *context,
     return ASTRA_VFS_OK;
 }
 
-static void file_areas_invalidate(HostfsVolume *volume, uint32_t kind,
+static int file_areas_invalidate(HostfsVolume *volume, uint32_t kind,
     uint64_t inode)
 {
-    if (!astra_vfs_state_lock_acquire(&state_lock)) return;
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return 0;
     for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next)
         if (entry->grant->owner == volume &&
             (kind != ASTRA_HOST_FS_CHANGE_NODE ||
              entry->source.identity.inode == inode))
             entry->stale = 1u;
     astra_vfs_state_lock_release(&state_lock);
+    return 1;
+}
+
+static void file_areas_observe_nodes(HostfsVolume *volume, uint64_t nodes)
+{
+    if (nodes != volume->observed_cache_nodes &&
+        file_areas_invalidate(volume, ASTRA_HOST_FS_CHANGE_GAP, 0u))
+        volume->observed_cache_nodes = nodes;
 }
 
 static void file_areas_maintain(void)
@@ -1238,6 +1250,10 @@ static void publish_filesystem_changes(uint32_t messaging)
     for (HostfsVolume *volume = volumes; volume != NULL;
          volume = volume->next) {
         if (!volume->service_ready || volume->config_store) continue;
+        uint64_t nodes, entries;
+        if (astra_vfs_host_change_snapshot(&volume->backend,
+                &nodes, &entries) == ASTRA_VFS_OK)
+            file_areas_observe_nodes(volume, nodes);
         for (uint32_t limit = 0u; limit < 8u; ++limit) {
             AstraHostFsChangeRecord record = {0};
             AstraVfsChangeSnapshot snapshot;

@@ -5,6 +5,25 @@ publication, and read-only HostFS file areas passed host and DE25 gates.
 Ordinary I/O still does not share mapped resident frames; dirty writeback,
 truncate semantics, pressure reclaim, and POSIX `mmap` remain open.
 
+File-area revision and invalidation, 2026-11-07: HostFS no longer reuses a
+mapped area merely because its node identity matches. It also compares the
+reported size and available timestamps. Its maintenance reads the latest
+provider node generation before draining the bounded broker queue and marks
+file areas stale on a generation change, then reclaims their resident pages.
+The broker remains the owner of application notifications; cache correctness
+does not wait behind its publication backlog. A cold DE25 run exposed a
+four-second invalidation timeout before this change. Three consecutive
+native `fssem file-map` runs passed after it, including a cold first run.
+The gate now uses the existing native `mkdtemp` for case directories and
+removes its own file-map directory, avoiding stale-PID collisions. Beast host
+tests, sanitizers, and target HostFS build passed; checked RFB evidence lives
+at `/home/barry/astra-evidence/file-map-revision-de25-20261107/` on Beast.
+This closes a mapped-area reuse and notification-backlog gap, but ordinary
+reads still use the provider rather than resident mapped frames. Haiku
+`src/system/kernel/cache/file_cache.cpp:345-430` ties cached pages to vnode
+identity; Astra retains its existing provider generation and area reclaim
+owners.
+
 HostFS file-area integration, 2026-11-07: cache-owned exact-node windows use
 one shared pager port and scratch page, retain the provider description and
 grant session across client close, and retire only after area handle, mapping,

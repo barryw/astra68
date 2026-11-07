@@ -2,6 +2,29 @@
 
 Status: active continuation map, 2026-11-07
 
+Mapped-file cache coherence, 2026-11-07: HostFS now compares the reported
+file revision (size and available timestamps) before reusing an exact-node
+file area. Its once-per-second maintenance observes the provider's latest
+node generation and invalidates mapped pages independently of the bounded
+filesystem notification broker drain. A cold DE25 `fssem file-map` run had
+timed out at invalidation while broker events were backlogged; after this
+change, three consecutive native runs passed, including the first after
+restart. `fssem` now uses the existing native `mkdtemp` for unique case
+directories and removes its file-map directory after each run; this avoids
+collisions with directories left by older tests. Beast HostFS and VFS host
+tests, sanitizers, and the HostFS MC68040 build passed. The updated HostFS
+binary SHA-256 is
+`32fb9bfaa51d55b21baf0707a1e9e5a50fba55b57ba3f652413b08021718b867`.
+Checked RFB evidence is under
+`/home/barry/astra-evidence/file-map-revision-de25-20261107/` on Beast.
+The test-only command and board captures were removed. DE25 reached stage 8;
+Astra, audio, and remote services are active with zero restarts and 8.5 GiB
+free. Ordinary I/O still has no shared resident file cache; dirty writeback,
+pressure reclaim, and POSIX `mmap` remain open. Haiku
+`src/system/kernel/cache/file_cache.cpp` keeps vnode cache identity and
+invalidation with its backing node; Astra uses its existing provider node
+generation and area reclaim path.
+
 Physical USB replug and mapped-file shrink, 2026-11-07: On the selected
 coherent ABI-3 DE25 release, native Terminal unmounted both SanDisk Cruzer
 partitions. Their Desktop icons disappeared; Linux confirmed the cable

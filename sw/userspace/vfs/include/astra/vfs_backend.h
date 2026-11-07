@@ -73,6 +73,23 @@ static inline int astra_vfs_node_identity_equal(const AstraVfsNodeMeta *left,
            left->generation == right->generation;
 }
 
+/* Unknown timestamps cannot prove a change; compare every reported one. */
+static inline int astra_vfs_node_revision_equal(const AstraVfsNodeInfo *left,
+                                                const AstraVfsNodeInfo *right)
+{
+    const uint32_t time_fields = ASTRA_VFS_META_MTIME | ASTRA_VFS_META_CTIME;
+    if (left == NULL || right == NULL || left->kind != right->kind ||
+        left->size != right->size || left->mtime != right->mtime ||
+        ((left->meta.valid ^ right->meta.valid) & time_fields) != 0u)
+        return 0;
+    if ((left->meta.valid & right->meta.valid & ASTRA_VFS_META_MTIME) != 0u &&
+        left->meta.mtime_nsec != right->meta.mtime_nsec)
+        return 0;
+    return (left->meta.valid & right->meta.valid & ASTRA_VFS_META_CTIME) == 0u ||
+        (left->meta.ctime == right->meta.ctime &&
+         left->meta.ctime_nsec == right->meta.ctime_nsec);
+}
+
 /* Publish known permissions and links, including real zero values. */
 static inline void astra_vfs_node_info_mode_links(AstraVfsNodeInfo *info,
                                                   uint16_t mode,
