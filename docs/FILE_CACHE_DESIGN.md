@@ -166,6 +166,31 @@ SHA-256 `371a3a0a00a9618b800ed1fcecf3097c6ad63afe8ca1bf177a0ecdf3eead130c`;
 checksummed evidence is under
 `/home/barry/astra-evidence/vfs-identity-de25-20261107/` on Beast.
 
+VFS page-source slice, 2026-11-07: the retained-description owner now reads
+one aligned page with repeated backend reads, refusing zero progress and
+overreported counts. It checks exact volume/inode/birth identity when a
+shared cache object supplied one; description-scoped objects pass no identity.
+It checks file type and EOF before reading, then rechecks identity, size,
+mtime, and the existing VFS node-change generation before publication.
+Concurrent changes return BUSY with zero valid bytes. The service-wide
+generation can retry on an unrelated write until per-node cache state exists.
+Beast core tests exercise short reads, stale identity, EOF, zero progress,
+overreport, truncate during read, and mutation during read. Full Beast VFS
+target build, host suite, and sanitizers passed. The same AArch64 service-core
+fixture passed on DE25 with one million forced switches; board and Beast
+binary SHA-256 matched at
+`79c6f258883067362985d3448b8ad35b79f99599216ad307adcdba4367802632`.
+Log SHA-256 is
+`69373fdd5dea3100ca16fce035e93461870a000151214aa1f9e6c7882deb511f`;
+both are archived under
+`/home/barry/astra-evidence/vfs-page-source-de25-20261107/` on Beast.
+The trial binary was removed; production services remained active and board
+free space stayed at 8.5 GiB. This is a reusable VFS read seam; no guest file
+mapping or pager service consumes it yet.
+Haiku `src/system/kernel/cache/file_cache.cpp:345-375,386-427` clears
+untouched tails before publishing cached pages; Astra keeps that zero-tail
+step in its kernel page publisher.
+
 Pager candidate, 2026-11-07: a bound-area fault now sends the page request
 through the existing port call/reply machinery, keeps the area pinned while
 waiting, reads the reply's transfer area, and publishes only a checked,

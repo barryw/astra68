@@ -1240,6 +1240,69 @@ astra_vfs_service_read_retained(AstraVfsService *service,
 }
 
 uint32_t
+astra_vfs_service_read_page_retained(AstraVfsService *service,
+                                     AstraVfsFile retained,
+                                     const AstraVfsNodeMeta *expected_identity,
+                                     uint64_t offset, void *page,
+                                     uint32_t *valid_bytes)
+{
+    AstraVfsNodeInfo before, after;
+    AstraVfsChangeSnapshot changes_before, changes_after;
+    uint32_t status, wanted, copied = 0u;
+
+    if (valid_bytes != NULL)
+        *valid_bytes = 0u;
+    if (service == NULL || page == NULL || valid_bytes == NULL ||
+        (offset & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
+        (expected_identity != NULL &&
+         !astra_vfs_node_identity_equal(expected_identity,
+                                        expected_identity)))
+        return ASTRA_VFS_ERR_INVALID;
+    if (!astra_vfs_service_change_snapshot(service, &changes_before))
+        return ASTRA_VFS_ERR_IO;
+    status = astra_vfs_service_stat_retained(service, retained, &before);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (before.kind != ASTRA_VFS_KIND_FILE || offset >= before.size)
+        return ASTRA_VFS_ERR_INVALID;
+    if (expected_identity != NULL &&
+        !astra_vfs_node_identity_equal(expected_identity, &before.meta))
+        return ASTRA_VFS_ERR_LOST;
+    wanted = before.size - offset < ASTRA_MEMORY_PAGE_SIZE ?
+        (uint32_t)(before.size - offset) : ASTRA_MEMORY_PAGE_SIZE;
+    while (copied < wanted) {
+        uint32_t moved = 0u;
+
+        status = astra_vfs_service_read_retained(
+            service, retained, offset + copied, (uint8_t *)page + copied,
+            wanted - copied, &moved);
+        if (status != ASTRA_VFS_OK)
+            return status;
+        if (moved == 0u)
+            return ASTRA_VFS_ERR_IO;
+        copied += moved;
+    }
+    status = astra_vfs_service_stat_retained(service, retained, &after);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (!astra_vfs_service_change_snapshot(service, &changes_after))
+        return ASTRA_VFS_ERR_IO;
+    if (after.kind != ASTRA_VFS_KIND_FILE ||
+        (expected_identity != NULL &&
+         !astra_vfs_node_identity_equal(expected_identity, &after.meta)) ||
+        (astra_vfs_node_identity_equal(&before.meta, &before.meta) &&
+         !astra_vfs_node_identity_equal(&before.meta, &after.meta)))
+        return ASTRA_VFS_ERR_LOST;
+    /* shortcut: unrelated writes can force retry; use per-node generation
+     * once cache objects own mutation state. */
+    if (after.size != before.size || after.mtime != before.mtime ||
+        changes_after.nodes != changes_before.nodes)
+        return ASTRA_VFS_ERR_BUSY;
+    *valid_bytes = copied;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
 astra_vfs_service_stat_retained(AstraVfsService *service,
                                 AstraVfsFile retained, AstraVfsNodeInfo *info)
 {

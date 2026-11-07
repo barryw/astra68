@@ -2,6 +2,21 @@
 
 Status: active continuation map, 2026-11-07
 
+File-cache candidate, 2026-11-07: on WIP branch
+`wip/pager-continuation-20261107`, kernel pager continuation and terminal
+lifecycle tests pass Beast host/target and K1 gates. VFS now has one retained
+description page-read path that completes short reads and rechecks exact node
+identity, size, and existing node-change generation before publication. The
+full Beast VFS suite and sanitizers passed; the same AArch64 core fixture
+passed on DE25 with one million forced switches and matching binary SHA-256
+`79c6f258883067362985d3448b8ad35b79f99599216ad307adcdba4367802632`.
+Evidence is under
+`/home/barry/astra-evidence/vfs-page-source-de25-20261107/` on Beast.
+Board trial binary was removed; production services remained active with
+8.5 GiB free. This candidate is not merged or deployed: VFS pager service,
+file mappings, shared ordinary I/O, writeback, pressure reclaim, target pager
+cycle budgets, and DE25 guest pager certification remain open.
+
 File-watch recovery, 2026-11-07: The storage provider now keeps emitting
 global GAP records while fanotify or inotify coverage is lost, retries failed
 watch registration on its existing one-second deadline, and rearms watches

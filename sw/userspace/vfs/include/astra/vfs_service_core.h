@@ -241,6 +241,13 @@ uint32_t astra_vfs_service_retain_file(AstraVfsService *service,
 uint32_t astra_vfs_service_read_retained(AstraVfsService *service,
     AstraVfsFile retained, uint64_t offset, void *buffer,
     uint32_t length, uint32_t *moved);
+/* One aligned pager page from the retained description. A complete expected
+ * identity guards shared cache objects; NULL means this open has its own
+ * cache object. Short backend reads are joined, and size/identity are
+ * rechecked before a caller may publish the page. */
+uint32_t astra_vfs_service_read_page_retained(AstraVfsService *service,
+    AstraVfsFile retained, const AstraVfsNodeMeta *expected_identity,
+    uint64_t offset, void *page, uint32_t *valid_bytes);
 uint32_t astra_vfs_service_stat_retained(AstraVfsService *service,
     AstraVfsFile retained, AstraVfsNodeInfo *info);
 uint32_t astra_vfs_service_write_retained(AstraVfsService *service,
