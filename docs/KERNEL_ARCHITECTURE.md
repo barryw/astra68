@@ -446,8 +446,10 @@ With guest paused, 80 Linux-side directory creates exceed the provider's
 showed the open `/work` view reload from zero to 80 folders, then return to
 zero after removal without Refresh. The subsequent Beast Atlas gate also
 recovered after provider reset without Refresh. DE25 AArch64 provider tests
-passed forced fanotify and inotify FD loss and rearm; injected watch-loss UI
-recovery and literal USB cable replug remain.
+passed forced fanotify and inotify FD loss and rearm. A coherent provider-14
+release then passed a 60-second DE25 stage-8 private trial; the first trial's
+stale provider-10 executable was rejected at QEMU startup and rebuilt. Injected
+watch-loss UI recovery and literal USB cable replug remain.
 `OPEN_CREATE` can open an existing file; the rooted provider probes atomic
 exclusive creation first and retries the requested flags when that probe
 fails. Only a successful exclusive creation emits an exact create record.

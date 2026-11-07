@@ -4180,10 +4180,17 @@ static void astra_host_provider_init(Astra68State *s)
     }
     AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
         .operation = ASTRA_STORAGE_CONTROL_SNAPSHOT, .serial = ++s->host.provider_control_serial};
-    AstraStorageControlReply reply;
+    AstraStorageControlReply reply = {0};
     int fd;
-    if (astra_storage_control_call(a, &request, -1, &reply, &fd) != 0 || reply.error != 0)
-        goto failed;
+    int status = astra_storage_control_call(a, &request, -1, &reply, &fd);
+    if (status != 0 || reply.error != 0) {
+        error_report("cannot acquire coherent storage provider roots: transport=%d provider=%d version=%u serial=%llu epoch=%llu count=%u reserved=%u/%u expected_serial=%llu",
+                     status, reply.error, reply.version,
+                     (unsigned long long)reply.serial, (unsigned long long)reply.epoch,
+                     reply.count, reply.reserved, reply.reserved2,
+                     (unsigned long long)request.serial);
+        exit(EXIT_FAILURE);
+    }
     s->host.provider_epoch = reply.epoch;
     const char *secret_text = g_getenv("ASTRA_CONFIG_SECRET_FD");
     if (secret_text != NULL) {
@@ -4204,9 +4211,6 @@ static void astra_host_provider_init(Astra68State *s)
         s->host.secret_key_loaded = true;
     }
     return;
-failed:
-    error_report("cannot acquire coherent storage provider roots");
-    exit(EXIT_FAILURE);
 }
 
 #define NODE_FIELD(field) (HOST_FIELD(node) + offsetof(AstraHostNode, field))

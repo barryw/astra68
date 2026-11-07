@@ -22,6 +22,17 @@ matched the Beast archive at
 all three production services stayed active, and board free space returned
 to 8.5 GiB. Guest Atlas recovery from an injected watch-FD loss on DE25 and
 literal USB cable replug remain open.
+The first coherent private trial failed before boot: QEMU expected storage
+protocol 14, but an accidentally reused AArch64 provider executable dated
+November 4 replied with protocol 10. Source/header and QEMU transport hashes
+matched; failure was stale release input, not a watch regression. After forced
+AArch64 provider rebuild, release
+`a289df1bf35cf938fcafdea34b8115d05ba31e68686fd26779ed2a365ebdeee5`
+passed a 60-second DE25 stage-8 private trial. Console SHA-256
+`f92061e76d44055bc84017620d3b3b8509270271036044225532bc468f874220`
+matched Beast archive. Selected release was restored, disposable trial state
+removed, all three services active with zero restarts, and 8.4 GiB free.
+QEMU now reports provider protocol fields when initial root acquisition fails.
 
 Userspace gate repair, 2026-11-07: Full `make -C sw/userspace test` and
 `all` now pass on Beast. The boundary check identifies declared private-state
