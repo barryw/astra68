@@ -2,6 +2,31 @@
 
 Status: active continuation map, 2026-11-07
 
+Read-only file-area control path, 2026-11-07: VFS protocol 40 now appends
+`FILE_AREA` operation 45 without changing existing messages. A direct-lane
+client shares its open description once, then asks the same grant control port
+for a page-aligned file window. The service validates its bound session,
+grant READ right, advertised feature, token, base, and span. It invokes a
+cache-owner callback and transfers a separate area handle narrowed to READ
+and MAP; invalid or failed replies close any returned handle. Client control
+calls with returned capabilities share one serialized lane path with grant
+derivation. Beast VFS host tests cover grant checks, no-handle errors, rights
+narrowing, invalid window fields, token withdrawal on failure, and direct
+accelerated client routing. Beast VFS target library, host suite, and
+ASan/UBSan passed. `make -C ndk dist-check` passed, and the new symbol appears
+in `filesystem.library.16`. Matching AArch64 fixture passed on DE25; board
+and Beast SHA-256 matched at
+`b4c0ec1a9a358be480f3cbd3a1fc97b7205a3d7c703b095a6fa07ad93922600f`;
+board log SHA-256 was
+`5e152079806f6f5eb7ddee6cfb5127d9d67d0137937f9098887175361b5ce159`.
+Evidence is under `/home/barry/astra-evidence/vfs-file-area-port-final-20261107/`
+on Beast. Trial binary was removed; three production services stayed active
+with 8.5 GiB free. HostFS does not yet register
+the callback or advertise the feature, so production callers receive
+UNSUPPORTED. Haiku `src/system/kernel/cache/file_cache.cpp:386-427` separates
+file-offset reads from consumer mapping; Astra uses grant control for mapping
+authority while existing provider data lanes keep ordinary file I/O.
+
 VFS pager file windows, 2026-11-07: the shared page source now carries a
 page-aligned 64-bit file base. Kernel request offsets remain relative to the
 bounded area; coherent backend reads use the checked file base plus offset.

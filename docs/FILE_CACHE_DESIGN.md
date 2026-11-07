@@ -5,6 +5,19 @@ VM page publication, and synthetic guest pager with CPU budgets passed host
 and DE25 gates. VFS pager service, cache, mappings, and file I/O certification
 remain open.
 
+File-area control protocol, 2026-11-07: the existing grant port now accepts
+one additive `FILE_AREA` operation. Client's direct lane makes a one-use share
+token; the bound control session exchanges token plus page-aligned base/span
+for one READ|MAP area handle. Server callback must own backing description and
+keep its own area handle, returning only a transferable duplicate. Unknown
+grant, absent feature, malformed request, and callback error cannot leak an
+area handle. Beast VFS target, host and sanitizer gates, NDK distribution,
+and static AArch64 fixture on DE25 passed. Checksummed evidence is under
+`/home/barry/astra-evidence/vfs-file-area-port-final-20261107/` on Beast. HostFS
+callback and actual guest fault are still open. Haiku
+`src/system/kernel/cache/file_cache.cpp:386-427`
+holds vnode-backed cache separately from mapped consumers.
+
 File windows, 2026-11-07: a reserved area has a bounded span, while a file can
 be larger. The shared page source now carries a page-aligned 64-bit file base;
 kernel request offsets remain area-relative and the VFS reader receives

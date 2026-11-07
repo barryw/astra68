@@ -2573,6 +2573,29 @@ mock_derive(void *context, const AstraVfsPortDeriveRequest *request,
     return ASTRA_VFS_OK;
 }
 
+static uint32_t
+grant_round_trip_message(AstraVfsPortService *host,
+    const AstraVfsPortGrant *grant, const AstraVfsRequestMessage *message,
+    uint32_t attach, uint32_t reply_handle, AstraVfsReplyMessage *reply,
+    uint32_t *received)
+{
+    uint32_t handles[1] = {attach};
+    uint32_t size = 0u;
+    uint32_t count = 0u;
+    AstraVfsPortWorker worker;
+
+    assert(astra_port_send(grant->receive, message, sizeof(*message),
+                           attach != 0u ? handles : NULL,
+                           attach != 0u ? 1u : 0u) == ASTRA_SYSCALL_OK);
+    if (astra_vfs_port_service_grant_pump(host, &worker, grant, 1u) == 0u)
+        return ASTRA_SYSCALL_WOULD_BLOCK;
+    handles[0] = 0u;
+    assert(astra_port_receive(reply_handle, reply, sizeof(*reply), handles,
+                              1u, &size, &count) == ASTRA_SYSCALL_OK);
+    *received = count != 0u ? handles[0] : 0u;
+    return ASTRA_SYSCALL_OK;
+}
+
 /* Sends one standard request for `session` on `grant`'s port and pumps it. */
 static uint32_t
 grant_round_trip(AstraVfsPortService *host, const AstraVfsPortGrant *grant,
@@ -2581,10 +2604,6 @@ grant_round_trip(AstraVfsPortService *host, const AstraVfsPortGrant *grant,
                  AstraVfsReplyMessage *reply, uint32_t *received)
 {
     AstraVfsRequestMessage message;
-    uint32_t handles[1] = {attach};
-    uint32_t size = 0u;
-    uint32_t count = 0u;
-    AstraVfsPortWorker worker;
 
     memset(&message, 0, sizeof(message));
     astra_message_header_set(&message.header, (uint32_t)sizeof(message),
@@ -2616,16 +2635,145 @@ grant_round_trip(AstraVfsPortService *host, const AstraVfsPortGrant *grant,
         assert(astra_vfs_path_pack(path, NULL, host->area_addresses[slot],
             host->area_sizes[slot], &message.request.body.paths, &used) == ASTRA_VFS_OK);
     }
-    assert(astra_port_send(grant->receive, &message, sizeof(message),
-                           attach != 0u ? handles : NULL,
-                           attach != 0u ? 1u : 0u) == ASTRA_SYSCALL_OK);
-    if (astra_vfs_port_service_grant_pump(host, &worker, grant, 1u) == 0u)
-        return ASTRA_SYSCALL_WOULD_BLOCK;
-    handles[0] = 0u;
-    assert(astra_port_receive(reply_handle, reply, sizeof(*reply), handles,
-                              1u, &size, &count) == ASTRA_SYSCALL_OK);
-    *received = count != 0u ? handles[0] : 0u;
-    return ASTRA_SYSCALL_OK;
+    return grant_round_trip_message(host, grant, &message, attach,
+                                    reply_handle, reply, received);
+}
+
+static uint32_t file_area_calls;
+static uint32_t file_area_result;
+static uint64_t file_area_expected_token;
+
+static uint32_t
+mock_file_area(void *context, const AstraVfsPortGrant *grant,
+    uint32_t requester, uint64_t token, uint64_t base, uint32_t span,
+    uint32_t *area, uint64_t *file_size)
+{
+    (void)context;
+    assert(grant->id == 9u && requester == mock_sender &&
+           token == file_area_expected_token &&
+           base == UINT64_C(0x100000000) &&
+           span == ASTRA_MEMORY_PAGE_SIZE);
+    ++file_area_calls;
+    *area = mock_open(1u);
+    *file_size = UINT64_C(0x100004000);
+    return file_area_result;
+}
+
+static void
+test_file_area_grant_and_narrowed_reply(void)
+{
+    AstraVfsPortService host;
+    AstraVfsPortGrant grant;
+    AstraVfsRequestMessage request = {0};
+    AstraVfsReplyMessage reply;
+    uint32_t lane = 0u, received = 0u, session;
+
+    mock_reset();
+    service_start();
+    file_area_calls = 0u;
+    file_area_result = ASTRA_VFS_OK;
+    file_area_expected_token = UINT64_C(0x123456789);
+    grant = full_grant(mock_open(MOCK_QUEUE_MAX), 9u);
+    grant.features |= ASTRA_VFS_FEATURE_FILE_AREAS;
+    assert(astra_vfs_port_service_init(&host, grant.receive, &service));
+    assert(astra_vfs_port_service_set_file_area(&host, mock_file_area, NULL));
+    assert(!astra_vfs_port_service_set_file_area(&host, mock_file_area, NULL));
+    lane = mock_open(4u);
+    assert(grant_round_trip(&host, &grant, ASTRA_VFS_OP_HELLO, 0u, 0u,
+        "", lane, lane, &reply, &received) == ASTRA_SYSCALL_OK);
+    assert(reply.reply.status == ASTRA_VFS_OK && received != 0u);
+    session = reply.reply.session;
+    astra_message_header_set(&request.header, sizeof(request),
+        ASTRA_VFS_PROTOCOL, ASTRA_VFS_VERSION, ASTRA_VFS_OP_FILE_AREA, 1u);
+    request.request.size = ASTRA_VFS_REQUEST_SIZE;
+    request.request.version = ASTRA_VFS_VERSION;
+    request.request.session = session;
+    request.request.offset = UINT64_C(0x123456789);
+    request.request.write_limit = UINT64_C(0x100000000);
+    request.request.length = ASTRA_MEMORY_PAGE_SIZE;
+    assert(grant_round_trip_message(&host, &grant, &request, 0u, lane,
+        &reply, &received) == ASTRA_SYSCALL_OK);
+    assert(reply.reply.status == ASTRA_VFS_OK &&
+           reply.reply.node_size == UINT64_C(0x100004000) &&
+           file_area_calls == 1u && received != 0u &&
+           ports[received].rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP));
+    request.request.offset = 0u;
+    assert(grant_round_trip_message(&host, &grant, &request, 0u, lane,
+        &reply, &received) == ASTRA_SYSCALL_OK);
+    assert(reply.reply.status == ASTRA_VFS_ERR_INVALID &&
+           received == 0u && file_area_calls == 1u);
+    request.request.offset = UINT64_C(0x123456789);
+    request.request.write_limit = 1u;
+    assert(grant_round_trip_message(&host, &grant, &request, 0u, lane,
+        &reply, &received) == ASTRA_SYSCALL_OK);
+    assert(reply.reply.status == ASTRA_VFS_ERR_INVALID &&
+           received == 0u && file_area_calls == 1u);
+    request.request.write_limit = UINT64_MAX - ASTRA_MEMORY_PAGE_SIZE + 1u;
+    assert(grant_round_trip_message(&host, &grant, &request, 0u, lane,
+        &reply, &received) == ASTRA_SYSCALL_OK);
+    assert(reply.reply.status == ASTRA_VFS_ERR_INVALID &&
+           received == 0u && file_area_calls == 1u);
+    request.request.write_limit = UINT64_C(0x100000000);
+    file_area_result = ASTRA_VFS_ERR_IO;
+    assert(grant_round_trip_message(&host, &grant, &request, 0u, lane,
+        &reply, &received) == ASTRA_SYSCALL_OK);
+    assert(reply.reply.status == ASTRA_VFS_ERR_IO &&
+           received == 0u && file_area_calls == 2u);
+    grant.features &= ~ASTRA_VFS_FEATURE_FILE_AREAS;
+    assert(grant_round_trip_message(&host, &grant, &request, 0u, lane,
+        &reply, &received) == ASTRA_SYSCALL_OK);
+    assert(reply.reply.status == ASTRA_VFS_ERR_UNSUPPORTED &&
+           received == 0u && file_area_calls == 2u);
+}
+
+static void
+test_file_area_client_uses_grant_control(void)
+{
+    AstraVfsPortService host;
+    AstraVfsPortGrant grant;
+    AstraVfsClient remote;
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    uint32_t area = 0u;
+    uint64_t file_size = 0u;
+    uint32_t data_operations;
+
+    mock_reset();
+    service_start();
+    file_area_calls = 0u;
+    file_area_result = ASTRA_VFS_OK;
+    file_area_expected_token = 42u;
+    grant = full_grant(mock_open(MOCK_QUEUE_MAX), 9u);
+    grant.features = ASTRA_VFS_FEATURE_DESCRIPTIONS |
+                     ASTRA_VFS_FEATURE_FILE_AREAS;
+    assert(astra_vfs_port_service_init(&host, grant.receive, &service));
+    assert(astra_vfs_port_service_set_file_area(&host, mock_file_area, NULL));
+    served = &host;
+    served_grant = &grant;
+    assert(astra_vfs_port_connect_lazy_with_accelerator(&remote,
+        grant.receive, &mock_accelerator_ops) == ASTRA_VFS_OK);
+    assert(astra_vfs_open(&remote, "/a", ASTRA_VFS_OPEN_READ,
+        &file, NULL, NULL) == ASTRA_VFS_OK);
+    assert(astra_vfs_file_area(&remote, file, 1u,
+        ASTRA_MEMORY_PAGE_SIZE, &area, &file_size) == ASTRA_VFS_ERR_INVALID);
+    data_operations = direct_operations;
+    assert(astra_vfs_file_area(&remote, file, UINT64_C(0x100000000),
+        ASTRA_MEMORY_PAGE_SIZE, &area, &file_size) == ASTRA_VFS_OK);
+    assert(file_area_calls == 1u && area != 0u &&
+           file_size == UINT64_C(0x100004000) &&
+           direct_operations == data_operations + 1u &&
+           direct_last_operation == ASTRA_VFS_OP_SHARE &&
+           ports[area].rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP));
+    (void)astra_close(area);
+    grant.features &= ~ASTRA_VFS_FEATURE_FILE_AREAS;
+    data_operations = direct_operations;
+    assert(astra_vfs_file_area(&remote, file, UINT64_C(0x100000000),
+        ASTRA_MEMORY_PAGE_SIZE, &area, &file_size) ==
+        ASTRA_VFS_ERR_UNSUPPORTED);
+    assert(area == 0u && file_size == 0u && file_area_calls == 1u &&
+           direct_operations == data_operations + 2u &&
+           direct_last_operation == ASTRA_VFS_OP_ADOPT);
+    assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
+    served = NULL;
 }
 
 /*
@@ -2936,13 +3084,16 @@ test_descriptions_require_a_connected_data_plane(void)
     AstraVfsPortGrant grant;
     AstraVfsClient remote;
     uint64_t token;
+    uint64_t file_size;
     AstraVfsFile file;
+    uint32_t area;
     uint32_t operations;
 
     mock_reset();
     service_start();
     grant = full_grant(mock_open(MOCK_QUEUE_MAX), 1u);
-    grant.features = ASTRA_VFS_FEATURE_DESCRIPTIONS;
+    grant.features = ASTRA_VFS_FEATURE_DESCRIPTIONS |
+                     ASTRA_VFS_FEATURE_FILE_AREAS;
     grant.scope = 0u;
     assert(astra_vfs_port_service_init(&host, grant.receive, &service));
     served = &host;
@@ -2969,6 +3120,12 @@ test_descriptions_require_a_connected_data_plane(void)
         file = 1u;
         assert(astra_vfs_adopt(&remote, 42u, &file) ==
                ASTRA_VFS_ERR_UNSUPPORTED && file == ASTRA_VFS_FILE_INVALID);
+        area = 99u;
+        file_size = 99u;
+        assert(astra_vfs_file_area(&remote, 1u, 0u,
+            ASTRA_MEMORY_PAGE_SIZE, &area, &file_size) ==
+            ASTRA_VFS_ERR_UNSUPPORTED);
+        assert(area == 0u && file_size == 0u);
         assert(host.requests == operations);
         assert(astra_vfs_port_refresh(&remote) == ASTRA_VFS_OK &&
                remote.features == ASTRA_VFS_FEATURE_GRANTS);
@@ -3057,6 +3214,8 @@ main(void)
     test_signal_cancellation_does_not_abandon_an_inflight_reply();
     test_host_accelerator_moves_data_plane_out_of_the_service();
     test_config_crypt_is_bound_to_grant_even_with_accelerator();
+    test_file_area_grant_and_narrowed_reply();
+    test_file_area_client_uses_grant_control();
     test_grants_hand_out_their_scope_and_only_narrow();
     test_the_kit_derives_on_its_hello_lane();
     test_descriptions_require_a_connected_data_plane();

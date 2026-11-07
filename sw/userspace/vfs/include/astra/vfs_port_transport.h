@@ -214,6 +214,12 @@ typedef uint32_t (*AstraVfsPortConfigCrypt)(void *context,
     const uint8_t *input, uint32_t input_length, uint8_t *output,
     uint32_t output_capacity, uint32_t *output_length);
 
+/* On success, return a transferable duplicate; cache owner keeps its area.
+ * The port narrows the reply to READ|MAP and moves the duplicate. */
+typedef uint32_t (*AstraVfsPortFileArea)(void *context,
+    const AstraVfsPortGrant *grant, uint32_t requester, uint64_t token,
+    uint64_t base, uint32_t span, uint32_t *area, uint64_t *file_size);
+
 typedef struct AstraVfsPortService {
     uint32_t receive;
     AstraVfsService *service;
@@ -231,6 +237,8 @@ typedef struct AstraVfsPortService {
     void *derive_context;
     AstraVfsPortConfigCrypt config_crypt;
     void *config_crypt_context;
+    AstraVfsPortFileArea file_area;
+    void *file_area_context;
     uint32_t reply_sessions[ASTRA_VFS_SESSION_MAX];
     uint32_t reply_lanes[ASTRA_VFS_SESSION_MAX];
     uint32_t reply_handles[ASTRA_VFS_SESSION_MAX];
@@ -258,6 +266,8 @@ int astra_vfs_port_service_set_derive(AstraVfsPortService *host,
                                       void *context);
 int astra_vfs_port_service_set_config_crypt(AstraVfsPortService *host,
     AstraVfsPortConfigCrypt crypt, void *context);
+int astra_vfs_port_service_set_file_area(AstraVfsPortService *host,
+    AstraVfsPortFileArea file_area, void *context);
 
 /* Handles at most `budget` requests and returns how many it answered. */
 uint32_t astra_vfs_port_service_pump(AstraVfsPortService *host,

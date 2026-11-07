@@ -195,8 +195,13 @@
 #define ASTRA_VFS_OP_CONFIG_CRYPT UINT32_C(43)
 /** Try an exclusive advisory lock on an open writable file; close releases it. */
 #define ASTRA_VFS_OP_TRY_LOCK     UINT32_C(44)
+/** Exchange one open-file share for a read-only, pager-backed file window.
+ * `offset` is the one-use token, `write_limit` the page-aligned file base,
+ * `length` the page-aligned span. Reply transfers one READ|MAP area handle
+ * and reports current file size in `node_size`. */
+#define ASTRA_VFS_OP_FILE_AREA    UINT32_C(45)
 /** Highest operation code this build defines. */
-#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_TRY_LOCK
+#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_FILE_AREA
 
 /** Encrypt a Config Kit value under the receiving grant's provider root. */
 #define ASTRA_VFS_CONFIG_SEAL UINT32_C(1)
@@ -230,6 +235,8 @@
 #define ASTRA_VFS_FEATURE_DIRECTORY_PATH (UINT32_C(1) << 4)
 /** Config values can be sealed/opened under this grant's server-owned root. */
 #define ASTRA_VFS_FEATURE_CONFIG_CRYPT (UINT32_C(1) << 5)
+/** A grant exchanges one-use file shares for read-only mapped windows. */
+#define ASTRA_VFS_FEATURE_FILE_AREAS (UINT32_C(1) << 6)
 /** Read at an open description's current directory cursor without seeking. */
 #define ASTRA_VFS_CURSOR_CURRENT UINT64_MAX
 
