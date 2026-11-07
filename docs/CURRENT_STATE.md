@@ -20,8 +20,7 @@ Board log SHA-256 `f23ef9e238bcb685d40a700405e2df078f631be20951d38edb401afdc7229
 matched the Beast archive at
 `/home/barry/astra-evidence/watch-rearm-20261107/`. Trial files were removed,
 all three production services stayed active, and board free space returned
-to 8.5 GiB. Guest Atlas recovery from an injected watch-FD loss on DE25 and
-literal USB cable replug remain open.
+to 8.5 GiB. Literal USB cable replug remains open.
 The first coherent private trial failed before boot: QEMU expected storage
 protocol 14, but an accidentally reused AArch64 provider executable dated
 November 4 replied with protocol 10. Source/header and QEMU transport hashes
@@ -33,6 +32,20 @@ passed a 60-second DE25 stage-8 private trial. Console SHA-256
 matched Beast archive. Selected release was restored, disposable trial state
 removed, all three services active with zero restarts, and 8.4 GiB free.
 QEMU now reports provider protocol fields when initial root acquisition fails.
+Injected watch-FD UI recovery passed a separate 480-second DE25 private trial
+of the same coherent release. With Atlas open on `/usb0` exFAT, GDB closed the
+provider's identified inotify FD 7; a Linux-side file create changed Atlas
+from 0 to 1 item without Refresh, and removal restored the exact baseline RFB
+frame. With Atlas open on disposable DH0, GDB closed identified fanotify FD 6;
+Linux-side create changed the root from 14 to 15 items, and removal again
+restored the exact baseline frame. Both watch FDs were present after rearm.
+All six board RFB frames and the console matched Beast SHA-256 copies; the
+console SHA-256 was
+`b0977b2b30d462713f530b312ea13e5461eda470d886d10af6fd1ef7b9590a66`.
+Evidence and checked `FD_LOSS_SHA256SUMS` are under
+`/home/barry/astra-evidence/watch-rearm-20261107/`. The selected release was
+restored, disposable test files and board trial state removed, production
+services active with zero restarts, and 8.5 GiB free.
 
 Userspace gate repair, 2026-11-07: Full `make -C sw/userspace test` and
 `all` now pass on Beast. The boundary check identifies declared private-state

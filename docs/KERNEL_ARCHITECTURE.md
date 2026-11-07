@@ -449,7 +449,10 @@ recovered after provider reset without Refresh. DE25 AArch64 provider tests
 passed forced fanotify and inotify FD loss and rearm. A coherent provider-14
 release then passed a 60-second DE25 stage-8 private trial; the first trial's
 stale provider-10 executable was rejected at QEMU startup and rebuilt. Injected
-watch-loss UI recovery and literal USB cable replug remain.
+watch-FD loss then passed DE25 Atlas UI recovery on exFAT and DH0 in a
+480-second private trial: each Linux-side create appeared without Refresh
+after its watch FD was closed, and each removal restored the exact baseline
+RFB frame. Literal USB cable replug remains.
 `OPEN_CREATE` can open an existing file; the rooted provider probes atomic
 exclusive creation first and retries the requested flags when that probe
 fails. Only a successful exclusive creation emits an exact create record.
