@@ -2,6 +2,26 @@
 
 Status: active continuation map, 2026-11-07
 
+VFS direct page-source seam, 2026-11-07: HostFS production clients use a
+provider-direct data lane, so their open descriptions do not enter the VFS
+service's retained-file table. The coherent one-page reader now lives in the
+shared VFS backend layer and accepts a service-owned backend description;
+retained VFS reads use the same implementation while pinning their file slot
+for the complete read. It rechecks exact node identity, file size, known
+timestamps, and the existing provider node-change counter before publishing
+any valid byte count. Direct-backend tests cover success, stale identity,
+and a provider mutation during read. Beast VFS target build, full host suite,
+and sanitizers passed. Matching AArch64 fixture passed one million forced
+switches on DE25: binary SHA-256
+`4afda974b39abc2af9b828693a76d537475edf5548baf79c9b8c2b08d452d0d0`,
+log SHA-256
+`69373fdd5dea3100ca16fce035e93461870a000151214aa1f9e6c7882deb511f`.
+Evidence: `/home/barry/astra-evidence/vfs-direct-page-20261107/` on Beast.
+Trial files were removed; all three production services stayed active with
+8.5 GiB free. This supplies the actual HostFS pager with one shared read
+contract; file-area creation, page replies, and notification-driven resident
+invalidation remain open.
+
 Pager reclaim/refault qualification, 2026-11-07: kernel host test now maps
 one pager area into two address spaces, verifies publication in both,
 reclaims the page, verifies both translations are withdrawn, and confirms

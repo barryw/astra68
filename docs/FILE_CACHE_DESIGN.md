@@ -5,6 +5,20 @@ VM page publication, and synthetic guest pager with CPU budgets passed host
 and DE25 gates. VFS pager service, cache, mappings, and file I/O certification
 remain open.
 
+Direct HostFS page source, 2026-11-07: production HostFS clients use provider
+descriptions through the direct data lane, outside the VFS service slot table.
+The existing coherent retained-page reader was factored into one shared
+backend-description reader; the retained wrapper pins its slot across that
+read. The direct path checks exact node identity, size, known timestamps,
+and the existing provider node-change counter around the complete page.
+Beast VFS target build, host suite, and sanitizers passed; matching AArch64
+fixture passed one million forced switches on DE25. Binary SHA-256
+`4afda974b39abc2af9b828693a76d537475edf5548baf79c9b8c2b08d452d0d0`;
+checksummed evidence is under
+`/home/barry/astra-evidence/vfs-direct-page-20261107/` on Beast. This shares
+one source contract across service and direct backends; it does not yet own
+areas, answer pager messages, or invalidate resident frames.
+
 Area-lifetime prerequisite, 2026-11-07: an ADMINISTER-only native syscall
 returns area handle, mapping, and in-flight fault counts in one kernel
 section. A VFS cache owner can keep one area handle and retained file

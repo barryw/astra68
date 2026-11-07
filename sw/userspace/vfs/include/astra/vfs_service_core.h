@@ -248,6 +248,12 @@ uint32_t astra_vfs_service_read_retained(AstraVfsService *service,
 uint32_t astra_vfs_service_read_page_retained(AstraVfsService *service,
     AstraVfsFile retained, const AstraVfsNodeMeta *expected_identity,
     uint64_t offset, void *page, uint32_t *valid_bytes);
+/* Shared page source for a service-owned backend description, including
+ * direct HostFS descriptions that do not live in the VFS slot table. The
+ * caller keeps `node` open until this call returns. */
+uint32_t astra_vfs_backend_read_page(const AstraVfsBackend *backend,
+    uintptr_t node, const AstraVfsNodeMeta *expected_identity,
+    uint64_t offset, void *page, uint32_t *valid_bytes);
 uint32_t astra_vfs_service_stat_retained(AstraVfsService *service,
     AstraVfsFile retained, AstraVfsNodeInfo *info);
 uint32_t astra_vfs_service_write_retained(AstraVfsService *service,

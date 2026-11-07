@@ -1240,36 +1240,34 @@ astra_vfs_service_read_retained(AstraVfsService *service,
 }
 
 uint32_t
-astra_vfs_service_read_page_retained(AstraVfsService *service,
-                                     AstraVfsFile retained,
-                                     const AstraVfsNodeMeta *expected_identity,
-                                     uint64_t offset, void *page,
-                                     uint32_t *valid_bytes)
+astra_vfs_backend_read_page(const AstraVfsBackend *backend,
+                            uintptr_t node,
+                            const AstraVfsNodeMeta *expected_identity,
+                            uint64_t offset, void *page,
+                            uint32_t *valid_bytes)
 {
-    AstraVfsNodeInfo before, after;
-    AstraVfsChangeSnapshot changes_before, changes_after;
+    AstraVfsNodeInfo before = {0}, after = {0};
     uint64_t provider_nodes_before = 0u, provider_nodes_after = 0u;
     uint64_t provider_entries;
     uint32_t status, wanted, copied = 0u;
 
     if (valid_bytes != NULL)
         *valid_bytes = 0u;
-    if (service == NULL || page == NULL || valid_bytes == NULL ||
+    if (backend == NULL || backend->ops == NULL ||
+        backend->ops->stat_node == NULL || backend->ops->read == NULL ||
+        node == 0u || page == NULL || valid_bytes == NULL ||
         (offset & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
         (expected_identity != NULL &&
          !astra_vfs_node_identity_equal(expected_identity,
                                         expected_identity)))
         return ASTRA_VFS_ERR_INVALID;
-    if (!astra_vfs_service_change_snapshot(service, &changes_before))
-        return ASTRA_VFS_ERR_IO;
-    if (service->backend.ops->change_snapshot != NULL) {
-        status = service->backend.ops->change_snapshot(
-            service->backend.context, &provider_nodes_before,
-            &provider_entries);
+    if (backend->ops->change_snapshot != NULL) {
+        status = backend->ops->change_snapshot(
+            backend->context, &provider_nodes_before, &provider_entries);
         if (status != ASTRA_VFS_OK)
             return status;
     }
-    status = astra_vfs_service_stat_retained(service, retained, &before);
+    status = backend->ops->stat_node(backend->context, node, &before);
     if (status != ASTRA_VFS_OK)
         return status;
     if (before.kind != ASTRA_VFS_KIND_FILE || offset >= before.size)
@@ -1282,24 +1280,21 @@ astra_vfs_service_read_page_retained(AstraVfsService *service,
     while (copied < wanted) {
         uint32_t moved = 0u;
 
-        status = astra_vfs_service_read_retained(
-            service, retained, offset + copied, (uint8_t *)page + copied,
-            wanted - copied, &moved);
+        status = backend->ops->read(backend->context, node, offset + copied,
+                                    (uint8_t *)page + copied,
+                                    wanted - copied, &moved);
         if (status != ASTRA_VFS_OK)
             return status;
-        if (moved == 0u)
+        if (moved == 0u || moved > wanted - copied)
             return ASTRA_VFS_ERR_IO;
         copied += moved;
     }
-    status = astra_vfs_service_stat_retained(service, retained, &after);
+    status = backend->ops->stat_node(backend->context, node, &after);
     if (status != ASTRA_VFS_OK)
         return status;
-    if (!astra_vfs_service_change_snapshot(service, &changes_after))
-        return ASTRA_VFS_ERR_IO;
-    if (service->backend.ops->change_snapshot != NULL) {
-        status = service->backend.ops->change_snapshot(
-            service->backend.context, &provider_nodes_after,
-            &provider_entries);
+    if (backend->ops->change_snapshot != NULL) {
+        status = backend->ops->change_snapshot(
+            backend->context, &provider_nodes_after, &provider_entries);
         if (status != ASTRA_VFS_OK)
             return status;
     }
@@ -1319,8 +1314,57 @@ astra_vfs_service_read_page_retained(AstraVfsService *service,
         ((before.meta.valid & after.meta.valid & ASTRA_VFS_META_CTIME) != 0u &&
          (before.meta.ctime != after.meta.ctime ||
           before.meta.ctime_nsec != after.meta.ctime_nsec)) ||
-        changes_after.nodes != changes_before.nodes ||
         provider_nodes_after != provider_nodes_before)
+        return ASTRA_VFS_ERR_BUSY;
+    *valid_bytes = copied;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
+astra_vfs_service_read_page_retained(AstraVfsService *service,
+                                     AstraVfsFile retained,
+                                     const AstraVfsNodeMeta *expected_identity,
+                                     uint64_t offset, void *page,
+                                     uint32_t *valid_bytes)
+{
+    AstraVfsChangeSnapshot changes_before, changes_after;
+    AstraVfsOpenFile *file;
+    uint32_t status, copied = 0u;
+    uintptr_t node;
+
+    if (valid_bytes != NULL)
+        *valid_bytes = 0u;
+    if (service == NULL || page == NULL || valid_bytes == NULL ||
+        (offset & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
+        (expected_identity != NULL &&
+         !astra_vfs_node_identity_equal(expected_identity,
+                                        expected_identity)))
+        return ASTRA_VFS_ERR_INVALID;
+    if (!astra_vfs_service_change_snapshot(service, &changes_before))
+        return ASTRA_VFS_ERR_IO;
+    if (!state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    status = acquire_retained(service, retained, &file);
+    if (status != ASTRA_VFS_OK) {
+        state_release(service);
+        return status;
+    }
+    node = file->node;
+    state_release(service);
+    status = astra_vfs_backend_read_page(&service->backend, node,
+                                          expected_identity, offset, page,
+                                          &copied);
+    if (!state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    file_release(service, file);
+    state_release(service);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (!astra_vfs_service_change_snapshot(service, &changes_after))
+        return ASTRA_VFS_ERR_IO;
+    /* shortcut: unrelated writes can force retry; use per-node generation
+     * once cache objects own mutation state. */
+    if (changes_after.nodes != changes_before.nodes)
         return ASTRA_VFS_ERR_BUSY;
     *valid_bytes = copied;
     return ASTRA_VFS_OK;

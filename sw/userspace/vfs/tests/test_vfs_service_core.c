@@ -1595,9 +1595,18 @@ test_retained_page_read_checks_complete_file(void)
                &service, retained, &info.meta, 0u, page, &valid) ==
            ASTRA_VFS_OK);
     assert(valid == 300u && memcmp(page, node->bytes, valid) == 0);
+    assert(astra_vfs_backend_read_page(&service.backend, (uintptr_t)node,
+               &info.meta, 0u, page, &valid) == ASTRA_VFS_OK);
+    assert(valid == 300u && memcmp(page, node->bytes, valid) == 0);
+    assert(astra_vfs_backend_read_page(&service.backend, 0u,
+               &info.meta, 0u, page, &valid) ==
+           ASTRA_VFS_ERR_INVALID && valid == 0u);
 
     stale = info.meta;
     ++stale.generation;
+    assert(astra_vfs_backend_read_page(&service.backend, (uintptr_t)node,
+               &stale, 0u, page, &valid) ==
+           ASTRA_VFS_ERR_LOST && valid == 0u);
     assert(astra_vfs_service_read_page_retained(
                &service, retained, &stale, 0u, page, &valid) ==
            ASTRA_VFS_ERR_LOST && valid == 0u);
@@ -1634,6 +1643,9 @@ test_retained_page_read_checks_complete_file(void)
            ASTRA_VFS_ERR_BUSY && valid == 0u);
     fake.read_note_change = 0u;
     fake.read_note_provider_change = 1u;
+    assert(astra_vfs_backend_read_page(&service.backend, (uintptr_t)node,
+               &info.meta, 0u, page, &valid) ==
+           ASTRA_VFS_ERR_BUSY && valid == 0u);
     assert(astra_vfs_service_read_page_retained(
                &service, retained, &info.meta, 0u, page, &valid) ==
            ASTRA_VFS_ERR_BUSY && valid == 0u);
