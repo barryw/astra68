@@ -2,6 +2,23 @@
 
 Status: active continuation map, 2026-11-07
 
+Pager reclaim/refault qualification, 2026-11-07: kernel host test now maps
+one pager area into two address spaces, verifies publication in both,
+reclaims the page, verifies both translations are withdrawn, and confirms
+both mappings fault again. K1 guest now reclaims a live page while its pager
+thread remains available, then refaults and checks the original bytes and
+zero tail. Beast and DE25 K1 passed all 15 markers; each recorded two pager
+replies and zero cycle-budget overruns. DE25 reclaim measured 200/125,000
+MC68040 cycles. ROM SHA-256
+`a0dd6433326aabe6ee4ea2ad765c78761690e18a961a75f3623e3b57989be2d2`;
+DE25 serial log SHA-256
+`092d89f3804f614119137d563a669a6565e55e9803be3f570647049cc1d5d5f6`.
+Evidence: `/home/barry/astra-evidence/pager-refault-k1-20261107/` on Beast.
+Private trial used isolated state and QEMU's qualification clock; trial state
+was removed and production returned to stage 8 with all three services
+active, zero restarts, only loop0, and 8.5 GiB free. VFS still needs a real
+cache owner, notification-driven invalidation, and pressure policy.
+
 Pager-page reclaim, 2026-11-07: WIP branch adds ADMINISTER-only
 `AREA_RECLAIM` for pager-bound reserved areas. It uses the existing shared
 page-withdrawal path, refuses an in-flight fault with WOULD_BLOCK, and

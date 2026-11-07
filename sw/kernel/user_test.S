@@ -889,6 +889,22 @@ _k1_survivor_image_entry:
 	bne     .Lmain_fail
 	tst.b   4095(%a1)
 	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	move.l  #4096, %d3
+	moveq   #ASTRA_SYSCALL_AREA_RECLAIM, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #1, %d1
+	bne     .Lmain_fail
+	movea.l KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0), %a1
+	cmpi.l  #0x50414745, (%a1)
+	bne     .Lmain_fail
+	cmpi.b  #0x21, 4(%a1)
+	bne     .Lmain_fail
+	tst.b   4095(%a1)
+	bne     .Lmain_fail
 
 	move.l  KERNEL_QUALIFICATION_PAGER_THREAD_OFFSET(%a0), %d1
 	move.l  #ASTRA_DEADLINE_NONE_HI, %d2
@@ -904,16 +920,6 @@ _k1_survivor_image_entry:
 	trap    #ASTRA_SYSCALL_TRAP
 	tst.l   %d0
 	bne     .Lmain_fail
-	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
-	moveq   #0, %d2
-	move.l  #4096, %d3
-	moveq   #ASTRA_SYSCALL_AREA_RECLAIM, %d0
-	trap    #ASTRA_SYSCALL_TRAP
-	tst.l   %d0
-	bne     .Lmain_fail
-	cmpi.l  #1, %d1
-	bne     .Lmain_fail
-
 	move.l  KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0), %d1
 	moveq   #ASTRA_SYSCALL_AREA_UNMAP, %d0
 	trap    #ASTRA_SYSCALL_TRAP
@@ -1236,6 +1242,9 @@ _k1_survivor_image_entry:
 	cmpi.l  #KERNEL_QUALIFICATION_PAGER_ARGUMENT, %d2
 	bne     .Lpager_fail
 	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
+	lea     -60(%sp), %sp
+	move.l  #2, 56(%sp)
+.Lpager_wait:
 	move.l  KERNEL_QUALIFICATION_PAGER_RECEIVE_OFFSET(%a0), %d1
 	move.l  #ASTRA_DEADLINE_NONE_HI, %d2
 	moveq   #-1, %d3
@@ -1244,7 +1253,6 @@ _k1_survivor_image_entry:
 	tst.l   %d0
 	bne     .Lpager_fail
 
-	lea     -56(%sp), %sp
 	move.l  KERNEL_QUALIFICATION_PAGER_RECEIVE_OFFSET(%a0), %d1
 	move.l  %sp, %d2
 	moveq   #40, %d3
@@ -1310,7 +1318,9 @@ _k1_survivor_image_entry:
 	trap    #ASTRA_SYSCALL_TRAP
 	tst.l   %d0
 	bne     .Lpager_fail
-	lea     56(%sp), %sp
+	subq.l  #1, 56(%sp)
+	bne     .Lpager_wait
+	lea     60(%sp), %sp
 	move.l  #KERNEL_QUALIFICATION_PAGER_EXIT_STATUS, %d1
 	moveq   #ASTRA_SYSCALL_THREAD_EXIT, %d0
 	trap    #ASTRA_SYSCALL_TRAP

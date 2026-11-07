@@ -246,6 +246,19 @@ writable mappings, and VFS must write back dirty content before reclaim.
 VFS cache ownership, notification-driven invalidation, and reclaim policy
 remain open.
 
+Refault gate, 2026-11-07: the area host test now proves one reclaimed page is
+withdrawn from two address spaces and both can request it again. The K1 guest
+pager serves a second request after reclaim, checks original bytes and zero
+tail, then retires its service thread. Beast and DE25 K1 passed all 15
+markers with two pager replies and no overruns; DE25 reclaim cost
+200/125,000 MC68040 cycles. ROM SHA-256
+`a0dd6433326aabe6ee4ea2ad765c78761690e18a961a75f3623e3b57989be2d2`;
+DE25 log SHA-256
+`092d89f3804f614119137d563a669a6565e55e9803be3f570647049cc1d5d5f6`.
+Checked evidence is under
+`/home/barry/astra-evidence/pager-refault-k1-20261107/` on Beast.
+This proves kernel withdrawal and refault, not VFS cache invalidation.
+
 Pager candidate, 2026-11-07: a bound-area fault now sends the page request
 through the existing port call/reply machinery, keeps the area pinned while
 waiting, reads the reply's transfer area, and publishes only a checked,
