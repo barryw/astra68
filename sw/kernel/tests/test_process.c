@@ -8204,13 +8204,16 @@ static void test_pager_binding_retains_send_endpoint(void)
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     area = next->data[1];
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_BIND_PAGER,
-                     area, receive, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+                     area, receive, 1u, 0u, 0u) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_BIND_PAGER,
                      area, send, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_BIND_PAGER,
+                     area, send, 1u, 0u, 0u) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_BIND_PAGER,
-                     area, send, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+                     area, send, 1u, 0u, 0u) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE,
                      send, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);

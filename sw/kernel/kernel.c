@@ -1899,6 +1899,7 @@ static bool qualification_publish_page(uint32_t *cycles)
 {
     KernelAddressSpace space = {0};
     KernelArea *area = NULL;
+    KernelAreaPagerRequest request;
     KernelPort *pager = NULL;
     static uint8_t source[KERNEL_PAGE_SIZE];
     uint8_t bytes[16];
@@ -1908,6 +1909,7 @@ static bool qualification_publish_page(uint32_t *cycles)
     uint32_t started;
     bool mapped = false;
     bool passed = false;
+    bool request_valid;
 
     if (cycles == NULL)
         return false;
@@ -1927,7 +1929,7 @@ static bool qualification_publish_page(uint32_t *cycles)
             pager, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND))
         goto done;
     if (kernel_area_bind_pager(
-            area, pager, kernel_port_handle_release,
+            area, pager, 1u, kernel_port_handle_release,
             (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND) != KERNEL_AREA_OK) {
         kernel_port_handle_release(
             pager, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND);
@@ -1941,7 +1943,14 @@ static bool qualification_publish_page(uint32_t *cycles)
         goto done;
     mapped = true;
     bytes[0] = 0x7eu;
-    if (kernel_area_fault(KERNEL_SELFTEST_OWNER, &space, base) ||
+    if (kernel_area_pager_request(KERNEL_SELFTEST_OWNER, &space, base,
+                                  &request) != KERNEL_AREA_OK)
+        goto done;
+    request_valid = request.area == area && request.port == pager &&
+                    request.cookie == 1u && request.offset == 0u;
+    if (kernel_area_child_release(request.area) != KERNEL_AREA_OK ||
+        !request_valid ||
+        kernel_area_fault(KERNEL_SELFTEST_OWNER, &space, base) ||
         kernel_area_read(area, 0u, bytes, 1u) !=
             KERNEL_AREA_INVALID_STATE ||
         bytes[0] != 0x7eu)

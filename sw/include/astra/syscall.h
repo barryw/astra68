@@ -1074,7 +1074,8 @@
 #define ASTRA_SYSCALL_MUTEX_UNLOCK 115
 /**
  * Bind a reserved, unmapped area to a pager service. data[1] is an area
- * handle with ADMINISTER, data[2] a port send handle with SIGNAL. The area
+ * handle with ADMINISTER, data[2] a port send handle with SIGNAL, and data[3]
+ * a nonzero service-owned cache cookie echoed in each page request. The area
  * retains the send endpoint; clients may map it read-only after binding.
  */
 #define ASTRA_SYSCALL_AREA_BIND_PAGER 116

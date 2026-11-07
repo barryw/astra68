@@ -12773,7 +12773,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             break;
         }
         area_status = kernel_area_bind_pager(
-            area, port, kernel_port_handle_release,
+            area, port, thread->context.data[3], kernel_port_handle_release,
             (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND);
         if (area_status != KERNEL_AREA_OK) {
             kernel_port_handle_release(

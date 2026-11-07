@@ -59,6 +59,14 @@ typedef enum KernelAreaStatus {
 typedef struct KernelArea KernelArea;
 typedef struct KernelPort KernelPort;
 
+/* A missing bound page; `area` has one child reference until released. */
+typedef struct KernelAreaPagerRequest {
+    KernelArea *area;
+    KernelPort *port;
+    uint32_t cookie;
+    uint32_t offset;
+} KernelAreaPagerRequest;
+
 /* A physically contiguous run of an area's bytes. */
 typedef struct KernelAreaExtent {
     uint32_t physical;
@@ -110,8 +118,13 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
                                     uint32_t flags, KernelArea **area);
 /* Takes ownership of one retained send endpoint on success. */
 KernelAreaStatus kernel_area_bind_pager(KernelArea *area, KernelPort *port,
+                                        uint32_t cookie,
                                         KernelHandleRelease release,
                                         void *release_context);
+KernelAreaStatus kernel_area_pager_request(uint32_t process_id,
+                                            KernelAddressSpace *space,
+                                            uint32_t address,
+                                            KernelAreaPagerRequest *request);
 /*
  * Answers a fault inside the area window: commits the cluster containing the
  * address and publishes it into every address space that already has the area

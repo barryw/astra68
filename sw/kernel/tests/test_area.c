@@ -1034,7 +1034,9 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
 {
     KernelAddressSpace client = {0};
     KernelArea *area = NULL;
-    uint32_t base, size, released;
+    KernelArea *other = NULL;
+    KernelAreaPagerRequest request;
+    uint32_t base, other_base, size, released;
     uint8_t byte = 0xa5u;
 
     initialize_test();
@@ -1045,15 +1047,36 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
            KERNEL_AREA_OK);
     assert(kernel_area_map(area, 317u, &client, KERNEL_VM_READ, &base,
                            &size) == KERNEL_AREA_OK);
+    assert(kernel_area_create(317u, KERNEL_PAGE_SIZE,
+                              KERNEL_AREA_CREATE_RESERVED, &other) ==
+           KERNEL_AREA_OK);
+    assert(kernel_area_bind_pager(other, (KernelPort *)(uintptr_t)1u,
+                                  2u, release_test_pager,
+                                  (void *)(uintptr_t)2u) == KERNEL_AREA_OK);
+    assert(kernel_area_map(other, 317u, &client, KERNEL_VM_READ,
+                           &other_base, &size) == KERNEL_AREA_OK);
+    assert(other_base != base);
+    assert(kernel_area_pager_request(317u, &client, other_base,
+                                     &request) == KERNEL_AREA_OK);
+    assert(request.area == other && request.cookie == 2u &&
+           request.offset == 0u);
+    assert(kernel_area_child_release(request.area) == KERNEL_AREA_OK);
     assert(kernel_area_bind_pager(area, (KernelPort *)(uintptr_t)1u,
+                                  1u,
                                   release_test_pager,
                                   (void *)(uintptr_t)2u) ==
            KERNEL_AREA_INVALID_STATE);
     assert(kernel_area_unmap(317u, &client, base) == KERNEL_AREA_OK);
     assert(kernel_area_bind_pager(area, (KernelPort *)(uintptr_t)1u,
+                                  0u, release_test_pager,
+                                  (void *)(uintptr_t)2u) ==
+           KERNEL_AREA_INVALID_ARGUMENT);
+    assert(kernel_area_bind_pager(area, (KernelPort *)(uintptr_t)1u,
+                                  1u,
                                   release_test_pager,
                                   (void *)(uintptr_t)2u) == KERNEL_AREA_OK);
     assert(kernel_area_bind_pager(area, (KernelPort *)(uintptr_t)1u,
+                                  1u,
                                   release_test_pager,
                                   (void *)(uintptr_t)2u) ==
            KERNEL_AREA_INVALID_STATE);
@@ -1062,6 +1085,19 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
                            &size) == KERNEL_AREA_ACCESS_DENIED);
     assert(kernel_area_map(area, 317u, &client, KERNEL_VM_READ, &base,
                            &size) == KERNEL_AREA_OK);
+    assert(kernel_area_pager_request(318u, &client, base, &request) ==
+           KERNEL_AREA_NOT_MAPPED && request.area == NULL);
+    assert(kernel_area_pager_request(317u, &client, base + 17u,
+                                     &request) == KERNEL_AREA_OK);
+    assert(request.area == area &&
+           request.port == (KernelPort *)(uintptr_t)1u &&
+           request.cookie == 1u && request.offset == 0u);
+    assert(kernel_area_child_release(request.area) == KERNEL_AREA_OK);
+    assert(kernel_area_pager_request(317u, &client,
+                                     base + KERNEL_PAGE_SIZE + 5u,
+                                     &request) == KERNEL_AREA_OK);
+    assert(request.offset == KERNEL_PAGE_SIZE);
+    assert(kernel_area_child_release(request.area) == KERNEL_AREA_OK);
     assert(!kernel_area_fault(317u, &client, base));
     assert(kernel_area_read(area, 0u, &byte, 1u) ==
            KERNEL_AREA_INVALID_STATE);
@@ -1071,6 +1107,8 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
     assert(kernel_area_decommit(317u, &client, base, KERNEL_PAGE_SIZE,
                                 &released) == KERNEL_AREA_ACCESS_DENIED);
     assert(kernel_area_publish_page(area, 0u, &byte, 1u) == KERNEL_AREA_OK);
+    assert(kernel_area_pager_request(317u, &client, base, &request) ==
+           KERNEL_AREA_NOT_MAPPED && request.area == NULL);
     byte = 0u;
     assert(kernel_area_read(area, 0u, &byte, 1u) == KERNEL_AREA_OK);
     assert(byte == 0xa5u);
@@ -1083,8 +1121,10 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
     }
     assert(kernel_area_pool_valid());
     assert(kernel_area_unmap(317u, &client, base) == KERNEL_AREA_OK);
+    assert(kernel_area_unmap(317u, &client, other_base) == KERNEL_AREA_OK);
     kernel_area_handle_release(area, NULL);
-    assert(pager_release_count == 1u);
+    kernel_area_handle_release(other, NULL);
+    assert(pager_release_count == 2u);
     assert(kernel_vm_destroy_address_space(&client) == KERNEL_VM_OK);
     assert(kernel_area_pool_valid());
 }

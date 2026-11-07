@@ -274,8 +274,12 @@ pressure and tail latency remain unmeasured.
 ## Pager wiring through existing native objects
 
 The VFS service creates one reserved area per cache object and binds its own
-port's send endpoint to that area. `kernel_port_handle_retain()` keeps the
-endpoint alive until the area retires; receiver death makes sends fail with
+port's send endpoint and a nonzero, service-owned cache cookie to that area.
+VFS must generation-tag the cookie and avoid reuse while an old area or
+request can still name it. A single port can therefore serve several files
+without treating an offset as a global identity.
+`kernel_port_handle_retain()` keeps the endpoint alive until the area retires;
+receiver death makes sends fail with
 `PEER_DEAD`. VFS transfers only the area handle to mapping clients. The
 kernel checks an existing area mapping on a fault, so a client cannot fault
 an ungranted file into memory. Unknown backend identity gets a separate area
@@ -355,6 +359,14 @@ both passed with 6,782 publication cycles against the 20,000-cycle budget.
 Evidence: `/home/barry/astra-evidence/pager-bind-20261106/` on Beast. This is
 an ownership and safety gate, not a working pager: fault request, reply
 continuation, cancellation, VFS page lifecycle, and mapping API remain open.
+
+The next area seam carries a nonzero VFS-owned cookie and returns an authorized
+missing page's area, port, cookie, and aligned offset together. Lookup takes
+one area child reference so a pending request can hold area and endpoint
+through its reply or cancellation. Host tests cover two distinct cookies on
+one port, an ungranted process, and a page already published. K1 checks the
+same identity on MC68040. The future request must consume this pin exactly
+once; the lookup alone sends no message and resumes no fault.
 
 ## Implementation order and release gates
 

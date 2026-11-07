@@ -258,7 +258,7 @@ $(POSIX_PROCESS_TEST): src/posix_process.c tests/test_posix_process.c
 $(ALLOCATOR_TEST): src/allocator_heap.c src/allocator.c \
 		src/allocator_internal.h tests/test_allocator.c
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -pthread \
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -no-pie -pthread \
 		src/allocator_heap.c src/allocator.c tests/test_allocator.c -o $@
 
 $(MUTEX_TEST): tests/test_mutex.c $(NDK)/include/astra/runtime.h

@@ -2,6 +2,29 @@
 
 Status: active continuation map, 2026-11-06
 
+Pager request identity prerequisite, 2026-11-06: `AREA_BIND_PAGER` now
+requires a nonzero VFS-owned cookie, so one private port can distinguish
+missing pages from several file cache areas. Existing area-map authority
+checks return area, port, cookie, and aligned offset together with one pinned
+area child reference; the future request path must release that pin exactly
+once. Two-area, ungranted-process, published-page, and port-lifetime host
+tests passed. Runtime wrapper test checks cookie register forwarding; runtime's
+allocator test harness now supplies its mutex syscall behavior, restoring full
+`make -C sw/userspace/runtime test`. Haiku reference:
+`src/system/kernel/vm/vm.cpp:3705-3780`
+retains area authority during fault handling; Astra reuses its existing
+mapping lookup and area child lifetime. Beast full kernel test/build/verify,
+NDK `dist-check`, and K1 qualification passed 14 markers with publication
+6,782/20,000 cycles. Same K1 ROM SHA-256
+`4b8462449047e773d242edb2c61c1081af0a45c5c46341eb5bd925cae4bca75c`
+reached `KERNEL MULTITASKING` on DE25 without production storage; board log
+SHA-256 `562c6d2ab2186f4223068935c89eaaf70471fd368de79a391c9d6be0433ee9a4`
+matched Beast archive at `/home/barry/astra-evidence/pager-cookie-20261106/`.
+Normal Beast ROM was restored, disposable board files removed, three
+production services remain active, only production loop0 remains, and 8.5
+GiB is free. Missing-page request/reply, cancellation, VFS cache identity
+retirement, file mapping, writeback, and pressure reclaim remain open.
+
 Pager area ownership prerequisite, 2026-11-06: `AREA_BIND_PAGER` now attaches
 one retained port send endpoint to an uncommitted, unmapped reserved area.
 Binding requires area administration and port signal rights; the endpoint is

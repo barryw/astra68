@@ -23,17 +23,60 @@ static uint32_t reserve_calls;
 static uint32_t decommit_calls;
 static uint32_t policy_calls;
 static int permit_growth;
-static atomic_uint futex_wait_calls;
+static atomic_uint blocked_wait_calls;
 static atomic_uint policy_entered;
 static atomic_uint policy_active;
 static atomic_uint policy_overlap;
+static atomic_uint next_thread_id;
+static _Thread_local uint32_t thread_id;
+
+uint32_t
+astra_current_thread_id(uint32_t *id)
+{
+    assert(id != NULL);
+    if (thread_id == 0u)
+        thread_id = atomic_fetch_add(&next_thread_id, 1u) + 1u;
+    *id = thread_id;
+    return ASTRA_SYSCALL_OK;
+}
+
+void
+astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
+               uint32_t argument2, uint32_t argument3, uint32_t argument4,
+               AstraSyscallResult *result)
+{
+    volatile uint32_t *state = (volatile uint32_t *)(uintptr_t)argument0;
+    uint32_t expected;
+
+    assert(state == &astra_allocator_control()->lock && argument1 == 0u &&
+           argument2 == 0u &&
+           argument3 == 0u && argument4 == 0u && result != NULL);
+    if (number == ASTRA_SYSCALL_MUTEX_WAIT) {
+        (void)atomic_fetch_add(&blocked_wait_calls, 1u);
+        do {
+            expected = 0u;
+            if (__atomic_compare_exchange_n(state, &expected, thread_id, 0,
+                                            __ATOMIC_ACQUIRE,
+                                            __ATOMIC_RELAXED))
+                break;
+            sched_yield();
+        } while (1);
+    } else {
+        assert(number == ASTRA_SYSCALL_MUTEX_UNLOCK);
+        expected = thread_id;
+        assert(__atomic_compare_exchange_n(state, &expected, 0u, 0,
+                                           __ATOMIC_RELEASE,
+                                           __ATOMIC_RELAXED));
+    }
+    result->status = ASTRA_SYSCALL_OK;
+}
 
 uint32_t
 astra_futex_wait(volatile uint32_t *address, uint32_t expected,
                  uint64_t deadline_ns)
 {
     (void)deadline_ns;
-    (void)atomic_fetch_add(&futex_wait_calls, 1u);
+    (void)atomic_fetch_add(&blocked_wait_calls, 1u);
     while (__atomic_load_n(address, __ATOMIC_ACQUIRE) == expected)
         sched_yield();
     return ASTRA_SYSCALL_OK;
@@ -95,7 +138,7 @@ serialized_growth_policy(uint32_t current_bytes, uint32_t growth_bytes,
     if (atomic_fetch_add(&policy_active, 1u) != 0u)
         atomic_store(&policy_overlap, 1u);
     if (call == 0u) {
-        while (atomic_load(&futex_wait_calls) == 0u)
+        while (atomic_load(&blocked_wait_calls) == 0u)
             sched_yield();
     }
     (void)atomic_fetch_sub(&policy_active, 1u);
@@ -174,7 +217,7 @@ main(void)
     assert(pthread_join(first_thread, NULL) == 0);
     assert(pthread_join(second_thread, NULL) == 0);
     assert(first_growth != NULL && second_growth != NULL);
-    assert(atomic_load(&futex_wait_calls) != 0u);
+    assert(atomic_load(&blocked_wait_calls) != 0u);
     assert(atomic_load(&policy_overlap) == 0u);
     astra_runtime_set_growth_policy(NULL, NULL);
 

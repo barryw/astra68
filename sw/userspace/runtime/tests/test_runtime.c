@@ -438,6 +438,7 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_VM_PRIVATE_RESERVE &&
         number != ASTRA_SYSCALL_VM_PRIVATE_COMMIT &&
         number != ASTRA_SYSCALL_VM_PRIVATE_DECOMMIT &&
+        number != ASTRA_SYSCALL_AREA_BIND_PAGER &&
         number != ASTRA_SYSCALL_RING_CREATE &&
         number != ASTRA_SYSCALL_RING_READ_TRY &&
         number != ASTRA_SYSCALL_RING_WRITE_TRY &&
@@ -904,6 +905,10 @@ test_syscall_wrappers(void)
     assert(astra_close(0x12345678u) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_CLOSE);
     assert(mock_argument0 == 0x12345678u);
+    assert(astra_rt_area_bind_pager(7u, 8u, 9u) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_AREA_BIND_PAGER);
+    assert(mock_argument0 == 7u && mock_argument1 == 8u &&
+           mock_argument2 == 9u);
     assert(astra_rt_semaphore_create(
                1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
                &sync_handle) == ASTRA_SYSCALL_OK);

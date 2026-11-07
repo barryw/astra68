@@ -84,6 +84,7 @@ struct KernelArea {
     uint8_t frames_released;
     uint8_t reserved_form;
     KernelPort *pager;
+    uint32_t pager_cookie;
     KernelHandleRelease pager_release;
     void *pager_release_context;
     /* Frame of shared-table addresses, one per span; 0 until first map. */
@@ -696,6 +697,7 @@ static KernelAreaStatus close_area(KernelArea *area, uint32_t terminal_result)
     if (area->pager != NULL) {
         area->pager_release(area->pager, area->pager_release_context);
         area->pager = NULL;
+        area->pager_cookie = 0u;
         area->pager_release = NULL;
         area->pager_release_context = NULL;
     }
@@ -834,10 +836,11 @@ allocation_failed:
 }
 
 KernelAreaStatus kernel_area_bind_pager(KernelArea *area, KernelPort *port,
+                                        uint32_t cookie,
                                         KernelHandleRelease release,
                                         void *release_context)
 {
-    if (!valid_area(area) || port == NULL || release == NULL)
+    if (!valid_area(area) || port == NULL || cookie == 0u || release == NULL)
         return KERNEL_AREA_INVALID_ARGUMENT;
     if (area->state != KERNEL_AREA_LIVE)
         return KERNEL_AREA_PEER_DEAD;
@@ -846,6 +849,7 @@ KernelAreaStatus kernel_area_bind_pager(KernelArea *area, KernelPort *port,
         area->committed_pages != 0u)
         return KERNEL_AREA_INVALID_STATE;
     area->pager = port;
+    area->pager_cookie = cookie;
     area->pager_release = release;
     area->pager_release_context = release_context;
     return KERNEL_AREA_OK;
@@ -1376,28 +1380,62 @@ static bool commit_cluster(KernelArea *area, uint32_t page,
     return true;
 }
 
+static KernelAreaMapping *missing_reserved_mapping(
+    uint32_t process_id, KernelAddressSpace *space, uint32_t address,
+    uint32_t *page)
+{
+    KernelAreaMapping *mapping = authorised_mapping(process_id, space,
+                                                     address);
+
+    if (mapping == NULL || mapping->area->reserved_form == 0u || page == NULL)
+        return NULL;
+    *page = (address - mapping->virtual_base) / KERNEL_PAGE_SIZE;
+    if (*page >= mapping->area->page_count ||
+        page_committed(mapping->area, *page))
+        return NULL;
+    return mapping;
+}
+
 bool kernel_area_fault(uint32_t process_id, KernelAddressSpace *space,
                        uint32_t address)
 {
     uint32_t page;
-    KernelAreaMapping *mapping;
-    /*
-     * Authority, and the reason this is not simply an address test: the
-     * faulting process must already hold a mapping of this area. Without the
-     * check any process could spend an area owner's frames by reading into a
-     * window it was never given.
-     */
-    KernelArea *area;
+    KernelAreaMapping *mapping = missing_reserved_mapping(
+        process_id, space, address, &page);
 
-    mapping = authorised_mapping(process_id, space, address);
-    if (mapping == NULL || mapping->area->reserved_form == 0u ||
-        mapping->area->pager != NULL)
+    if (mapping == NULL || mapping->area->pager != NULL)
         return false;
-    area = mapping->area;
-    page = (address - mapping->virtual_base) / KERNEL_PAGE_SIZE;
-    if (page >= area->page_count || page_committed(area, page))
-        return false;
-    return commit_cluster(area, page, NULL, 0u);
+    return commit_cluster(mapping->area, page, NULL, 0u);
+}
+
+KernelAreaStatus kernel_area_pager_request(uint32_t process_id,
+                                            KernelAddressSpace *space,
+                                            uint32_t address,
+                                            KernelAreaPagerRequest *request)
+{
+    uint32_t page;
+    KernelAreaMapping *mapping;
+    KernelAreaStatus status;
+
+    if (request == NULL)
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    request->area = NULL;
+    request->port = NULL;
+    request->cookie = 0u;
+    request->offset = 0u;
+    mapping = missing_reserved_mapping(process_id, space, address, &page);
+    if (mapping == NULL)
+        return KERNEL_AREA_NOT_MAPPED;
+    if (mapping->area->pager == NULL)
+        return KERNEL_AREA_INVALID_STATE;
+    status = kernel_area_child_retain(mapping->area);
+    if (status != KERNEL_AREA_OK)
+        return status;
+    request->area = mapping->area;
+    request->port = mapping->area->pager;
+    request->cookie = mapping->area->pager_cookie;
+    request->offset = page * KERNEL_PAGE_SIZE;
+    return KERNEL_AREA_OK;
 }
 
 KernelAreaStatus kernel_area_publish_page(KernelArea *area, uint32_t offset,
@@ -1884,7 +1922,8 @@ bool kernel_area_pool_valid(void)
                 area->handle_references != 0u ||
                 area->child_references != 0u ||
                 area->mapping_references != 0u ||
-                area->pager != NULL || area->pager_release != NULL ||
+                area->pager != NULL || area->pager_cookie != 0u ||
+                area->pager_release != NULL ||
                 area->pager_release_context != NULL ||
                 area->frames_released == 0u)
                 return false;
@@ -1899,9 +1938,10 @@ bool kernel_area_pool_valid(void)
             area->frame_owner == 0u || area->page_count == 0u ||
             area->page_count > KERNEL_AREA_PAGE_MAX ||
             (area->pager != NULL &&
-             (area->reserved_form == 0u || area->pager_release == NULL)) ||
+             (area->reserved_form == 0u || area->pager_cookie == 0u ||
+              area->pager_release == NULL)) ||
             (area->pager == NULL &&
-             (area->pager_release != NULL ||
+             (area->pager_cookie != 0u || area->pager_release != NULL ||
               area->pager_release_context != NULL)) ||
             area->byte_size != area->page_count * KERNEL_PAGE_SIZE)
             return false;
