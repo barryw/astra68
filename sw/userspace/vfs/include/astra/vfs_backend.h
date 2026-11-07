@@ -200,6 +200,8 @@ typedef struct AstraVfsBackendOps {
     uint32_t (*symlink_at)(void *, const char *, uintptr_t, const char *);
     uint32_t (*readlink_at)(void *, uintptr_t, const char *, void *, uint32_t, uint32_t *);
     uint32_t (*directory_path)(void *, uintptr_t, void *, uint32_t, uint32_t *);
+    /** Optional provider mutation counters for coherent retained page reads. */
+    uint32_t (*change_snapshot)(void *, uint64_t *nodes, uint64_t *entries);
 } AstraVfsBackendOps;
 
 struct AstraVfsBackend {

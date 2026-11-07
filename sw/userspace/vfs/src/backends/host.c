@@ -195,6 +195,12 @@ uint32_t astra_vfs_host_change_snapshot(AstraVfsHostBackend *backend,
     return ASTRA_VFS_OK;
 }
 
+static uint32_t host_change_snapshot(void *context, uint64_t *nodes,
+                                     uint64_t *entries)
+{
+    return astra_vfs_host_change_snapshot(context, nodes, entries);
+}
+
 uint32_t astra_vfs_host_change_next(AstraVfsHostBackend *backend,
     uint64_t *cursor, AstraHostFsChangeRecord *record, uint32_t *kind)
 {
@@ -1014,6 +1020,7 @@ static const AstraVfsBackendOps host_ops = {
     .rename_noreplace_at = host_rename_noreplace_at,
     .link_at = host_link_at, .symlink_at = host_symlink_at,
     .readlink_at = host_readlink_at, .directory_path = host_directory_path,
+    .change_snapshot = host_change_snapshot,
 };
 
 int astra_vfs_host_init(AstraVfsHostBackend *backend,

@@ -695,7 +695,7 @@ int main(void)
 
 #define EXPECT(operation) host.expected_operation = (operation)
     EXPECT(ASTRA_HOST_FS_CHANGE_SNAPSHOT);
-    assert(astra_vfs_host_change_snapshot(&backend, &changes_nodes,
+    assert(ops->change_snapshot(&backend, &changes_nodes,
         &changes_entries) == ASTRA_VFS_OK);
     assert(changes_nodes == UINT64_C(0x100000002) &&
            changes_entries == UINT64_C(0x300000004));

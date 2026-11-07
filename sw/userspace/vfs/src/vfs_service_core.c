@@ -1248,6 +1248,8 @@ astra_vfs_service_read_page_retained(AstraVfsService *service,
 {
     AstraVfsNodeInfo before, after;
     AstraVfsChangeSnapshot changes_before, changes_after;
+    uint64_t provider_nodes_before = 0u, provider_nodes_after = 0u;
+    uint64_t provider_entries;
     uint32_t status, wanted, copied = 0u;
 
     if (valid_bytes != NULL)
@@ -1260,6 +1262,13 @@ astra_vfs_service_read_page_retained(AstraVfsService *service,
         return ASTRA_VFS_ERR_INVALID;
     if (!astra_vfs_service_change_snapshot(service, &changes_before))
         return ASTRA_VFS_ERR_IO;
+    if (service->backend.ops->change_snapshot != NULL) {
+        status = service->backend.ops->change_snapshot(
+            service->backend.context, &provider_nodes_before,
+            &provider_entries);
+        if (status != ASTRA_VFS_OK)
+            return status;
+    }
     status = astra_vfs_service_stat_retained(service, retained, &before);
     if (status != ASTRA_VFS_OK)
         return status;
@@ -1287,6 +1296,13 @@ astra_vfs_service_read_page_retained(AstraVfsService *service,
         return status;
     if (!astra_vfs_service_change_snapshot(service, &changes_after))
         return ASTRA_VFS_ERR_IO;
+    if (service->backend.ops->change_snapshot != NULL) {
+        status = service->backend.ops->change_snapshot(
+            service->backend.context, &provider_nodes_after,
+            &provider_entries);
+        if (status != ASTRA_VFS_OK)
+            return status;
+    }
     if (after.kind != ASTRA_VFS_KIND_FILE ||
         (expected_identity != NULL &&
          !astra_vfs_node_identity_equal(expected_identity, &after.meta)) ||
@@ -1296,7 +1312,15 @@ astra_vfs_service_read_page_retained(AstraVfsService *service,
     /* shortcut: unrelated writes can force retry; use per-node generation
      * once cache objects own mutation state. */
     if (after.size != before.size || after.mtime != before.mtime ||
-        changes_after.nodes != changes_before.nodes)
+        ((after.meta.valid ^ before.meta.valid) &
+         (ASTRA_VFS_META_MTIME | ASTRA_VFS_META_CTIME)) != 0u ||
+        ((before.meta.valid & after.meta.valid & ASTRA_VFS_META_MTIME) != 0u &&
+         before.meta.mtime_nsec != after.meta.mtime_nsec) ||
+        ((before.meta.valid & after.meta.valid & ASTRA_VFS_META_CTIME) != 0u &&
+         (before.meta.ctime != after.meta.ctime ||
+          before.meta.ctime_nsec != after.meta.ctime_nsec)) ||
+        changes_after.nodes != changes_before.nodes ||
+        provider_nodes_after != provider_nodes_before)
         return ASTRA_VFS_ERR_BUSY;
     *valid_bytes = copied;
     return ASTRA_VFS_OK;

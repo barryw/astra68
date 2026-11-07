@@ -2,6 +2,17 @@
 
 Status: active continuation map, 2026-11-07
 
+VFS retained page reads now check HostFS provider node-change generation and
+known nanosecond timestamps around fill, using the existing backend change
+snapshot and notification source. Beast VFS target, tests, and sanitizers
+passed; DE25 AArch64 fixture passed one million forced switches with matching
+binary SHA-256. Evidence:
+`/home/barry/astra-evidence/vfs-page-coherence-de25-20261107/` on Beast.
+No guest mapping consumes this source yet; VFS pager service, shared cached
+I/O, invalidation, writeback, and pressure reclaim remain open. Haiku
+`src/system/kernel/cache/file_cache.cpp:345-375,386-427` supplies the
+read/zero-tail reference, adapted to Astra's retained VFS description.
+
 Area ownership query, 2026-11-07: WIP branch adds an ADMINISTER-only native
 area reference query for the VFS file-cache owner. It atomically reports live
 handle, mapping, and in-flight child counts; VFS can retain its one owner

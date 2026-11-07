@@ -49,7 +49,15 @@ typedef struct FakeFs {
     uint32_t read_limit;
     uint32_t read_resize_after;
     uint8_t read_note_change;
+    uint8_t read_note_provider_change;
+    uint8_t read_bump_timestamps;
+    uint8_t read_bump_ctime;
+    uint8_t read_drop_time_valid;
     uint8_t exact_identity;
+    uint32_t mtime_nsec;
+    uint32_t ctime_nsec;
+    uint64_t provider_nodes;
+    uint32_t provider_status;
     uint32_t close_status;
     uint32_t write_status;
     uint32_t write_overreport;
@@ -206,6 +214,26 @@ fake_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
         found->size = fake.read_resize_after;
     if (fake.read_note_change)
         ++service.changes.nodes;
+    if (fake.read_note_provider_change)
+        ++fake.provider_nodes;
+    if (fake.read_bump_timestamps)
+        ++fake.mtime_nsec;
+    if (fake.read_bump_ctime)
+        ++fake.ctime_nsec;
+    if (fake.read_drop_time_valid)
+        fake.read_drop_time_valid = 2u;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t fake_change_snapshot(void *context, uint64_t *nodes,
+                                     uint64_t *entries)
+{
+    (void)context;
+
+    if (fake.provider_status != ASTRA_VFS_OK)
+        return fake.provider_status;
+    *nodes = fake.provider_nodes;
+    *entries = 0u;
     return ASTRA_VFS_OK;
 }
 
@@ -302,11 +330,17 @@ fake_stat_node(void *context, uintptr_t node, AstraVfsNodeInfo *info)
     if (fake.exact_identity)
         info->meta = (AstraVfsNodeMeta){
             .valid = ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_INODE |
-                     ASTRA_VFS_META_GENERATION,
+                     ASTRA_VFS_META_GENERATION | ASTRA_VFS_META_MTIME |
+                     ASTRA_VFS_META_CTIME,
             .volume = 3u,
             .inode = (uint64_t)(found - fake.nodes) + 1u,
-            .generation = 7u
+            .generation = 7u,
+            .mtime_nsec = fake.mtime_nsec,
+            .ctime = 1234567,
+            .ctime_nsec = fake.ctime_nsec
         };
+    if (fake.read_drop_time_valid == 2u)
+        info->meta.valid &= ~ASTRA_VFS_META_MTIME;
     return ASTRA_VFS_OK;
 }
 
@@ -684,6 +718,7 @@ static const AstraVfsBackendOps fake_ops = {
     .rename_at = fake_rename_at,
     .rename_noreplace_at = fake_rename_noreplace_at,
     .directory_path = fake_directory_path,
+    .change_snapshot = fake_change_snapshot,
 };
 
 static AstraVfsSessionSlot service_sessions[ASTRA_VFS_SESSION_MAX];
@@ -1598,6 +1633,31 @@ test_retained_page_read_checks_complete_file(void)
                &service, retained, &info.meta, 0u, page, &valid) ==
            ASTRA_VFS_ERR_BUSY && valid == 0u);
     fake.read_note_change = 0u;
+    fake.read_note_provider_change = 1u;
+    assert(astra_vfs_service_read_page_retained(
+               &service, retained, &info.meta, 0u, page, &valid) ==
+           ASTRA_VFS_ERR_BUSY && valid == 0u);
+    fake.read_note_provider_change = 0u;
+    fake.read_bump_timestamps = 1u;
+    assert(astra_vfs_service_read_page_retained(
+               &service, retained, &info.meta, 0u, page, &valid) ==
+           ASTRA_VFS_ERR_BUSY && valid == 0u);
+    fake.read_bump_timestamps = 0u;
+    fake.read_bump_ctime = 1u;
+    assert(astra_vfs_service_read_page_retained(
+               &service, retained, &info.meta, 0u, page, &valid) ==
+           ASTRA_VFS_ERR_BUSY && valid == 0u);
+    fake.read_bump_ctime = 0u;
+    fake.read_drop_time_valid = 1u;
+    assert(astra_vfs_service_read_page_retained(
+               &service, retained, &info.meta, 0u, page, &valid) ==
+           ASTRA_VFS_ERR_BUSY && valid == 0u);
+    fake.read_drop_time_valid = 0u;
+    fake.provider_status = ASTRA_VFS_ERR_LOST;
+    assert(astra_vfs_service_read_page_retained(
+               &service, retained, &info.meta, 0u, page, &valid) ==
+           ASTRA_VFS_ERR_LOST && valid == 0u);
+    fake.provider_status = ASTRA_VFS_OK;
     assert(astra_vfs_service_release_retained(&service, retained) ==
            ASTRA_VFS_OK);
     assert(astra_vfs_service_read_page_retained(

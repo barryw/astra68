@@ -206,6 +206,26 @@ Haiku `src/system/kernel/cache/file_cache.cpp:345-375,386-427` clears
 untouched tails before publishing cached pages; Astra keeps that zero-tail
 step in its kernel page publisher.
 
+Provider-coherence slice, 2026-11-07: retained page reads now sample the
+backend's optional node-change counter before and after filling a page.
+HostFS implements this through its existing provider change snapshot; the
+same counter feeds filesystem notifications. The read also compares known
+mtime nanoseconds, ctime seconds/nanoseconds, and timestamp validity in
+addition to size and mtime seconds. Any change returns BUSY with zero valid
+bytes; a failed provider snapshot propagates its error. Host tests cover
+counter changes, timestamp changes, validity loss, and snapshot failure;
+Beast target build, host suite, and sanitizers passed. The AArch64 service
+core fixture passed on DE25 with one million forced switches. Board and Beast
+binary SHA-256 matched at
+`e216833cd37dd55165f71c91e07d695d2ce70e6df6b833abdff96e318e5b9133`;
+log SHA-256 is
+`69373fdd5dea3100ca16fce035e93461870a000151214aa1f9e6c7882deb511f`.
+Evidence is under
+`/home/barry/astra-evidence/vfs-page-coherence-de25-20261107/` on Beast.
+HostFS notification delivery can lag a direct external write, so the future
+cache must also consume node and gap notifications before reusing pages.
+This slice does not create a file mapping or pager service.
+
 Pager candidate, 2026-11-07: a bound-area fault now sends the page request
 through the existing port call/reply machinery, keeps the area pinned while
 waiting, reads the reply's transfer area, and publishes only a checked,
