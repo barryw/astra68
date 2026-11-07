@@ -199,7 +199,7 @@ static void watch_mount(AstraStorageProvider *provider,
         entry->watch_state = WATCH_FID;
     } else {
         int error = provider->watch_fd < 0 ? ENOTSUP : errno;
-        if (error == EOPNOTSUPP) {
+        if (error == EOPNOTSUPP || provider->watch_fd < 0) {
             int directory = provider->inotify_fd < 0 ? -1 :
                 openat(entry->mounted.root, ".",
                     O_RDONLY | O_DIRECTORY | O_CLOEXEC);
@@ -208,7 +208,7 @@ static void watch_mount(AstraStorageProvider *provider,
                 watch_add_directory(provider, entry, directory);
             if (result == 0) result = watch_scan(provider, entry);
             entry->watch_state = result == 0 ? WATCH_INOTIFY : WATCH_DEGRADED;
-            entry->watch_gap_deadline_ns = 0u;
+            if (result == 0) entry->watch_gap_deadline_ns = 0u;
             if (result != 0)
                 fprintf(stderr, "astra-storage inotify coverage id=%" PRIu64
                     " error=%d\n", entry->id, result);
@@ -260,8 +260,7 @@ static void watch_reset_inotify(AstraStorageProvider *provider)
         if (entry->watch_state == WATCH_INOTIFY ||
             entry->watch_state == WATCH_DEGRADED) {
             watch_gap(provider);
-            entry->watch_state = provider->inotify_fd < 0 ?
-                WATCH_DEGRADED : WATCH_UNTRIED;
+            entry->watch_state = WATCH_DEGRADED;
             entry->watch_gap_deadline_ns = 0u;
         }
 }
@@ -646,6 +645,12 @@ static void watch_drain(AstraStorageProvider *provider, pid_t completed_worker)
             watch_gap(provider);
             close(provider->watch_fd);
             provider->watch_fd = -1;
+            for (AstraStorageResource *entry = provider->resources;
+                 entry != NULL; entry = entry->next)
+                if (entry->watch_state == WATCH_FID) {
+                    entry->watch_state = WATCH_UNAVAILABLE;
+                    entry->watch_gap_deadline_ns = 0u;
+                }
             return;
         }
         size_t offset = 0u;
@@ -677,12 +682,26 @@ int astra_storage_provider_change_next(AstraStorageProvider *provider,
         uint64_t current = (uint64_t)now.tv_sec * UINT64_C(1000000000) +
             (uint64_t)now.tv_nsec;
         for (AstraStorageResource *entry = provider->resources; entry != NULL;
-             entry = entry->next)
-            if (entry->watch_state == WATCH_DEGRADED &&
-                current >= entry->watch_gap_deadline_ns) {
-                watch_gap(provider);
-                entry->watch_gap_deadline_ns = current + UINT64_C(1000000000);
-            }
+             entry = entry->next) {
+            if ((entry->watch_state != WATCH_DEGRADED &&
+                 entry->watch_state != WATCH_UNAVAILABLE) ||
+                current < entry->watch_gap_deadline_ns)
+                continue;
+            watch_gap(provider);
+            entry->watch_gap_deadline_ns = current + UINT64_C(1000000000);
+            if (entry->watch_state == WATCH_UNAVAILABLE &&
+                provider->watch_fd < 0)
+                provider->watch_fd = fanotify_init(FAN_CLASS_NOTIF |
+                    FAN_CLOEXEC | FAN_NONBLOCK | FAN_REPORT_DFID_NAME_TARGET,
+                    O_RDONLY | O_LARGEFILE);
+            if (entry->watch_state == WATCH_DEGRADED)
+                for (AstraStorageWatch *watch = provider->watches;
+                     watch != NULL; watch = watch->next)
+                    if (watch->mount == entry->id)
+                        watch->scanned = 0u;
+            entry->watch_state = WATCH_UNTRIED;
+            watch_mount(provider, entry);
+        }
     }
     *change = (AstraStorageChangeRecord){0};
     uint64_t latest = provider->watch_sequence;

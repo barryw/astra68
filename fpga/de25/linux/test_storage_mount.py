@@ -14,6 +14,7 @@ def main():
     parser.add_argument("binary")
     parser.add_argument("--provider", action="store_true")
     parser.add_argument("--exfat-tool")
+    parser.add_argument("--exfat-image")
     parser.add_argument("--nfs-server")
     parser.add_argument("--smb-server")
     parser.add_argument("--smb-auth-server")
@@ -24,8 +25,10 @@ def main():
     args = parser.parse_args()
     if args.owner_uid <= 0 or args.owner_gid <= 0:
         parser.error("mount owner must be non-root; set --owner-uid and --owner-gid")
-    if args.exfat_tool and not args.provider:
-        parser.error("--exfat-tool requires --provider")
+    if (args.exfat_tool or args.exfat_image) and not args.provider:
+        parser.error("exFAT fixture requires --provider")
+    if args.exfat_tool and args.exfat_image:
+        parser.error("choose --exfat-tool or --exfat-image")
     if args.nfs_server and not args.provider:
         parser.error("--nfs-server requires --provider")
     if args.smb_server and not args.provider:
@@ -85,12 +88,20 @@ def main():
                                 "-m", "0755", args.formatter_exfat,
                                 str(Path(work) / "astra-mkfs.exfat")], check=True)
                 binary = str(staged)
-            if args.exfat_tool:
+            if args.exfat_tool or args.exfat_image:
                 exfat = str(Path(work) / "exfat.img")
-                with open(exfat, "wb") as handle:
-                    handle.truncate(64 * 1024 * 1024)
-                subprocess.run([args.exfat_tool, "-q", "-L", "ASTRA_EXFAT", exfat],
-                               check=True)
+                if args.exfat_image:
+                    shutil.copyfile(args.exfat_image, exfat)
+                    probe = subprocess.run(["blkid", "-p", "-s", "TYPE",
+                                            "-o", "value", exfat],
+                                           text=True, capture_output=True)
+                    if probe.returncode != 0 or probe.stdout.strip() != "exfat":
+                        raise ValueError("--exfat-image is not exFAT")
+                else:
+                    with open(exfat, "wb") as handle:
+                        handle.truncate(64 * 1024 * 1024)
+                    subprocess.run([args.exfat_tool, "-q", "-L", "ASTRA_EXFAT", exfat],
+                                   check=True)
                 images["exfat.img"] = exfat
             sudo = ["sudo", "-n"]
             if args.nfs_server:
@@ -104,7 +115,7 @@ def main():
                             images["fat12.img"], images["fat16.img"],
                             images["fat32.img"], images["ntfs.img"],
                             images["disc.udf"]] +
-                           ([images["exfat.img"]] if args.exfat_tool else []) +
+                           ([images["exfat.img"]] if args.exfat_tool or args.exfat_image else []) +
                            (["--format-gate"] if args.formatter_fat else []), check=True)
             if args.formatter_fat:
                 checker = str(Path(args.formatter_fat).with_name("astra-fsck.fat"))

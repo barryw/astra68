@@ -2,6 +2,27 @@
 
 Status: active continuation map, 2026-11-07
 
+File-watch recovery, 2026-11-07: The storage provider now keeps emitting
+global GAP records while fanotify or inotify coverage is lost, retries failed
+watch registration on its existing one-second deadline, and rearms watches
+after a fatal watch-FD read. It no longer leaves a mounted volume silently
+marked watched after the FD dies. Existing HostFS change ring and Messaging
+broker still deliver those invalidations; no second event path was added.
+Haiku `src/system/kernel/fs/node_monitor.cpp` keeps node/volume listener
+identity at the filesystem owner; Astra adapts that contract with a GAP when
+the Linux-backed observer cannot prove coverage. Beast FAT/ISO and exFAT
+provider fixtures, sanitizer, and guest Atlas create/remove, provider-reset,
+and 80-entry overflow gates passed. The same AArch64 provider fixture ran on
+DE25 with exFAT inotify fallback active and forced inotify/fanotify FD loss;
+board and Beast binary SHA-256 matched at
+`8c13e7f31f8cf5074ed636fcaed041e89fb3db660631526dd3f036fc2e476301`.
+Board log SHA-256 `f23ef9e238bcb685d40a700405e2df078f631be20951d38edb401afdc722991c`
+matched the Beast archive at
+`/home/barry/astra-evidence/watch-rearm-20261107/`. Trial files were removed,
+all three production services stayed active, and board free space returned
+to 8.5 GiB. Guest Atlas recovery from an injected watch-FD loss on DE25 and
+literal USB cable replug remain open.
+
 Userspace gate repair, 2026-11-07: Full `make -C sw/userspace test` and
 `all` now pass on Beast. The boundary check identifies declared private-state
 owners rather than mistaking Interface controls for VFS files; AstraZ uses

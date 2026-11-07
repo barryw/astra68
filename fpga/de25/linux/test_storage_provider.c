@@ -776,15 +776,6 @@ static void exfat_external_changes(AstraStorageProvider *provider,
             cursor = next;
         }
         assert(gap >= 1);
-        provider->resource_limit = limit;
-        for (unsigned at = 0u; at < 64u; ++at) {
-            AstraStorageChangeRecord change;
-            uint64_t next;
-            assert(astra_storage_provider_change_next(provider, cursor,
-                &change, &next) == 0);
-            if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
-            cursor = next;
-        }
         sleep(1);
         AstraStorageChangeRecord change;
         uint64_t next;
@@ -792,7 +783,51 @@ static void exfat_external_changes(AstraStorageProvider *provider,
             &change, &next) == 0 &&
             change.change.kind == ASTRA_HOST_FS_CHANGE_GAP &&
             change.mount == 0u && change.generation == 0u);
+        provider->resource_limit = limit;
+        sleep(1);
+        assert(astra_storage_provider_change_next(provider,
+            provider->watch_sequence, &change, &next) == 0);
+        cursor = provider->watch_sequence;
+        int resumed = openat(root, "astra-after-watch-cap",
+            O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+        assert(resumed >= 0 && close(resumed) == 0);
+        int resumed_seen = 0;
+        for (unsigned at = 0u; at < 64u; ++at) {
+            assert(astra_storage_provider_change_next(provider, cursor,
+                &change, &next) == 0);
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED &&
+                change.mount == mount &&
+                strcmp(change.change.name, "astra-after-watch-cap") == 0)
+                ++resumed_seen;
+            cursor = next;
+        }
+        assert(resumed_seen == 1);
+        assert(unlinkat(root, "astra-after-watch-cap", 0) == 0);
         assert(unlinkat(root, "astra-watch-cap", AT_REMOVEDIR) == 0);
+        close(provider->inotify_fd);
+        cursor = provider->watch_sequence;
+        assert(astra_storage_provider_change_next(provider, cursor,
+            &change, &next) == 0 &&
+            change.change.kind == ASTRA_HOST_FS_CHANGE_GAP);
+        assert(provider->inotify_fd >= 0 && provider->watch_count >= baseline_watches);
+        cursor = provider->watch_sequence;
+        int restored = openat(root, "astra-after-fd-loss",
+            O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+        assert(restored >= 0 && close(restored) == 0);
+        int restored_seen = 0;
+        for (unsigned at = 0u; at < 64u; ++at) {
+            assert(astra_storage_provider_change_next(provider, cursor,
+                &change, &next) == 0);
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
+            if (change.change.kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED &&
+                change.mount == mount &&
+                strcmp(change.change.name, "astra-after-fd-loss") == 0)
+                ++restored_seen;
+            cursor = next;
+        }
+        assert(restored_seen == 1);
+        assert(unlinkat(root, "astra-after-fd-loss", 0) == 0);
     }
     assert(mkdirat(root, "astra-bound-dir", 0700) == 0);
     int subtree = openat(root, "astra-bound-dir",
@@ -1412,6 +1447,28 @@ static void external_changes(AstraStorageProvider *provider, int root)
     assert(created >= 1u && modified >= 1u);
     assert(unlinkat(root, "inside-event", 0) == 0);
     assert(unlink(sibling) == 0 && rmdir(outside) == 0);
+    close(provider->watch_fd);
+    cursor = provider->watch_sequence;
+    AstraStorageChangeRecord lost;
+    uint64_t lost_next;
+    assert(astra_storage_provider_change_next(provider, cursor, &lost,
+        &lost_next) == 0 && lost.change.kind == ASTRA_HOST_FS_CHANGE_GAP);
+    assert(provider->watch_fd >= 0);
+    cursor = provider->watch_sequence;
+    file = openat(root, "after-fid-loss", O_CREAT | O_EXCL | O_WRONLY, 0600);
+    assert(file >= 0 && close(file) == 0);
+    unsigned restored = 0u;
+    for (unsigned at = 0u; at < 64u; ++at) {
+        assert(astra_storage_provider_change_next(provider, cursor, &lost,
+            &lost_next) == 0);
+        if (lost.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
+        if (lost.change.kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED &&
+            lost.mount == mount &&
+            strcmp(lost.change.name, "after-fid-loss") == 0)
+            ++restored;
+        cursor = lost_next;
+    }
+    assert(restored == 1u && unlinkat(root, "after-fid-loss", 0) == 0);
     assert(astra_storage_provider_loss(provider, mount, 1u) == 0);
     assert(unmount_wait(provider, mount, 2u) == 0);
     assert(astra_storage_provider_release(provider, mount) == 0);
