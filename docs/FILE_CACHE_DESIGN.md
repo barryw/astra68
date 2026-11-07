@@ -384,13 +384,15 @@ authority while resolving a page, and `src/system/kernel/cache/file_cache.cpp`
 publishes only complete, zero-tailed data. Astra adapts those contracts to
 its current area, port, and scheduler owners.
 
-Host tests now cover success, malformed reply, full send queue, original
-deadline retention, timeout, receive-end closure, and two simultaneous faults
-on one page with both full and available send queues. Client exit, stale
-replies, and donation remain required gates, as do zero leaked area children
-after every terminal path. K1 needs separate request, reply/publication, and
-terminal-handoff cycle budgets against the existing user-fault baseline
-before VFS mappings depend on this path.
+Host tests now cover success, malformed reply, stale replies after successful
+publication and timeout, full send queue, original deadline retention, timeout,
+receive-end closure, and two simultaneous faults on one page with both full
+and available send queues. Process exit with pending same-page faults retires
+their area references. Pager donation and restoration are asserted.
+Area child references return to zero on tested success and failure paths.
+K1 needs separate request, reply/publication, and terminal-handoff cycle budgets
+against the existing user-fault baseline before VFS mappings depend on this
+path.
 
 This wiring uses existing `sw/kernel/area.c` mapping authority and frame
 ownership, `sw/kernel/port.c` transfer, `sw/kernel/thread.c` call donation,

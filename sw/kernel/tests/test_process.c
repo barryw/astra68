@@ -8335,6 +8335,20 @@ static void test_pager_reply_publishes_before_wake(void)
     assert(kernel_area_pool_valid());
 }
 
+static uint32_t pager_area_children(uint32_t creator)
+{
+    uint32_t children = 0u;
+
+    for (uint32_t slot = 0u; slot < KERNEL_AREA_MAX; ++slot) {
+        KernelAreaSnapshot snapshot;
+
+        if (kernel_area_snapshot(slot, &snapshot) &&
+            snapshot.creator == creator && snapshot.reserved_form != 0u)
+            children += snapshot.child_references;
+    }
+    return children;
+}
+
 static void test_bound_area_fault_calls_pager(void)
 {
     static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
@@ -8431,6 +8445,7 @@ static void test_bound_area_fault_calls_pager(void)
                      0u, 0u) == KERNEL_PROCESS_OK);
     assert(kernel_thread_at(0u)->pager_area == NULL);
     assert(kernel_thread_at(0u)->pager_failed == 0u);
+    assert(pager_area_children(process_id) == 0u);
     assert(kernel_thread_at(0u)->context.data[0] == 0xdeadbeefu);
     assert(kernel_thread_at(0u)->context.program_counter ==
            KERNEL_PROCESS_CODE_BASE);
@@ -8438,6 +8453,15 @@ static void test_bound_area_fault_calls_pager(void)
            KERNEL_USER_COPY_OK);
     assert(memcmp(bytes, "paged", 5u) == 0);
     assert(kernel_process_stats(&stats) && stats.user_faults == 0u);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, service_stack + 512u, sizeof(reply),
+                     0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_CLOSED);
+    assert(kernel_user_copy_from_asm(bytes, target_base, sizeof(bytes)) ==
+           KERNEL_USER_COPY_OK);
+    assert(memcmp(bytes, "paged", 5u) == 0);
 
     astra_message_header_set(&filler.header, sizeof(filler),
                              ASTRA_PAGER_PROTOCOL,
@@ -8493,12 +8517,20 @@ static void test_bound_area_fault_calls_pager(void)
     assert(snapshot.exit_reason == KERNEL_PROCESS_EXIT_USER_FAULT);
     assert(snapshot.fault_address == target_base + KERNEL_PAGE_SIZE);
     assert(kernel_process_stats(&stats) && stats.user_faults == 1u);
+    assert(pager_area_children(process_id) == 0u);
     assert(kernel_area_pool_valid());
 }
 
+typedef enum PagerTestOutcome {
+    PAGER_TEST_REPLY,
+    PAGER_TEST_TIMEOUT,
+    PAGER_TEST_CLOSE_RECEIVER,
+    PAGER_TEST_CLIENT_EXIT,
+    PAGER_TEST_LATE_REPLY
+} PagerTestOutcome;
+
 static void test_same_page_faults_wake_together(bool queue_full,
-                                               bool expire,
-                                               bool close_receiver)
+                                               PagerTestOutcome outcome)
 {
     static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
     const uint32_t main_stack = KERNEL_PROCESS_STACK_TOP - 2048u;
@@ -8512,6 +8544,7 @@ static void test_same_page_faults_wake_together(bool queue_full,
     AstraPagerPageRequest request;
     AstraPagerPageRequest filler = {0};
     AstraPagerPageReply reply = {0};
+    uint8_t byte;
     uint32_t process_id, receive, send, source, source_base, target;
     uint32_t target_base, capability;
 
@@ -8587,7 +8620,7 @@ static void test_same_page_faults_wake_together(bool queue_full,
     assert(port_snapshot.queued_messages == 1u);
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
                KERNEL_PROCESS_CODE_BASE + 2u, 0u);
-    if (expire) {
+    if (outcome == PAGER_TEST_TIMEOUT) {
         scheduler_test_cycles = kernel_thread_at(0u)->pager_deadline + 1u;
         assert(kernel_process_on_timer(registers, service_stack, frame,
                                        &next) == KERNEL_PROCESS_NO_RUNNABLE);
@@ -8595,10 +8628,11 @@ static void test_same_page_faults_wake_together(bool queue_full,
         assert(snapshot.process_state == KERNEL_PROCESS_EXITING);
         assert(snapshot.exit_reason == KERNEL_PROCESS_EXIT_USER_FAULT);
         assert(snapshot.fault_address == target_base);
+        assert(pager_area_children(process_id) == 0u);
         assert(kernel_area_pool_valid());
         return;
     }
-    if (close_receiver) {
+    if (outcome == PAGER_TEST_CLOSE_RECEIVER) {
         assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
                          receive, 0u, 0u, 0u, 0u) ==
                KERNEL_PROCESS_NO_RUNNABLE);
@@ -8606,6 +8640,17 @@ static void test_same_page_faults_wake_together(bool queue_full,
         assert(snapshot.process_state == KERNEL_PROCESS_EXITING);
         assert(snapshot.exit_reason == KERNEL_PROCESS_EXIT_USER_FAULT);
         assert(snapshot.fault_address == target_base);
+        assert(pager_area_children(process_id) == 0u);
+        assert(kernel_area_pool_valid());
+        return;
+    }
+    if (outcome == PAGER_TEST_CLIENT_EXIT) {
+        assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_EXIT,
+                         0u, 0u, 0u, 0u, 0u) ==
+               KERNEL_PROCESS_NO_RUNNABLE);
+        assert(kernel_process_snapshot(0u, &snapshot));
+        assert(snapshot.process_state == KERNEL_PROCESS_EXITING);
+        assert(pager_area_children(process_id) == 0u);
         assert(kernel_area_pool_valid());
         return;
     }
@@ -8623,10 +8668,44 @@ static void test_same_page_faults_wake_together(bool queue_full,
                      ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive,
                      service_stack + 256u, sizeof(request),
                      service_stack + 384u, 1u) == KERNEL_PROCESS_OK);
+    assert(kernel_thread_at(2u)->effective_priority ==
+           KERNEL_THREAD_PRIORITY_NORMAL);
     assert(kernel_user_copy_from_asm(&request, service_stack + 256u,
                                      sizeof(request)) == KERNEL_USER_COPY_OK);
     assert(kernel_user_copy_from_asm(&capability, service_stack + 384u,
                                      sizeof(capability)) == KERNEL_USER_COPY_OK);
+    if (outcome == PAGER_TEST_LATE_REPLY) {
+        assert(kernel_thread_set_priority(
+                   kernel_thread_at(2u),
+                   KERNEL_THREAD_PRIORITY_NORMAL + 1u) == KERNEL_THREAD_OK);
+        scheduler_test_cycles = kernel_thread_at(0u)->pager_deadline + 1u;
+        assert(kernel_process_on_timer(registers, service_stack, frame,
+                                       &next) == KERNEL_PROCESS_OK);
+        assert(kernel_thread_at(0u)->pager_area == NULL);
+        assert(kernel_thread_at(1u)->pager_area == NULL);
+        assert(pager_area_children(process_id) == 0u);
+        astra_message_header_set(&reply.header, sizeof(reply),
+                                 ASTRA_PAGER_PROTOCOL,
+                                 ASTRA_PAGER_PROTOCOL_VERSION,
+                                 ASTRA_PAGER_OPERATION_PAGE_REPLY,
+                                 request.header.transaction_id);
+        reply.status = ASTRA_STATUS_OK;
+        reply.cookie = request.cookie;
+        reply.offset = request.offset;
+        reply.data_area = source;
+        reply.valid_bytes = 6u;
+        assert(kernel_user_copy_to_asm(service_stack + 512u, &reply,
+                                       sizeof(reply)) == KERNEL_USER_COPY_OK);
+        assert(test_trap(service_stack, frame, &next,
+                         ASTRA_SYSCALL_PORT_SEND_TRY, capability,
+                         service_stack + 512u, sizeof(reply), 0u, 0u) ==
+               KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+        assert(kernel_user_copy_from_asm(&byte, target_base, 1u) ==
+               KERNEL_USER_COPY_BAD_ADDRESS);
+        assert(kernel_area_pool_valid());
+        return;
+    }
     astra_message_header_set(&reply.header, sizeof(reply),
                              ASTRA_PAGER_PROTOCOL,
                              ASTRA_PAGER_PROTOCOL_VERSION,
@@ -8642,8 +8721,11 @@ static void test_same_page_faults_wake_together(bool queue_full,
     assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
                      capability, service_stack + 512u, sizeof(reply),
                      0u, 0u) == KERNEL_PROCESS_OK);
+    assert(kernel_thread_at(2u)->effective_priority ==
+           kernel_thread_at(2u)->base_priority);
     assert(kernel_thread_at(0u)->pager_area == NULL);
     assert(kernel_thread_at(1u)->pager_area == NULL);
+    assert(pager_area_children(process_id) == 0u);
     assert(kernel_area_pool_valid());
     assert(kernel_process_current_context() != NULL);
     assert(kernel_user_copy_from_asm(&request, target_base, 6u) ==
@@ -17511,10 +17593,12 @@ int main(void)
     test_pager_binding_retains_send_endpoint();
     test_pager_reply_publishes_before_wake();
     test_bound_area_fault_calls_pager();
-    test_same_page_faults_wake_together(false, false, false);
-    test_same_page_faults_wake_together(true, false, false);
-    test_same_page_faults_wake_together(true, true, false);
-    test_same_page_faults_wake_together(true, false, true);
+    test_same_page_faults_wake_together(false, PAGER_TEST_REPLY);
+    test_same_page_faults_wake_together(true, PAGER_TEST_REPLY);
+    test_same_page_faults_wake_together(true, PAGER_TEST_TIMEOUT);
+    test_same_page_faults_wake_together(true, PAGER_TEST_CLOSE_RECEIVER);
+    test_same_page_faults_wake_together(true, PAGER_TEST_CLIENT_EXIT);
+    test_same_page_faults_wake_together(false, PAGER_TEST_LATE_REPLY);
     test_area_and_ring_endpoint_transfer_over_port();
     test_executable_loading();
     test_executable_threads_receive_independent_tls();
