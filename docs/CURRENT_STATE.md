@@ -31,10 +31,12 @@ Board trial files were removed; Astra, audio host, and remote desktop are
 active, only production loop0 remains, and 8.4 GiB is free. Top-level
 userspace `test` still stops at three existing source-boundary violations in
 Interface and AstraZ. Desktop-app gate first missed SDLTestDraw2 twice, then
-passed four consecutive five-app runs on the first image. Final image gate
-missed Fonts after Atlas opened multiple drawers; launch flakiness needs
-diagnosis. Quake HDMI trial: smooth gameplay and effects, no music on selected
-image, which lacks `/store/id1/music`.
+passed four consecutive five-app runs on the first image. The final image
+initially missed Fonts when the gate clicked its Atlas position before the
+new drawer had painted; the gate now pauses 250 ms between icon discovery and
+input. Four consecutive five-app runs passed on the final image. Quake HDMI
+trial: smooth gameplay and effects, no music on selected image, which lacks
+`/store/id1/music`.
 
 Pager request identity prerequisite, 2026-11-06: `AREA_BIND_PAGER` now
 requires a nonzero VFS-owned cookie, so one private port can distinguish

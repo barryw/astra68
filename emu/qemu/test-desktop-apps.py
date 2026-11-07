@@ -34,6 +34,8 @@ def display_count(machine, name):
 
 def open_application(machine, bundle, deadline):
     icon = machine.application_icon(bundle, 30.0)
+    # Atlas reports icon positions before its newly opened window is painted.
+    time.sleep(0.25)
     before = machine.sequence()
     submissions = display_count(machine, "submissions")
     palette_blits = display_count(machine, "palette-blit-commands")
