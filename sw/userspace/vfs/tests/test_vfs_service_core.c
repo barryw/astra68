@@ -1393,7 +1393,8 @@ test_retained_description_survives_client_close(void)
                                          &retained) == ASTRA_VFS_OK);
     assert(retained == handle);
     assert(astra_vfs_service_retain_file(&service, session, handle,
-                                         &retained) == ASTRA_VFS_ERR_BUSY);
+                                         &retained) == ASTRA_VFS_OK);
+    assert(retained == handle);
     fake.read_mode = 2u;
     begin_request(&request, session, NULL);
     request.file = handle;
@@ -1450,6 +1451,20 @@ test_retained_description_survives_client_close(void)
     fake.sync_status = ASTRA_VFS_ERR_IO;
     assert(astra_vfs_service_sync_retained(&service, handle) == ASTRA_VFS_ERR_IO);
     fake.sync_status = ASTRA_VFS_OK;
+    assert(astra_vfs_service_release_retained(&service, handle) == ASTRA_VFS_OK);
+    assert(fake.closes == 0u && service.open_files == 1u);
+    assert(astra_vfs_service_shutdown(&service, &writable, &probe) ==
+           ASTRA_VFS_ERR_BUSY);
+    assert(astra_vfs_service_read_retained(&service, handle, 0u, bytes,
+                                           sizeof(bytes), &moved) == ASTRA_VFS_OK);
+    AstraVfsOpenFile *open = &service.files[(handle & 0xffffu) - 1u];
+    open->active = 1u;
+    service.state_wait = NULL;
+    assert(astra_vfs_service_release_retained(&service, handle) ==
+           ASTRA_VFS_ERR_IO);
+    assert(open->retained == 1u && open->state == ASTRA_VFS_FILE_DETACHED);
+    open->active = 0u;
+    service.state_wait = test_state_wait;
     assert(astra_vfs_service_release_retained(&service, handle) == ASTRA_VFS_OK);
     assert(fake.closes == 1u && service.open_files == 0u);
     assert(astra_vfs_service_shutdown(&service, &writable, &probe) ==

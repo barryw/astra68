@@ -104,6 +104,20 @@ input. Four consecutive five-app runs passed on the final image. Quake HDMI
 trial: smooth gameplay and effects, no music on selected image, which lacks
 `/store/id1/music`.
 
+VFS retained-description ownership, 2026-11-07: one open file can now hold
+multiple internal cache references. Closing its client session revokes public
+access; the backend description remains open and blocks safe unmount until
+the last reference releases it. The final release keeps its reference if
+waiting for active I/O fails. Beast VFS target build, host suite, and
+sanitizers passed. The same AArch64 core fixture passed on DE25 with one
+million forced switches. Board and Beast binary SHA-256 matched at
+`1430282e706aa33341e7890e542e1a3947787d4c7eaa939b731a5a7aa17f9a9e`;
+checksummed evidence is under
+`/home/barry/astra-evidence/vfs-retain-shared-de25-20261107/` on Beast.
+Trial binary was removed; all three production services are active with zero
+Astra restarts, only loop0 remains, and 8.5 GiB is free. Cache-object identity,
+guest pager, and file mappings remain open.
+
 Pager request identity prerequisite, 2026-11-06: `AREA_BIND_PAGER` now
 requires a nonzero VFS-owned cookie, so one private port can distinguish
 missing pages from several file cache areas. Existing area-map authority

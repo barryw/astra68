@@ -141,6 +141,19 @@ page; it does not yet bind a VFS pager, track dirty pages, or expose mappings
 to guest applications. Separate budgets are still required for fault handoff
 and pager reply before those paths become dependencies.
 
+Eighth slice, 2026-11-07: existing retained descriptions now accept multiple
+cache owners. Each successful retain requires one release; closing the client
+session revokes its handle while the backend description remains open, and
+safe unmount stays BUSY until the last owner releases it. If waiting for
+active I/O fails, final release keeps its reference so close can be retried. Haiku
+`src/system/kernel/vm/VMCache.cpp:1616-1644` releases consumer and store
+references separately and performs VFS release outside its cache lock; Astra
+keeps its existing state-lock release around backend close. Beast VFS target
+build, host suite, and sanitizers passed. The AArch64 core fixture passed on
+DE25 with one million forced switches; checksummed evidence is under
+`/home/barry/astra-evidence/vfs-retain-shared-de25-20261107/` on Beast.
+Cache-object identity, guest pager, and file mappings remain open.
+
 ## Target baseline, 2026-11-06
 
 Three focused `fsbench` runs on DE25 used the selected release's kernel and
@@ -240,11 +253,10 @@ pressure and tail latency remain unmeasured.
    becomes a mapped page: zero the page tail and publish only after the full
    result and current volume incarnation are checked.
 
-   `AstraVfsOpenFile` in `sw/userspace/vfs/src/vfs_service_core.c` is owned by
-   one session. `close_file()` closes its backend node and invalidates its
-   generation. A mapping therefore cannot hold only this session token:
-   VFS must retain a separate backend description until its final cache or
-   mapping reference retires, including after session close. Its identity
+   `AstraVfsOpenFile` in `sw/userspace/vfs/src/vfs_service_core.c` starts with
+   one session. Closing that session revokes its public handle; retained cache
+   references keep the backend description open until their final release.
+   A mapping therefore cannot hold only the session token. Its identity
    comes from `AstraVfsNodeMeta.valid`; only the complete volume, inode, and
    birth-generation triple permits cross-open sharing.
 

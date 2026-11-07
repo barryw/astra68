@@ -44,8 +44,7 @@ typedef struct AstraVfsOpenFile {
     uint16_t waiters;
     uint8_t state;
     uint8_t active;
-    /* shortcut: one cache owner per open, add shared references with VM cache. */
-    uint8_t retained;
+    uint16_t retained;     /* cache owners holding this backend description */
 } AstraVfsOpenFile;
 
 enum {
@@ -235,8 +234,8 @@ uint32_t astra_vfs_service_read_into(AstraVfsService *service,
                                      uint64_t offset, void *buffer,
                                      uint32_t length, uint32_t *moved);
 
-/* One cache owner can retain an open description across client close. The
- * returned token is internal to VFS, never an application file handle. */
+/* Cache owners can retain an open description across client close. Each
+ * successful retain needs one release. Tokens stay internal to VFS. */
 uint32_t astra_vfs_service_retain_file(AstraVfsService *service,
     uint32_t session, AstraVfsFile file, AstraVfsFile *retained);
 uint32_t astra_vfs_service_read_retained(AstraVfsService *service,

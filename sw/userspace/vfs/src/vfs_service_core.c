@@ -1205,10 +1205,10 @@ astra_vfs_service_retain_file(AstraVfsService *service, uint32_t session,
         if (file->kind != ASTRA_VFS_KIND_FILE ||
             (file->flags & ASTRA_VFS_OPEN_READ) == 0u)
             status = ASTRA_VFS_ERR_ACCESS;
-        else if (file->retained != 0u)
-            status = ASTRA_VFS_ERR_BUSY;
+        else if (file->retained == UINT16_MAX)
+            status = ASTRA_VFS_ERR_LIMIT;
         else {
-            file->retained = 1u;
+            ++file->retained;
             *retained = handle;
         }
     }
@@ -1282,7 +1282,12 @@ astra_vfs_service_release_retained(AstraVfsService *service,
         return ASTRA_VFS_ERR_BAD_HANDLE;
     }
     if (file->state == ASTRA_VFS_FILE_OPEN) {
-        file->retained = 0u;
+        --file->retained;
+        state_release(service);
+        return ASTRA_VFS_OK;
+    }
+    if (file->retained > 1u) {
+        --file->retained;
         state_release(service);
         return ASTRA_VFS_OK;
     }
