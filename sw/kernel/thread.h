@@ -131,6 +131,7 @@ typedef enum KernelThreadStatus {
 } KernelThreadStatus;
 
 struct KernelThread;
+struct KernelArea;
 typedef void (*KernelThreadWaitObserver)(struct KernelThread *thread,
                                          uint32_t result, void *context);
 typedef struct KernelThreadWaitRegistration KernelThreadWaitRegistration;
@@ -242,6 +243,15 @@ typedef struct KernelThread {
     uint32_t call_reply_capacity;
     uint32_t call_reply_handles;
     uint32_t call_reply_handle_capacity;
+    struct KernelArea *pager_area;
+    struct KernelThread *pager_next;
+    uint32_t pager_offset;
+    uint32_t pager_cookie;
+    uint32_t pager_saved_data[4];
+    uint32_t pager_fault_address;
+    uint16_t pager_fault_vector;
+    uint16_t pager_fault_status;
+    uint8_t pager_failed;
     uint32_t exit_status;
     uint32_t terminal_result;
     uint64_t deadline_cycles;

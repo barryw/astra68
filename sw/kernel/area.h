@@ -141,6 +141,7 @@ bool kernel_area_fault(uint32_t process_id, KernelAddressSpace *space,
 KernelAreaStatus kernel_area_publish_page(KernelArea *area, uint32_t offset,
                                           const void *source,
                                           uint32_t valid_bytes);
+bool kernel_area_page_resident(const KernelArea *area, uint32_t offset);
 /*
  * Drops the committed pages of a reserved area that lie wholly inside the
  * range, and keeps the reservation. This is what makes freeing memory mean

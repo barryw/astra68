@@ -1462,6 +1462,15 @@ KernelAreaStatus kernel_area_publish_page(KernelArea *area, uint32_t offset,
     return KERNEL_AREA_OK;
 }
 
+bool kernel_area_page_resident(const KernelArea *area, uint32_t offset)
+{
+    return valid_area(area) && area->state == KERNEL_AREA_LIVE &&
+           area->reserved_form != 0u &&
+           (offset & (KERNEL_PAGE_SIZE - 1u)) == 0u &&
+           range_valid(area, offset, KERNEL_PAGE_SIZE) &&
+           page_committed(area, offset / KERNEL_PAGE_SIZE);
+}
+
 
 /*
  * Withdraws one page from every address space holding the area, then releases

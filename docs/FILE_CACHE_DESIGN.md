@@ -166,6 +166,21 @@ SHA-256 `371a3a0a00a9618b800ed1fcecf3097c6ad63afe8ca1bf177a0ecdf3eead130c`;
 checksummed evidence is under
 `/home/barry/astra-evidence/vfs-identity-de25-20261107/` on Beast.
 
+Pager candidate, 2026-11-07: a bound-area fault now sends the page request
+through the existing port call/reply machinery, keeps the area pinned while
+waiting, reads the reply's transfer area, and publishes only a checked,
+zero-tailed page. Wait completion restores the faulting registers and releases
+the pin. Invalid replies produce the ordinary inspectable user-fault verdict.
+Focused host tests cover success, invalid reply, and two threads faulting the
+same page; Beast kernel tests, target build, `verify`, and 14-marker K1 gate
+pass. Haiku `src/system/kernel/vm/VMCache.cpp:950-966,1563-1577` tracks page
+waiters and wakes them after publication; Astra currently reuses its native
+thread wait observer and port reply capability. This candidate is not a
+release: same-page faults still send duplicate requests, a full-port wake
+re-enters user mode before retrying the absent page, VFS does not yet serve
+pager requests, and no DE25 guest pager gate has run. Resolve those lifecycle
+gaps before merging or enabling file mappings.
+
 ## Target baseline, 2026-11-06
 
 Three focused `fsbench` runs on DE25 used the selected release's kernel and
@@ -311,8 +326,8 @@ per retained description; complete volume/inode/birth identity permits area
 sharing. The VFS description stays retained while the area or a pending page
 request exists.
 
-For a missing page, the kernel installs its existing reply capability in the
-faulting process's handle table and sends a request to the bound port with
+For a missing page, the kernel installs its existing reply capability in a
+kernel-owned transient handle table and sends a request to the bound port with
 `kernel_port_send_narrowed()`. The faulting thread then uses
 `kernel_thread_call_begin/block/assign()` and `schedule_next(SWITCH_BLOCK)`,
 the same donation and deadline machinery as `ASTRA_SYSCALL_PORT_CALL`. A full

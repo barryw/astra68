@@ -51,6 +51,7 @@
 #include <astra/audio_stream.h>
 #include <astra/block.h>
 #include <astra/pcm_format.h>
+#include <astra/pager_service.h>
 #include <astra/host.h>
 #include <astra/network.h>
 #include <vesta.h>
@@ -8243,6 +8244,334 @@ static void test_pager_binding_retains_send_endpoint(void)
     assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
     assert(kernel_area_pool_valid());
     assert(kernel_port_pool_valid());
+}
+
+static void test_pager_reply_publishes_before_wake(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u,
+                                    0x4eu, 0x71u, 0x4eu, 0x71u};
+    const uint32_t stack = KERNEL_PROCESS_STACK_TOP - 2048u;
+    const uint32_t call_base = KERNEL_PROCESS_STACK_TOP - 1024u;
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint8_t bytes[KERNEL_PAGE_SIZE];
+    KernelCpuContext *next;
+    KernelThread *caller;
+    KernelArea *target;
+    AstraPagerPageReply reply = {0};
+    uint32_t process_id, receive, send, source, source_base, service_stack;
+    uint32_t capability, call;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_PORT_CREATE,
+                     2u, 2u * sizeof(TestCallRequest), 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    receive = next->data[1];
+    send = next->data[2];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_CREATE,
+                     KERNEL_PAGE_SIZE, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                         ASTRA_RIGHT_MAP | ASTRA_RIGHT_ADMINISTER,
+                     0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    source = next->data[1];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_MAP,
+                     source, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                     0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    source_base = next->data[1];
+    assert(kernel_user_copy_to_asm(source_base, "page!", 5u) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_area_create(process_id, KERNEL_PAGE_SIZE,
+                              ASTRA_AREA_CREATE_RESERVED, &target) ==
+           KERNEL_AREA_OK);
+    assert(kernel_area_child_retain(target) == KERNEL_AREA_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_THREAD_CREATE,
+                     KERNEL_PROCESS_CODE_BASE + 2u, 0u,
+                     KERNEL_THREAD_PRIORITY_NORMAL - 1u,
+                     KERNEL_THREAD_RIGHTS, 0u) == KERNEL_PROCESS_OK);
+    service_stack = TEST_STACK_TOP(1u) - 1536u;
+    assert(test_port_call(stack, frame, &next, call_base, send, NULL, 0u,
+                          0u, sizeof(reply), 0u, TEST_CALL_FOREVER, 7u) ==
+           KERNEL_PROCESS_OK);
+    caller = kernel_thread_at(0u);
+    assert(caller != NULL && caller->state == KERNEL_THREAD_BLOCKED);
+    call = caller->call;
+    caller->pager_area = target;
+    caller->pager_cookie = 0xabcdu;
+    caller->pager_offset = 0u;
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive,
+                     service_stack + 256u, sizeof(TestCallRequest),
+                     service_stack + 384u, 1u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&capability, service_stack + 384u,
+                                     sizeof(capability)) == KERNEL_USER_COPY_OK);
+    astra_message_header_set(&reply.header, sizeof(reply),
+                             ASTRA_PAGER_PROTOCOL,
+                             ASTRA_PAGER_PROTOCOL_VERSION,
+                             ASTRA_PAGER_OPERATION_PAGE_REPLY, call);
+    reply.status = ASTRA_STATUS_OK;
+    reply.cookie = caller->pager_cookie;
+    reply.offset = caller->pager_offset;
+    reply.data_area = source;
+    reply.valid_bytes = 5u;
+    assert(kernel_user_copy_to_asm(service_stack + 512u, &reply,
+                                   sizeof(reply)) == KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, service_stack + 512u, sizeof(reply),
+                     0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(caller->pager_failed == 0u);
+    assert(kernel_area_read(target, 0u, bytes, sizeof(bytes)) ==
+           KERNEL_AREA_OK);
+    assert(memcmp(bytes, "page!", 5u) == 0);
+    for (uint32_t index = 5u; index < sizeof(bytes); ++index)
+        assert(bytes[index] == 0u);
+    caller->pager_area = NULL;
+    assert(kernel_area_child_release(target) == KERNEL_AREA_OK);
+    kernel_area_handle_release(target, NULL);
+    assert(kernel_area_pool_valid());
+}
+
+static void test_bound_area_fault_calls_pager(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
+    const uint32_t stack = KERNEL_PROCESS_STACK_TOP - 2048u;
+    const uint32_t service_stack = TEST_STACK_TOP(1u) - 1536u;
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    KernelCpuContext *next;
+    KernelSchedulerStats stats;
+    AstraPagerPageRequest request;
+    AstraPagerPageReply reply = {0};
+    uint8_t bytes[16];
+    KernelProcessSnapshot snapshot;
+    uint32_t process_id, receive, send, source, source_base, target;
+    uint32_t target_base, capability;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_PORT_CREATE,
+                     2u, 2u * sizeof(request), 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    receive = next->data[1];
+    send = next->data[2];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_CREATE,
+                     KERNEL_PAGE_SIZE,
+                     ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                         ASTRA_RIGHT_MAP | ASTRA_RIGHT_ADMINISTER,
+                     0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    source = next->data[1];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_MAP,
+                     source, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                     0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    source_base = next->data[1];
+    assert(kernel_user_copy_to_asm(source_base, "paged", 5u) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_CREATE,
+                     2u * KERNEL_PAGE_SIZE,
+                     ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP |
+                         ASTRA_RIGHT_ADMINISTER,
+                     ASTRA_AREA_CREATE_RESERVED, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    target = next->data[1];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_BIND_PAGER,
+                     target, send, 0x1234u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_MAP,
+                     target, ASTRA_AREA_MAP_READ, 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    target_base = next->data[1];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_THREAD_CREATE,
+                     KERNEL_PROCESS_CODE_BASE + 2u, 0u,
+                     KERNEL_THREAD_PRIORITY_NORMAL - 1u,
+                     KERNEL_THREAD_RIGHTS, 0u) == KERNEL_PROCESS_OK);
+    registers[0] = 0xdeadbeefu;
+    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE,
+               target_base);
+    assert(kernel_process_on_fault(registers, stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_thread_at(0u)->state == KERNEL_THREAD_BLOCKED);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive,
+                     service_stack + 256u, sizeof(request),
+                     service_stack + 384u, 1u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&request, service_stack + 256u,
+                                     sizeof(request)) == KERNEL_USER_COPY_OK);
+    assert(request.header.protocol == ASTRA_PAGER_PROTOCOL);
+    assert(request.header.operation == ASTRA_PAGER_OPERATION_PAGE);
+    assert(request.cookie == 0x1234u && request.offset == 0u);
+    assert(kernel_user_copy_from_asm(&capability, service_stack + 384u,
+                                     sizeof(capability)) == KERNEL_USER_COPY_OK);
+    astra_message_header_set(&reply.header, sizeof(reply),
+                             ASTRA_PAGER_PROTOCOL,
+                             ASTRA_PAGER_PROTOCOL_VERSION,
+                             ASTRA_PAGER_OPERATION_PAGE_REPLY,
+                             request.header.transaction_id);
+    reply.status = ASTRA_STATUS_OK;
+    reply.cookie = request.cookie;
+    reply.offset = request.offset;
+    reply.data_area = source;
+    reply.valid_bytes = 5u;
+    assert(kernel_user_copy_to_asm(service_stack + 512u, &reply,
+                                   sizeof(reply)) == KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, service_stack + 512u, sizeof(reply),
+                     0u, 0u) == KERNEL_PROCESS_OK);
+    assert(kernel_thread_at(0u)->pager_area == NULL);
+    assert(kernel_thread_at(0u)->pager_failed == 0u);
+    assert(kernel_thread_at(0u)->context.data[0] == 0xdeadbeefu);
+    assert(kernel_thread_at(0u)->context.program_counter ==
+           KERNEL_PROCESS_CODE_BASE);
+    assert(kernel_user_copy_from_asm(bytes, target_base, sizeof(bytes)) ==
+           KERNEL_USER_COPY_OK);
+    assert(memcmp(bytes, "paged", 5u) == 0);
+    assert(kernel_process_stats(&stats) && stats.user_faults == 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = 0xabcdef01u;
+    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE,
+               target_base + KERNEL_PAGE_SIZE);
+    assert(kernel_process_on_fault(registers, stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive,
+                     service_stack + 256u, sizeof(request),
+                     service_stack + 384u, 1u) == KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(&request, service_stack + 256u,
+                                     sizeof(request)) == KERNEL_USER_COPY_OK);
+    assert(kernel_user_copy_from_asm(&capability, service_stack + 384u,
+                                     sizeof(capability)) == KERNEL_USER_COPY_OK);
+    astra_message_header_set(&reply.header, sizeof(reply),
+                             ASTRA_PAGER_PROTOCOL,
+                             ASTRA_PAGER_PROTOCOL_VERSION,
+                             ASTRA_PAGER_OPERATION_PAGE_REPLY,
+                             request.header.transaction_id);
+    reply.cookie = request.cookie + 1u;
+    reply.offset = request.offset;
+    assert(kernel_user_copy_to_asm(service_stack + 512u, &reply,
+                                   sizeof(reply)) == KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, service_stack + 512u, sizeof(reply),
+                     0u, 0u) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_snapshot(0u, &snapshot));
+    assert(snapshot.process_state == KERNEL_PROCESS_EXITING);
+    assert(snapshot.exit_reason == KERNEL_PROCESS_EXIT_USER_FAULT);
+    assert(snapshot.fault_address == target_base + KERNEL_PAGE_SIZE);
+    assert(kernel_process_stats(&stats) && stats.user_faults == 1u);
+}
+
+static void test_same_page_faults_wake_together(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
+    const uint32_t main_stack = KERNEL_PROCESS_STACK_TOP - 2048u;
+    const uint32_t peer_stack = TEST_STACK_TOP(1u) - 1536u;
+    const uint32_t service_stack = TEST_STACK_TOP(2u) - 1536u;
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    KernelCpuContext *next;
+    AstraPagerPageRequest request;
+    AstraPagerPageReply reply = {0};
+    uint32_t process_id, receive, send, source, source_base, target;
+    uint32_t target_base, capability;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_PORT_CREATE,
+                     2u, 2u * sizeof(request), 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    receive = next->data[1];
+    send = next->data[2];
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_AREA_CREATE,
+                     KERNEL_PAGE_SIZE,
+                     ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                         ASTRA_RIGHT_MAP | ASTRA_RIGHT_ADMINISTER,
+                     0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    source = next->data[1];
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_AREA_MAP,
+                     source, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                     0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    source_base = next->data[1];
+    assert(kernel_user_copy_to_asm(source_base, "shared", 6u) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_AREA_CREATE,
+                     KERNEL_PAGE_SIZE,
+                     ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP |
+                         ASTRA_RIGHT_ADMINISTER,
+                     ASTRA_AREA_CREATE_RESERVED, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    target = next->data[1];
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_AREA_BIND_PAGER,
+                     target, send, 0x9876u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_AREA_MAP,
+                     target, ASTRA_AREA_MAP_READ, 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    target_base = next->data[1];
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_THREAD_CREATE,
+                     KERNEL_PROCESS_CODE_BASE + 2u, 0u,
+                     KERNEL_THREAD_PRIORITY_NORMAL - 1u,
+                     KERNEL_THREAD_RIGHTS, 0u) == KERNEL_PROCESS_OK);
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_THREAD_CREATE,
+                     KERNEL_PROCESS_CODE_BASE + 2u, 0u,
+                     KERNEL_THREAD_PRIORITY_NORMAL - 2u,
+                     KERNEL_THREAD_RIGHTS, 0u) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE, target_base);
+    assert(kernel_process_on_fault(registers, main_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_thread_at(0u)->state == KERNEL_THREAD_BLOCKED);
+    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE + 2u,
+               target_base);
+    assert(kernel_process_on_fault(registers, peer_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_thread_at(1u)->state == KERNEL_THREAD_BLOCKED);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive,
+                     service_stack + 256u, sizeof(request),
+                     service_stack + 384u, 1u) == KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(&request, service_stack + 256u,
+                                     sizeof(request)) == KERNEL_USER_COPY_OK);
+    assert(kernel_user_copy_from_asm(&capability, service_stack + 384u,
+                                     sizeof(capability)) == KERNEL_USER_COPY_OK);
+    astra_message_header_set(&reply.header, sizeof(reply),
+                             ASTRA_PAGER_PROTOCOL,
+                             ASTRA_PAGER_PROTOCOL_VERSION,
+                             ASTRA_PAGER_OPERATION_PAGE_REPLY,
+                             request.header.transaction_id);
+    reply.status = ASTRA_STATUS_OK;
+    reply.cookie = request.cookie;
+    reply.offset = request.offset;
+    reply.data_area = source;
+    reply.valid_bytes = 6u;
+    assert(kernel_user_copy_to_asm(service_stack + 512u, &reply,
+                                   sizeof(reply)) == KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, service_stack + 512u, sizeof(reply),
+                     0u, 0u) == KERNEL_PROCESS_OK);
+    assert(kernel_thread_at(0u)->pager_area == NULL);
+    assert(kernel_thread_at(1u)->pager_area == NULL);
+    assert(kernel_area_pool_valid());
+    assert(kernel_process_current_context() != NULL);
+    assert(kernel_user_copy_from_asm(&request, target_base, 6u) ==
+           KERNEL_USER_COPY_OK);
+    assert(memcmp(&request, "shared", 6u) == 0);
 }
 
 static void test_area_and_ring_endpoint_transfer_over_port(void)
@@ -17103,6 +17432,9 @@ int main(void)
     test_shared_area_and_bulk_ring_syscalls();
     test_area_publication_rolls_back_when_handle_table_full();
     test_pager_binding_retains_send_endpoint();
+    test_pager_reply_publishes_before_wake();
+    test_bound_area_fault_calls_pager();
+    test_same_page_faults_wake_together();
     test_area_and_ring_endpoint_transfer_over_port();
     test_executable_loading();
     test_executable_threads_receive_independent_tls();

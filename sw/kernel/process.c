@@ -16,6 +16,7 @@
 #include <astra/library.h>
 #include <astra/network.h>
 #include <astra/pcm_format.h>
+#include <astra/pager_service.h>
 #include <astra/process.h>
 #include <astra/proc.h>
 #include <astra/render_batch.h>
@@ -432,6 +433,10 @@ static void reply_export_observer(KernelObjectType type, void *object,
                                   void *context);
 static KernelProcessMaintenanceDiagnostics maintenance_diagnostics;
 static KernelThread *current_thread;
+static KernelThread *pager_waiting;
+/* One processor creates one pager request at a time; transfer detaches each
+ * reply before another fault can enter. App handle quotas stay independent. */
+static KernelHandleTable pager_handles KERNEL_TABLES;
 #define MEDIA_PERIOD_CYCLES (KERNEL_PLATFORM_CPU_HZ / 50u)
 #define MEDIA_BUDGET_CYCLES (MEDIA_PERIOD_CYCLES * 3u / 4u)
 static uint64_t quantum_deadline;
@@ -1695,12 +1700,67 @@ KernelProcessStatus activate_profiled(KernelThread *next, SwitchCause cause,
     return status;
 }
 
+static KernelProcessStatus retire_process(KernelProcess *retiring,
+                                          KernelProcessExitReason reason,
+                                          uint32_t exit_status,
+                                          KernelCpuContext **next_context);
+
+static void report_user_fault(KernelProcess *process, KernelThread *thread,
+                              uint32_t address, uint16_t vector,
+                              uint16_t status, uint32_t kind)
+{
+    AstraProcessCrash *crash = &process->crash;
+
+    kernel_bytes_clear(crash, sizeof(*crash));
+    crash->process_id = process->id;
+    crash->thread_id = thread->id;
+    crash->fault_pc = thread->context.program_counter;
+    crash->fault_address = address;
+    kernel_bytes_copy(crash->data, thread->context.data,
+                      sizeof(crash->data));
+    kernel_bytes_copy(crash->address, thread->context.address,
+                      sizeof(crash->address));
+    crash->user_stack = thread->context.usp;
+    crash->status_register = thread->context.status_register;
+    crash->vector = vector;
+    crash->fault_status = status;
+    crash->frame_format = thread->context.frame_format;
+    crash->pc_mapping = (uint8_t)kernel_vm_probe_address_space(
+        &process->address_space, crash->fault_pc, NULL);
+    crash->fault_mapping = (uint8_t)kernel_vm_probe_address_space(
+        &process->address_space, crash->fault_address, NULL);
+    crash->stack_mapping = (uint8_t)kernel_vm_probe_address_space(
+        &process->address_space, crash->user_stack, NULL);
+    crash->size = sizeof(*crash);
+    process->fault_pc = crash->fault_pc;
+    process->fault_vector = crash->vector;
+    process->fault_status = crash->fault_status;
+    process->fault_address = crash->fault_address;
+    ++scheduler_stats.user_faults;
+    trace_fault_text(process->id, crash->fault_pc, address, vector);
+    kernel_process_fault_report(process->id, thread->id, crash->fault_pc,
+                                address, vector, kind);
+}
+
 static KernelProcessStatus activate(KernelThread *next, SwitchCause cause,
                                     KernelCpuContext **next_context)
 {
-    if (kernel_performance_sampling_enabled == 0u)
-        return activate_fast(next, cause, next_context);
-    return activate_profiled(next, cause, next_context);
+    KernelProcessStatus status = kernel_performance_sampling_enabled == 0u ?
+        activate_fast(next, cause, next_context) :
+        activate_profiled(next, cause, next_context);
+    KernelProcess *process;
+
+    if (status != KERNEL_PROCESS_OK || next->pager_failed == 0u)
+        return status;
+    process = process_for_thread(next);
+    if (process == NULL)
+        return KERNEL_PROCESS_CORRUPT;
+    next->pager_failed = 0u;
+    report_user_fault(process, next, next->pager_fault_address,
+                      next->pager_fault_vector, next->pager_fault_status,
+                      KERNEL_PROCESS_FAULT_AREA_WINDOW);
+    return retire_process(process, KERNEL_PROCESS_EXIT_USER_FAULT, 0u,
+                          next_context);
 }
 
 static KernelProcessStatus capture_current(const uint32_t *registers,
@@ -4275,6 +4335,8 @@ void kernel_process_init(void)
     }
     kernel_bytes_clear(processes, sizeof(processes));
     executable_loads = NULL;
+    pager_waiting = NULL;
+    kernel_handle_table_init(&pager_handles);
     kernel_bytes_clear(&scheduler_stats, sizeof(scheduler_stats));
     kernel_thread_wait_queue_init(&sleep_waiters);
     kernel_bytes_clear(host_channels, sizeof(host_channels));
@@ -10088,6 +10150,92 @@ static KernelHandleTransferBatch reply_transfer KERNEL_TABLES;
  * stack budget. */
 static uint32_t send_masks[ASTRA_MESSAGE_HANDLES_MAX] KERNEL_TABLES;
 static KernelHandleImportReservation reply_import KERNEL_TABLES;
+static uint8_t pager_reply_bytes[KERNEL_PAGE_SIZE] KERNEL_TABLES;
+
+static KernelProcessStatus deliver_pager_reply(
+    KernelProcess *replier, KernelHandle reply_handle, KernelThread *caller,
+    uint32_t call, const uint8_t *message, uint32_t message_size,
+    uint32_t handle_count, uint32_t *result)
+{
+    AstraPagerPageReply received;
+    const AstraPagerPageReply *reply = &received;
+    KernelArea *source = NULL;
+    KernelAreaStatus area_status;
+    uint32_t caller_result = ASTRA_SYSCALL_IO_ERROR;
+
+    if (handle_count != 0u) {
+        *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return KERNEL_PROCESS_OK;
+    }
+    if (message_size == sizeof(received))
+        kernel_bytes_copy(&received, message, sizeof(received));
+    if (message_size == sizeof(*reply) &&
+        reply->header.total_size == sizeof(*reply) &&
+        reply->header.header_size == ASTRA_MESSAGE_HEADER_SIZE &&
+        reply->header.flags == 0u && reply->header.reserved == 0u &&
+        reply->header.protocol == ASTRA_PAGER_PROTOCOL &&
+        reply->header.protocol_version == ASTRA_PAGER_PROTOCOL_VERSION &&
+        reply->header.operation == ASTRA_PAGER_OPERATION_PAGE_REPLY &&
+        reply->header.transaction_id == call && reply->reserved == 0u &&
+        reply->cookie == caller->pager_cookie &&
+        reply->offset == caller->pager_offset) {
+        if (reply->status == ASTRA_STATUS_OK &&
+            reply->valid_bytes != 0u &&
+            reply->valid_bytes <= KERNEL_PAGE_SIZE &&
+            kernel_handle_lookup(replier->handles, reply->data_area,
+                                 KERNEL_OBJECT_AREA, ASTRA_RIGHT_READ,
+                                 (void **)&source) == KERNEL_HANDLE_OK &&
+            source != NULL) {
+            area_status = kernel_area_read(source, reply->data_offset,
+                                           pager_reply_bytes,
+                                           reply->valid_bytes);
+            if (area_status == KERNEL_AREA_CORRUPT)
+                return KERNEL_PROCESS_CORRUPT;
+            if (area_status == KERNEL_AREA_OK) {
+                area_status = kernel_area_publish_page(
+                    caller->pager_area, caller->pager_offset,
+                    pager_reply_bytes, reply->valid_bytes);
+                if (area_status == KERNEL_AREA_CORRUPT)
+                    return KERNEL_PROCESS_CORRUPT;
+                if (area_status == KERNEL_AREA_OK ||
+                    (area_status == KERNEL_AREA_INVALID_STATE &&
+                     kernel_area_page_resident(caller->pager_area,
+                                               caller->pager_offset)))
+                    caller_result = ASTRA_SYSCALL_OK;
+            }
+        }
+    }
+    caller->pager_failed = caller_result != ASTRA_SYSCALL_OK;
+    if (kernel_area_page_resident(caller->pager_area,
+                                  caller->pager_offset)) {
+        KernelThread *peer = pager_waiting;
+
+        while (peer != NULL) {
+            KernelThread *next = peer->pager_next;
+
+            if (peer != caller && peer->pager_area == caller->pager_area &&
+                peer->pager_offset == caller->pager_offset &&
+                peer->state == KERNEL_THREAD_BLOCKED) {
+                KernelThreadStatus wake = peer->call != 0u ?
+                    kernel_thread_call_complete(peer, ASTRA_SYSCALL_OK,
+                                                0u, 0u, 0u) :
+                    kernel_thread_cancel_wait(peer, ASTRA_SYSCALL_OK);
+                if (wake != KERNEL_THREAD_OK)
+                    return KERNEL_PROCESS_CORRUPT;
+            }
+            peer = next;
+        }
+    }
+    if (kernel_handle_set_context(replier->handles, reply_handle,
+                                  KERNEL_OBJECT_REPLY, NULL) !=
+            KERNEL_HANDLE_OK ||
+        kernel_thread_call_complete(caller, caller_result, 0u, 0u,
+                                    replier->handles->process_id) !=
+            KERNEL_THREAD_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    *result = ASTRA_SYSCALL_OK;
+    return KERNEL_PROCESS_OK;
+}
 
 static __attribute__((noinline)) KernelProcessStatus deliver_reply(
     KernelProcess *current, KernelHandle reply_handle, void *object,
@@ -10128,6 +10276,10 @@ static __attribute__((noinline)) KernelProcessStatus deliver_reply(
         *result = ASTRA_SYSCALL_PEER_DEAD;
         return KERNEL_PROCESS_OK;
     }
+    if (caller->pager_area != NULL)
+        return deliver_pager_reply(current, reply_handle, caller, call,
+                                   message, message_size, handle_count,
+                                   result);
     if (handle_count != 0u) {
         handle_status = kernel_handle_transfer_prepare(
             current->handles, handles, handle_count, ASTRA_RIGHT_TRANSFER,
@@ -15169,6 +15321,153 @@ bool kernel_process_prepare_user_copy(uint32_t address, uint32_t size,
     return false;
 }
 
+static void pager_wait_done(KernelThread *thread, uint32_t result,
+                            void *context)
+{
+    KernelArea *area = context;
+    bool resident = kernel_area_page_resident(area, thread->pager_offset);
+    KernelThread **link = &pager_waiting;
+
+    while (*link != NULL && *link != thread)
+        link = &(*link)->pager_next;
+    if (*link != thread)
+        process_pool_corrupt = 1u;
+    else
+        *link = thread->pager_next;
+    thread->pager_next = NULL;
+
+    if (resident)
+        thread->pager_failed = 0u;
+    else if (result != ASTRA_SYSCALL_OK)
+        thread->pager_failed = 1u;
+    kernel_bytes_copy(thread->context.data, thread->pager_saved_data,
+                      sizeof(thread->pager_saved_data));
+    thread->pager_area = NULL;
+    if (kernel_area_child_release(area) != KERNEL_AREA_OK)
+        process_pool_corrupt = 1u;
+}
+
+/* A port-full fault sleeps on the existing writable queue, then retries the
+ * instruction. An accepted request sleeps on its existing reply capability. */
+static KernelProcessStatus request_pager_page(
+    KernelProcess *process, KernelThread *thread,
+    const KernelExceptionFrame *frame, KernelCpuContext **next_context,
+    bool *handled)
+{
+    KernelAreaPagerRequest request;
+    KernelThreadWaitSpec wait;
+    AstraPagerPageRequest message = {0};
+    KernelHandle reply = KERNEL_HANDLE_INVALID;
+    KernelAreaStatus area_status;
+    KernelHandleStatus handle_status;
+    KernelPortStatus port_status;
+    KernelThreadStatus thread_status;
+    uint64_t now_ns, now_cycles, deadline;
+    uint32_t call, woken = 0u, sequence;
+    KernelThread *receiver = NULL;
+
+    *handled = false;
+    area_status = kernel_area_pager_request(
+        process->id, &process->address_space, frame->fault_address,
+        &request);
+    if (area_status == KERNEL_AREA_NOT_MAPPED ||
+        area_status == KERNEL_AREA_INVALID_STATE)
+        return KERNEL_PROCESS_OK;
+    if (area_status == KERNEL_AREA_CORRUPT)
+        return KERNEL_PROCESS_CORRUPT;
+    if (area_status != KERNEL_AREA_OK)
+        return KERNEL_PROCESS_OK;
+    now_ns = kernel_platform_monotonic_ns();
+    if (now_ns > (uint64_t)INT64_MAX - UINT64_C(30000000000) ||
+        !kernel_platform_deadline_to_cycles(
+            (int64_t)(now_ns + UINT64_C(30000000000)), &deadline))
+        goto release;
+    now_cycles = scheduler_cycles();
+    thread_status = kernel_thread_call_begin(thread, &call);
+    if (thread_status == KERNEL_THREAD_OUT_OF_MEMORY)
+        goto release;
+    if (thread_status != KERNEL_THREAD_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    handle_status = kernel_handle_install(
+        &pager_handles, KERNEL_OBJECT_REPLY, KERNEL_REPLY_RIGHTS,
+        (void *)(uintptr_t)((uint32_t)thread->slot + 1u), reply_release,
+        (void *)(uintptr_t)call, &reply);
+    if (handle_status != KERNEL_HANDLE_OK) {
+        if (kernel_thread_call_abort(thread) != KERNEL_THREAD_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        goto release;
+    }
+    astra_message_header_set(&message.header, sizeof(message),
+                             ASTRA_PAGER_PROTOCOL,
+                             ASTRA_PAGER_PROTOCOL_VERSION,
+                             ASTRA_PAGER_OPERATION_PAGE, call);
+    message.cookie = request.cookie;
+    message.offset = request.offset;
+    port_status = kernel_port_send_narrowed(
+        request.port, &pager_handles, &message, sizeof(message), &reply,
+        1u, NULL, &woken, &receiver);
+    if (port_status != KERNEL_PORT_OK) {
+        if (port_status == KERNEL_PORT_CORRUPT ||
+            kernel_handle_close(&pager_handles, reply) != KERNEL_HANDLE_OK ||
+            kernel_thread_call_abort(thread) != KERNEL_THREAD_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        if (port_status != KERNEL_PORT_WOULD_BLOCK)
+            goto release;
+        if (kernel_port_wait_sequence(request.port,
+                                      KERNEL_PORT_ENDPOINT_SEND,
+                                      &sequence) != KERNEL_PORT_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        port_status = kernel_port_prepare_wait_after(
+            request.port, KERNEL_PORT_ENDPOINT_SEND, sequence, &wait);
+        if (port_status == KERNEL_PORT_OK) {
+            *handled = true;
+            if (kernel_area_child_release(request.area) != KERNEL_AREA_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            *next_context = runtime_resume(thread);
+            return KERNEL_PROCESS_OK;
+        }
+        if (port_status != KERNEL_PORT_WOULD_BLOCK)
+            goto release;
+    }
+    kernel_bytes_copy(thread->pager_saved_data, thread->context.data,
+                      sizeof(thread->pager_saved_data));
+    thread->pager_area = request.area;
+    thread->pager_offset = request.offset;
+    thread->pager_cookie = request.cookie;
+    thread->pager_fault_address = frame->fault_address;
+    thread->pager_fault_vector = (uint16_t)(frame->vector_offset >> 2);
+    thread->pager_fault_status = frame->special_status;
+    thread->pager_failed = 0u;
+    thread_status = port_status == KERNEL_PORT_OK ?
+        kernel_thread_call_block(thread, now_cycles, deadline) :
+        kernel_thread_block_until(thread, wait.queue, wait.sequence,
+                                  now_cycles, deadline,
+                                  ASTRA_SYSCALL_TIMED_OUT);
+    if (thread_status != KERNEL_THREAD_OK ||
+        kernel_thread_observe_wait(thread, pager_wait_done,
+                                   request.area) != KERNEL_THREAD_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    thread->pager_next = pager_waiting;
+    pager_waiting = thread;
+    if (port_status == KERNEL_PORT_WOULD_BLOCK) {
+        if (kernel_port_commit_wait(request.port,
+                                    KERNEL_PORT_ENDPOINT_SEND) !=
+            KERNEL_PORT_OK)
+            return KERNEL_PROCESS_CORRUPT;
+    } else if (receiver != NULL &&
+               kernel_thread_call_assign(thread, receiver) !=
+                   KERNEL_THREAD_OK) {
+        return KERNEL_PROCESS_CORRUPT;
+    }
+    *handled = true;
+    scheduler_timer_rearm();
+    return schedule_next(SWITCH_BLOCK, next_context);
+
+release:
+    return kernel_area_child_release(request.area) == KERNEL_AREA_OK ?
+        KERNEL_PROCESS_OK : KERNEL_PROCESS_CORRUPT;
+}
+
 KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
                                             uint32_t user_stack,
                                             const void *raw_frame,
@@ -15178,6 +15477,7 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
     KernelProcess *current;
     KernelThread *thread;
     KernelProcessStatus status;
+    bool pager_handled;
 
     if (next_context == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
@@ -15212,40 +15512,16 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
         *next_context = runtime_resume(thread);
         return KERNEL_PROCESS_OK;
     }
-    AstraProcessCrash *crash = &current->crash;
-    kernel_bytes_clear(crash, sizeof(*crash));
-    crash->process_id = current->id;
-    crash->thread_id = thread->id;
-    crash->fault_pc = frame.program_counter;
-    crash->fault_address = frame.fault_address;
-    kernel_bytes_copy(crash->data, thread->context.data,
-                      sizeof(crash->data));
-    kernel_bytes_copy(crash->address, thread->context.address,
-                      sizeof(crash->address));
-    crash->user_stack = thread->context.usp;
-    crash->status_register = thread->context.status_register;
-    crash->vector = (uint16_t)(frame.vector_offset >> 2);
-    crash->fault_status = frame.special_status;
-    crash->frame_format = thread->context.frame_format;
-    crash->pc_mapping = (uint8_t)kernel_vm_probe_address_space(
-        &current->address_space, crash->fault_pc, NULL);
-    crash->fault_mapping = (uint8_t)kernel_vm_probe_address_space(
-        &current->address_space, crash->fault_address, NULL);
-    crash->stack_mapping = (uint8_t)kernel_vm_probe_address_space(
-        &current->address_space, crash->user_stack, NULL);
-    crash->size = sizeof(*crash);
-    current->fault_pc = crash->fault_pc;
-    current->fault_vector = crash->vector;
-    current->fault_status = crash->fault_status;
-    current->fault_address = crash->fault_address;
-    ++scheduler_stats.user_faults;
-    trace_fault_text(current->id, frame.program_counter, frame.fault_address,
-                     frame.vector_offset >> 2);
-    kernel_process_fault_report(current->id, thread->id,
-                                frame.program_counter, frame.fault_address,
-                                frame.vector_offset >> 2,
-                                classify_fault_address(thread,
-                                                       frame.fault_address));
+    if (frame.access_fault != 0u) {
+        status = request_pager_page(current, thread, &frame,
+                                    next_context, &pager_handled);
+        if (status != KERNEL_PROCESS_OK || pager_handled)
+            return status;
+    }
+    report_user_fault(current, thread, frame.fault_address,
+                      (uint16_t)(frame.vector_offset >> 2),
+                      frame.special_status,
+                      classify_fault_address(thread, frame.fault_address));
     return retire_current(KERNEL_PROCESS_EXIT_USER_FAULT, 0u,
                           next_context);
 }
