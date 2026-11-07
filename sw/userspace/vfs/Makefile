@@ -39,6 +39,7 @@ EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
 	-DCONFIG_USE_DEFAULT_CFG=0 -I$(RUNTIME)/freestanding
 
 HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
+	include/astra/vfs_file_pager.h \
 	include/astra/vfs_path_storage.h \
 	include/astra/vfs_call_storage.h \
 	include/astra/vfs_file_lifetime.h \
@@ -85,6 +86,7 @@ TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_provider_index.o $(SYSTEM_STATIC_OBJECTS) \
 	build/m68k/vfs_status.o
 SERVICE_OBJECTS := build/m68k/library/vfs_service_core.o \
+	build/m68k/library/vfs_file_pager.o \
 	build/m68k/library/vfs_path.o \
 	build/m68k/library/volume.o build/m68k/library/volume_port.o \
 	build/m68k/library/vfs_port_transport.o \
@@ -131,6 +133,7 @@ RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.3
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 KERNEL_ELF_TEST := ../../kernel/build/test_elf
 HOST_TEST := build/host/test_vfs_service_core
+FILE_PAGER_TEST := build/host/test_vfs_file_pager
 VOLUME_TEST := build/host/test_volume_port
 VOLUME_CLIENT_TEST := build/host/test_volume_client
 VFS_CLIPBOARD_TEST := build/host/test_vfs_clipboard
@@ -151,6 +154,11 @@ $(VFS_CLIPBOARD_TEST): src/vfs_clipboard.c src/vfs_path.c \
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/vfs_clipboard.c src/vfs_path.c tests/test_vfs_clipboard.c \
 		$(UTF8_OBJECT) -o $@
+
+$(FILE_PAGER_TEST): src/vfs_file_pager.c tests/test_vfs_file_pager.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/vfs_file_pager.c tests/test_vfs_file_pager.c -o $@
 
 sanitize-volume:
 	@mkdir -p build/host
@@ -528,7 +536,7 @@ $(HOST_TRANSPORT_TEST): src/vfs_host_transport.c \
 		-fno-pie -no-pie src/vfs_host_transport.c \
 		tests/test_vfs_host_transport.c -o $@
 
-test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
+test: $(HOST_TEST) $(FILE_PAGER_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 		$(PORT_THREAD_TEST) \
 		$(PROCESS_TEST) $(READER_TEST) $(FILESYSTEM_LIBRARY_TEST) \
 		$(FILESYSTEM_COPY_TEST) $(TRASH_TEST) $(SAVED_QUERY_TEST) $(RECENT_ITEMS_TEST) \
@@ -536,6 +544,7 @@ test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 		$(HOST_BACKEND_TEST) $(RAM_BACKEND_TEST) $(HOST_TRANSPORT_TEST) \
 		$(VOLUME_TEST) $(VOLUME_CLIENT_TEST) $(VFS_CLIPBOARD_TEST)
 	./$(HOST_TEST)
+	./$(FILE_PAGER_TEST)
 	./$(ASSIGN_TEST)
 	./$(UNION_TEST)
 	./$(PATH_TEST)
@@ -562,6 +571,10 @@ test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 sanitize: $(PROCESS_SANITIZE_TEST)
 	./$(PROCESS_SANITIZE_TEST)
 	@mkdir -p build/host
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/vfs_file_pager.c \
+		tests/test_vfs_file_pager.c -o build/host/test_vfs_file_pager_sanitize
+	./build/host/test_vfs_file_pager_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(VFS_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) $(SANITIZER_FLAGS) \
 		src/vfs_service_core.c src/vfs_client.c \
