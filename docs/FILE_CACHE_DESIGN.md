@@ -2,8 +2,23 @@
 
 Status: design contract; VFS description-retention, metadata, VM page
 publication, and read-only HostFS file areas passed host and DE25 gates.
+The existing pressure worker reclaims clean read-only pager frames on DE25.
 Ordinary I/O still does not share mapped resident frames; dirty writeback,
-truncate semantics, pressure reclaim, and POSIX `mmap` remain open.
+full EOF/truncate mapping semantics, and POSIX `mmap` remain open.
+
+Read-only pager pressure reclaim, 2026-11-07: kernel pressure worker runs a
+bounded area sweep after idle library reclaim. It skips in-flight faults and
+uses the existing shared-table withdrawal before freeing a resident frame;
+mapped addresses remain and refault on demand. Beast host tests, Beast/DE25
+K1 16-marker qualification, and a normal DE25 stage-8 boot passed. K1's
+worst 64-step sweep measured 384/2,500,000 MC68040 cycles. Checked evidence:
+`/home/barry/astra-evidence/file-cache-pressure-20261107/` on Beast. This
+only covers clean read-only pager pages; writable shared mappings still need
+dirty accounting and writeback. Haiku
+`src/system/kernel/low_resource_manager.cpp:100-145` orders pressure
+handlers, and `src/system/kernel/cache/file_cache.cpp` keeps backing file
+identity separate from its mapped consumers. Astra reused its native worker
+and area owners.
 
 File-area revision and invalidation, 2026-11-07: HostFS no longer reuses a
 mapped area merely because its node identity matches. It also compares the
@@ -530,8 +545,9 @@ pressure and tail latency remain unmeasured.
    Partial writes preserve untouched bytes; short reads zero the remainder of
    the final page. `MAP_PRIVATE` uses existing COW. `MAP_SHARED` writes mark
    pages dirty and `msync`/unmap/close use VFS writeback and sync, reporting
-   errors rather than dropping dirty data. No page is evicted while mapped,
-   busy, or dirty.
+   errors rather than dropping dirty data. Clean read-only pager pages may be
+   withdrawn from mapped addresses and refaulted; busy or dirty pages remain
+   resident.
 4. Truncate revokes pages beyond new EOF before access can resume. Page faults
    beyond EOF fail without exposing stale frame contents. Unmount reports
    mapped/open users through the existing volume-usage path and refuses safe
@@ -543,8 +559,9 @@ pressure and tail latency remain unmeasured.
    conflict to the owner; never silently merge or discard either version.
    Notifications are an invalidation signal, not a substitute for VFS's own
    ordered writes.
-6. The existing pressure worker reclaims clean, unmapped file pages after
-   idle libraries, before protected reserves. Dirty writeback is a separate
+6. The existing pressure worker reclaims clean file pages after idle libraries,
+   before protected reserves. Read-only pager pages can remain mapped because
+   shared translations are withdrawn before frame release. Dirty writeback is a separate
    bounded worker operation; memory pressure must not synchronously perform
    filesystem I/O inside the allocator or fault handler. Failure leaves
    dirty pages resident and visible in accounting.

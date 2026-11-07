@@ -9,8 +9,8 @@
 #include <astra/syscall.h>
 
 #include "kernel_build_info.h"
-#if ASTRA_KERNEL_K1_QUALIFICATION
 #include "area.h"
+#if ASTRA_KERNEL_K1_QUALIFICATION
 #include "port.h"
 #endif
 #include "allocation.h"
@@ -104,7 +104,8 @@ static struct {
 } panic_exception;
 #if ASTRA_KERNEL_K1_QUALIFICATION
 static uint32_t qualification_survivor_process_id;
-static bool qualification_publish_page(uint32_t *cycles);
+static bool qualification_publish_page(uint32_t *cycles,
+                                       uint32_t *reclaim_cycles);
 #endif
 static KernelAddressSpace user_copy_selftest_space;
 static const KernelMonitorBuildInfo monitor_build_info = {
@@ -1816,7 +1817,8 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
         console_putc('\n');
         kernel_panic("interrupt-disabled latency budget exceeded");
     }
-    if (!qualification_publish_page(&publish_cycles))
+    uint32_t reclaim_cycles;
+    if (!qualification_publish_page(&publish_cycles, &reclaim_cycles))
         kernel_panic("K1 page publication failed");
     console_puts("K8 PAGE PUBLISH cycles=");
     console_dec32(publish_cycles);
@@ -1824,6 +1826,13 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     console_dec32(KERNEL_AREA_PUBLISH_BUDGET_CYCLES);
     if (publish_cycles > KERNEL_AREA_PUBLISH_BUDGET_CYCLES)
         kernel_panic("K1 page publication budget exceeded");
+    console_puts(" PASS\n");
+    console_puts("K8 PAGER PRESSURE cycles=");
+    console_dec32(reclaim_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_LIBRARY_CACHE);
+    if (reclaim_cycles > KERNEL_PERFORMANCE_BUDGET_LIBRARY_CACHE)
+        kernel_panic("K1 pager pressure budget exceeded");
     console_puts(" PASS\n");
     console_puts("K8 PAGER GUEST PASS\n");
     if (performance_mask == KERNEL_PERFORMANCE_RELEASE_MASK)
@@ -1911,24 +1920,45 @@ void kernel_process_soak_checkpoint(uint32_t cycles,
 static KernelWorkerServiceResult pressure_reclaim(uint32_t batch_limit,
                                                   void *context)
 {
+    static KernelAreaReclaimCursor file_cursor;
     KernelMemoryPressure level;
     uint32_t headroom;
+    uint32_t released;
 
     if (batch_limit != 1u || context != NULL ||
         !kernel_memory_pressure(&level, &headroom))
         return KERNEL_WORKER_SERVICE_FATAL;
-    if (level < KERNEL_MEMORY_PRESSURE_NOTE)
+    if (level < KERNEL_MEMORY_PRESSURE_NOTE) {
+        file_cursor = (KernelAreaReclaimCursor){0};
         return KERNEL_WORKER_SERVICE_COMPLETE;
-    return kernel_process_reclaim_idle_libraries() == KERNEL_PROCESS_OK ?
-        KERNEL_WORKER_SERVICE_COMPLETE : KERNEL_WORKER_SERVICE_FATAL;
+    }
+    if (kernel_process_reclaim_idle_libraries() != KERNEL_PROCESS_OK ||
+        !kernel_memory_pressure(&level, &headroom))
+        return KERNEL_WORKER_SERVICE_FATAL;
+    if (level < KERNEL_MEMORY_PRESSURE_NOTE) {
+        file_cursor = (KernelAreaReclaimCursor){0};
+        return KERNEL_WORKER_SERVICE_COMPLETE;
+    }
+    if (kernel_area_reclaim_pager_pages(&file_cursor, 64u, &released) !=
+            KERNEL_AREA_OK ||
+        !kernel_memory_pressure(&level, &headroom))
+        return KERNEL_WORKER_SERVICE_FATAL;
+    if (level < KERNEL_MEMORY_PRESSURE_NOTE) {
+        file_cursor = (KernelAreaReclaimCursor){0};
+        return KERNEL_WORKER_SERVICE_COMPLETE;
+    }
+    return file_cursor.remaining_slots != 0u ?
+        KERNEL_WORKER_SERVICE_RETRY : KERNEL_WORKER_SERVICE_COMPLETE;
 }
 
 #if ASTRA_KERNEL_K1_QUALIFICATION
-static bool qualification_publish_page(uint32_t *cycles)
+static bool qualification_publish_page(uint32_t *cycles,
+                                       uint32_t *reclaim_cycles)
 {
     KernelAddressSpace space = {0};
     KernelArea *area = NULL;
     KernelAreaPagerRequest request;
+    KernelAreaReclaimCursor cursor = {0};
     KernelPort *pager = NULL;
     static uint8_t source[KERNEL_PAGE_SIZE];
     uint8_t bytes[16];
@@ -1936,13 +1966,16 @@ static bool qualification_publish_page(uint32_t *cycles)
     uint32_t base = 0u;
     uint32_t size = 0u;
     uint32_t started;
+    uint32_t released;
+    uint32_t reclaimed = 0u;
     bool mapped = false;
     bool passed = false;
     bool request_valid;
 
-    if (cycles == NULL)
+    if (cycles == NULL || reclaim_cycles == NULL)
         return false;
     *cycles = 0u;
+    *reclaim_cycles = 0u;
     for (uint32_t index = 0u; index < KERNEL_PAGE_SIZE; ++index)
         source[index] = (uint8_t)(index ^ 0x5au);
     if (kernel_vm_create_address_space(KERNEL_SELFTEST_OWNER, &space) !=
@@ -2008,6 +2041,35 @@ static bool qualification_publish_page(uint32_t *cycles)
         passed = false;
     for (uint32_t index = 0u; index < sizeof(bytes); ++index)
         if (bytes[index] != (index < 5u ? source[index] : 0u))
+            passed = false;
+    for (uint32_t pass = 0u; pass < 1024u; ++pass) {
+        started = kernel_platform_cpu_cycles_low();
+        if (kernel_area_reclaim_pager_pages(&cursor, 64u, &released) !=
+            KERNEL_AREA_OK) {
+            passed = false;
+            break;
+        }
+        uint32_t elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > *reclaim_cycles)
+            *reclaim_cycles = elapsed;
+        reclaimed += released;
+        if (cursor.remaining_slots == 0u)
+            break;
+        if (pass == 1023u)
+            passed = false;
+    }
+    if (reclaimed < 2u || kernel_area_page_resident(area, 0u) ||
+        kernel_area_page_resident(area, KERNEL_PAGE_SIZE) ||
+        kernel_area_pager_request(KERNEL_SELFTEST_OWNER, &space, base,
+                                  &request) != KERNEL_AREA_OK)
+        passed = false;
+    else if (kernel_area_child_release(request.area) != KERNEL_AREA_OK ||
+             kernel_area_publish_page(area, 0u, source, sizeof(source)) !=
+                 KERNEL_AREA_OK ||
+             kernel_vm_read(&space, base, bytes, sizeof(bytes)) != KERNEL_VM_OK)
+        passed = false;
+    for (uint32_t index = 0u; index < sizeof(bytes); ++index)
+        if (bytes[index] != source[index])
             passed = false;
 
 done:

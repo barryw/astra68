@@ -164,6 +164,16 @@ KernelAreaStatus kernel_area_decommit(uint32_t process_id,
 KernelAreaStatus kernel_area_reclaim(KernelArea *area, uint32_t offset,
                                      uint32_t byte_size,
                                      uint32_t *released_pages);
+/* Bounded sweep of clean pager pages. Caller preserves cursor across worker
+ * retries and resets it when pressure ends. Virtual mappings remain valid. */
+typedef struct KernelAreaReclaimCursor {
+    uint32_t slot;
+    uint32_t page;
+    uint32_t remaining_slots;
+} KernelAreaReclaimCursor;
+KernelAreaStatus kernel_area_reclaim_pager_pages(
+    KernelAreaReclaimCursor *cursor, uint32_t scan_budget,
+    uint32_t *released_pages);
 void kernel_area_abandon_unpublished(KernelArea *area);
 bool kernel_area_handle_retain(void *object, void *context);
 void kernel_area_handle_release(void *object, void *context);

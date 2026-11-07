@@ -1557,6 +1557,56 @@ KernelAreaStatus kernel_area_reclaim(KernelArea *area, uint32_t offset,
     return decommit_range(area, offset, byte_size, released_pages);
 }
 
+KernelAreaStatus kernel_area_reclaim_pager_pages(
+    KernelAreaReclaimCursor *cursor, uint32_t scan_budget,
+    uint32_t *released_pages)
+{
+    if (cursor == NULL || released_pages == NULL || scan_budget == 0u ||
+        cursor->remaining_slots > area_backed_limit ||
+        (cursor->remaining_slots != 0u && cursor->slot >= area_backed_limit))
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    *released_pages = 0u;
+    if (cursor->remaining_slots == 0u) {
+        cursor->slot = 0u;
+        cursor->page = 0u;
+        cursor->remaining_slots = area_backed_limit;
+    }
+    while (scan_budget != 0u && cursor->remaining_slots != 0u) {
+        KernelArea *area = area_at(cursor->slot);
+
+        --scan_budget;
+        if (area != NULL && area->state == KERNEL_AREA_LIVE &&
+            !valid_area(area))
+            return KERNEL_AREA_CORRUPT;
+        if (area == NULL || area->state != KERNEL_AREA_LIVE ||
+            area->pager == NULL || area->reserved_form == 0u ||
+            area->child_references != 0u || area->committed_pages == 0u ||
+            cursor->page >= area->page_count) {
+            ++cursor->slot;
+            cursor->page = 0u;
+            --cursor->remaining_slots;
+            continue;
+        }
+        if (area->page_directory[cursor->page / AREA_PAGE_LEAF_ENTRIES] == NULL) {
+            cursor->page = ((cursor->page / AREA_PAGE_LEAF_ENTRIES) + 1u) *
+                AREA_PAGE_LEAF_ENTRIES;
+            continue;
+        }
+        if (page_committed(area, cursor->page)) {
+            if (!drop_page(area, cursor->page))
+                return KERNEL_AREA_CORRUPT;
+            if (*released_pages == 0u)
+                ++pool_stats.decommit_operations;
+            ++pool_stats.decommit_pages;
+            ++*released_pages;
+        }
+        ++cursor->page;
+    }
+    if (cursor->remaining_slots == 0u)
+        cursor->slot = cursor->page = 0u;
+    return KERNEL_AREA_OK;
+}
+
 KernelAreaStatus kernel_area_decommit(uint32_t process_id,
                                       KernelAddressSpace *space,
                                       uint32_t address, uint32_t byte_size,

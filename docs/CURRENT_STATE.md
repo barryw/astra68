@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-11-07
 
+Pager pressure reclaim, 2026-11-07: the existing kernel pressure worker now
+reclaims clean, read-only pager frames after idle library mappings. A bounded
+64-step cursor resumes across worker passes, skips areas with in-flight pager
+requests, withdraws shared translations before frame release, and stops when
+ordinary headroom recovers. The existing mapped virtual addresses then refault
+through their pager. Beast kernel host suite and both normal and K1 MC68040
+ROM builds passed. Beast and DE25 K1 passed 16 markers; each measured the
+worst bounded sweep at 384/2,500,000 cycles, reclaimed both test pages, and
+refaulted the first page. DE25 K1 ROM SHA-256 is
+`cfc478e16d45d8a3de6f1416b2452ca762478f6d61cd8e0330b24b462d3f8cbd`;
+checked DE25 log SHA-256 is
+`cd7097ebe79340e11137a8a1702eec779758925c7c28efaf7f3840028082c972`.
+The normal ROM SHA-256 is
+`25910a0b7d3cac5b129be2e5bd23f66b755b4b27b7dd2167ba30556839aa0bac`.
+Targeted DE25 ROM deployment passed stage 8 with all three services active,
+zero Astra restarts, and 8.5 GiB free. Evidence is under
+`/home/barry/astra-evidence/file-cache-pressure-20261107/` on Beast;
+disposable board trial state was removed. Haiku
+`src/system/kernel/low_resource_manager.cpp` orders pressure handlers, while
+`src/system/kernel/cache/file_cache.cpp` and `vm/VMCache.cpp` retain page
+ownership through mapped consumers. Astra kept its existing pressure worker,
+pager area, and shared-table withdrawal path. Ordinary I/O sharing, dirty
+writeback, full EOF/truncate mapping semantics, and POSIX `mmap` remain open.
+
 Mapped-file cache coherence, 2026-11-07: HostFS now compares the reported
 file revision (size and available timestamps) before reusing an exact-node
 file area. Its once-per-second maintenance observes the provider's latest

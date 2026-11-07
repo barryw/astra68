@@ -1044,7 +1044,9 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
     KernelArea *area = NULL;
     KernelArea *other = NULL;
     KernelAreaPagerRequest request;
+    KernelAreaReclaimCursor cursor = {0};
     uint32_t base, peer_base, other_base, size, released, physical;
+    uint32_t total;
     uint8_t byte = 0xa5u;
 
     initialize_test();
@@ -1160,6 +1162,34 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
     assert(kernel_area_pager_request(318u, &peer, peer_base, &request) ==
            KERNEL_AREA_OK && request.offset == 0u);
     assert(kernel_area_child_release(request.area) == KERNEL_AREA_OK);
+    assert(kernel_area_publish_page(area, 0u, &byte, 1u) == KERNEL_AREA_OK);
+    assert(kernel_area_pager_request(317u, &client,
+                                    base + KERNEL_PAGE_SIZE, &request) ==
+           KERNEL_AREA_OK);
+    total = 0u;
+    for (uint32_t at = 0u; at < 32u; ++at) {
+        assert(kernel_area_reclaim_pager_pages(&cursor, 1u, &released) ==
+               KERNEL_AREA_OK);
+        total += released;
+        if (cursor.remaining_slots == 0u) break;
+        assert(at != 31u);
+    }
+    assert(total == 0u && kernel_area_page_resident(area, 0u));
+    assert(kernel_area_child_release(request.area) == KERNEL_AREA_OK);
+    cursor = (KernelAreaReclaimCursor){0};
+    total = 0u;
+    for (uint32_t at = 0u; at < 32u; ++at) {
+        assert(kernel_area_reclaim_pager_pages(&cursor, 1u, &released) ==
+               KERNEL_AREA_OK);
+        total += released;
+        if (cursor.remaining_slots == 0u) break;
+        assert(at != 31u);
+    }
+    assert(total == 1u && !kernel_area_page_resident(area, 0u));
+    assert(kernel_vm_switch(&client) == KERNEL_VM_OK);
+    assert(!kernel_vm_test_translate_current(base, false, &physical));
+    assert(kernel_vm_switch(&peer) == KERNEL_VM_OK);
+    assert(!kernel_vm_test_translate_current(peer_base, false, &physical));
     assert(kernel_area_pool_valid());
     assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
     assert(kernel_area_unmap(317u, &client, base) == KERNEL_AREA_OK);
