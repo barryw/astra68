@@ -14,10 +14,12 @@ native `fssem file-map` passed two-page fault, close-before-map, and
 write/invalidation/refault checks. A coherent ABI-3 DE25 private release held
 stage 8 for 300 seconds; its post-trial image passed read-only `e2fsck`.
 Checked evidence is under
-`/home/barry/astra-evidence/file-map-de25-20261107/` on Beast. Selected DE25
-production ROM still uses syscall ABI 2, so incremental ABI-3 HostFS install
-cannot be used there; the matched private trial restored the selected release
-afterward. Haiku `src/system/kernel/cache/file_cache.cpp:345-430` and
+`/home/barry/astra-evidence/file-map-de25-20261107/` on Beast. After the
+matched private trial, release `a46dffcb6efa575f16f1ef074f8389f27c6f46faf1b58ca0aa9d335d48e3c6d1`
+deployed through the state-preserving migration transaction; production
+reached stage 8 with three services active, zero Astra restarts, and 8.5 GiB
+free. The previous selected ROM used syscall ABI 2, which ruled out an
+incremental ABI-3 HostFS install. Haiku `src/system/kernel/cache/file_cache.cpp:345-430` and
 `vm/VMCache.cpp:1616-1644` guided backing-source and consumer lifetimes.
 
 File-area control protocol, 2026-11-07: the existing grant port now accepts

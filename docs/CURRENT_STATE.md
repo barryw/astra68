@@ -18,9 +18,14 @@ read-only `e2fsck`; board and Beast post-image SHA-256 matched at
 `943b8d91f4aab631228691c814df59b5cce836830439f4d3cf048067ff766993`.
 Evidence, including the terminal capture, trial console, and checked hashes,
 is under `/home/barry/astra-evidence/file-map-de25-20261107/` on Beast.
-Trial files were removed; selected production release returned to stage 8 with
-Astra/audio/remote active, zero Astra restarts, only production loop0, and
-8.5 GiB free. An earlier incremental attempt failed because selected ROM used
+Trial files were removed. Coherent release
+`a46dffcb6efa575f16f1ef074f8389f27c6f46faf1b58ca0aa9d335d48e3c6d1`
+was then deployed with the existing state-preserving migration and rollback
+transaction. Production reached stage 8 with Astra/audio/remote active, zero
+Astra restarts, only production loop0, and 8.5 GiB free; board and Beast
+production-console SHA-256 matched at
+`2ff29f207c2c0b29ddc3aea0d1a893a5fe1b9f46abbfa46c2a447a2a1c62ce53`.
+An earlier incremental attempt failed because the prior selected ROM used
 syscall ABI 2 while new HostFS used ABI 3; production image was restored from
 its verified pre-trial backup before the coherent private release was built.
 Read-only mappings now work; ordinary I/O still does not share these resident
