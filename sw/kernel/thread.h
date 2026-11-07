@@ -249,10 +249,13 @@ typedef struct KernelThread {
     uint32_t pager_cookie;
     uint32_t pager_saved_data[4];
     uint32_t pager_fault_address;
+    uint64_t pager_deadline;
     uint16_t pager_fault_vector;
     uint16_t pager_fault_status;
     uint8_t pager_failed;
     uint8_t pager_primary;
+    uint8_t pager_send_wait;
+    uint8_t pager_retry;
     uint32_t exit_status;
     uint32_t terminal_result;
     uint64_t deadline_cycles;

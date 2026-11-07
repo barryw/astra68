@@ -171,16 +171,17 @@ through the existing port call/reply machinery, keeps the area pinned while
 waiting, reads the reply's transfer area, and publishes only a checked,
 zero-tailed page. Wait completion restores the faulting registers and releases
 the pin. Invalid replies produce the ordinary inspectable user-fault verdict.
-Focused host tests cover success, invalid reply, and two threads faulting the
-same page; the latter queues one request and wakes both after publication.
+Focused host tests cover success, invalid reply, a full send queue, and two
+threads faulting the same page with either a full or available queue; the
+latter queues one request and wakes both after publication.
 Beast kernel tests, target build, `verify`, and 14-marker K1 gate
 pass. Haiku `src/system/kernel/vm/VMCache.cpp:950-966,1563-1577` tracks page
 waiters and wakes them after publication; Astra currently reuses its native
-thread wait observer and port reply capability. This candidate is not a
-release: a full-port wake re-enters user mode before retrying the absent page,
-VFS does not yet serve
-pager requests, and no DE25 guest pager gate has run. Resolve those lifecycle
-gaps before merging or enabling file mappings.
+thread wait observer and port reply capability. A full-port wake now retries
+the unsent request in the kernel before the user instruction can run. This
+candidate is not a release: terminal lifecycle gates remain, VFS does not yet
+serve pager requests, and no DE25 guest pager gate has run. Resolve those gaps
+before merging or enabling file mappings.
 
 ## Target baseline, 2026-11-06
 
@@ -368,24 +369,26 @@ area pin exactly once on reply, timeout, cancellation, or process exit.
 The observer runs inside `sw/kernel/thread.c:complete_wait()`, before the
 thread is enqueued. It must not retire the process reentrantly. A failed
 continuation instead needs one common return-to-user gate in
-`sw/kernel/dispatch.c`: retire each selected failed-fault process with the
+`sw/kernel/process.c:activate()`: retire each selected failed-fault process with the
 original fault snapshot, select another runnable thread or existing idle/
 worker path, and only then return a user context. This avoids fabricated user
 addresses, invalid-PC traps, silent zero pages, and unbounded recursive
-scheduling. A full pager port cannot be treated as a failed page-in or resume
-the unresolved instruction: retain the unsent call, block on the existing
-port-send wait sequence, and retry from that same kernel continuation before
-returning to user mode. One pending operation owns each `(area, page)`; later
+scheduling. A full pager port blocks on its existing writable wait queue;
+`activate()` retries the unsent page request before returning to user mode,
+using the original deadline. The waiting thread remains the page's primary
+operation so later faults join it, including while the send queue is full.
+One pending operation owns each `(area, page)`; later
 faults wait for its publication or terminal failure through existing thread
 wait queues. Haiku `src/system/kernel/vm/vm.cpp:3705-3780` keeps fault
 authority while resolving a page, and `src/system/kernel/cache/file_cache.cpp`
 publishes only complete, zero-tailed data. Astra adapts those contracts to
 its current area, port, and scheduler owners.
 
-The first executable gate must cover success, malformed and stale replies,
-full send queue, timeout, pager death, client exit, two simultaneous faults
-on one page, and donation. It must assert zero leaked area children and no
-user resume after failure. K1 needs separate request, reply/publication, and
+Host tests now cover success, malformed reply, full send queue, original
+deadline retention, timeout, receive-end closure, and two simultaneous faults
+on one page with both full and available send queues. Client exit, stale
+replies, and donation remain required gates, as do zero leaked area children
+after every terminal path. K1 needs separate request, reply/publication, and
 terminal-handoff cycle budgets against the existing user-fault baseline
 before VFS mappings depend on this path.
 

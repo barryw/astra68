@@ -1464,7 +1464,8 @@ static KernelProcessStatus queue_process_signal(KernelProcess *process,
 
 static KernelCpuContext *runtime_resume(KernelThread *thread)
 {
-    signal_deliver(thread);
+    if (thread->pager_failed == 0u && thread->pager_retry == 0u)
+        signal_deliver(thread);
     if (runtime_active == 0u) {
         runtime_started_cycles = kernel_platform_cpu_cycles_low();
         runtime_started_media =
@@ -1626,6 +1627,16 @@ typedef enum SwitchCause {
     SWITCH_IDLE       /* the CPU was idle */
 } SwitchCause;
 
+typedef enum PagerDisposition {
+    PAGER_NOT_BOUND,
+    PAGER_RETRY_NOW,
+    PAGER_BLOCKED
+} PagerDisposition;
+
+static KernelProcessStatus request_pager_page(
+    KernelProcess *process, KernelThread *thread,
+    const KernelExceptionFrame *frame, PagerDisposition *disposition);
+
 static void count_switch(SwitchCause cause)
 {
     ++scheduler_stats.context_switches;
@@ -1743,14 +1754,68 @@ static void report_user_fault(KernelProcess *process, KernelThread *thread,
                                 address, vector, kind);
 }
 
+static KernelProcessStatus schedule_idle(KernelCpuContext **next_context)
+{
+    /* Keep last URP while worker waits; its process may wake next. */
+    if (runtime_stop(process_for_thread(current_thread), current_thread) !=
+        KERNEL_PROCESS_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    current_thread = NULL;
+    runtime_active = 0u;
+    quantum_active = 0u;
+    quantum_preempt_pending = 0u;
+    deadline_preempt_pending = 0u;
+    scheduler_stats.current_process_id = 0u;
+    scheduler_stats.current_thread_id = 0u;
+    *next_context = NULL;
+    scheduler_timer_rearm();
+    return KERNEL_PROCESS_NO_RUNNABLE;
+}
+
 static KernelProcessStatus activate(KernelThread *next, SwitchCause cause,
                                     KernelCpuContext **next_context)
 {
-    KernelProcessStatus status = kernel_performance_sampling_enabled == 0u ?
-        activate_fast(next, cause, next_context) :
-        activate_profiled(next, cause, next_context);
+    KernelProcessStatus status;
     KernelProcess *process;
 
+    while (next->pager_retry != 0u) {
+        KernelExceptionFrame frame = {0};
+        PagerDisposition disposition;
+        KernelThreadStatus selected;
+        KernelVmMapping mapping;
+
+        process = process_for_thread(next);
+        if (process == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        next->pager_retry = 0u;
+        frame.fault_address = next->pager_fault_address;
+        frame.vector_offset = (uint16_t)(next->pager_fault_vector << 2);
+        frame.special_status = next->pager_fault_status;
+        do {
+            status = request_pager_page(process, next, &frame,
+                                        &disposition);
+            if (status != KERNEL_PROCESS_OK)
+                return status;
+        } while (disposition == PAGER_RETRY_NOW);
+        if (disposition == PAGER_NOT_BOUND) {
+            mapping = kernel_vm_probe_address_space(
+                &process->address_space, frame.fault_address, NULL);
+            if (mapping != KERNEL_VM_MAPPING_READ_ONLY &&
+                mapping != KERNEL_VM_MAPPING_READ_WRITE)
+                next->pager_failed = 1u;
+            next->pager_deadline = 0u;
+            break;
+        }
+        selected = kernel_thread_take_next(&next);
+        if (selected == KERNEL_THREAD_NO_RUNNABLE)
+            return schedule_idle(next_context);
+        if (selected != KERNEL_THREAD_OK || next == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        cause = SWITCH_BLOCK;
+    }
+    status = kernel_performance_sampling_enabled == 0u ?
+        activate_fast(next, cause, next_context) :
+        activate_profiled(next, cause, next_context);
     if (status != KERNEL_PROCESS_OK || next->pager_failed == 0u)
         return status;
     process = process_for_thread(next);
@@ -1817,25 +1882,7 @@ static KernelProcessStatus schedule_next(SwitchCause cause,
     case KERNEL_THREAD_OK:
         return activate(next, cause, next_context);
     case KERNEL_THREAD_NO_RUNNABLE:
-        /*
-         * Supervisor execution uses SRP, so keep the last URP installed while
-         * the worker waits. If that process wakes next, kernel_vm_switch()
-         * becomes a no-op instead of invalidating the ATC twice for one wait.
-         * The reaper moves URP to the empty root before destroying the space.
-         */
-        if (runtime_stop(process_for_thread(current_thread), current_thread) !=
-            KERNEL_PROCESS_OK)
-            return KERNEL_PROCESS_CORRUPT;
-        current_thread = NULL;
-        runtime_active = 0u;
-        quantum_active = 0u;
-        quantum_preempt_pending = 0u;
-        deadline_preempt_pending = 0u;
-        scheduler_stats.current_process_id = 0u;
-        scheduler_stats.current_thread_id = 0u;
-        *next_context = NULL;
-        scheduler_timer_rearm();
-        return KERNEL_PROCESS_NO_RUNNABLE;
+        return schedule_idle(next_context);
     default:
         return KERNEL_PROCESS_CORRUPT;
     }
@@ -15309,6 +15356,7 @@ static void pager_wait_done(KernelThread *thread, uint32_t result,
     KernelArea *area = context;
     bool resident = kernel_area_page_resident(area, thread->pager_offset);
     bool primary = thread->pager_primary != 0u;
+    bool send_wait = thread->pager_send_wait != 0u;
     uint32_t offset = thread->pager_offset;
     KernelThread **link = &pager_waiting;
 
@@ -15320,17 +15368,25 @@ static void pager_wait_done(KernelThread *thread, uint32_t result,
         *link = thread->pager_next;
     thread->pager_next = NULL;
     thread->pager_primary = 0u;
+    thread->pager_send_wait = 0u;
 
-    if (resident)
+    if (resident) {
         thread->pager_failed = 0u;
-    else if (result != ASTRA_SYSCALL_OK || primary)
+        thread->pager_retry = 0u;
+        thread->pager_deadline = 0u;
+    } else if (send_wait && result == ASTRA_SYSCALL_OK) {
+        thread->pager_retry = 1u;
+    } else {
         thread->pager_failed = 1u;
+        thread->pager_retry = 0u;
+        thread->pager_deadline = 0u;
+    }
     kernel_bytes_copy(thread->context.data, thread->pager_saved_data,
                       sizeof(thread->pager_saved_data));
     thread->pager_area = NULL;
     if (kernel_area_child_release(area) != KERNEL_AREA_OK)
         process_pool_corrupt = 1u;
-    if (primary) {
+    if (primary && thread->pager_retry == 0u) {
         KernelThread *peer = pager_waiting;
 
         while (peer != NULL) {
@@ -15357,7 +15413,7 @@ static void pager_wait_done(KernelThread *thread, uint32_t result,
 static void pager_wait_prepare(KernelThread *thread,
                                const KernelAreaPagerRequest *request,
                                const KernelExceptionFrame *frame,
-                               bool primary)
+                               bool primary, bool send_wait)
 {
     kernel_bytes_copy(thread->pager_saved_data, thread->context.data,
                       sizeof(thread->pager_saved_data));
@@ -15369,14 +15425,14 @@ static void pager_wait_prepare(KernelThread *thread,
     thread->pager_fault_status = frame->special_status;
     thread->pager_failed = 0u;
     thread->pager_primary = primary ? 1u : 0u;
+    thread->pager_send_wait = send_wait ? 1u : 0u;
 }
 
-/* A port-full fault sleeps on the existing writable queue, then retries the
- * instruction. An accepted request sleeps on its existing reply capability. */
+/* A port-full fault sleeps on the existing writable queue. Selection retries
+ * the unsent request before the saved user instruction can run. */
 static KernelProcessStatus request_pager_page(
     KernelProcess *process, KernelThread *thread,
-    const KernelExceptionFrame *frame, KernelCpuContext **next_context,
-    bool *handled)
+    const KernelExceptionFrame *frame, PagerDisposition *disposition)
 {
     KernelAreaPagerRequest request;
     KernelThreadWaitSpec wait;
@@ -15391,7 +15447,7 @@ static KernelProcessStatus request_pager_page(
     KernelThread *receiver = NULL;
     KernelThread *peer;
 
-    *handled = false;
+    *disposition = PAGER_NOT_BOUND;
     area_status = kernel_area_pager_request(
         process->id, &process->address_space, frame->fault_address,
         &request);
@@ -15402,19 +15458,25 @@ static KernelProcessStatus request_pager_page(
         return KERNEL_PROCESS_CORRUPT;
     if (area_status != KERNEL_AREA_OK)
         return KERNEL_PROCESS_OK;
-    now_ns = kernel_platform_monotonic_ns();
-    if (now_ns > (uint64_t)INT64_MAX - UINT64_C(30000000000) ||
-        !kernel_platform_deadline_to_cycles(
-            (int64_t)(now_ns + UINT64_C(30000000000)), &deadline))
-        goto release;
+    deadline = thread->pager_deadline;
+    if (deadline == 0u) {
+        now_ns = kernel_platform_monotonic_ns();
+        if (now_ns > (uint64_t)INT64_MAX - UINT64_C(30000000000) ||
+            !kernel_platform_deadline_to_cycles(
+                (int64_t)(now_ns + UINT64_C(30000000000)), &deadline))
+            goto release;
+        thread->pager_deadline = deadline;
+    }
     now_cycles = scheduler_cycles();
+    if (now_cycles >= deadline)
+        goto release;
     for (peer = pager_waiting; peer != NULL; peer = peer->pager_next) {
         if (peer->pager_primary == 0u || peer->pager_area != request.area ||
             peer->pager_offset != request.offset ||
             peer->state != KERNEL_THREAD_BLOCKED)
             continue;
         sequence = kernel_thread_wait_queue_sequence(&pager_shared_waiters);
-        pager_wait_prepare(thread, &request, frame, false);
+        pager_wait_prepare(thread, &request, frame, false, false);
         thread_status = kernel_thread_block_until(
             thread, &pager_shared_waiters, sequence, now_cycles, deadline,
             ASTRA_SYSCALL_TIMED_OUT);
@@ -15424,9 +15486,9 @@ static KernelProcessStatus request_pager_page(
             return KERNEL_PROCESS_CORRUPT;
         thread->pager_next = pager_waiting;
         pager_waiting = thread;
-        *handled = true;
+        *disposition = PAGER_BLOCKED;
         scheduler_timer_rearm();
-        return schedule_next(SWITCH_BLOCK, next_context);
+        return KERNEL_PROCESS_OK;
     }
     thread_status = kernel_thread_call_begin(thread, &call);
     if (thread_status == KERNEL_THREAD_OUT_OF_MEMORY)
@@ -15465,17 +15527,16 @@ static KernelProcessStatus request_pager_page(
         port_status = kernel_port_prepare_wait_after(
             request.port, KERNEL_PORT_ENDPOINT_SEND, sequence, &wait);
         if (port_status == KERNEL_PORT_OK) {
-            *handled = true;
+            *disposition = PAGER_RETRY_NOW;
             if (kernel_area_child_release(request.area) != KERNEL_AREA_OK)
                 return KERNEL_PROCESS_CORRUPT;
-            *next_context = runtime_resume(thread);
             return KERNEL_PROCESS_OK;
         }
         if (port_status != KERNEL_PORT_WOULD_BLOCK)
             goto release;
     }
-    pager_wait_prepare(thread, &request, frame,
-                       port_status == KERNEL_PORT_OK);
+    pager_wait_prepare(thread, &request, frame, true,
+                       port_status == KERNEL_PORT_WOULD_BLOCK);
     thread_status = port_status == KERNEL_PORT_OK ?
         kernel_thread_call_block(thread, now_cycles, deadline) :
         kernel_thread_block_until(thread, wait.queue, wait.sequence,
@@ -15497,9 +15558,9 @@ static KernelProcessStatus request_pager_page(
                    KERNEL_THREAD_OK) {
         return KERNEL_PROCESS_CORRUPT;
     }
-    *handled = true;
+    *disposition = PAGER_BLOCKED;
     scheduler_timer_rearm();
-    return schedule_next(SWITCH_BLOCK, next_context);
+    return KERNEL_PROCESS_OK;
 
 release:
     return kernel_area_child_release(request.area) == KERNEL_AREA_OK ?
@@ -15515,7 +15576,7 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
     KernelProcess *current;
     KernelThread *thread;
     KernelProcessStatus status;
-    bool pager_handled;
+    PagerDisposition pager_disposition;
 
     if (next_context == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
@@ -15551,10 +15612,15 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
         return KERNEL_PROCESS_OK;
     }
     if (frame.access_fault != 0u) {
-        status = request_pager_page(current, thread, &frame,
-                                    next_context, &pager_handled);
-        if (status != KERNEL_PROCESS_OK || pager_handled)
-            return status;
+        do {
+            status = request_pager_page(current, thread, &frame,
+                                        &pager_disposition);
+            if (status != KERNEL_PROCESS_OK)
+                return status;
+        } while (pager_disposition == PAGER_RETRY_NOW);
+        if (pager_disposition == PAGER_BLOCKED)
+            return schedule_next(SWITCH_BLOCK, next_context);
+        thread->pager_deadline = 0u;
     }
     report_user_fault(current, thread, frame.fault_address,
                       (uint16_t)(frame.vector_offset >> 2),
