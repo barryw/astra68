@@ -12,8 +12,17 @@ qualification passed all 16 markers with zero reported overruns. K1's
 existing area-map calls reached 2,232/125,000 cycles; new range syscall was
 not exercised by K1. A native `fssem area-range` guest gate passed on Beast
 with an image containing current userspace: it checked aligned subrange
-views, shared bytes, decommit, and refault. DE25 gate is pending. This does
-not yet merge
+views, shared bytes, decommit, and refault. Verified private release
+`5f44bd305667e202ea2cd6c3f3019cbbc5c1e71e1450b4e16df754bbde8bb6ff`
+ran 300 seconds on DE25 at stage 8. Native Terminal passed `fssem area-range`
+and existing `fssem file-map`, each 1/1; `disk list` showed both physical USB
+partitions mounted read/write. Trial image passed read-only `e2fsck` and its
+board/Beast SHA-256 matched `90044d86ef211488823f2b9adecf42dc8fd776e3615bb6adbb3c3bf9a1eb7803`.
+Console and RFB hashes matched archived Beast copies under
+`/home/barry/astra-evidence/file-cache-range-20261108/`. Wrapper restored the
+selected release; Astra, audio, and remote desktop are active with one
+production loop and 8.5 GiB free after trial cleanup. The USB cable was not
+replugged in this trial. This does not yet merge
 HostFS's range-keyed file areas or route ordinary VFS I/O through cached
 frames. Haiku `src/system/kernel/cache/file_cache.cpp:745-850` guided single
 ownership; Astra extends existing `KernelArea` mappings.
