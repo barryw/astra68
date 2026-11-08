@@ -10,7 +10,7 @@ int astra_ndk_cxx_header_contract()
 {
     AstraVfsClipboardSelection selection = {};
     const AstraVfsClipboardSelection *read_only = &selection;
-    return ASTRA_FILESYSTEM_LIBRARY_VERSION == 15u &&
+    return ASTRA_FILESYSTEM_LIBRARY_VERSION == 17u &&
         astra_vfs_clipboard_selection_entries_mutable(&selection) ==
             astra_vfs_clipboard_selection_entries(read_only) ? 0 : 1;
 }

@@ -1,7 +1,7 @@
 # Filesystem Kit
 
 Include `astra/filesystem_kit.h` for the complete API. Link against
-`filesystem.library.16` and declare the minimum compatible version in the
+`filesystem.library.17` and declare the minimum compatible version in the
 bundle manifest. The process loader resolves that dependency before `main`;
 applications call the declared `astra_filesystem_*` functions directly.
 
@@ -12,11 +12,14 @@ the underlying VFS client operations for filesystem and compatibility tools.
 The ABI has no dependency on lwext4 or any other on-disk implementation; RAM
 drives and other filesystem services use the same protocol and API.
 
-ABI 16.0 moves volume change delivery onto generic Messaging. Volume protocol
+ABI 17.0 returns a canonical file-area chunk from
+`astra_filesystem_file_area`; map the requested window with
+`astra_rt_area_map_range` at `base % ASTRA_AREA_SIZE_MAX`. Requests cannot
+cross a chunk boundary. ABI 16.0 moved volume change delivery onto generic Messaging. Volume protocol
 6 removes its private subscription operations. Pass the `MESSAGING` startup
 capability to `astra_volume_watch_open` and `astra_volume_watch_close`; keep
 using `VOLUMES` for snapshots. All in-tree clients require the single
-`ASTRA_FILESYSTEM_16.0` symbol namespace.
+`ASTRA_FILESYSTEM_17.0` symbol namespace.
 
 `astra_volume_reference_equal` compares the full provider epoch, volume ID,
 and generation. Use it when matching a selected or retained volume against a

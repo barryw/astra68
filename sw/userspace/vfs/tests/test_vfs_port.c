@@ -2825,6 +2825,10 @@ test_file_area_client_uses_grant_control(void)
         &file, NULL, NULL) == ASTRA_VFS_OK);
     assert(astra_vfs_file_area(&remote, file, 1u,
         ASTRA_MEMORY_PAGE_SIZE, &area, &file_size) == ASTRA_VFS_ERR_INVALID);
+    assert(astra_vfs_file_area(&remote, file,
+        ASTRA_AREA_SIZE_MAX - ASTRA_MEMORY_PAGE_SIZE,
+        2u * ASTRA_MEMORY_PAGE_SIZE, &area, &file_size) ==
+        ASTRA_VFS_ERR_INVALID);
     data_operations = direct_operations;
     assert(astra_vfs_file_area(&remote, file, UINT64_C(0x100000000),
         ASTRA_MEMORY_PAGE_SIZE, &area, &file_size) == ASTRA_VFS_OK);

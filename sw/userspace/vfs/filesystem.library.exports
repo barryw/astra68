@@ -1,5 +1,5 @@
 /* Filesystem Kit ABI 16 replaces the pre-alpha Volume watch wire protocol. */
-ASTRA_FILESYSTEM_16.0 {
+ASTRA_FILESYSTEM_17.0 {
     global:
         astra_volume_catalog;
         astra_volume_broker_info;

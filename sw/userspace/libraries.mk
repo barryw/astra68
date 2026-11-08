@@ -18,7 +18,7 @@ ASTRA_RUNTIME_LIBRARY := \
 ASTRA_STREAMS_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/streams/build/m68k/libraries/streams.library.1
 ASTRA_FILESYSTEM_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/vfs/build/m68k/libraries/filesystem.library.16
+	$(ASTRA_USERSPACE_ROOT)/vfs/build/m68k/libraries/filesystem.library.17
 ASTRA_DOS_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/dos/build/m68k/libraries/dos.library.1
 ASTRA_PACKAGE_LIBRARY := \

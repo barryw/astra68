@@ -1466,6 +1466,7 @@ astra_vfs_file_area(AstraVfsClient *client, AstraVfsFile file,
         span > ASTRA_AREA_SIZE_MAX ||
         (base & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
         (span & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
+        span > ASTRA_AREA_SIZE_MAX - base % ASTRA_AREA_SIZE_MAX ||
         base > UINT64_MAX - span ||
         client->transport != astra_vfs_port_transport)
         return ASTRA_VFS_ERR_INVALID;
@@ -2889,6 +2890,8 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
                      incoming->request.offset == 0u ||
                      incoming->request.length == 0u ||
                      incoming->request.length > ASTRA_AREA_SIZE_MAX ||
+                     incoming->request.length > ASTRA_AREA_SIZE_MAX -
+                         incoming->request.write_limit % ASTRA_AREA_SIZE_MAX ||
                      (incoming->request.length & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
                      (incoming->request.write_limit & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
                      incoming->request.write_limit > UINT64_MAX - incoming->request.length)

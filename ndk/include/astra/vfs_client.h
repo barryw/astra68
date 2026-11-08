@@ -353,8 +353,9 @@ uint32_t astra_vfs_seek(AstraVfsClient *client, AstraVfsFile file,
  * @param token Receives a one-use share. @return ASTRA_VFS_* status. */
 uint32_t astra_vfs_share(AstraVfsClient *client, AstraVfsFile file,
     uint64_t *token);
-/** Create a read-only file window through the owning filesystem grant.
- * Caller closes the returned area handle after unmapping.
+/** Acquire the read-only file chunk containing one requested window.
+ * Its source offset is base % ASTRA_AREA_SIZE_MAX; a window cannot cross a
+ * chunk boundary. Caller maps the subrange and closes the area handle.
  * @param client Connected client with file-area capability.
  * @param file Open file description to share with the cache owner.
  * @param base Page-aligned file offset for the first mapped byte.

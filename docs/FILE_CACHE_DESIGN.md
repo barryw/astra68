@@ -7,6 +7,22 @@ Ordinary I/O still does not share mapped resident frames; dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Canonical file-area WIP, 2026-11-08: storage protocol 41 and
+`filesystem.library.17` return a fixed 128 MiB owner chunk for each requested
+window. Overlapping requests for one exact node share that owner. Read-only
+POSIX `mmap` maps only requested views and joins adjacent owners at exact
+virtual addresses; repeated maps remain independent. Beast host tests,
+MC68040 builds, NDK `dist-check`, and coherent QEMU `fssem file-map` and
+`area-range` passed, including a sparse 128 MiB boundary test. Private DE25
+release `3a283a79b1b630faf932b21f9d3d325b75bb476fb354b1f1b950f848dc0dd371`
+ran 300 seconds at stage 8; native Terminal passed both gates 1/1. Trial image
+passed read-only `e2fsck`; image/console hashes matched archived Beast copies.
+Evidence is under `/home/barry/astra-evidence/file-cache-canon-20261108/`.
+Selected release and production data stayed intact; board trial state was
+removed. Linux saw no attached USB device, so USB remount remains untested.
+Ordinary VFS I/O still bypasses these pages; remaining acceptance
+work below is unchanged.
+
 Native area subrange mapping, 2026-11-08: WIP kernel now records a source
 offset and view length for each mapping and attaches only corresponding
 existing shared tables. New syscall and runtime export require 256 KiB source
@@ -23,8 +39,7 @@ trial also passed existing `fssem file-map`, read-only image `e2fsck`, and
 physical USB mounted-state check. Evidence is under
 `/home/barry/astra-evidence/file-cache-exact-20261108/` on Beast. K1 does not
 yet sample the new exact-address path; its existing area-map budget applies.
-This VM primitive does not yet unify file cache: HostFS still creates
-range-keyed areas and ordinary VFS I/O still bypasses mapped pages. Haiku
+HostFS now uses canonical chunks; ordinary VFS I/O still bypasses mapped pages. Haiku
 `src/system/kernel/cache/file_cache.cpp:745-850`
 uses one vnode VMCache for file I/O and mappings; Astra reuses `KernelArea`.
 
@@ -736,16 +751,12 @@ pressure and tail latency remain unmeasured.
 
 ### Shared page owner required for ordinary I/O
 
-Current `HostfsFileArea` is keyed by volume, identity, `base`, and `span`.
-Two overlapping requests with different ranges create separate `KernelArea`
-owners and frames. `read_acquired_file()` and `write_file()` in
+`HostfsFileArea` now keys exact nodes by volume, identity, and fixed 128 MiB
+chunk base. Incomplete identities still get separate owners. `read_acquired_file()` and `write_file()` in
 `sw/userspace/vfs/src/vfs_service_core.c` call backend I/O directly, so
-ordinary I/O does not consume those frames. `kernel_area_map()` attaches whole
-shared-table spans and reports the area's size; new range-map primitive can
-select aligned subranges but HostFS does not use it yet. Canonicalizing
-HostFS's area lookup alone
-would therefore change callers' file offsets or reject legitimate overlapping
-and multi-span mappings. Keep this as one VM/VFS contract change, not a second
+ordinary I/O does not consume those frames. `kernel_area_map_range_at()` maps
+aligned subranges and POSIX joins adjacent chunks. Keep remaining VFS work as
+one owner path, not a second
 userspace byte cache or an Atlas/SDL-specific path.
 
 Extend the existing `KernelArea` mapping record with source page offset and

@@ -1627,6 +1627,9 @@ static void test_area_subranges_map_at_adjacent_slots(void)
                                     0u, span, target, &first,
                                     &size) == KERNEL_AREA_OK);
     assert(first == target && size == span);
+    assert(kernel_area_map_range_at(first_area, 371u, &space, KERNEL_VM_READ,
+                                    0u, span, target, &alias,
+                                    &size) == KERNEL_AREA_ALREADY_MAPPED);
     assert(kernel_area_map_range_at(second_area, 371u, &space,
                                     KERNEL_VM_READ, 0u, span, target + span,
                                     &second, &size) == KERNEL_AREA_OK);

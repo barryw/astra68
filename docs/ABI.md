@@ -6,11 +6,11 @@ The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
 Kernel-internal structures and function calls may change at any time.
 
-Current filesystem client ABI is 16.0 (`filesystem.library.16`,
-`ASTRA_FILESYSTEM_16.0`). Native Volume protocol 6 removes its private watch
+Current filesystem client ABI is 17.0 (`filesystem.library.17`,
+`ASTRA_FILESYSTEM_17.0`). Native Volume protocol 6 removes its private watch
 operations; `astra_volume_watch_*` now uses the generic MSGG 1 broker through
 the `MESSAGING` startup capability. `VOLUMES` still supplies catalog snapshots.
-All in-tree filesystem consumers use ABI 16.0; historical ABI 14 and 15 notes
+All in-tree filesystem consumers use ABI 17.0; historical ABI 14–16 notes
 below describe earlier migrations, not supported coexistence.
 
 ## Unreleased native volume migration
@@ -438,7 +438,10 @@ the description lock for its complete batch, and a record that does not fit
 is rolled back before the lock is released. `ASTRA_VFS_CURSOR_CURRENT` reads
 the shared stream without replaying a caller's cached cookie. An explicit
 rewind uses SEEK, so every owner sees the rewind.
-Storage protocol version 40 extends each directory record header from 32 to
+Storage protocol version 41 makes FILE_AREA return one canonical 128 MiB area
+for its file chunk. A request stays within one chunk; the client maps its
+requested subrange at `base % ASTRA_AREA_SIZE_MAX` and joins adjacent chunks
+with exact-address area maps. Version 40 extended each directory record header from 32 to
 64 bytes with validity-tagged volume, inode, and birth generation fields.
 Clients can preserve selection across a refreshed snapshot by node identity.
 HostFS change record schema 1 now reports successful unlink with kind 4:

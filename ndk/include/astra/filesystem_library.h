@@ -11,7 +11,7 @@
 /** Package provider name resolved by the eager ELF loader. */
 #define ASTRA_FILESYSTEM_LIBRARY_NAME "filesystem.library"
 /** Minimum compatible Filesystem Kit ABI major requested by applications. */
-#define ASTRA_FILESYSTEM_LIBRARY_VERSION 16u
+#define ASTRA_FILESYSTEM_LIBRARY_VERSION 17u
 /** Current Filesystem Kit ABI major. */
 #define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ASTRA_FILESYSTEM_LIBRARY_VERSION
 /** Current backward-compatible Filesystem Kit ABI revision. */
@@ -252,7 +252,9 @@ uint32_t astra_filesystem_open_at_mode(AstraFilesystem *filesystem, const AstraF
 /** Close an open file. @param file Open state. @return ASTRA_VFS_* status. */
 uint32_t astra_filesystem_close(AstraFile *file);
 /**
- * Acquire a read-only, demand-paged window of an open regular file.
+ * Acquire a read-only, demand-paged chunk containing one file window.
+ * Map only the requested window with astra_rt_area_map_range; its source
+ * offset is base % ASTRA_AREA_SIZE_MAX. Windows cannot cross chunk bounds.
  * Close returned area when finished; mapping remains valid after closing file.
  * @param file Open file with read access.
  * @param base Page-aligned file offset.

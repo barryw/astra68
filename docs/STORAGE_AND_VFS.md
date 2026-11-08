@@ -12,7 +12,7 @@ journaling. The Linux storage provider owns device, medium, source and mounted
 instance records. QEMU exposes that provider through versioned Astra protocols.
 HostFS publishes the native grants, inventory and control endpoints. It posts
 volume changes through Supervisor's generic Messaging broker. Supervisor owns
-startup grants and service policy. Applications use `filesystem.library.16`;
+startup grants and service policy. Applications use `filesystem.library.17`;
 POSIX file descriptors adapt those same native objects.
 
 The production bootstrap opens the selected system volume read-only through

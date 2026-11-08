@@ -18,5 +18,5 @@ _Static_assert(_Alignof(AstraVfsClient) >= 4u &&
 
 int astra_ndk_c_header_contract(void)
 {
-    return ASTRA_FILESYSTEM_LIBRARY_VERSION == 15u ? 0 : 1;
+    return ASTRA_FILESYSTEM_LIBRARY_VERSION == 17u ? 0 : 1;
 }

@@ -847,11 +847,19 @@ static uint32_t hostfs_file_area(void *context,
     HostfsFileArea *entry;
     uintptr_t node = 0u;
     uint32_t status;
+    uint64_t owner_base;
 
     (void)context;
     (void)requester;
     *area = 0u;
     *file_size = 0u;
+    if (span == 0u || span > ASTRA_AREA_SIZE_MAX ||
+        (base & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
+        (span & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
+        span > ASTRA_AREA_SIZE_MAX - base % ASTRA_AREA_SIZE_MAX ||
+        base > UINT64_MAX - span)
+        return ASTRA_VFS_ERR_INVALID;
+    owner_base = base - base % ASTRA_AREA_SIZE_MAX;
     if (grant->retiring || file_pager_thread == 0u ||
         __atomic_load_n(&file_pager_failed, __ATOMIC_ACQUIRE) != 0u ||
         file_pager_cookie == UINT32_MAX)
@@ -886,7 +894,8 @@ static uint32_t hostfs_file_area(void *context,
     for (entry = file_areas; entry != NULL; entry = entry->next)
         if (entry->grant->owner == grant->owner &&
             entry->provider_epoch == provider_epoch && !entry->stale &&
-            entry->source.base == base && entry->source.span == span &&
+            entry->source.base == owner_base &&
+            entry->source.span == ASTRA_AREA_SIZE_MAX &&
             astra_vfs_node_identity_equal(&info.meta, &info.meta) &&
             astra_vfs_node_identity_equal(&entry->source.identity,
                                            &info.meta) &&
@@ -911,9 +920,9 @@ static uint32_t hostfs_file_area(void *context,
     entry->provider_epoch = provider_epoch;
     if (!astra_vfs_file_page_source_init(&entry->source,
         &(AstraVfsBackend){ops, &entry->backend}, node, &info.meta,
-        base, span, file_pager_cookie))
+        owner_base, ASTRA_AREA_SIZE_MAX, file_pager_cookie))
         status = ASTRA_VFS_ERR_INVALID;
-    else if (astra_rt_area_create_flagged(span,
+    else if (astra_rt_area_create_flagged(ASTRA_AREA_SIZE_MAX,
         ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER |
         ASTRA_RIGHT_ADMINISTER, ASTRA_AREA_CREATE_RESERVED,
         &entry->area) != ASTRA_SYSCALL_OK)

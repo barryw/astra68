@@ -989,8 +989,7 @@ KernelAreaStatus kernel_area_map_range_at(KernelArea *area,
             if (mapping->process_id == process_id && mapping->area == area &&
                 mapping->source_offset == source_offset &&
                 mapping->mapped_bytes == view_bytes &&
-                (requested_base == 0u ||
-                 mapping->virtual_base == requested_base)) {
+                requested_base == 0u) {
                 if (mapping->space != space ||
                     mapping->permissions != permissions)
                     return KERNEL_AREA_ACCESS_DENIED;

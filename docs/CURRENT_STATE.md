@@ -2,6 +2,34 @@
 
 Status: active continuation map, 2026-11-08
 
+Canonical file-area WIP, 2026-11-08: storage protocol 41 and
+`filesystem.library.17` give one reserved 128 MiB area per exact node chunk;
+overlapping windows now name the same owner. POSIX read-only `mmap` maps only
+the requested 256 KiB-aligned views, joins at most two adjacent chunks at
+exact addresses, and uses separate virtual mappings for repeated calls.
+Exact-address mapping now rejects an occupied target even for the same area.
+Host kernel/VFS/HostFS/POSIX suites, MC68040 builds, NDK `dist-check`, and
+coherent Beast QEMU `fssem file-map` and `area-range` probes passed. The
+file-map probe includes repeated independent maps and a sparse file crossing
+the 128 MiB chunk boundary. Coherent private release
+`3a283a79b1b630faf932b21f9d3d325b75bb476fb354b1f1b950f848dc0dd371`
+ran 300 seconds at stage 8 on DE25. Native Terminal `fssem file-map` and
+`fssem area-range` each passed 1/1; no panic or degraded marker appeared.
+Trial image and console matched board/Beast SHA-256
+`e5265cf72371b1c6149001a2d51c8e7f3047e5050755e0f3fec34ef4fbd7d6ff`
+and `fa143f647a41f0f3f360e5ff3a2cf30b2f475596b453d54a3fcca6920422a8fa`.
+Read-only `e2fsck` passed. Evidence is under
+`/home/barry/astra-evidence/file-cache-canon-20261108/` on Beast; disposable
+board files were removed. Selected release stayed
+`a46dffcb6efa575f16f1ef074f8389f27c6f46faf1b58ca0aa9d335d48e3c6d1`;
+Astra/audio/RFB are active with only production loop0 and 8.5 GiB free.
+Linux detected no attached USB device during this trial, so no USB hotplug
+or remount result is claimed. Ordinary VFS reads and
+writes still bypass resident pages; mapped shared writes, COW, EOF/truncate
+fault policy, external dirty conflict, and pressure/writeback accounting
+remain open. Haiku `src/system/kernel/cache/file_cache.cpp:745-850` guided
+single vnode ownership; Astra retains native area frames and HostFS pager.
+
 Native area subrange primitive, 2026-11-08: WIP kernel mapping records now
 carry source offset, exact view length, and attached shared-table span. New
 `ASTRA_SYSCALL_AREA_MAP_RANGE` and runtime export allow 256 KiB-aligned source
@@ -31,8 +59,7 @@ Wrapper restored the
 selected release; Astra, audio, and remote desktop are active with one
 production loop and 8.5 GiB free after trial cleanup. The USB cable was not
 replugged in either trial. This does not yet merge
-HostFS's range-keyed file areas or route ordinary VFS I/O through cached
-frames. Haiku `src/system/kernel/cache/file_cache.cpp:745-850` guided single
+ordinary VFS I/O through cached frames. Haiku `src/system/kernel/cache/file_cache.cpp:745-850` guided single
 ownership; Astra extends existing `KernelArea` mappings.
 
 Exact mapped-file change retirement, 2026-11-08: WIP HostFS now consumes its
@@ -63,12 +90,8 @@ while ordering I/O, and `src/system/kernel/fs/node_monitor.cpp` routes node
 events; Astra retains its one HostFS area owner and existing change stream.
 
 Active file-cache blocker, 2026-11-08: ordinary VFS read/write still bypass
-resident mapped frames. HostFS's area key includes request base and span, so
-overlapping file ranges can own duplicate kernel frames even for one exact
-node. Native 256 KiB subrange and exact-address mapping now work, but the
-file-area API gives no offset within a canonical owner. The next correctness
-change must consolidate HostFS ownership before routing ordinary I/O through
-those pages. Writable shared
+resident mapped frames. Canonical chunk ownership now exists for exact nodes,
+but VFS I/O does not address those frames yet. Writable shared
 pages then need a first-write trap, dirty state, bounded writeback, and
 conflict handling; the existing filesystem change topic remains the only
 external invalidation feed. See `docs/FILE_CACHE_DESIGN.md` for the inspected

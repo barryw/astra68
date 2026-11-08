@@ -42,14 +42,15 @@
 /** Native-big-endian `STOR` storage-protocol signature. */
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
 /** Current storage-protocol wire-format version. */
-#define ASTRA_VFS_VERSION  UINT16_C(40)
+#define ASTRA_VFS_VERSION  UINT16_C(41)
 
 /** Current version only: in-tree clients and providers change together.
- * Version 40 carries directory-entry node identity alongside metadata.
+ * Version 41 returns the owning 128 MiB file area for FILE_AREA windows.
+ * Version 40 carried directory-entry node identity alongside metadata.
  * Version 38 carries complete pathname operands in the bound transfer area.
  * Version 37 carried full-width native volume identity. A mismatch
  * fails closed; no rolling-upgrade or obsolete request format is supported. */
-#define ASTRA_VFS_VERSION_MIN UINT16_C(40)
+#define ASTRA_VFS_VERSION_MIN UINT16_C(41)
 
 /** Maximum byte length of a path, including its terminating NUL, on the wire. */
 #define ASTRA_VFS_PATH_MAX 4096u

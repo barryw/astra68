@@ -15,7 +15,7 @@ capability WORK:r
 capability DH0:r
 capability LIBS:r
 requires interface.library 12 12.0.0
-requires filesystem.library 16 16.0.0
+requires filesystem.library 17 17.0.0
 requires config.library 2 2.0.0
 requires graphics.library 3 3.0.0
 requires font.library 5 5.0.0

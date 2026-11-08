@@ -2083,6 +2083,7 @@ static int file_map_gate(const char *directory)
     uint32_t area = 0u, fresh_area = 0u, mapped_size = 0u;
     uint64_t file_size = 0u;
     void *mapping = NULL, *fresh_mapping = NULL, *posix_mapping = MAP_FAILED;
+    void *posix_alias = MAP_FAILED, *cross_mapping = MAP_FAILED;
     size_t posix_mapping_length = ASTRA_MEMORY_PAGE_SIZE * 2u;
     int fd = -1, result = 2;
     const char *stage = "create";
@@ -2113,6 +2114,14 @@ static int file_map_gate(const char *directory)
     stage = "POSIX readonly map";
     posix_mapping = mmap(NULL, sizeof(bytes), PROT_READ, MAP_SHARED, fd, 0);
     if (posix_mapping == MAP_FAILED) goto done;
+    stage = "POSIX independent mappings";
+    posix_alias = mmap(NULL, sizeof(bytes), PROT_READ, MAP_SHARED, fd, 0);
+    if (posix_alias == MAP_FAILED || posix_alias == posix_mapping ||
+        ((volatile const char *)posix_alias)[0] != 'a') goto done;
+    if (munmap(posix_mapping, sizeof(bytes)) != 0 ||
+        ((volatile const char *)posix_alias)[0] != 'a') goto done;
+    posix_mapping = posix_alias;
+    posix_alias = MAP_FAILED;
     close(fd); fd = -1;
     if (((volatile const char *)posix_mapping)[0] != 'a' ||
         ((volatile const char *)posix_mapping)[ASTRA_MEMORY_PAGE_SIZE] != 'a')
@@ -2147,8 +2156,9 @@ static int file_map_gate(const char *directory)
         goto done;
     if (astra_filesystem_close(&file) != ASTRA_VFS_OK) goto done;
     stage = "map";
-    if (astra_rt_area_map(area, ASTRA_AREA_MAP_READ, &mapping,
-        &mapped_size) != ASTRA_SYSCALL_OK || mapped_size < sizeof(bytes))
+    if (astra_rt_area_map_range(area, ASTRA_AREA_MAP_READ, 0u,
+        ASTRA_SHARED_AREA_TABLE_SPAN, &mapping, &mapped_size) !=
+        ASTRA_SYSCALL_OK || mapped_size != ASTRA_SHARED_AREA_TABLE_SPAN)
         goto done;
     stage = "fault";
     if (((volatile const char *)mapping)[0] != 'a' ||
@@ -2170,8 +2180,9 @@ static int file_map_gate(const char *directory)
         file_size != sizeof(bytes)) goto done;
     if (astra_filesystem_close(&file) != ASTRA_VFS_OK) goto done;
     stage = "fresh map";
-    if (astra_rt_area_map(fresh_area, ASTRA_AREA_MAP_READ, &fresh_mapping,
-        &mapped_size) != ASTRA_SYSCALL_OK || mapped_size < sizeof(bytes))
+    if (astra_rt_area_map_range(fresh_area, ASTRA_AREA_MAP_READ, 0u,
+        ASTRA_SHARED_AREA_TABLE_SPAN, &fresh_mapping, &mapped_size) !=
+        ASTRA_SYSCALL_OK || mapped_size != ASTRA_SHARED_AREA_TABLE_SPAN)
         goto done;
     stage = "fresh contents";
     if (((volatile const char *)fresh_mapping)[0] != 'b') goto done;
@@ -2193,9 +2204,28 @@ static int file_map_gate(const char *directory)
     close(fd); fd = -1;
     stage = "refault";
     if (!wait_mapped_byte(mapping, 1u, 'c')) goto done;
+    stage = "cross-chunk file map";
+    fd = open(path, O_RDWR);
+    if (fd < 0 || pwrite(fd, "L", 1u,
+            ASTRA_AREA_SIZE_MAX - ASTRA_MEMORY_PAGE_SIZE) != 1 ||
+        pwrite(fd, "R", 1u, ASTRA_AREA_SIZE_MAX) != 1 ||
+        fsync(fd) != 0) goto done;
+    cross_mapping = mmap(NULL, 2u * ASTRA_MEMORY_PAGE_SIZE,
+        PROT_READ, MAP_SHARED, fd,
+        ASTRA_AREA_SIZE_MAX - ASTRA_MEMORY_PAGE_SIZE);
+    if (cross_mapping == MAP_FAILED ||
+        ((volatile const char *)cross_mapping)[0] != 'L' ||
+        ((volatile const char *)cross_mapping)[ASTRA_MEMORY_PAGE_SIZE] != 'R' ||
+        munmap(cross_mapping, 2u * ASTRA_MEMORY_PAGE_SIZE) != 0)
+        goto done;
+    cross_mapping = MAP_FAILED;
+    close(fd); fd = -1;
     result = 0;
 done:
     if (fd >= 0) close(fd);
+    if (cross_mapping != MAP_FAILED)
+        (void)munmap(cross_mapping, 2u * ASTRA_MEMORY_PAGE_SIZE);
+    if (posix_alias != MAP_FAILED) (void)munmap(posix_alias, sizeof(bytes));
     if (posix_mapping != MAP_FAILED)
         (void)munmap(posix_mapping, posix_mapping_length);
     if (fresh_mapping != NULL) (void)astra_rt_area_unmap(fresh_mapping);
@@ -2263,6 +2293,11 @@ static int area_range_gate(const char *directory)
         size != ASTRA_MEMORY_PAGE_SIZE)
         goto done;
     stage = "reject occupied target";
+    if (astra_rt_area_map_range_at(area,
+            ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE, 0u,
+            span, target, &collision, &size) !=
+            ASTRA_SYSCALL_INVALID_ARGUMENT || collision != NULL)
+        goto done;
     if (astra_rt_area_map_range_at(area, ASTRA_AREA_MAP_READ, 0u,
             span, target + span, &collision, &size) !=
             ASTRA_SYSCALL_INVALID_ARGUMENT || collision != NULL)

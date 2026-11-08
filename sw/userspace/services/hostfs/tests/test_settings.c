@@ -103,7 +103,7 @@ int astra_vfs_host_init(AstraVfsHostBackend *backend, AstraVfsHostTransport *hos
                                    .session = session}; return 1; }
 uint32_t astra_rt_area_create_flagged(uint32_t size, uint32_t rights,
     uint32_t flags, uint32_t *area)
-{ assert(size == ASTRA_MEMORY_PAGE_SIZE &&
+{ assert(size == ASTRA_AREA_SIZE_MAX &&
          rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER |
                     ASTRA_RIGHT_ADMINISTER) && flags == ASTRA_AREA_CREATE_RESERVED);
   *area = next_area; next_area += 2u; return ASTRA_SYSCALL_OK; }
@@ -125,7 +125,7 @@ uint32_t astra_rt_area_references(uint32_t area, uint32_t *handles,
 uint32_t astra_rt_area_reclaim(uint32_t area, uint32_t offset,
     uint32_t size, uint32_t *released)
 { assert(area >= 40u && area <= 48u && (area & 1u) == 0u &&
-         offset == 0u && size == ASTRA_MEMORY_PAGE_SIZE);
+         offset == 0u && size == ASTRA_AREA_SIZE_MAX);
   *released = 1u; ++area_reclaims; return ASTRA_SYSCALL_OK; }
 const AstraVfsServiceStats *astra_vfs_service_stats(const AstraVfsService *service)
 {
@@ -313,27 +313,38 @@ int main(void)
         ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
     assert(mapped_area == 41u && mapped_size == 2u * ASTRA_MEMORY_PAGE_SIZE &&
            mapped_grant.file_areas == 1u && area_binds == 1u);
+    assert(file_areas->source.base == 0u &&
+           file_areas->source.span == ASTRA_AREA_SIZE_MAX);
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u,
+        ASTRA_MEMORY_PAGE_SIZE, ASTRA_MEMORY_PAGE_SIZE, &mapped_area,
+        &mapped_size) == ASTRA_VFS_OK);
+    assert(mapped_area == 41u && mapped_grant.file_areas == 1u &&
+           area_binds == 1u);
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u,
+        ASTRA_AREA_SIZE_MAX - ASTRA_MEMORY_PAGE_SIZE,
+        2u * ASTRA_MEMORY_PAGE_SIZE, &mapped_area,
+        &mapped_size) == ASTRA_VFS_ERR_INVALID);
     assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1235u, 0u,
         ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
-    assert(mapped_grant.file_areas == 1u && area_duplicates == 2u &&
-           file_closes == 1u);
+    assert(mapped_grant.file_areas == 1u && area_duplicates == 3u &&
+           file_closes == 2u);
     assert(hostfs_file_area(NULL, &another_grant.port, 2u, 1234u, 0u,
         ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
     assert(mapped_area == 41u && mapped_size == 2u * ASTRA_MEMORY_PAGE_SIZE &&
            mapped_grant.file_areas == 1u && another_grant.file_areas == 0u &&
-           area_binds == 1u && area_duplicates == 3u && file_closes == 2u);
+           area_binds == 1u && area_duplicates == 4u && file_closes == 3u);
     open_file_size = ASTRA_MEMORY_PAGE_SIZE;
     assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1235u, 0u,
         ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
     assert(mapped_area == 43u && mapped_size == ASTRA_MEMORY_PAGE_SIZE &&
            mapped_grant.file_areas == 2u && area_binds == 2u &&
-           area_duplicates == 4u);
+           area_duplicates == 5u);
     HostfsVolume other_owner = {0};
     HostfsGrant other_grant = {.owner = &other_owner, .session = 33u};
     assert(hostfs_file_area(NULL, &other_grant.port, 3u, 1234u, 0u,
         ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
     assert(mapped_area == 45u && other_grant.file_areas == 1u &&
-           area_binds == 3u && area_duplicates == 5u);
+           area_binds == 3u && area_duplicates == 6u);
     mapped_owner.backend.session = 33u;
     uint32_t moved = 0u;
     uint64_t position = 0u;
@@ -369,7 +380,7 @@ int main(void)
     area_handles = 1u; area_mappings = 0u;
     file_areas_maintain();
     assert(file_areas == NULL && mapped_grant.file_areas == 0u &&
-           other_grant.file_areas == 0u && file_closes == 5u);
+           other_grant.file_areas == 0u && file_closes == 6u);
     node_sequence = 1u;
     next_area = 40u;
     area_handles = 2u; area_mappings = 1u;
@@ -388,7 +399,7 @@ int main(void)
     area_handles = 1u; area_mappings = 0u;
     file_areas_maintain();
     assert(file_areas == NULL && mapped_grant.file_areas == 0u &&
-           file_closes == 7u);
+           file_closes == 8u);
     provider_epoch = 0u;
     next_area = 40u;
     area_handles = 2u; area_mappings = 1u;
