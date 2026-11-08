@@ -7,6 +7,20 @@ Ordinary I/O still does not share mapped resident frames; dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Immediate mutation coherence, 2026-11-07: DE25 exposed a correctness gap
+after `pwrite`/`fsync` and `ftruncate`/`fsync`. An already-faulted mapping can
+still return the old byte immediately after each operation returns; the
+existing test's four-second wait hid this. The strengthened `fssem file-map`
+gate now checks both return boundaries. Red RFB evidence is under
+`/home/barry/astra-evidence/file-cache-immediate-20261107/` on Beast.
+HostFS already owns exact file-area identities, area reclaim, and provider
+node-change notifications. Canonical guest writes and truncates must revoke
+affected resident pages before their VFS reply; the existing notification
+path remains responsible for external changes and application updates. Haiku
+`src/system/kernel/cache/file_cache.cpp:763-1000` holds its vnode cache while
+ordering ordinary I/O and mapped-page access. Astra must adapt that ordering
+to its userspace VFS service and kernel area owner.
+
 Read-only POSIX file mapping, 2026-11-07: `libc.library` now adapts
 `mmap` with `PROT_READ` and either `MAP_SHARED` or `MAP_PRIVATE` to the
 existing native file-area and area-map APIs. It closes the temporary area

@@ -2158,6 +2158,8 @@ static int file_map_gate(const char *directory)
     if (fd < 0 || pwrite(fd, "b", 1u, 0) != 1 || fsync(fd) != 0)
         goto done;
     close(fd); fd = -1;
+    stage = "write immediate invalidation";
+    if (((volatile const char *)mapping)[0] != 'b') goto done;
     stage = "fresh open";
     if (astra_filesystem_open(&native.filesystem, path,
         ASTRA_VFS_OPEN_READ, &file) != ASTRA_VFS_OK) goto done;
@@ -2179,6 +2181,8 @@ static int file_map_gate(const char *directory)
     if (fd < 0 || ftruncate(fd, 1) != 0 || fsync(fd) != 0)
         goto done;
     close(fd); fd = -1;
+    stage = "truncate immediate invalidation";
+    if (((volatile const char *)mapping)[1] != '\0') goto done;
     stage = "zero-tail";
     if (!wait_mapped_byte(mapping, 1u, '\0')) goto done;
     stage = "extend";

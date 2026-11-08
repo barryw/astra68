@@ -2,6 +2,19 @@
 
 Status: active continuation map, 2026-11-07
 
+Active file-cache correctness blocker, 2026-11-07: DE25 `fssem file-map`
+fails when it checks an already-faulted mapping immediately after a completed
+`pwrite` and `fsync`: the old byte remains visible until HostFS's later
+provider-change maintenance. With the write check temporarily bypassed, the
+same gate also fails immediate zero-tail after completed `ftruncate` and
+`fsync`. Both red RFB captures are archived under
+`/home/barry/astra-evidence/file-cache-immediate-20261107/` on Beast. This
+proves the current notification-poll path cannot supply a synchronous
+write/truncate coherence barrier. The existing `fssem` gate now checks both
+return boundaries; it is red until cache-owner revocation runs before the VFS
+mutation reply. Trial command and captures were removed from DE25; Astra,
+audio, and remote desktop remain active with zero restarts and 8.5 GiB free.
+
 Read-only POSIX file mapping, 2026-11-07: `libc.library` now maps file-backed
 `PROT_READ` with `MAP_SHARED` or `MAP_PRIVATE` through the existing native
 HostFS area, with full-span `munmap`. The mapping remains valid after closing
