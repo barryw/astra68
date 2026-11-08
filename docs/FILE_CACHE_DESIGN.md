@@ -20,6 +20,11 @@ path remains responsible for external changes and application updates. Haiku
 `src/system/kernel/cache/file_cache.cpp:763-1000` holds its vnode cache while
 ordering ordinary I/O and mapped-page access. Astra must adapt that ordering
 to its userspace VFS service and kernel area owner.
+DE25 pre-change `fsbench` measured 1,024 random 4 KiB operations per mode:
+read median/p95 31,156/60,126 MC68040 cycles, write 32,260/68,657 cycles.
+The `--cleanup` option removed its fixture directory after reporting, and
+the report was removed after an RFB capture. The same `rand-read` and
+`rand-write` workloads must run after the write-path change.
 
 Read-only POSIX file mapping, 2026-11-07: `libc.library` now adapts
 `mmap` with `PROT_READ` and either `MAP_SHARED` or `MAP_PRIVATE` to the

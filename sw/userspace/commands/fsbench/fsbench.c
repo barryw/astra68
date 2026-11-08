@@ -2,7 +2,7 @@
  * fsbench -- the filesystem baseline (docs/FILESYSTEM_PRODUCTION_PRD.md,
  * "Acceptance and performance gates").
  *
- *   fsbench --label NAME [--dir DIR] [--cold-handshake]
+ *   fsbench --label NAME [--dir DIR] [--cleanup] [--cold-handshake]
  *           [--fault-handshake write|sync] [--only W]...
  *
  * Runs each workload over DIR (default /work/fsbench-NAME) and writes one
@@ -99,6 +99,8 @@ static int handshake;
 static int fault_point;
 static int only[W_COUNT];
 static int any_only;
+static int clean_after;
+static int owns_directory;
 
 static uint64_t now_ns(void)
 {
@@ -258,6 +260,7 @@ static int prepare(void)
                 "use a new --label\n", directory);
         return -1;
     }
+    owns_directory = 1;
     for (uint32_t index = 0u; index < FILES; ++index) {
         file_name(path, sizeof(path), "f", index);
         if (write_whole(path, 64u) != 0)
@@ -268,6 +271,28 @@ static int prepare(void)
         return -1;
     (void)snprintf(path, sizeof(path), "%s/big2", directory);
     return write_whole(path, BIG_BYTES);
+}
+
+static int cleanup(void)
+{
+    static const char *const extra[] = {
+        "big", "big2", "written", "appended", "save", "save.tmp"
+    };
+    char path[160];
+    int failed = 0;
+
+    if (!owns_directory) return 0;
+    for (uint32_t index = 0u; index < FILES; ++index) {
+        file_name(path, sizeof(path), "f", index);
+        if (unlink(path) != 0 && errno != ENOENT) failed = 1;
+    }
+    for (uint32_t index = 0u; index < sizeof(extra) / sizeof(extra[0]); ++index) {
+        (void)snprintf(path, sizeof(path), "%s/%s", directory, extra[index]);
+        if (unlink(path) != 0 && errno != ENOENT) failed = 1;
+    }
+    if (rmdir(directory) != 0 && errno != ENOENT) failed = 1;
+    else owns_directory = 0;
+    return failed ? -1 : 0;
 }
 
 static void run_stat(Result *result)
@@ -654,6 +679,8 @@ int main(int argc, char **argv)
                            argv[++index]);
         else if (strcmp(argv[index], "--cold-handshake") == 0)
             handshake = 1;
+        else if (strcmp(argv[index], "--cleanup") == 0)
+            clean_after = 1;
         else if (strcmp(argv[index], "--fault-handshake") == 0 &&
                  index + 1 < argc) {
             const char *point = argv[++index];
@@ -674,7 +701,7 @@ int main(int argc, char **argv)
             only[at] = 1;
             any_only = 1;
         } else {
-            fprintf(stderr, "usage: fsbench --label NAME [--dir DIR] "
+            fprintf(stderr, "usage: fsbench --label NAME [--dir DIR] [--cleanup] "
                     "[--cold-handshake] [--fault-handshake write|sync] "
                     "[--only WORKLOAD]...\n");
             return 2;
@@ -688,6 +715,7 @@ int main(int argc, char **argv)
     (void)mkdir("/work/.astra", 0755);
     if (prepare() != 0) {
         fprintf(stderr, "fsbench: prepare failed: %s\n", strerror(errno));
+        if (clean_after) (void)cleanup();
         return 1;
     }
     for (uint32_t workload = 0u; workload < W_COUNT; ++workload) {
@@ -699,10 +727,12 @@ int main(int argc, char **argv)
             continue;
         if (cold && cold_point() != 0) {
             fprintf(stderr, "fsbench: no cold handshake\n");
+            if (clean_after) (void)cleanup();
             return 1;
         }
         if (workload == W_HELD_MISS && held_miss_cold_point() != 0) {
             fprintf(stderr, "fsbench: no held-miss cold handshake\n");
+            if (clean_after) (void)cleanup();
             return 1;
         }
         begin(result, workload);
@@ -726,6 +756,11 @@ int main(int argc, char **argv)
     }
     if (report() != 0) {
         fprintf(stderr, "fsbench: cannot write the result\n");
+        if (clean_after) (void)cleanup();
+        return 1;
+    }
+    if (clean_after && cleanup() != 0) {
+        fprintf(stderr, "fsbench: cleanup failed\n");
         return 1;
     }
     return failed ? 1 : 0;

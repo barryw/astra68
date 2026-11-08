@@ -14,6 +14,14 @@ write/truncate coherence barrier. The existing `fssem` gate now checks both
 return boundaries; it is red until cache-owner revocation runs before the VFS
 mutation reply. Trial command and captures were removed from DE25; Astra,
 audio, and remote desktop remain active with zero restarts and 8.5 GiB free.
+Before changing the VFS write path, DE25 `fsbench --label cachepre --cleanup
+--only rand-read --only rand-write` measured 1,024 random 4 KiB operations per
+mode: read median/p95 31,156/60,126 MC68040 cycles, write median/p95
+32,260/68,657 cycles. Both workloads reported `failed:false`; fixture
+directory and report were removed after capture. Checked RFB result and
+absence proof are in the same Beast evidence directory. The benchmark's
+`--cleanup` option refuses to remove a preexisting directory; DE25 tested
+that guard against `/work/.astra`.
 
 Read-only POSIX file mapping, 2026-11-07: `libc.library` now maps file-backed
 `PROT_READ` with `MAP_SHARED` or `MAP_PRIVATE` through the existing native
