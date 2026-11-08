@@ -7,6 +7,20 @@ Ordinary I/O still does not share mapped resident frames; dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Native area subrange mapping, 2026-11-08: WIP kernel now records a source
+offset and view length for each mapping and attaches only corresponding
+existing shared tables. New syscall and runtime export require 4 MiB source
+alignment and full 4 MiB views except for a terminal partial span. Host tests
+cover distinct and overlapping views of one area, decommit/refault, terminal
+bounds, permissions, and process dispatch. MC68040 kernel/runtime builds, NDK
+`dist-check`, and 16-marker K1 QEMU gate passed. New range syscall needs
+target measurement and DE25 trial before it can be a file-cache dependency.
+This VM primitive
+does not yet unify file cache: HostFS still creates range-keyed areas and
+ordinary VFS I/O still bypasses mapped pages. Existing area-map performance
+budget covers new syscall. Haiku `src/system/kernel/cache/file_cache.cpp:745-850`
+uses one vnode VMCache for file I/O and mappings; Astra reuses `KernelArea`.
+
 Exact change retirement, 2026-11-08: HostFS now has a cache cursor separate
 from reliable broker delivery and drains the existing per-namespace change
 ring before area reuse. NODE invalidates matching inode areas, while
@@ -720,8 +734,9 @@ Two overlapping requests with different ranges create separate `KernelArea`
 owners and frames. `read_acquired_file()` and `write_file()` in
 `sw/userspace/vfs/src/vfs_service_core.c` call backend I/O directly, so
 ordinary I/O does not consume those frames. `kernel_area_map()` attaches whole
-shared-table spans and reports the area's size; it cannot map a requested
-subrange of one node-wide owner. Canonicalizing HostFS's area lookup alone
+shared-table spans and reports the area's size; new range-map primitive can
+select aligned subranges but HostFS does not use it yet. Canonicalizing
+HostFS's area lookup alone
 would therefore change callers' file offsets or reject legitimate overlapping
 and multi-span mappings. Keep this as one VM/VFS contract change, not a second
 userspace byte cache or an Atlas/SDL-specific path.

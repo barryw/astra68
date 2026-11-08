@@ -1094,6 +1094,14 @@
  * The pager owner must write back dirty data before calling this operation.
  */
 #define ASTRA_SYSCALL_AREA_RECLAIM    118
+/**
+ * Maps a shared-table-aligned subrange of an area. data[1] is the area handle,
+ * data[2] the ASTRA_AREA_MAP_* permissions, data[3] a 4 MiB-aligned source
+ * offset, and data[4] the view length. The length must be a multiple of 4 MiB
+ * unless it reaches the area's end. Returns base in data[1] and view length
+ * in data[2].
+ */
+#define ASTRA_SYSCALL_AREA_MAP_RANGE  119
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */

@@ -12893,7 +12893,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
         break;
     }
-    case ASTRA_SYSCALL_AREA_MAP: {
+    case ASTRA_SYSCALL_AREA_MAP:
+    case ASTRA_SYSCALL_AREA_MAP_RANGE: {
         KernelArea *area = NULL;
         KernelAreaStatus area_status;
         KernelHandleStatus handle_status;
@@ -12925,9 +12926,15 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (handle_status != KERNEL_HANDLE_OK || area == NULL)
             return KERNEL_PROCESS_CORRUPT;
         kernel_enable_interrupts();
-        area_status = kernel_area_map(
-            area, current->id, &current->address_space, permissions,
-            &virtual_base, &byte_size);
+        if (thread->context.data[0] == ASTRA_SYSCALL_AREA_MAP_RANGE)
+            area_status = kernel_area_map_range(
+                area, current->id, &current->address_space, permissions,
+                thread->context.data[3], thread->context.data[4],
+                &virtual_base, &byte_size);
+        else
+            area_status = kernel_area_map(
+                area, current->id, &current->address_space, permissions,
+                &virtual_base, &byte_size);
         kernel_disable_interrupts();
         if (area_status != KERNEL_AREA_OK) {
             if (!area_status_to_syscall(area_status, &result))

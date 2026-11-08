@@ -2,6 +2,19 @@
 
 Status: active continuation map, 2026-11-08
 
+Native area subrange primitive, 2026-11-08: WIP kernel mapping records now
+carry source offset, exact view length, and attached shared-table span. New
+`ASTRA_SYSCALL_AREA_MAP_RANGE` and runtime export allow 4 MiB-aligned source
+ranges, complete 4 MiB views, and a terminal partial span. Existing whole-area
+maps retain their contract. Beast full kernel and runtime host suites,
+MC68040 kernel and runtime library builds, NDK `dist-check`, and K1 QEMU
+qualification passed all 16 markers with zero reported overruns. K1's
+existing area-map calls reached 2,232/125,000 cycles; new range syscall was
+not exercised by K1. DE25 gate is pending. This does not yet merge
+HostFS's range-keyed file areas or route ordinary VFS I/O through cached
+frames. Haiku `src/system/kernel/cache/file_cache.cpp:745-850` guided single
+ownership; Astra extends existing `KernelArea` mappings.
+
 Exact mapped-file change retirement, 2026-11-08: WIP HostFS now consumes its
 existing namespace change ring with a cache cursor independent of reliable
 broker publication. Exact NODE records stale only matching inode areas;

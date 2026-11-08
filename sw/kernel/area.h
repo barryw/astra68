@@ -186,6 +186,13 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
                                  uint32_t permissions,
                                  uint32_t *virtual_base,
                                  uint32_t *byte_size);
+KernelAreaStatus kernel_area_map_range(KernelArea *area, uint32_t process_id,
+                                       KernelAddressSpace *space,
+                                       uint32_t permissions,
+                                       uint32_t source_offset,
+                                       uint32_t view_bytes,
+                                       uint32_t *virtual_base,
+                                       uint32_t *byte_size);
 KernelAreaStatus kernel_area_clone_process(
     uint32_t source_process_id, const KernelAddressSpace *source_space,
     uint32_t destination_process_id, KernelAddressSpace *destination_space);

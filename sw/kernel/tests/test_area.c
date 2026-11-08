@@ -1541,6 +1541,70 @@ static void test_reserved_area_commit_stops_at_physical_memory(void)
     assert(kernel_vm_destroy_address_space(&owner) == KERNEL_VM_OK);
 }
 
+static void test_area_subrange_maps_distinct_source_spans(void)
+{
+    KernelAddressSpace space;
+    KernelArea *area;
+    uint32_t first, second, whole, size, physical, expected, released;
+    uint8_t value = 0x6bu;
+
+    initialize_test();
+    assert(kernel_vm_create_address_space(370u, &space) == KERNEL_VM_OK);
+    assert(kernel_area_create(370u,
+                              KERNEL_VM_SHARED_TABLE_SPAN + KERNEL_PAGE_SIZE,
+                              KERNEL_AREA_CREATE_RESERVED, &area) ==
+           KERNEL_AREA_OK);
+    assert(kernel_area_map_range(area, 370u, &space, KERNEL_VM_READ,
+                                 1u, KERNEL_VM_SHARED_TABLE_SPAN,
+                                 &first, &size) ==
+           KERNEL_AREA_INVALID_ARGUMENT);
+    assert(kernel_area_map_range(area, 370u, &space, KERNEL_VM_READ,
+                                 0u, KERNEL_PAGE_SIZE, &first, &size) ==
+           KERNEL_AREA_INVALID_ARGUMENT);
+    assert(kernel_area_map_range(area, 370u, &space, KERNEL_VM_READ,
+                                 KERNEL_VM_SHARED_TABLE_SPAN,
+                                 KERNEL_PAGE_SIZE, &first,
+                                 &size) == KERNEL_AREA_OK);
+    assert(size == KERNEL_PAGE_SIZE);
+    assert(kernel_area_map_range(area, 370u, &space, KERNEL_VM_READ,
+                                 0u, KERNEL_VM_SHARED_TABLE_SPAN,
+                                 &second, &size) == KERNEL_AREA_OK);
+    assert(second != first);
+    assert(kernel_area_write(area, KERNEL_VM_SHARED_TABLE_SPAN,
+                             &value, 1u) == KERNEL_AREA_OK);
+    assert(kernel_area_page_physical(area, KERNEL_VM_SHARED_TABLE_SPAN,
+                                     &expected));
+    assert(kernel_area_map(area, 370u, &space, KERNEL_VM_READ,
+                           &whole, &size) == KERNEL_AREA_OK);
+    assert(kernel_vm_switch(&space) == KERNEL_VM_OK);
+    assert(kernel_vm_test_translate_current(first, false, &physical));
+    assert(physical == expected);
+    assert(kernel_vm_test_translate_current(
+        whole + KERNEL_VM_SHARED_TABLE_SPAN, false, &physical));
+    assert(physical == expected);
+    assert(!kernel_area_fault(370u, &space, first + KERNEL_PAGE_SIZE));
+    assert(!kernel_vm_test_translate_current(second, false, &physical));
+    assert(kernel_area_fault(370u, &space, second));
+    assert(kernel_area_decommit(370u, &space, first, KERNEL_PAGE_SIZE,
+                                &released) == KERNEL_AREA_OK);
+    assert(released == 1u);
+    assert(kernel_area_fault(370u, &space, first));
+    assert(kernel_area_page_physical(area, KERNEL_VM_SHARED_TABLE_SPAN,
+                                     &expected));
+    assert(kernel_vm_test_translate_current(first, false, &physical));
+    assert(physical == expected);
+    assert(kernel_vm_test_translate_current(
+        whole + KERNEL_VM_SHARED_TABLE_SPAN, false, &physical));
+    assert(physical == expected);
+    assert(kernel_area_unmap(370u, &space, first) == KERNEL_AREA_OK);
+    assert(kernel_area_unmap(370u, &space, second) == KERNEL_AREA_OK);
+    assert(kernel_area_unmap(370u, &space, whole) == KERNEL_AREA_OK);
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_area_pool_valid());
+    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
+}
+
 int main(void)
 {
     test_allocation_injection_preserves_mapping_baseline();
@@ -1564,6 +1628,7 @@ int main(void)
     test_reserved_area_decommit_returns_frames();
     test_reserved_area_commits_holes_and_short_tails();
     test_reserved_area_commit_stops_at_physical_memory();
+    test_area_subrange_maps_distinct_source_spans();
     puts("area tests passed");
     return 0;
 }

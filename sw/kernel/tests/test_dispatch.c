@@ -865,6 +865,7 @@ static void test_shared_ipc_uses_dedicated_metrics(void)
     } cases[] = {
         { ASTRA_SYSCALL_AREA_CREATE, KERNEL_PERFORMANCE_AREA_CREATE },
         { ASTRA_SYSCALL_AREA_MAP, KERNEL_PERFORMANCE_AREA_MAP },
+        { ASTRA_SYSCALL_AREA_MAP_RANGE, KERNEL_PERFORMANCE_AREA_MAP },
         { ASTRA_SYSCALL_AREA_UNMAP, KERNEL_PERFORMANCE_AREA_UNMAP },
         { ASTRA_SYSCALL_RING_NOTIFY, KERNEL_PERFORMANCE_RING_NOTIFY },
         { ASTRA_SYSCALL_LIBRARY_ATTACH, KERNEL_PERFORMANCE_LIBRARY_CACHE },
@@ -878,6 +879,7 @@ static void test_shared_ipc_uses_dedicated_metrics(void)
          index < sizeof(cases) / sizeof(cases[0]); ++index) {
         KernelPerformanceStats stats;
 
+        kernel_performance_init();
         registers[0] = cases[index].syscall;
         assert(kernel_syscall_entry_dispatch(registers, frame,
                                              0x70000f80u) ==

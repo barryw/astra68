@@ -440,6 +440,7 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_VM_PRIVATE_DECOMMIT &&
         number != ASTRA_SYSCALL_AREA_BIND_PAGER &&
         number != ASTRA_SYSCALL_AREA_RECLAIM &&
+        number != ASTRA_SYSCALL_AREA_MAP_RANGE &&
         number != ASTRA_SYSCALL_RING_CREATE &&
         number != ASTRA_SYSCALL_RING_READ_TRY &&
         number != ASTRA_SYSCALL_RING_WRITE_TRY &&
@@ -915,6 +916,25 @@ test_syscall_wrappers(void)
     assert(mock_number == ASTRA_SYSCALL_AREA_BIND_PAGER);
     assert(mock_argument0 == 7u && mock_argument1 == 8u &&
            mock_argument2 == 9u);
+    {
+        void *address = NULL;
+        uint32_t mapped_bytes = 0u;
+
+        assert(astra_rt_area_map_range(7u, ASTRA_AREA_MAP_READ,
+                                        4u * 1024u * 1024u, 4096u,
+                                        &address, &mapped_bytes) ==
+               ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_AREA_MAP_RANGE);
+        assert(mock_argument0 == 7u &&
+               mock_argument1 == ASTRA_AREA_MAP_READ &&
+               mock_argument2 == 4u * 1024u * 1024u &&
+               mock_argument3 == 4096u);
+        assert((uintptr_t)address == ASTRA_SYSCALL_ABI_VERSION);
+        assert(mapped_bytes == 0x11111111u);
+        assert(astra_rt_area_map_range(7u, ASTRA_AREA_MAP_READ, 0u,
+                                        4096u, NULL, &mapped_bytes) ==
+               ASTRA_SYSCALL_INVALID_ARGUMENT);
+    }
     {
         uint32_t handles = 0u, mappings = 0u, children = 1u;
         assert(astra_rt_area_references(7u, &handles, &mappings,

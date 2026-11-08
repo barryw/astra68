@@ -7863,6 +7863,29 @@ static void test_shared_area_and_bulk_ring_syscalls(void)
     assert(next->data[0] == ASTRA_SYSCALL_OK);
 
     memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_MAP_RANGE;
+    registers[1] = reduced_handle;
+    registers[2] = ASTRA_AREA_MAP_READ;
+    registers[3] = 1u;
+    registers[4] = KERNEL_PAGE_SIZE;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    registers[3] = 0u;
+    registers[4] = 10u * KERNEL_PAGE_SIZE;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    area_base = next->data[1];
+    assert(next->data[2] == 10u * KERNEL_PAGE_SIZE);
+    registers[0] = ASTRA_SYSCALL_AREA_UNMAP;
+    registers[1] = area_base;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_AREA_MAP;
     registers[1] = area_handle;
     registers[2] = ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE;

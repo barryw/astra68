@@ -409,6 +409,7 @@ KernelDispatchTarget syscall_entry_dispatch_profiled(
             metric = KERNEL_PERFORMANCE_AREA_CREATE;
             break;
         case ASTRA_SYSCALL_AREA_MAP:
+        case ASTRA_SYSCALL_AREA_MAP_RANGE:
             metric = KERNEL_PERFORMANCE_AREA_MAP;
             break;
         case ASTRA_SYSCALL_AREA_UNMAP:
