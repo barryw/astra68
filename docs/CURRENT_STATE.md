@@ -2,6 +2,27 @@
 
 Status: active continuation map, 2026-11-07
 
+File-area acquisition freshness, 2026-11-07: HostFS now samples the existing
+provider node-change generation during every file-area acquisition, before
+looking up a reusable area. A completed same-size write therefore triggers
+the existing area invalidation and resident-page reclaim even when the
+once-per-second broker maintenance has not run yet. A focused test failed
+before this change and passed afterward with ASan/UBSan; MC68040 HostFS and
+`fssem` builds passed. The strengthened native `fssem file-map` test reopens
+and maps the same file immediately after a same-size write, checks the new
+byte, then checks the original mapping's invalidation and truncate/refault
+behavior. It passed on DE25 after a targeted two-file install. Checked RFB
+capture is under `/home/barry/astra-evidence/file-area-freshness-20261107/`
+on Beast. The test-only command and board captures were removed; final stage-8
+boot has Astra, HDMI audio, and remote desktop active, zero Astra restarts,
+both USB volumes, only production loop0, and 8.5 GiB free. HostFS SHA-256 is
+`be2afd1688d442577f8e09abe7e8250a6cb7a7fa366dad150a430c1861814f99`.
+Haiku `src/system/kernel/cache/file_cache.cpp:760-820` locks the cache while
+satisfying ordinary I/O; Astra keeps its userspace cache owner and samples
+the provider's existing change generation before area reuse. Ordinary I/O
+sharing, dirty writeback, strict ordered truncate/EOF revocation, and POSIX
+`mmap` remain open.
+
 Provider-epoch file-area retirement, 2026-11-07: HostFS now marks all mapped
 file windows stale when the storage provider epoch changes, reclaims resident
 pages through its existing area maintenance path, and requires the current

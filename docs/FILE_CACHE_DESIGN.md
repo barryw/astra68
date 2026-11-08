@@ -6,6 +6,19 @@ The existing pressure worker reclaims clean read-only pager frames on DE25.
 Ordinary I/O still does not share mapped resident frames; dirty writeback,
 full EOF/truncate mapping semantics, and POSIX `mmap` remain open.
 
+Acquisition freshness, 2026-11-07: Existing provider node-change generation
+is now sampled when a file area is requested, before area reuse. This closes
+the interval between a completed same-size write and the once-per-second
+change poll; invalidation still uses the one existing page-reclaim path.
+Host test failed before the change, then passed with ASan/UBSan and MC68040
+build. Native DE25 `fssem file-map` now acquires a second mapping immediately
+after a same-size write and checks both new and existing mappings, then
+truncate and refault. It passed; checked capture is under
+`/home/barry/astra-evidence/file-area-freshness-20261107/` on Beast. Haiku
+`src/system/kernel/cache/file_cache.cpp:760-820` holds its cache lock while
+satisfying I/O; Astra checks the provider generation before shared area
+lookup, using its existing HostFS change source.
+
 Provider recovery, 2026-11-07: Existing HostFS change invalidation now runs
 on provider-epoch transition before grant sessions reopen. A file area's
 provider epoch also participates in the reuse key, so successful reclaim

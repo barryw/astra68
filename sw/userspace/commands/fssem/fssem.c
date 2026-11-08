@@ -2078,9 +2078,9 @@ static int file_map_gate(const char *directory)
     AstraProcessFilesystem native = ASTRA_PROCESS_FILESYSTEM_INIT;
     AstraFile file = ASTRA_FILE_INIT;
     char path[192];
-    uint32_t area = 0u, mapped_size = 0u;
+    uint32_t area = 0u, fresh_area = 0u, mapped_size = 0u;
     uint64_t file_size = 0u;
-    void *mapping = NULL;
+    void *mapping = NULL, *fresh_mapping = NULL;
     int fd = -1, result = 2;
     const char *stage = "create";
 
@@ -2119,6 +2119,20 @@ static int file_map_gate(const char *directory)
     if (fd < 0 || pwrite(fd, "b", 1u, 0) != 1 || fsync(fd) != 0)
         goto done;
     close(fd); fd = -1;
+    stage = "fresh open";
+    if (astra_filesystem_open(&native.filesystem, path,
+        ASTRA_VFS_OPEN_READ, &file) != ASTRA_VFS_OK) goto done;
+    stage = "fresh area";
+    if (astra_filesystem_file_area(&file, 0u, sizeof(bytes),
+        &fresh_area, &file_size) != ASTRA_VFS_OK ||
+        file_size != sizeof(bytes)) goto done;
+    if (astra_filesystem_close(&file) != ASTRA_VFS_OK) goto done;
+    stage = "fresh map";
+    if (astra_rt_area_map(fresh_area, ASTRA_AREA_MAP_READ, &fresh_mapping,
+        &mapped_size) != ASTRA_SYSCALL_OK || mapped_size < sizeof(bytes))
+        goto done;
+    stage = "fresh contents";
+    if (((volatile const char *)fresh_mapping)[0] != 'b') goto done;
     stage = "invalidate";
     if (!wait_mapped_byte(mapping, 0u, 'b')) goto done;
     stage = "truncate";
@@ -2138,6 +2152,8 @@ static int file_map_gate(const char *directory)
     result = 0;
 done:
     if (fd >= 0) close(fd);
+    if (fresh_mapping != NULL) (void)astra_rt_area_unmap(fresh_mapping);
+    if (fresh_area != 0u) (void)astra_close(fresh_area);
     if (mapping != NULL) (void)astra_rt_area_unmap(mapping);
     if (area != 0u) (void)astra_close(area);
     if (file._private_client != NULL) (void)astra_filesystem_close(&file);

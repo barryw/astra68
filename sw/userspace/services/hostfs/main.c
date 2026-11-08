@@ -221,6 +221,7 @@ static uint32_t volume_noop_unmount(void *context)
 static AstraVfsPortService *grant_host(const HostfsGrant *grant);
 static int grant_retire(uint32_t at);
 static void file_areas_maintain(void);
+static void file_areas_observe_nodes(HostfsVolume *volume, uint64_t nodes);
 static void file_pager_stop_and_close(void);
 
 static uint32_t finish_hostfs(void)
@@ -864,6 +865,15 @@ static uint32_t hostfs_file_area(void *context,
         (void)ops->close(&backend, node);
         return status != ASTRA_VFS_OK ? status : ASTRA_VFS_ERR_INVALID;
     }
+    uint64_t nodes = 0u, entries = 0u;
+    status = astra_vfs_host_change_snapshot(&grant->owner->backend,
+                                            &nodes, &entries);
+    if (status != ASTRA_VFS_OK) {
+        (void)ops->close(&backend, node);
+        return status;
+    }
+    file_areas_observe_nodes(grant->owner, nodes);
+    file_areas_maintain();
     if (!astra_vfs_state_lock_acquire(&state_lock)) {
         (void)ops->close(&backend, node);
         return ASTRA_VFS_ERR_IO;
