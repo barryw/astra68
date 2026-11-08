@@ -24,7 +24,13 @@ were removed; selected release, production data, and services stayed intact,
 with only production loop0 and 8.5 GiB free. This covers cache hits for ordinary VFS reads;
 bulk/direct reads, ordinary writes, cache population on read miss, writable
 shared maps, and dirty writeback remain open. Physical USB replug was not
-performed.
+performed. A follow-up `fssem file-map` now checks an ordinary read after a
+mapped page becomes resident. Coherent Beast guest and a second guarded
+240-second DE25 trial each passed 1/1. Its image and console SHA-256 matched
+board and Beast (`d5d2dbcbf5151363b0e4922713a9f0dd4b93671b43c4b30891d582432b206f3d`,
+`e6dfc66cec6580de1e9b3f18ec40c96b0d78691457376e532c316a1d50c24153`);
+offline read-only `e2fsck` passed. Second trial files were removed; services,
+selected release, and production data stayed intact.
 
 Canonical file-area WIP, 2026-11-08: storage protocol 41 and
 `filesystem.library.17` give one reserved 128 MiB area per exact node chunk;

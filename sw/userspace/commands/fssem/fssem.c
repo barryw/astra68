@@ -2164,6 +2164,12 @@ static int file_map_gate(const char *directory)
     if (((volatile const char *)mapping)[0] != 'a' ||
         ((volatile const char *)mapping)[ASTRA_MEMORY_PAGE_SIZE] != 'a')
         goto done;
+    stage = "resident ordinary read";
+    fd = open(path, O_RDONLY);
+    char observed = 0;
+    if (fd < 0 || pread(fd, &observed, 1u, ASTRA_MEMORY_PAGE_SIZE) != 1 ||
+        observed != 'a') goto done;
+    close(fd); fd = -1;
     stage = "mutation";
     fd = open(path, O_WRONLY);
     if (fd < 0 || pwrite(fd, "b", 1u, 0) != 1 || fsync(fd) != 0)

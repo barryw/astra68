@@ -21,7 +21,10 @@ each passed 1/1. Post-trial image and console hashes matched board and Beast;
 offline read-only `e2fsck` passed. Evidence is under
 `/home/barry/astra-evidence/file-cache-read-20261108/`. Trial files were
 removed, selected release and production data preserved. USB replug was not
-performed. This
+performed. A follow-up native `fssem file-map` checks ordinary read after
+mapped fault; coherent Beast guest and a second 240-second DE25 trial passed
+1/1. Image and console hashes matched archived copies, offline `e2fsck`
+passed, and board trial state was removed. This
 is a read-hit slice, not the full ordinary-I/O or writable-cache contract.
 Haiku `src/system/kernel/cache/file_cache.cpp:745-850` guided resident-page
 reuse under vnode ownership; Astra preserves its userspace HostFS owner and
