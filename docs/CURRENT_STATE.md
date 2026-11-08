@@ -20,9 +20,15 @@ read rose from 31,156/60,126 to 38,961/125,209. Both 1,024-operation
 workloads completed without failed operations. Unconditional mutation-control
 exchange is too costly when no file mapping exists. Bounded `WOULD_BLOCK`
 reclaim retry after a committed provider write also needs a definitive
-completion policy. A native `disk list` check after USB replug returned
-repeated `ASTRA_ERROR_BUSY` from volume/usage snapshot agreement; diagnose
-whether this persists on the stable build.
+completion policy. A native `disk list` check under the trial returned
+repeated `ASTRA_ERROR_BUSY` from volume/usage snapshot agreement. After
+restoring stable HostFS and Filesystem Kit binaries, the same command listed
+both replugged USB partitions mounted read/write at `/usb0` and `/usb2`.
+The trial-only busy result has not been assigned a cause. The trial commands,
+benchmark report, RFB helper, and captures were removed from DE25 after
+archiving checked evidence on Beast. Astra, HDMI audio, and remote desktop
+remain active with zero Astra restarts, only production loop0, and 8.5 GiB
+free. The WIP code is pushed but not merged to main or selected on DE25.
 
 Read-only POSIX file mapping, 2026-11-07: `libc.library` now maps file-backed
 `PROT_READ` with `MAP_SHARED` or `MAP_PRIVATE` through the existing native
