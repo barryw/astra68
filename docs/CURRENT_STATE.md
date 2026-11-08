@@ -10,11 +10,14 @@ bounded-drain overflow stale the whole volume. This removes the earlier
 unconditional whole-volume invalidation before exact records were read.
 Focused HostFS test, ASan/UBSan, and MC68040 HostFS build passed on Beast.
 Current DE25 selected release remains unchanged; board RFB shows both
-`CLIFAT` and `CLIEXFAT` after USB reattachment, with Astra, audio host, and
-remote desktop active and 8.5 GiB free. Current boot log lacks a USB
+`CLIFAT` and `CLIEXFAT` after USB reattachment. Double-clicking `CLIFAT`
+opened Atlas at `/usb2` and enumerated its `ChocolateDoom.` item. Astra,
+audio host, and remote desktop remain active with zero Astra restarts and
+8.5 GiB free. Current boot log lacks a USB
 disconnect event, so this confirms mounted state, not timing of that cable
 cycle. RFB SHA-256 `7e2a3a9c48d1f6f10b64c31ba92c9cc2d6a07181fe1c49ed5babe0c6f8c3d687`
-is archived at `/home/barry/astra-evidence/file-cache-node-invalidation-20261108/`
+and Atlas SHA-256 `3393ae6d93f3f9f4c7c6c94a24a04fff8ea3a09392d15b09f98f2763a8ac1761`
+are archived at `/home/barry/astra-evidence/file-cache-node-invalidation-20261108/`
 on Beast. WIP change still needs a guest and guarded DE25 trial. Haiku
 `src/system/kernel/cache/file_cache.cpp:760-820` retains vnode cache identity
 while ordering I/O, and `src/system/kernel/fs/node_monitor.cpp` routes node
