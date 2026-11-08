@@ -3,9 +3,29 @@
 Status: design contract; VFS description-retention, metadata, VM page
 publication, and read-only HostFS file areas passed host and DE25 gates.
 The existing pressure worker reclaims clean read-only pager frames on DE25.
-Ordinary I/O still does not share mapped resident frames; dirty writeback,
+Ordinary writes and read misses still bypass mapped resident frames; dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
+
+Resident ordinary-read slice, 2026-11-08: native area syscall 120 copies from
+one resident page through READ authority, returning WOULD_BLOCK on an absent
+page without triggering a pager fault in HostFS. HostFS ordinary reads consult
+the exact-node area only while its provider generation, node identity, and
+revision remain stable; cache misses and changed files use the original
+backend read. Kernel, runtime, and HostFS host tests and HostFS sanitizer
+pass. Beast target kernel/HostFS builds, NDK `dist-check`, K1 QEMU, and
+coherent Beast guest `fssem file-map` passed. Private DE25 release
+`ab446f5ee4de4727b35ce37c0f96667be582d43d33415afd7c6a1b2576f35172`
+ran 300 seconds at stage 8; native `fssem file-map` and `fssem area-range`
+each passed 1/1. Post-trial image and console hashes matched board and Beast;
+offline read-only `e2fsck` passed. Evidence is under
+`/home/barry/astra-evidence/file-cache-read-20261108/`. Trial files were
+removed, selected release and production data preserved. USB replug was not
+performed. This
+is a read-hit slice, not the full ordinary-I/O or writable-cache contract.
+Haiku `src/system/kernel/cache/file_cache.cpp:745-850` guided resident-page
+reuse under vnode ownership; Astra preserves its userspace HostFS owner and
+native area frames.
 
 Canonical file-area WIP, 2026-11-08: storage protocol 41 and
 `filesystem.library.17` return a fixed 128 MiB owner chunk for each requested

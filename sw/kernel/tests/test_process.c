@@ -8497,6 +8497,15 @@ static void test_bound_area_fault_calls_pager(void)
                      target, ASTRA_AREA_MAP_READ, 0u, 0u, 0u) ==
            KERNEL_PROCESS_OK);
     target_base = next->data[1];
+    assert(test_trap(stack, frame, &next,
+                     ASTRA_SYSCALL_AREA_READ_RESIDENT, target, 0u,
+                     source_base + 64u, 5u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_WOULD_BLOCK);
+    assert(test_trap(stack, frame, &next,
+                     ASTRA_SYSCALL_AREA_READ_RESIDENT, target,
+                     KERNEL_PAGE_SIZE - 1u, source_base + 64u, 5u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_THREAD_CREATE,
                      KERNEL_PROCESS_CODE_BASE + 2u, 0u,
                      KERNEL_THREAD_PRIORITY_NORMAL - 1u,
@@ -8567,6 +8576,13 @@ static void test_bound_area_fault_calls_pager(void)
     assert(kernel_thread_at(0u)->context.program_counter ==
            KERNEL_PROCESS_CODE_BASE);
     assert(kernel_user_copy_from_asm(bytes, target_base, sizeof(bytes)) ==
+           KERNEL_USER_COPY_OK);
+    assert(memcmp(bytes, "fresh", 5u) == 0);
+    assert(test_trap(stack, frame, &next,
+                     ASTRA_SYSCALL_AREA_READ_RESIDENT, target, 0u,
+                     source_base + 64u, 5u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(bytes, source_base + 64u, 5u) ==
            KERNEL_USER_COPY_OK);
     assert(memcmp(bytes, "fresh", 5u) == 0);
     assert(kernel_process_stats(&stats) && stats.user_faults == 0u);

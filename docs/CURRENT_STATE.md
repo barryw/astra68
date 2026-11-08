@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-11-08
 
+Resident ordinary-read slice, 2026-11-08: native syscall 120 copies from one
+already resident area page through READ authority without raising a pager
+fault. HostFS ordinary reads use those bytes only for an exact live node area
+and only if provider change generation, node identity, and revision remain
+stable through the copy. A miss or change falls back to the original provider
+read. Kernel process, runtime, and HostFS host tests pass; HostFS sanitizer
+passes. Beast target kernel and HostFS builds, NDK `dist-check`, and 16-marker
+K1 QEMU gate passed; syscall dispatch max was 2,993/50,000 cycles. A coherent
+Beast guest passed `fssem file-map`. Private DE25 release
+`ab446f5ee4de4727b35ce37c0f96667be582d43d33415afd7c6a1b2576f35172`
+ran 300 seconds at stage 8. Native Terminal passed `fssem file-map` and
+`fssem area-range`, each 1/1; Atlas enumerated `/apps` in RFB. Board and Beast
+post-trial image SHA-256 matched
+`b9deddae7a4ed11de16d8a989f9b1bb48fba53dcff1e5581d88e501885f68eea`;
+console SHA-256 matched
+`9edce44ee47c11d1228aa638f5612ff321d5696b5a0171714fe341484481754b`.
+Offline read-only `e2fsck` passed. Evidence is archived under
+`/home/barry/astra-evidence/file-cache-read-20261108/` on Beast. Trial files
+were removed; selected release, production data, and services stayed intact,
+with only production loop0 and 8.5 GiB free. This covers cache hits for ordinary VFS reads;
+bulk/direct reads, ordinary writes, cache population on read miss, writable
+shared maps, and dirty writeback remain open. Physical USB replug was not
+performed.
+
 Canonical file-area WIP, 2026-11-08: storage protocol 41 and
 `filesystem.library.17` give one reserved 128 MiB area per exact node chunk;
 overlapping windows now name the same owner. POSIX read-only `mmap` maps only
@@ -89,9 +113,9 @@ are archived with trial console, frames, image, and paired private state at
 while ordering I/O, and `src/system/kernel/fs/node_monitor.cpp` routes node
 events; Astra retains its one HostFS area owner and existing change stream.
 
-Active file-cache blocker, 2026-11-08: ordinary VFS read/write still bypass
-resident mapped frames. Canonical chunk ownership now exists for exact nodes,
-but VFS I/O does not address those frames yet. Writable shared
+Active file-cache blocker, 2026-11-08: ordinary VFS reads now consult exact
+resident pages when available, but misses, bulk reads, and writes still bypass
+those frames. Canonical chunk ownership exists for exact nodes. Writable shared
 pages then need a first-write trap, dirty state, bounded writeback, and
 conflict handling; the existing filesystem change topic remains the only
 external invalidation feed. See `docs/FILE_CACHE_DESIGN.md` for the inspected

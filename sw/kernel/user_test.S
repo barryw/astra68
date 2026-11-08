@@ -869,6 +869,17 @@ _k1_survivor_image_entry:
 	tst.l   %d3
 	bne     .Lmain_fail
 
+	| The ordinary-read cache path must miss without invoking the pager.
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d3
+	addq.l  #8, %d3
+	move.l  #192, %d4
+	moveq   #ASTRA_SYSCALL_AREA_READ_RESIDENT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	cmpi.l  #ASTRA_SYSCALL_WOULD_BLOCK, %d0
+	bne     .Lmain_fail
+
 	move.l  #KERNEL_QUALIFICATION_CODE_BASE + \
 		(.Lpager_service_thread - _k1_survivor_image_start), %d1
 	move.l  #KERNEL_QUALIFICATION_PAGER_ARGUMENT, %d2
@@ -888,6 +899,24 @@ _k1_survivor_image_entry:
 	tst.b   5(%a1)
 	bne     .Lmain_fail
 	tst.b   4095(%a1)
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d3
+	addq.l  #8, %d3
+	move.l  #192, %d4
+	moveq   #ASTRA_SYSCALL_AREA_READ_RESIDENT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	movea.l KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %a1
+	cmpi.l  #0x50414745, 8(%a1)
+	bne     .Lmain_fail
+	cmpi.b  #0x21, 12(%a1)
+	bne     .Lmain_fail
+	tst.b   13(%a1)
+	bne     .Lmain_fail
+	tst.b   199(%a1)
 	bne     .Lmain_fail
 	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
 	moveq   #0, %d2

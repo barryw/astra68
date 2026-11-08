@@ -284,6 +284,16 @@ uint32_t astra_rt_area_references(uint32_t area, uint32_t *handles,
     return result.status;
 }
 
+uint32_t astra_rt_area_read_resident(uint32_t area, uint32_t offset,
+                                    void *destination, uint32_t length)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_AREA_READ_RESIDENT, area, offset,
+                   (uint32_t)(uintptr_t)destination, length, 0u, &result);
+    return result.status;
+}
+
 uint32_t astra_rt_area_reclaim(uint32_t area, uint32_t offset,
                                uint32_t byte_size, uint32_t *released_pages)
 {

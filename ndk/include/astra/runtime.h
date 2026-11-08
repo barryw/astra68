@@ -274,6 +274,16 @@ uint32_t astra_rt_area_bind_pager(uint32_t area, uint32_t port,
  */
 uint32_t astra_rt_area_references(uint32_t area, uint32_t *handles,
                                   uint32_t *mappings, uint32_t *children);
+/**
+ * Copy bytes from an already resident page without raising a pager fault.
+ * @param area Area handle with READ authority.
+ * @param offset Byte offset within one area page.
+ * @param destination Writable buffer for the copied bytes.
+ * @param length Nonzero byte count contained in that page.
+ * @return ASTRA_SYSCALL_OK, WOULD_BLOCK for an absent page, or an error.
+ */
+uint32_t astra_rt_area_read_resident(uint32_t area, uint32_t offset,
+                                    void *destination, uint32_t length);
 /** Reclaim clean pages of a pager-bound area through ADMINISTER authority.
  * In-flight page faults return WOULD_BLOCK; caller keeps its backing source.
  * @param area Pager-bound area handle with ADMINISTER rights.

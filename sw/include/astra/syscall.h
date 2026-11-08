@@ -1096,12 +1096,19 @@
 #define ASTRA_SYSCALL_AREA_RECLAIM    118
 /**
  * Maps a shared-table-aligned subrange of an area. data[1] is the area handle,
- * data[2] the ASTRA_AREA_MAP_* permissions, data[3] a 4 MiB-aligned source
- * offset, and data[4] the view length. The length must be a multiple of 4 MiB
- * unless it reaches the area's end. Returns base in data[1] and view length
- * in data[2].
+ * data[2] the ASTRA_AREA_MAP_* permissions, data[3] a 256 KiB-aligned source
+ * offset, data[4] the view length, and data[5] an optional exact virtual base.
+ * The length must be a multiple of 256 KiB unless it reaches the area's end.
+ * Returns base in data[1] and view length in data[2].
  */
 #define ASTRA_SYSCALL_AREA_MAP_RANGE  119
+/**
+ * Copy bytes from one resident page of an area through a READ handle.
+ * data[1] is the area, data[2] its byte offset, data[3] a user destination,
+ * and data[4] the length. The range must lie in one 4 KiB page. An absent
+ * pager page returns WOULD_BLOCK without faulting or touching destination.
+ */
+#define ASTRA_SYSCALL_AREA_READ_RESIDENT 120
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */
