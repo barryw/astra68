@@ -14,8 +14,21 @@ opens. Exact-node notifications and local mutations conservatively invalidate
 them; the existing provider revision checks still guard each page read.
 Focused HostFS and VFS pager tests, HostFS ASan/UBSan, and MC68040 HostFS/VFS
 builds passed on Beast. A disposable Beast guest passed `fssem file-map` and
-`volume-catalog`, followed by provider `e2fsck`. DE25 qualification of this
-change is pending.
+`volume-catalog`, followed by provider `e2fsck`. A guarded DE25 private trial
+reached stage 8; native Terminal reported `FSSEM DONE passed 1 failed 0` for
+`fssem file-map`, and `disk list` showed both USB partitions mounted read/write.
+The trial image passed read-only `e2fsck`; selected release and production
+data were preserved. Checked console and RFB evidence is under
+`/home/barry/astra-evidence/file-cache-unknown-identity-de25-20261108/` on
+Beast. Trial state was removed from DE25 after verification.
+
+One intervening trial boot panicked when HostFS could not find its settings:
+the first boot migrated configuration from the image into private host state,
+then the next trial copied only the image into a new empty host-state root.
+That root received the migration marker without the moved settings. The same
+post-boot image reproduced `hostfs status=2` on Beast. Pairing the image with
+its private `state/system` directory fixed the reboot; the final DE25 trial
+passed. Keep the two together for any repeated private trial.
 Haiku `src/system/kernel/cache/file_cache.cpp:1273-1327` attaches a VM cache to
 a vnode; Astra keeps the provider description as the safe owner when no
 stable cross-open vnode identity exists.

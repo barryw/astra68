@@ -8,8 +8,19 @@ metadata lacks a complete identity. It shares across opens only for complete
 volume/inode/generation identity. Exact-node notifications and local mutation
 reclaim include identity-poor areas. Focused HostFS and VFS pager tests,
 HostFS ASan/UBSan, and MC68040 HostFS/VFS builds passed on Beast. Hardware
-guest `fssem file-map` and `volume-catalog` also passed with provider `e2fsck`;
-DE25 gate remains pending. Haiku `src/system/kernel/cache/file_cache.cpp:1273-1327`
+guest `fssem file-map` and `volume-catalog` also passed with provider `e2fsck`.
+Guarded DE25 trial reached stage 8; Terminal `fssem file-map` passed 1/1 and
+`disk list` showed both USB partitions mounted read/write. Trial image passed
+read-only `e2fsck`. The wrapper restored selected release; all three services
+are active with zero Astra restarts, one production loop, and 8.5 GiB free
+after trial cleanup. Checked evidence is under
+`/home/barry/astra-evidence/file-cache-unknown-identity-de25-20261108/`.
+An intervening reboot trial panicked with `hostfs status=2` because its image
+was copied without the private config state created by first-boot migration.
+The image alone reproduced the failure on Beast. Retrying with the paired
+`state/system` directory passed; this was a trial setup error, not a random
+kernel fault. Keep migrated image and host state together on repeat trials.
+Haiku `src/system/kernel/cache/file_cache.cpp:1273-1327`
 guided vnode/cache ownership; Astra uses description scope where its provider
 cannot supply a stable vnode identity.
 
