@@ -18,6 +18,9 @@ static uint32_t open_file_identity_valid = 1u;
 static uint32_t file_closes, area_reclaims, area_binds, area_duplicates;
 static uint32_t writes, truncates, opens;
 static uint64_t node_sequence;
+static uint64_t changed_inode = 7u;
+static int change_gap;
+static uint32_t changed_kind = ASTRA_HOST_FS_CHANGE_NODE;
 static uint32_t snapshot_calls;
 uint32_t astra_log(const char *text) { (void)text; return ASTRA_SYSCALL_OK; }
 uint64_t astra_clock_monotonic(void) { return 1u; }
@@ -30,6 +33,20 @@ uint32_t astra_vfs_host_change_snapshot(AstraVfsHostBackend *backend,
 {
     assert(backend != NULL && nodes != NULL && entries != NULL);
     *nodes = node_sequence; *entries = 0u; ++snapshot_calls;
+    return ASTRA_VFS_OK;
+}
+uint32_t astra_vfs_host_change_next(AstraVfsHostBackend *backend,
+    uint64_t *cursor, AstraHostFsChangeRecord *record, uint32_t *kind)
+{
+    assert(backend != NULL && cursor != NULL && record != NULL && kind != NULL);
+    if (*cursor < node_sequence) {
+        ++*cursor;
+        *kind = change_gap ? ASTRA_HOST_FS_CHANGE_GAP : changed_kind;
+        *record = (AstraHostFsChangeRecord){.sequence = *cursor,
+            .nodes = *cursor, .inode = changed_inode, .kind = *kind};
+    } else {
+        *kind = ASTRA_HOST_FS_CHANGE_NONE;
+    }
     return ASTRA_VFS_OK;
 }
 int astra_vfs_state_lock_acquire(void *context)
@@ -187,6 +204,38 @@ static void settings(uint64_t files, uint64_t sessions, uint64_t messages, const
 }
 int main(void)
 {
+    HostfsVolume change_owner = {0};
+    HostfsGrant change_grant = {.owner = &change_owner};
+    HostfsFileArea other = {.grant = &change_grant,
+        .source.identity = {.valid = ASTRA_VFS_META_VOLUME |
+            ASTRA_VFS_META_INODE | ASTRA_VFS_META_GENERATION,
+            .volume = 1u, .inode = 999u}};
+    HostfsFileArea changed = {.next = &other, .grant = &change_grant,
+        .source.identity = {.valid = ASTRA_VFS_META_VOLUME |
+            ASTRA_VFS_META_INODE | ASTRA_VFS_META_GENERATION,
+            .volume = 1u, .inode = 1234u}};
+    file_areas = &changed;
+    changed_inode = 1234u;
+    node_sequence = 1u;
+    assert(file_areas_observe_nodes(&change_owner, 1u));
+    assert(changed.stale && !other.stale);
+    changed.stale = 0u;
+    changed_kind = ASTRA_HOST_FS_CHANGE_ENTRY_CREATED;
+    node_sequence = 2u;
+    assert(file_areas_observe_nodes(&change_owner, 2u));
+    assert(!changed.stale && !other.stale);
+    change_gap = 1;
+    node_sequence = 3u;
+    assert(file_areas_observe_nodes(&change_owner, 3u));
+    assert(changed.stale && other.stale);
+    changed.stale = other.stale = 0u;
+    assert(file_areas_observe_nodes(&change_owner, 4u));
+    assert(changed.stale && other.stale);
+    file_areas = NULL;
+    node_sequence = 0u;
+    change_gap = 0;
+    changed_kind = ASTRA_HOST_FS_CHANGE_NODE;
+    changed_inode = 7u;
     /* A shared delegated root reports all actual HELLO owners, never the
        Supervisor creation requester. Duplicate sessions do not duplicate a
        process, and a page can stop inside the shared root's holder list. */

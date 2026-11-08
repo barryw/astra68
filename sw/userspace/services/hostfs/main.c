@@ -102,6 +102,7 @@ typedef struct HostfsVolume {
     AstraVfsService service;
     AstraVfsChangeSnapshot published_changes;
     uint64_t published_change_sequence;
+    uint64_t observed_cache_sequence;
     uint64_t observed_cache_nodes;
     AstraVfsSessionSlot sessions[ASTRA_VFS_SESSION_MAX];
     AstraVfsPortService port;
@@ -223,7 +224,7 @@ static uint32_t volume_noop_unmount(void *context)
 static AstraVfsPortService *grant_host(const HostfsGrant *grant);
 static int grant_retire(uint32_t at);
 static void file_areas_maintain(void);
-static void file_areas_observe_nodes(HostfsVolume *volume, uint64_t nodes);
+static int file_areas_observe_nodes(HostfsVolume *volume, uint64_t nodes);
 static void file_pager_stop_and_close(void);
 
 static uint32_t finish_hostfs(void)
@@ -873,7 +874,10 @@ static uint32_t hostfs_file_area(void *context,
         (void)ops->close(&backend, node);
         return status;
     }
-    file_areas_observe_nodes(grant->owner, nodes);
+    if (!file_areas_observe_nodes(grant->owner, nodes)) {
+        (void)ops->close(&backend, node);
+        return ASTRA_VFS_ERR_BUSY;
+    }
     file_areas_maintain();
     if (!astra_vfs_state_lock_acquire(&state_lock)) {
         (void)ops->close(&backend, node);
@@ -961,11 +965,36 @@ static int file_areas_invalidate(HostfsVolume *volume, uint32_t kind,
     return 1;
 }
 
-static void file_areas_observe_nodes(HostfsVolume *volume, uint64_t nodes)
+static int file_areas_observe_nodes(HostfsVolume *volume, uint64_t nodes)
 {
-    if (nodes != volume->observed_cache_nodes &&
-        file_areas_invalidate(volume, ASTRA_HOST_FS_CHANGE_GAP, 0u))
-        volume->observed_cache_nodes = nodes;
+    for (uint32_t limit = 0u; limit < 8u; ++limit) {
+        AstraHostFsChangeRecord record = {0};
+        uint64_t cursor = volume->observed_cache_sequence;
+        uint32_t kind;
+        if (astra_vfs_host_change_next(&volume->backend, &cursor,
+                &record, &kind) != ASTRA_VFS_OK)
+            break;
+        if (kind == ASTRA_HOST_FS_CHANGE_NODE &&
+            !file_areas_invalidate(volume, kind, record.inode))
+            return 0;
+        if (kind == ASTRA_HOST_FS_CHANGE_GAP ||
+            (kind == ASTRA_HOST_FS_CHANGE_NONE &&
+             nodes != volume->observed_cache_nodes)) {
+            if (!file_areas_invalidate(volume, ASTRA_HOST_FS_CHANGE_GAP, 0u))
+                return 0;
+            volume->observed_cache_nodes = nodes;
+        } else if (kind != ASTRA_HOST_FS_CHANGE_NONE) {
+            volume->observed_cache_nodes = record.nodes;
+        }
+        volume->observed_cache_sequence = cursor;
+        if (kind == ASTRA_HOST_FS_CHANGE_GAP ||
+            kind == ASTRA_HOST_FS_CHANGE_NONE)
+            return 1;
+    }
+    if (!file_areas_invalidate(volume, ASTRA_HOST_FS_CHANGE_GAP, 0u))
+        return 0;
+    volume->observed_cache_nodes = nodes;
+    return 1;
 }
 
 static void file_areas_maintain(void)

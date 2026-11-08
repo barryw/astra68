@@ -7,6 +7,17 @@ Ordinary I/O still does not share mapped resident frames; dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Exact change retirement, 2026-11-08: HostFS now has a cache cursor separate
+from reliable broker delivery and drains the existing per-namespace change
+ring before area reuse. NODE invalidates matching inode areas, while
+incomplete identities, GAP, missing records, and bounded-drain overflow stay
+conservative. The previous generation observer invalidated every mapped file
+before reading exact records. Beast HostFS test, ASan/UBSan, and MC68040 build
+pass; guest and DE25 candidate gates remain. Haiku
+`src/system/kernel/cache/file_cache.cpp:760-820` keeps identity and I/O
+ordering under one cache owner; Astra uses its existing HostFS area owner and
+change stream, without a second notification path.
+
 Incomplete-identity mappings, 2026-11-07: HostFS now permits a retained
 description to back a read-only file area even when the provider cannot report
 the full volume/inode/birth-generation identity. Such areas never share across
