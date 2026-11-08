@@ -219,6 +219,8 @@ typedef uint32_t (*AstraVfsPortConfigCrypt)(void *context,
 typedef uint32_t (*AstraVfsPortFileArea)(void *context,
     const AstraVfsPortGrant *grant, uint32_t requester, uint64_t token,
     uint64_t base, uint32_t span, uint32_t *area, uint64_t *file_size);
+typedef uint32_t (*AstraVfsPortFileMutated)(void *context,
+    const AstraVfsPortGrant *grant, uint64_t token);
 
 typedef struct AstraVfsPortService {
     uint32_t receive;
@@ -239,6 +241,8 @@ typedef struct AstraVfsPortService {
     void *config_crypt_context;
     AstraVfsPortFileArea file_area;
     void *file_area_context;
+    AstraVfsPortFileMutated file_mutated;
+    void *file_mutated_context;
     uint32_t reply_sessions[ASTRA_VFS_SESSION_MAX];
     uint32_t reply_lanes[ASTRA_VFS_SESSION_MAX];
     uint32_t reply_handles[ASTRA_VFS_SESSION_MAX];
@@ -268,6 +272,9 @@ int astra_vfs_port_service_set_config_crypt(AstraVfsPortService *host,
     AstraVfsPortConfigCrypt crypt, void *context);
 int astra_vfs_port_service_set_file_area(AstraVfsPortService *host,
     AstraVfsPortFileArea file_area, void *context);
+int astra_vfs_port_service_set_file_mutated(AstraVfsPortService *host,
+    AstraVfsPortFileMutated file_mutated, void *context);
+uint32_t astra_vfs_file_mutated_node(AstraVfsClient *client, uintptr_t node);
 
 /* Handles at most `budget` requests and returns how many it answered. */
 uint32_t astra_vfs_port_service_pump(AstraVfsPortService *host,

@@ -2854,9 +2854,127 @@ static void test_read_path_failures(void)
     assert(node->open_count == 0 && fake.closes == 4u);
 }
 
+static uint32_t mutation_calls, mutation_discards, mutation_closes,
+    mutation_reply;
+
+static uint32_t mutation_open(void *context, const char *path, uint32_t flags,
+    uint16_t mode, uintptr_t *node, AstraVfsNodeInfo *info)
+{
+    (void)context; (void)mode;
+    assert(strcmp(path, "/mapped") == 0 &&
+           (flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u);
+    *node = 7u;
+    info->kind = ASTRA_VFS_KIND_FILE;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t mutation_close(void *context, uintptr_t node)
+{ (void)context; assert(node == 7u); ++mutation_closes;
+  return ASTRA_VFS_OK; }
+
+static uint32_t mutation_write(void *context, uintptr_t node, uint64_t offset,
+    uint32_t flags, uint64_t limit, const void *bytes, uint32_t length,
+    uint32_t *moved, uint64_t *position)
+{
+    (void)context; (void)flags; (void)limit;
+    assert(node == 7u && offset == 0u && length == 1u &&
+           ((const char *)bytes)[0] == 'x');
+    *moved = 1u; *position = 1u;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t mutation_share(void *context, uintptr_t node, uint64_t *token)
+{
+    (void)context;
+    assert(node == 7u);
+    *token = 91u;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t mutation_adopt(void *context, uint64_t token,
+    uint32_t flags, uintptr_t *node)
+{
+    (void)context; (void)node;
+    assert(token == 91u && flags == ASTRA_VFS_ADOPT_DISCARD);
+    ++mutation_discards;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t mutation_truncate(void *context, uintptr_t node, uint64_t size)
+{
+    (void)context;
+    assert(node == 7u && size == 1u);
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t mutation_transport(void *context, uint32_t operation,
+    const AstraVfsRequest *request, const AstraVfsTransfer *transfer,
+    AstraVfsReply *reply)
+{
+    (void)context; (void)transfer;
+    assert(operation == ASTRA_VFS_OP_FILE_MUTATED &&
+           request->file == ASTRA_VFS_FILE_INVALID && request->offset == 91u &&
+           request->session == 4u && request->activity == 5u);
+    ++mutation_calls;
+    reply->status = mutation_reply;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t mutation_enter(AstraVfsClient *client)
+{ (void)client; return ASTRA_VFS_OK; }
+static void mutation_leave(AstraVfsClient *client)
+{ (void)client; }
+
+static void test_direct_truncate_waits_for_mutation_barrier(void)
+{
+    static const AstraVfsBackendOps ops = {
+        .open = mutation_open, .close = mutation_close,
+        .write = mutation_write,
+        .share = mutation_share, .adopt = mutation_adopt,
+        .truncate = mutation_truncate};
+    AstraVfsClient client = {0};
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    uint32_t moved = 0u;
+    uint64_t position = 0u;
+
+    client.transport = mutation_transport;
+    client.direct_backend_ops = &ops;
+    client.direct_backend_context = &client;
+    client.direct_backend_enter = mutation_enter;
+    client.direct_backend_leave = mutation_leave;
+    client.features = ASTRA_VFS_FEATURE_FILE_AREAS;
+    client.version = ASTRA_VFS_VERSION;
+    client.session = 4u;
+    client.activity = 5u;
+    mutation_calls = mutation_discards = mutation_closes = 0u;
+    mutation_reply = ASTRA_VFS_OK;
+    assert(astra_vfs_open(&client, "/mapped",
+        ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_TRUNCATE,
+        &file, NULL, NULL) == ASTRA_VFS_OK && file == 7u);
+    assert(mutation_calls == 1u);
+    assert(astra_vfs_write_position(&client, file, 0u, 0u, UINT64_MAX,
+        "x", 1u, &moved, &position) == ASTRA_VFS_OK);
+    assert(moved == 1u && position == 1u && mutation_calls == 2u);
+    assert(astra_vfs_truncate(&client, 7u, 1u) == ASTRA_VFS_OK);
+    assert(mutation_calls == 3u && mutation_discards == 0u);
+    mutation_reply = ASTRA_VFS_ERR_BUSY;
+    assert(astra_vfs_open(&client, "/mapped",
+        ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_TRUNCATE,
+        &file, NULL, NULL) == ASTRA_VFS_ERR_BUSY);
+    assert(mutation_closes == 1u);
+    assert(astra_vfs_write_position(&client, 7u, 0u, 0u, UINT64_MAX,
+        "x", 1u, &moved, &position) == ASTRA_VFS_ERR_BUSY);
+    assert(astra_vfs_truncate(&client, 7u, 1u) == ASTRA_VFS_ERR_BUSY);
+    assert(mutation_calls == 6u && mutation_discards == 3u);
+    client.features = 0u;
+    assert(astra_vfs_truncate(&client, 7u, 1u) == ASTRA_VFS_OK);
+    assert(mutation_calls == 6u);
+}
+
 int
 main(void)
 {
+    test_direct_truncate_waits_for_mutation_barrier();
     test_session_observer();
     test_read_path_failures();
     test_mount_shutdown();

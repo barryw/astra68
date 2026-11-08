@@ -70,6 +70,40 @@ begin_request(AstraVfsClient *client, AstraVfsRequest *request, uint16_t size)
     request->activity = client->activity;
 }
 
+uint32_t astra_vfs_file_mutated_node(AstraVfsClient *client, uintptr_t node)
+{
+    AstraVfsRequest request;
+    AstraVfsReply reply = {0};
+    uint64_t token = 0u;
+    uint32_t status;
+
+    if (client == NULL || client->direct_backend_ops == NULL ||
+        client->direct_backend_context == NULL || client->transport == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    if ((client->features & ASTRA_VFS_FEATURE_FILE_AREAS) == 0u)
+        return ASTRA_VFS_OK;
+    if (client->direct_backend_ops->share == NULL ||
+        client->direct_backend_ops->adopt == NULL)
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    status = client->direct_backend_ops->share(
+        client->direct_backend_context, node, &token);
+    if (status != ASTRA_VFS_OK) return status;
+    if (token == 0u) return ASTRA_VFS_ERR_PROTOCOL;
+    begin_request(client, &request, ASTRA_VFS_REQUEST_SIZE);
+    request.file = ASTRA_VFS_FILE_INVALID;
+    request.offset = token;
+    status = client->transport(client, ASTRA_VFS_OP_FILE_MUTATED,
+                               &request, NULL, &reply);
+    if (status == ASTRA_VFS_OK)
+        status = reply.status;
+    if (status != ASTRA_VFS_OK) {
+        uintptr_t discarded = 0u;
+        (void)client->direct_backend_ops->adopt(client->direct_backend_context,
+            token, ASTRA_VFS_ADOPT_DISCARD, &discarded);
+    }
+    return status;
+}
+
 static AstraVfsCallState *
 begin(AstraVfsClient *client)
 {
@@ -294,10 +328,14 @@ open_mode_at(AstraVfsClient *client, AstraVfsFile directory, const char *path,
             ops->open(context, path, flags, create_mode, &node, &info) :
             ops->open_at(context, directory, path, flags, create_mode, &node,
                          &info);
+        if (status == ASTRA_VFS_OK &&
+            (flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u)
+            status = astra_vfs_file_mutated_node(client, node);
         if (status == ASTRA_VFS_OK && node > (uintptr_t)UINT32_MAX) {
-            (void)ops->close(context, node);
             status = ASTRA_VFS_ERR_PROTOCOL;
         }
+        if (status != ASTRA_VFS_OK && node != 0u)
+            (void)ops->close(context, node);
         backend_leave(client);
         if (status != ASTRA_VFS_OK)
             return status;
@@ -629,6 +667,8 @@ astra_vfs_write_position(AstraVfsClient *client, AstraVfsFile file,
             return status;
         status = ops->write(context, file, offset, flags, max_end, buffer, length,
                             moved, position);
+        if (status == ASTRA_VFS_OK && *moved != 0u)
+            status = astra_vfs_file_mutated_node(client, file);
         backend_leave(client);
         return status == ASTRA_VFS_OK && *moved > length ?
             ASTRA_VFS_ERR_PROTOCOL : status;
@@ -725,6 +765,8 @@ astra_vfs_truncate(AstraVfsClient *client, AstraVfsFile file, uint64_t size)
         if (status != ASTRA_VFS_OK)
             return status;
         status = ops->truncate(context, file, size);
+        if (status == ASTRA_VFS_OK)
+            status = astra_vfs_file_mutated_node(client, file);
         backend_leave(client);
         return status;
     }

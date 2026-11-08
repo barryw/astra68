@@ -23,8 +23,17 @@ to its userspace VFS service and kernel area owner.
 DE25 pre-change `fsbench` measured 1,024 random 4 KiB operations per mode:
 read median/p95 31,156/60,126 MC68040 cycles, write 32,260/68,657 cycles.
 The `--cleanup` option removed its fixture directory after reporting, and
-the report was removed after an RFB capture. The same `rand-read` and
-`rand-write` workloads must run after the write-path change.
+the report was removed after an RFB capture. Post-change DE25 `fssem file-map`
+passed immediate write, truncate, and extension/refault. `rand-read` and
+`rand-write` each completed 1,024 operations without failures. Random read
+median/p95 rose to 38,961/125,209 cycles; write rose to
+736,354/1,519,407 cycles. The unconditional grant-control mutation exchange
+costs too much when no mapping exists, so this remains an unselected
+correctness trial. Bounded reclaim retry also needs a definitive outcome when
+a write has committed but an in-flight pager fault prevents revocation.
+Native direct and accelerated bulk operations plus ordinary service calls all
+reach the existing HostFS file-area owner. Do not reintroduce a separate cache
+or an asynchronous-only local write path.
 
 Read-only POSIX file mapping, 2026-11-07: `libc.library` now adapts
 `mmap` with `PROT_READ` and either `MAP_SHARED` or `MAP_PRIVATE` to the

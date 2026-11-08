@@ -458,6 +458,12 @@ uint32_t astra_vfs_host_direct_transport(
         reply->status = ops->open(
             backend.context, paths.first,
             request->flags, create_mode, &node, &info);
+        if (reply->status == ASTRA_VFS_OK &&
+            (request->flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u) {
+            reply->status = astra_vfs_file_mutated_node(client, node);
+            if (reply->status != ASTRA_VFS_OK)
+                (void)ops->close(backend.context, node);
+        }
         if (reply->status == ASTRA_VFS_OK) {
             reply->file = (AstraVfsFile)node;
             astra_vfs_node_info_publish(reply, &info);
@@ -490,6 +496,12 @@ uint32_t astra_vfs_host_direct_transport(
             backend.context, request->file,
             paths.first, request->flags, create_mode,
             &node, &info);
+        if (reply->status == ASTRA_VFS_OK &&
+            (request->flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u) {
+            reply->status = astra_vfs_file_mutated_node(client, node);
+            if (reply->status != ASTRA_VFS_OK)
+                (void)ops->close(backend.context, node);
+        }
         if (reply->status == ASTRA_VFS_OK) {
             reply->file = (AstraVfsFile)node;
             astra_vfs_node_info_publish(reply, &info);
@@ -521,6 +533,9 @@ uint32_t astra_vfs_host_direct_transport(
             backend.context, request->file, request->offset, request->flags, request->write_limit,
             request->body.payload, request->length, &reply->count,
             &position);
+        if (reply->status == ASTRA_VFS_OK && reply->count != 0u)
+            reply->status = astra_vfs_file_mutated_node(client,
+                                                             request->file);
         if (reply->status == ASTRA_VFS_OK) {
             if (reply->count > request->length)
                 reply->status = ASTRA_VFS_ERR_PROTOCOL;
@@ -571,6 +586,9 @@ uint32_t astra_vfs_host_direct_transport(
     case ASTRA_VFS_OP_TRUNCATE:
         reply->status = ops->truncate(backend.context, request->file,
                                       request->offset);
+        if (reply->status == ASTRA_VFS_OK)
+            reply->status = astra_vfs_file_mutated_node(client,
+                                                             request->file);
         break;
     case ASTRA_VFS_OP_LOOKUP:
         reply->status = astra_vfs_backend_path_operation(&backend, operation,
@@ -739,6 +757,9 @@ uint32_t astra_vfs_host_direct_bulk(
             &moved, &position);
         if (reply->status == ASTRA_VFS_OK)
             reply->position = position;
+        if (reply->status == ASTRA_VFS_OK && moved != 0u)
+            reply->status = astra_vfs_file_mutated_node(client,
+                                                             request->file);
     } else if (operation == ASTRA_VFS_OP_READDIR_AREA) {
         uint64_t next = request->offset;
 

@@ -2,26 +2,27 @@
 
 Status: active continuation map, 2026-11-07
 
-Active file-cache correctness blocker, 2026-11-07: DE25 `fssem file-map`
-fails when it checks an already-faulted mapping immediately after a completed
-`pwrite` and `fsync`: the old byte remains visible until HostFS's later
-provider-change maintenance. With the write check temporarily bypassed, the
-same gate also fails immediate zero-tail after completed `ftruncate` and
-`fsync`. Both red RFB captures are archived under
-`/home/barry/astra-evidence/file-cache-immediate-20261107/` on Beast. This
-proves the current notification-poll path cannot supply a synchronous
-write/truncate coherence barrier. The existing `fssem` gate now checks both
-return boundaries; it is red until cache-owner revocation runs before the VFS
-mutation reply. Trial command and captures were removed from DE25; Astra,
-audio, and remote desktop remain active with zero restarts and 8.5 GiB free.
-Before changing the VFS write path, DE25 `fsbench --label cachepre --cleanup
---only rand-read --only rand-write` measured 1,024 random 4 KiB operations per
-mode: read median/p95 31,156/60,126 MC68040 cycles, write median/p95
-32,260/68,657 cycles. Both workloads reported `failed:false`; fixture
-directory and report were removed after capture. Checked RFB result and
-absence proof are in the same Beast evidence directory. The benchmark's
-`--cleanup` option refuses to remove a preexisting directory; DE25 tested
-that guard against `/work/.astra`.
+Immediate mapped-file coherence trial, 2026-11-07: DE25 `fssem file-map` now
+passes after completed `pwrite` and `ftruncate`; previously faulted pages show
+the new byte or zero tail at the return boundary, and extension refaults.
+HostFS reclaims its existing file area synchronously for local mutations.
+A new VFS grant-control operation carries a shared-node token from accelerated
+writers to HostFS. Native direct operations, bulk writes, and the ordinary
+service path all reach this owner. Beast VFS and HostFS tests plus ASan/UBSan
+passed. Haiku `src/system/kernel/cache/file_cache.cpp:763-1000` guided the
+ordering; Astra kept one native cache owner for POSIX and native clients.
+Checked red and green DE25 RFB evidence and benchmark report are under
+`/home/barry/astra-evidence/file-cache-immediate-20261107/` on Beast.
+
+This is not a release candidate. DE25 `fsbench` median/p95 random 4 KiB write
+cost rose from 32,260/68,657 to 736,354/1,519,407 MC68040 cycles; random
+read rose from 31,156/60,126 to 38,961/125,209. Both 1,024-operation
+workloads completed without failed operations. Unconditional mutation-control
+exchange is too costly when no file mapping exists. Bounded `WOULD_BLOCK`
+reclaim retry after a committed provider write also needs a definitive
+completion policy. A native `disk list` check after USB replug returned
+repeated `ASTRA_ERROR_BUSY` from volume/usage snapshot agreement; diagnose
+whether this persists on the stable build.
 
 Read-only POSIX file mapping, 2026-11-07: `libc.library` now maps file-backed
 `PROT_READ` with `MAP_SHARED` or `MAP_PRIVATE` through the existing native

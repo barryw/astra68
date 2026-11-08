@@ -200,8 +200,11 @@
  * `length` the page-aligned span. Reply transfers one READ|MAP area handle
  * and reports current file size in `node_size`. */
 #define ASTRA_VFS_OP_FILE_AREA    UINT32_C(45)
+/** A completed direct-lane mutation supplies a one-use file share token.
+ * The cache owner revokes matching mapped pages before acknowledging it. */
+#define ASTRA_VFS_OP_FILE_MUTATED UINT32_C(46)
 /** Highest operation code this build defines. */
-#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_FILE_AREA
+#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_FILE_MUTATED
 
 /** Encrypt a Config Kit value under the receiving grant's provider root. */
 #define ASTRA_VFS_CONFIG_SEAL UINT32_C(1)

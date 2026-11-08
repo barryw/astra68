@@ -19,6 +19,7 @@
 #include <astra/volume_port.h>
 #include <astra/string.h>
 
+#include <stddef.h>
 #include <string.h>
 
 ASTRA_PROGRAM("hostfs", 0, 1, 0, "Barry Walker",
@@ -97,6 +98,7 @@ typedef struct HostfsVolume {
     uint32_t pending_session;
     char metric_group[ASTRA_METRIC_NAME_MAX];
     AstraVfsHostBackend backend;
+    AstraVfsBackendOps ops;
     AstraVfsService service;
     AstraVfsChangeSnapshot published_changes;
     uint64_t published_change_sequence;
@@ -1009,6 +1011,151 @@ static void file_areas_maintain(void)
     astra_vfs_state_lock_release(&state_lock);
 }
 
+/* Provider change notifications reach other clients asynchronously. A local
+ * mutation must retire old mapped pages before its VFS reply is published. */
+static uint32_t file_areas_reclaim_mutation(HostfsVolume *volume,
+    uintptr_t node, const AstraVfsNodeInfo *known)
+{
+    AstraVfsNodeInfo current = {0};
+    const AstraVfsNodeMeta *identity = NULL;
+    uint64_t deadline = astra_clock_monotonic() + UINT64_C(1000000000);
+    uint32_t status;
+
+
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
+    for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next)
+        if (entry->grant->owner == volume) {
+            astra_vfs_state_lock_release(&state_lock);
+            goto populated;
+        }
+    astra_vfs_state_lock_release(&state_lock);
+    return ASTRA_VFS_OK;
+
+populated:
+    if (known != NULL && astra_vfs_node_identity_equal(&known->meta, &known->meta))
+        identity = &known->meta;
+    else if (node != 0u && astra_vfs_host_ops()->stat_node(&volume->backend,
+             node, &current) == ASTRA_VFS_OK &&
+             astra_vfs_node_identity_equal(&current.meta, &current.meta))
+        identity = &current.meta;
+    for (;;) {
+        if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
+        for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next) {
+            uint32_t released = 0u;
+            if (entry->grant->owner != volume ||
+                (identity != NULL && !astra_vfs_node_identity_equal(
+                    &entry->source.identity, identity)))
+                continue;
+            entry->stale = 1u;
+            status = astra_rt_area_reclaim(entry->area, 0u,
+                                           entry->source.span, &released);
+            if (status == ASTRA_SYSCALL_WOULD_BLOCK) {
+                astra_vfs_state_lock_release(&state_lock);
+                if (astra_clock_monotonic() >= deadline)
+                    return ASTRA_VFS_ERR_BUSY;
+                (void)astra_rt_thread_sleep(UINT64_C(1000000),
+                    ASTRA_THREAD_SLEEP_RELATIVE, 0u, NULL);
+                goto retry;
+            }
+            if (status != ASTRA_SYSCALL_OK) {
+                astra_vfs_state_lock_release(&state_lock);
+                return ASTRA_VFS_ERR_IO;
+            }
+            entry->stale = 0u;
+        }
+        astra_vfs_state_lock_release(&state_lock);
+        return ASTRA_VFS_OK;
+retry:;
+    }
+}
+
+static HostfsVolume *hostfs_backend_volume(void *context)
+{
+    return (HostfsVolume *)((char *)context - offsetof(HostfsVolume, backend));
+}
+
+static uint32_t hostfs_open(void *context, const char *path, uint32_t flags,
+    uint16_t mode, uintptr_t *node, AstraVfsNodeInfo *info)
+{
+    uint32_t status = astra_vfs_host_ops()->open(context, path, flags,
+                                                   mode, node, info);
+    if ((flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u) {
+        uint32_t reclaimed = file_areas_reclaim_mutation(
+            hostfs_backend_volume(context), status == ASTRA_VFS_OK ? *node : 0u,
+            status == ASTRA_VFS_OK ? info : NULL);
+        if (reclaimed != ASTRA_VFS_OK && status == ASTRA_VFS_OK) {
+            (void)astra_vfs_host_ops()->close(context, *node);
+            return reclaimed;
+        }
+    }
+    return status;
+}
+
+static uint32_t hostfs_open_at(void *context, uintptr_t directory,
+    const char *path, uint32_t flags, uint16_t mode, uintptr_t *node,
+    AstraVfsNodeInfo *info)
+{
+    uint32_t status = astra_vfs_host_ops()->open_at(context, directory,
+        path, flags, mode, node, info);
+    if ((flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u) {
+        uint32_t reclaimed = file_areas_reclaim_mutation(
+            hostfs_backend_volume(context), status == ASTRA_VFS_OK ? *node : 0u,
+            status == ASTRA_VFS_OK ? info : NULL);
+        if (reclaimed != ASTRA_VFS_OK && status == ASTRA_VFS_OK) {
+            (void)astra_vfs_host_ops()->close(context, *node);
+            return reclaimed;
+        }
+    }
+    return status;
+}
+
+static uint32_t hostfs_write(void *context, uintptr_t node, uint64_t offset,
+    uint32_t flags, uint64_t max_end, const void *buffer, uint32_t length,
+    uint32_t *moved, uint64_t *position)
+{
+    uint32_t status = astra_vfs_host_ops()->write(context, node, offset,
+        flags, max_end, buffer, length, moved, position);
+    if (length != 0u) {
+        uint32_t reclaimed = file_areas_reclaim_mutation(
+            hostfs_backend_volume(context), node, NULL);
+        if (status == ASTRA_VFS_OK) status = reclaimed;
+    }
+    return status;
+}
+
+static uint32_t hostfs_truncate(void *context, uintptr_t node, uint64_t size)
+{
+    uint32_t status = astra_vfs_host_ops()->truncate(context, node, size);
+    uint32_t reclaimed = file_areas_reclaim_mutation(
+        hostfs_backend_volume(context), node, NULL);
+    return status == ASTRA_VFS_OK ? reclaimed : status;
+}
+
+static uint32_t hostfs_file_mutated(void *context,
+    const AstraVfsPortGrant *port, uint64_t token)
+{
+    const HostfsGrant *grant = (const HostfsGrant *)(const void *)port;
+    const AstraVfsBackendOps *ops = astra_vfs_host_ops();
+    AstraVfsHostBackend backend;
+    AstraVfsNodeInfo info = {0};
+    uintptr_t node = 0u;
+    uint32_t status;
+
+    (void)context;
+    if (grant->retiring || !astra_vfs_host_init(&backend, &transport,
+            transport.generation, grant->session))
+        return ASTRA_VFS_ERR_LOST;
+    status = ops->adopt(&backend, token, 0u, &node);
+    if (status != ASTRA_VFS_OK) return status;
+    status = ops->stat_node(&backend, node, &info);
+    if (status == ASTRA_VFS_OK)
+        status = file_areas_reclaim_mutation(grant->owner, 0u, &info);
+    else
+        (void)file_areas_reclaim_mutation(grant->owner, 0u, NULL);
+    uint32_t closed = ops->close(&backend, node);
+    return status == ASTRA_VFS_OK ? closed : status;
+}
+
 /* The grant's last holder closed its handle, or its deriver's session
  * ended. Revoke its scope -- every channel bound to it stops at once --
  * then end its sessions with their reply lanes, and its provider session,
@@ -1374,7 +1521,12 @@ static uint32_t volume_add(const AstraVolumeReference *reference, const char *na
          !astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile), &volume->storage, &capacity)))
         status = ASTRA_STATUS_LIMIT;
     if (status == ASTRA_VFS_OK) {
-        volume->service_ready = astra_vfs_service_init(&volume->service, astra_vfs_host_ops(), &volume->backend,
+        volume->ops = *astra_vfs_host_ops();
+        volume->ops.open = hostfs_open;
+        volume->ops.open_at = hostfs_open_at;
+        volume->ops.write = hostfs_write;
+        volume->ops.truncate = hostfs_truncate;
+        volume->service_ready = astra_vfs_service_init(&volume->service, &volume->ops, &volume->backend,
             volume->sessions, ASTRA_VFS_SESSION_MAX, volume->storage.address, capacity);
         if (!volume->service_ready) status = ASTRA_STATUS_LIMIT;
     }
@@ -1400,6 +1552,8 @@ static uint32_t volume_add(const AstraVolumeReference *reference, const char *na
          !astra_vfs_port_service_set_derive(&volume->port, hostfs_derive, NULL) ||
          (!volume->config_store && !astra_vfs_port_service_set_file_area(
              &volume->port, hostfs_file_area, NULL)) ||
+         (!volume->config_store && !astra_vfs_port_service_set_file_mutated(
+             &volume->port, hostfs_file_mutated, NULL)) ||
          (volume->config_store && !astra_vfs_port_service_set_config_crypt(
              &volume->port, hostfs_config_crypt, NULL))))
         status = HOSTFS_FAIL_PORT;
