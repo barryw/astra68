@@ -26,7 +26,7 @@ correct answer rather than a missing feature.
 | file | provides |
 |---|---|
 | `src/console.c` | the descriptor table. 0/1/2 arrive as the `STDIN`/`STDOUT`/`STDERR` stream capabilities; anything above them is what `open` or `pipe` put there. `read`, `write`, `close`, `dup`, `dup2`, `fcntl`, `pipe`, `isatty`, `lseek`, `_exit` |
-| `src/file.c` | `open`, `stat`, `fstat`, `access`, `unlink`, `rmdir`, `mkdir`, `chdir`, `getcwd`, `opendir`, `readdir`, `closedir` |
+| `src/file.c` | `open`, `stat`, `fstat`, `access`, `unlink`, `rmdir`, `mkdir`, `chdir`, `getcwd`, `opendir`, `readdir`, `closedir`, read-only file-backed `mmap`/`munmap` |
 | `src/heap.c` | `sbrk`, so picolibc's `malloc`, `free` and `realloc` work |
 | `src/startup.c` | standard `main(argc, argv, envp)` entry over Astra's native startup block |
 | `src/terminal.c` | termios state, raw/canonical switching, window size, drain and flush |
@@ -93,7 +93,13 @@ what matters is that each one has an Astra answer before it has a Unix one.
 | missing | Astra answer | first needed by |
 |---|---|---|
 | `realpath` | normalising is `path_normalise`; there is no root to resolve against | rarely |
-| `mmap` | areas | large-file editing; stub-able for a long time |
+| writable/anonymous `mmap`, partial `munmap` | native areas need dirty writeback and range unmap | large-file editing |
+
+Read-only file-backed `mmap` uses native HostFS areas. `MAP_SHARED` and
+`MAP_PRIVATE` accept page-aligned offsets and remain valid after `close(fd)`.
+`munmap` accepts the complete rounded mapping span. Writable mappings,
+anonymous mappings, fixed placement, and partial unmap return `ENOTSUP`;
+strict EOF and truncate behavior remains part of the general file-cache work.
 
 `execve` is an atomic replacement over the shared native ELF loader. POSIX
 exports descriptor/VFS state into the opaque startup handoff, so redirections,

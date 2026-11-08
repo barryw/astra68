@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-11-07
 
+Read-only POSIX file mapping, 2026-11-07: `libc.library` now maps file-backed
+`PROT_READ` with `MAP_SHARED` or `MAP_PRIVATE` through the existing native
+HostFS area, with full-span `munmap`. The mapping remains valid after closing
+its fd. Writable/anonymous maps, fixed placement, and partial unmap report
+`ENOTSUP`; ordinary-I/O sharing, dirty writeback, and strict EOF/truncate
+semantics remain open. Beast Posix Kit and `fssem` target builds plus POSIX
+tests/sanitizers passed. DE25 `fssem file-map` passed both POSIX modes and
+existing native invalidation/refault checks after a targeted install. First
+DE25 run found an unaligned static mutex word on MC68040; four-byte alignment
+fixed it. Checked terminal capture is under
+`/home/barry/astra-evidence/posix-mmap-de25-20261107/` on Beast; final RFB
+SHA-256 is `a648e69d219d49902d416aea5162b705e682633064100ad8825d510a535d9048`.
+The test command and board captures were removed. Final DE25 state has
+stage-8 Astra, audio, and remote desktop active, zero Astra restarts, both
+USB volumes, only production loop0, and 8.5 GiB free. Haiku
+`src/system/libroot/posix/sys/mman.cpp:85-153` keeps POSIX translation above
+native areas; Astra uses its existing file-area and page owners.
+
 File-area acquisition freshness, 2026-11-07: HostFS now samples the existing
 provider node-change generation during every file-area acquisition, before
 looking up a reusable area. A completed same-size write therefore triggers

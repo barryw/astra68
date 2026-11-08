@@ -135,6 +135,8 @@ memalign
 mkdir
 mkdtemp
 mkostemp
+mmap
+munmap
 nanosleep
 nl_langinfo
 nl_langinfo_l

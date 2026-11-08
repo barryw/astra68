@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/types.h>
 #include <sys/statvfs.h>
@@ -48,6 +49,13 @@ static PosixFileSlot *file_slots;
 static uint32_t file_capacity;
 static int started;
 static mode_t creation_mask = 0022u;
+typedef struct PosixFileMapping {
+    struct PosixFileMapping *next;
+    void *address;
+    uint32_t span;
+} PosixFileMapping;
+static PosixFileMapping *file_mappings;
+static _Alignas(4) volatile uint32_t file_mapping_lock;
 
 typedef struct PosixPath {
     const char *native;
@@ -270,6 +278,7 @@ int
 astra_posix_file_after_fork_child(const AstraProcessFileShare *shares,
                                   uint32_t count)
 {
+    file_mapping_lock = 0u;
     uint32_t status = astra_process_vfs_after_fork_child(
         astra_posix_startup(), count == file_capacity + 1u ? &shares[file_capacity] : NULL);
 
@@ -771,6 +780,112 @@ file_for_descriptor(int fd)
         return NULL;
     }
     return &file_slots[slot].file;
+}
+
+void *
+mmap(void *address, size_t length, int protection, int flags, int fd,
+     off_t offset)
+{
+    PosixFileMapping *entry;
+    AstraFile *file;
+    uint64_t file_size = 0u;
+    uint32_t area = 0u, span, mapped_size = 0u, status;
+    void *mapped = NULL;
+
+    (void)address;
+    if (length == 0u || offset < 0 ||
+        ((uint64_t)offset & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
+        length > UINT32_MAX - (ASTRA_MEMORY_PAGE_SIZE - 1u) ||
+        ((flags & MAP_SHARED) != 0) == ((flags & MAP_PRIVATE) != 0)) {
+        errno = EINVAL;
+        return MAP_FAILED;
+    }
+    if (protection != PROT_READ ||
+        (flags & ~(MAP_SHARED | MAP_PRIVATE)) != 0) {
+        /* shortcut: read-only file areas only, add other modes with native support. */
+        errno = ENOTSUP;
+        return MAP_FAILED;
+    }
+    file = file_for_descriptor(fd);
+    if (file == NULL) return MAP_FAILED;
+    entry = malloc(sizeof(*entry));
+    if (entry == NULL) { errno = ENOMEM; return MAP_FAILED; }
+    span = ((uint32_t)length + ASTRA_MEMORY_PAGE_SIZE - 1u) &
+           ~(ASTRA_MEMORY_PAGE_SIZE - 1u);
+    status = astra_filesystem_file_area(file, (uint64_t)offset, span,
+                                       &area, &file_size);
+    if (status != ASTRA_VFS_OK) {
+        free(entry);
+        errno = status == ASTRA_VFS_ERR_UNSUPPORTED ? ENOTSUP :
+                posix_errno(status);
+        return MAP_FAILED;
+    }
+    status = astra_rt_area_map(area, ASTRA_AREA_MAP_READ, &mapped,
+                               &mapped_size);
+    if (status != ASTRA_SYSCALL_OK || mapped_size < span) {
+        if (mapped != NULL) (void)astra_rt_area_unmap(mapped);
+        (void)astra_close(area);
+        free(entry);
+        errno = status == ASTRA_SYSCALL_OUT_OF_MEMORY ||
+                status == ASTRA_SYSCALL_RESOURCE_LIMIT ? ENOMEM : EIO;
+        return MAP_FAILED;
+    }
+    if (astra_close(area) != ASTRA_SYSCALL_OK) {
+        (void)astra_rt_area_unmap(mapped);
+        free(entry);
+        errno = EIO;
+        return MAP_FAILED;
+    }
+    entry->address = mapped;
+    entry->span = span;
+    if (astra_mutex_lock(&file_mapping_lock) != ASTRA_SYSCALL_OK) {
+        (void)astra_rt_area_unmap(mapped);
+        free(entry);
+        errno = EIO;
+        return MAP_FAILED;
+    }
+    entry->next = file_mappings;
+    file_mappings = entry;
+    (void)astra_mutex_unlock(&file_mapping_lock);
+    return mapped;
+}
+
+int
+munmap(void *address, size_t length)
+{
+    PosixFileMapping **slot;
+    PosixFileMapping *entry;
+    uint32_t span;
+
+    if (address == NULL || length == 0u ||
+        length > UINT32_MAX - (ASTRA_MEMORY_PAGE_SIZE - 1u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    span = ((uint32_t)length + ASTRA_MEMORY_PAGE_SIZE - 1u) &
+           ~(ASTRA_MEMORY_PAGE_SIZE - 1u);
+    if (astra_mutex_lock(&file_mapping_lock) != ASTRA_SYSCALL_OK) {
+        errno = EIO;
+        return -1;
+    }
+    for (slot = &file_mappings; *slot != NULL; slot = &(*slot)->next)
+        if ((*slot)->address == address) break;
+    entry = *slot;
+    if (entry == NULL || entry->span != span) {
+        (void)astra_mutex_unlock(&file_mapping_lock);
+        /* shortcut: partial unmap unsupported, add native area range unmap. */
+        errno = entry == NULL ? EINVAL : ENOTSUP;
+        return -1;
+    }
+    if (astra_rt_area_unmap(address) != ASTRA_SYSCALL_OK) {
+        (void)astra_mutex_unlock(&file_mapping_lock);
+        errno = EIO;
+        return -1;
+    }
+    *slot = entry->next;
+    (void)astra_mutex_unlock(&file_mapping_lock);
+    free(entry);
+    return 0;
 }
 
 static int

@@ -39,6 +39,7 @@
 #include <signal.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -2080,7 +2081,8 @@ static int file_map_gate(const char *directory)
     char path[192];
     uint32_t area = 0u, fresh_area = 0u, mapped_size = 0u;
     uint64_t file_size = 0u;
-    void *mapping = NULL, *fresh_mapping = NULL;
+    void *mapping = NULL, *fresh_mapping = NULL, *posix_mapping = MAP_FAILED;
+    size_t posix_mapping_length = ASTRA_MEMORY_PAGE_SIZE * 2u;
     int fd = -1, result = 2;
     const char *stage = "create";
 
@@ -2095,6 +2097,43 @@ static int file_map_gate(const char *directory)
     if (write(fd, bytes, sizeof(bytes)) != (ssize_t)sizeof(bytes) ||
         fsync(fd) != 0) goto done;
     close(fd); fd = -1;
+    stage = "POSIX open";
+    fd = open(path, O_RDONLY);
+    if (fd < 0) goto done;
+    stage = "POSIX reject writable map";
+    errno = 0;
+    void *rejected = mmap(NULL, sizeof(bytes), PROT_READ | PROT_WRITE,
+                          MAP_SHARED, fd, 0);
+    if (rejected != MAP_FAILED) {
+        (void)munmap(rejected, sizeof(bytes));
+        goto done;
+    }
+    if (errno != ENOTSUP) goto done;
+    stage = "POSIX readonly map";
+    posix_mapping = mmap(NULL, sizeof(bytes), PROT_READ, MAP_SHARED, fd, 0);
+    if (posix_mapping == MAP_FAILED) goto done;
+    close(fd); fd = -1;
+    if (((volatile const char *)posix_mapping)[0] != 'a' ||
+        ((volatile const char *)posix_mapping)[ASTRA_MEMORY_PAGE_SIZE] != 'a')
+        goto done;
+    stage = "POSIX partial unmap";
+    errno = 0;
+    if (munmap(posix_mapping, ASTRA_MEMORY_PAGE_SIZE) != -1 ||
+        errno != ENOTSUP) goto done;
+    stage = "POSIX unmap";
+    if (munmap(posix_mapping, sizeof(bytes)) != 0) goto done;
+    posix_mapping = MAP_FAILED;
+    stage = "POSIX private map";
+    fd = open(path, O_RDONLY);
+    if (fd < 0) goto done;
+    posix_mapping = mmap(NULL, ASTRA_MEMORY_PAGE_SIZE, PROT_READ,
+                         MAP_PRIVATE, fd, 0);
+    if (posix_mapping == MAP_FAILED) goto done;
+    posix_mapping_length = ASTRA_MEMORY_PAGE_SIZE;
+    close(fd); fd = -1;
+    if (((volatile const char *)posix_mapping)[0] != 'a' ||
+        munmap(posix_mapping, ASTRA_MEMORY_PAGE_SIZE) != 0) goto done;
+    posix_mapping = MAP_FAILED;
     stage = "attach";
     if (astra_process_filesystem_open(&native, astra_posix_startup()) !=
         ASTRA_VFS_OK) goto done;
@@ -2152,6 +2191,8 @@ static int file_map_gate(const char *directory)
     result = 0;
 done:
     if (fd >= 0) close(fd);
+    if (posix_mapping != MAP_FAILED)
+        (void)munmap(posix_mapping, posix_mapping_length);
     if (fresh_mapping != NULL) (void)astra_rt_area_unmap(fresh_mapping);
     if (fresh_area != 0u) (void)astra_close(fresh_area);
     if (mapping != NULL) (void)astra_rt_area_unmap(mapping);

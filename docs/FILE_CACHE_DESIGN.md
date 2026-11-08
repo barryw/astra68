@@ -4,7 +4,25 @@ Status: design contract; VFS description-retention, metadata, VM page
 publication, and read-only HostFS file areas passed host and DE25 gates.
 The existing pressure worker reclaims clean read-only pager frames on DE25.
 Ordinary I/O still does not share mapped resident frames; dirty writeback,
-full EOF/truncate mapping semantics, and POSIX `mmap` remain open.
+full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
+remain open.
+
+Read-only POSIX file mapping, 2026-11-07: `libc.library` now adapts
+`mmap` with `PROT_READ` and either `MAP_SHARED` or `MAP_PRIVATE` to the
+existing native file-area and area-map APIs. It closes the temporary area
+handle after mapping and tracks
+only mapping address and span for `munmap`; file pages, invalidation, and
+reclaim stay with the HostFS/VFS native owners. Exact rounded-span unmap works;
+partial unmap, writable or anonymous maps, and fixed placement report
+`ENOTSUP`. DE25 `fssem file-map` passed both read-only modes, fd close before
+fault, partial-unmap rejection, native same-size invalidation, truncate, and
+refault. The first hardware attempt exposed an unaligned MC68040 static mutex
+word; aligning it to four bytes fixed `ASTRA_SYSCALL_INVALID_ARGUMENT`.
+Checked RFB evidence is under
+`/home/barry/astra-evidence/posix-mmap-de25-20261107/` on Beast. Haiku
+`src/system/libroot/posix/sys/mman.cpp:85-153` adapts POSIX calls to native
+areas, and `src/system/kernel/cache/file_cache.cpp:1418-1490` owns shared
+file pages; Astra kept that layering without adding a second cache.
 
 Acquisition freshness, 2026-11-07: Existing provider node-change generation
 is now sampled when a file area is requested, before area reuse. This closes
