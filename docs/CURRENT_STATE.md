@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-11-07
 
+Provider-epoch file-area retirement, 2026-11-07: HostFS now marks all mapped
+file windows stale when the storage provider epoch changes, reclaims resident
+pages through its existing area maintenance path, and requires the current
+provider epoch before sharing an area with a new reader. This closes stale
+area reuse even after successful reclaim clears the stale flag. A focused
+host test failed before the fix and passed with ASan/UBSan; MC68040 HostFS
+build passed. Targeted DE25 install reached stage 8. Native `fssem file-map`
+passed before and after two QMP provider resets (`0 -> 1 -> 2`), with zero
+Astra restarts; an active mapping was not held across a physical reset in
+this gate. Checked screenshots and reset log are under
+`/home/barry/astra-evidence/file-cache-provider-epoch-20261107/` on Beast.
+The test-only command and board captures were removed. Final DE25 state has
+Astra, HDMI audio, and remote desktop active, zero Astra restarts, both USB
+volume icons, only production loop0, and 8.5 GiB free.
+HostFS SHA-256 is
+`54ac57082c82c0ec9f1f7a31b988bc9c05a4437ed92a30956934c477775191db`.
+Haiku `src/system/kernel/cache/file_cache.cpp:1314-1327` releases a file
+cache reference, while `src/system/kernel/fs/vfs.cpp:990-1020` coordinates
+vnode teardown with cache ownership. Astra retained its native pager area
+and provider-epoch contracts. Ordinary I/O sharing, dirty writeback, strict
+ordered truncate/EOF revocation, and POSIX `mmap` remain open.
+
 Cross-grant file-area sharing, 2026-11-07: HostFS now reuses one read-only
 pager area for the same complete node identity, revision, window, and live
 volume owner even when readers hold different grants. The original grant

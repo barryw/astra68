@@ -6,6 +6,18 @@ The existing pressure worker reclaims clean read-only pager frames on DE25.
 Ordinary I/O still does not share mapped resident frames; dirty writeback,
 full EOF/truncate mapping semantics, and POSIX `mmap` remain open.
 
+Provider recovery, 2026-11-07: Existing HostFS change invalidation now runs
+on provider-epoch transition before grant sessions reopen. A file area's
+provider epoch also participates in the reuse key, so successful reclaim
+cannot make an old area eligible again when its stale flag clears. Focused
+host test, ASan/UBSan, MC68040 build, targeted DE25 install, native mapped
+file checks before and after two QMP provider resets passed. The hardware
+gate did not hold a mapped client across the reset. Evidence is under
+`/home/barry/astra-evidence/file-cache-provider-epoch-20261107/` on Beast.
+Haiku `src/system/kernel/cache/file_cache.cpp:1314-1327` and
+`src/system/kernel/fs/vfs.cpp:990-1020` guided cache ownership at teardown;
+Astra uses its existing epoch and pager-area lifecycle.
+
 Cross-grant read-only sharing, 2026-11-07: HostFS now keys reuse by live volume
 owner, complete node identity, revision, and file window, rather than grant
 pointer. Its first grant keeps the provider description through the area's

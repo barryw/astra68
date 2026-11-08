@@ -260,6 +260,25 @@ int main(void)
     file_areas_maintain();
     assert(file_areas == NULL && mapped_grant.file_areas == 0u &&
            other_grant.file_areas == 0u && file_closes == 5u);
+    next_area = 40u;
+    area_handles = 2u; area_mappings = 1u;
+    provider_epoch = 50u;
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, 0u,
+        ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
+    assert(mapped_area == 41u && area_binds == 4u);
+    assert(file_areas_invalidate(&mapped_owner, ASTRA_HOST_FS_CHANGE_GAP, 0u));
+    file_areas_maintain();
+    assert(!file_areas->stale && area_reclaims == 3u);
+    provider_epoch = 51u;
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, 0u,
+        ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
+    assert(mapped_area == 43u && area_binds == 5u &&
+           mapped_grant.file_areas == 2u);
+    area_handles = 1u; area_mappings = 0u;
+    file_areas_maintain();
+    assert(file_areas == NULL && mapped_grant.file_areas == 0u &&
+           file_closes == 7u);
+    provider_epoch = 0u;
     file_pager_thread = file_pager_send = 0u;
     HostfsGrant recovered = {.root = "/folder", .root_meta = {
         .valid = ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_INODE |

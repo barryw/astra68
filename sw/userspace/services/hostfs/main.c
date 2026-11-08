@@ -153,6 +153,7 @@ typedef struct HostfsFileArea {
     AstraVfsHostBackend backend;
     AstraVfsFilePageSource source;
     AstraVfsNodeInfo snapshot;
+    uint32_t provider_epoch;
     uint32_t area;
     uint32_t pins;
     uint8_t stale;
@@ -868,7 +869,8 @@ static uint32_t hostfs_file_area(void *context,
         return ASTRA_VFS_ERR_IO;
     }
     for (entry = file_areas; entry != NULL; entry = entry->next)
-        if (entry->grant->owner == grant->owner && !entry->stale &&
+        if (entry->grant->owner == grant->owner &&
+            entry->provider_epoch == provider_epoch && !entry->stale &&
             entry->source.base == base && entry->source.span == span &&
             astra_vfs_node_identity_equal(&entry->source.identity,
                                            &info.meta) &&
@@ -890,6 +892,7 @@ static uint32_t hostfs_file_area(void *context,
     entry->backend = backend;
     entry->grant = grant;
     entry->snapshot = info;
+    entry->provider_epoch = provider_epoch;
     if (!astra_vfs_file_page_source_init(&entry->source,
         &(AstraVfsBackend){ops, &entry->backend}, node, &info.meta,
         base, span, file_pager_cookie))
@@ -1140,6 +1143,10 @@ static uint32_t hostfs_check_provider(void)
 
     if (status != ASTRA_VFS_OK || epoch == provider_epoch)
         return status;
+    for (HostfsVolume *volume = volumes; volume != NULL; volume = volume->next)
+        if (!file_areas_invalidate(volume, ASTRA_HOST_FS_CHANGE_GAP, 0u))
+            return ASTRA_VFS_ERR_IO;
+    file_areas_maintain();
     for (HostfsVolume *volume = volumes; volume != NULL; volume = volume->next) {
         status = close_owned_session(&volume->backend.session);
         if (status != ASTRA_VFS_OK) {
