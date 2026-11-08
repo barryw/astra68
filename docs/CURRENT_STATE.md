@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-11-07
+Status: active continuation map, 2026-11-08
 
 Exact mapped-file change retirement, 2026-11-08: WIP HostFS now consumes its
 existing namespace change ring with a cache cursor independent of reliable
@@ -9,16 +9,23 @@ identity-poor areas still stale conservatively. GAP, missing records, and
 bounded-drain overflow stale the whole volume. This removes the earlier
 unconditional whole-volume invalidation before exact records were read.
 Focused HostFS test, ASan/UBSan, and MC68040 HostFS build passed on Beast.
-Current DE25 selected release remains unchanged; board RFB shows both
-`CLIFAT` and `CLIEXFAT` after USB reattachment. Double-clicking `CLIFAT`
-opened Atlas at `/usb2` and enumerated its `ChocolateDoom.` item. Astra,
-audio host, and remote desktop remain active with zero Astra restarts and
-8.5 GiB free. Current boot log lacks a USB
-disconnect event, so this confirms mounted state, not timing of that cable
-cycle. RFB SHA-256 `7e2a3a9c48d1f6f10b64c31ba92c9cc2d6a07181fe1c49ed5babe0c6f8c3d687`
+A disposable Beast guest passed `fssem file-map` and `volume-catalog`, with
+provider `e2fsck`. Coherent release `b844ae906bf8131a5ccce531f2056a624abe1ab3ef1df5beb4701357b34d9ce5`
+passed a 300-second private DE25 trial at stage 8. Native Terminal reported
+`FSSEM DONE passed 1 failed 0`; `disk list` showed `CLIEXFAT` and `CLIFAT`
+mounted read/write. Post-trial image matched Beast and board SHA-256
+`9d2dde8587424593c1b71582365bb7a712adef98d79ebe9e5fc8dd62aa2f79ce`
+and passed read-only `e2fsck`; console hashes matched and contained no panic
+or degraded markers. Trial wrapper restored the selected release. All three
+services remain active with one production loop and 8.5 GiB free after
+trial cleanup. WIP release was not selected. Board RFB also showed both USB
+volumes after reattachment; double-clicking `CLIFAT` opened Atlas at `/usb2`
+and enumerated its `ChocolateDoom.` item. Selected-release boot log lacks a
+USB disconnect event, so this confirms mounted state, not timing of that
+cable cycle. RFB SHA-256 `7e2a3a9c48d1f6f10b64c31ba92c9cc2d6a07181fe1c49ed5babe0c6f8c3d687`
 and Atlas SHA-256 `3393ae6d93f3f9f4c7c6c94a24a04fff8ea3a09392d15b09f98f2763a8ac1761`
-are archived at `/home/barry/astra-evidence/file-cache-node-invalidation-20261108/`
-on Beast. WIP change still needs a guest and guarded DE25 trial. Haiku
+are archived with trial console, frames, image, and paired private state at
+`/home/barry/astra-evidence/file-cache-node-invalidation-20261108/` on Beast. Haiku
 `src/system/kernel/cache/file_cache.cpp:760-820` retains vnode cache identity
 while ordering I/O, and `src/system/kernel/fs/node_monitor.cpp` routes node
 events; Astra retains its one HostFS area owner and existing change stream.

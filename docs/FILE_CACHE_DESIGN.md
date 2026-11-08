@@ -13,7 +13,17 @@ ring before area reuse. NODE invalidates matching inode areas, while
 incomplete identities, GAP, missing records, and bounded-drain overflow stay
 conservative. The previous generation observer invalidated every mapped file
 before reading exact records. Beast HostFS test, ASan/UBSan, and MC68040 build
-pass; guest and DE25 candidate gates remain. Haiku
+passed. A disposable Beast guest passed `fssem file-map` and `volume-catalog`
+with provider `e2fsck`. Coherent release
+`b844ae906bf8131a5ccce531f2056a624abe1ab3ef1df5beb4701357b34d9ce5`
+passed a 300-second private DE25 trial at stage 8. Native `fssem file-map`
+passed 1/1, and `disk list` showed both USB partitions mounted read/write.
+Post-trial image SHA-256
+`9d2dde8587424593c1b71582365bb7a712adef98d79ebe9e5fc8dd62aa2f79ce`
+matched board and Beast and passed read-only `e2fsck`. Trial console had no
+panic or degraded marker. Selected release and production data were preserved;
+trial files were removed after evidence archiving at
+`/home/barry/astra-evidence/file-cache-node-invalidation-20261108/`. Haiku
 `src/system/kernel/cache/file_cache.cpp:760-820` keeps identity and I/O
 ordering under one cache owner; Astra uses its existing HostFS area owner and
 change stream, without a second notification path.
