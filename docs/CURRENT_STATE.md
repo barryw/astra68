@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-11-07
 
+Blocked-provider forced-reboot regression, 2026-11-07: with production
+services stopped and its storage image synced, the selected AArch64 QEMU and
+provider ran the existing `blocked_io_reboot` fixture on a disposable ext4
+image. A real frozen-volume write held QEMU in Linux `D`; the provider and
+mount remained live after TERM. A matched transient unit kept its stop job
+pending; its 20-second `JobRunningTimeoutSec` expired at 08:02:58 board time,
+and systemd logged `Forcibly rebooting: job timed out`. Boot ID changed from
+`f30b01c7-8acd-438b-95fa-89e04062954e` to
+`3f1be90a-ba00-4c2f-9fa4-16c076369687`. The selected development ROM
+passed storage POST (journal recovery, write, reread, unmount) and reached
+stage 8; Astra, audio, remote desktop, and SSH are active with zero Astra
+restarts and 8.6 GiB free. Only production loop0 remains. Checked evidence:
+`/home/barry/astra-evidence/blocked-provider-reboot-20261107/` on Beast;
+SHA-256 of pre-stop and recovery records is
+`cc089b542b0fb9b445fd17ba35baebfa01bcf7100aa983d9be1b89f71f0b66d2`
+and `0fc48a1bfd37a3a051cd764cb9c4706e9260df377666f335941fd9ba817126de`.
+Trial scripts and its orphaned private mount directory were removed from
+DE25. This repeats the previously closed blocked-provider gate against the
+current release; actual stalled graphics AXI and failed-reset gates remain.
+SSH was observed refusing during reset, but `ssh.service` started six seconds
+into the new boot; board time synchronization shifted wall timestamps.
+
 Pager pressure reclaim, 2026-11-07: the existing kernel pressure worker now
 reclaims clean, read-only pager frames after idle library mappings. A bounded
 64-step cursor resumes across worker passes, skips areas with in-flight pager
