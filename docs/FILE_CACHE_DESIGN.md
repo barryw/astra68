@@ -7,6 +7,19 @@ Ordinary I/O still does not share mapped resident frames; dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Incomplete-identity mappings, 2026-11-07: HostFS now permits a retained
+description to back a read-only file area even when the provider cannot report
+the full volume/inode/birth-generation identity. Such areas never share across
+opens. Exact-node notifications and local mutations conservatively invalidate
+them; the existing provider revision checks still guard each page read.
+Focused HostFS and VFS pager tests, HostFS ASan/UBSan, and MC68040 HostFS/VFS
+builds passed on Beast. A disposable Beast guest passed `fssem file-map` and
+`volume-catalog`, followed by provider `e2fsck`. DE25 qualification of this
+change is pending.
+Haiku `src/system/kernel/cache/file_cache.cpp:1273-1327` attaches a VM cache to
+a vnode; Astra keeps the provider description as the safe owner when no
+stable cross-open vnode identity exists.
+
 Immediate mutation coherence, 2026-11-07: DE25 exposed a correctness gap
 after `pwrite`/`fsync` and `ftruncate`/`fsync`. An already-faulted mapping can
 still return the old byte immediately after each operation returns; the

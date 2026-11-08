@@ -3,7 +3,8 @@
 
 #include <astra/vfs_backend.h>
 
-/* Cache owner retains the description while mappings or acquired faults live. */
+/* Cache owner retains the description while mappings or acquired faults live.
+ * Incomplete identity keeps the area scoped to this description. */
 typedef struct AstraVfsFilePageSource {
     AstraVfsBackend backend;
     AstraVfsNodeMeta identity;

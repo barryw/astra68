@@ -15,11 +15,12 @@ typedef struct PageCall {
     uint32_t send_status;
 } PageCall;
 
-static PageCall calls[8];
-static AstraPagerPageReply replies[8];
+static PageCall calls[9];
+static AstraPagerPageReply replies[9];
 static uint32_t call_count, next_call, send_count, close_count, read_count;
 static uint32_t receive_error;
 static uint32_t pin_count, release_count, pinned;
+static int expect_unknown_identity;
 
 static const AstraVfsFilePageSource *acquire(void *context, uint32_t cookie)
 {
@@ -99,12 +100,14 @@ uint32_t astra_vfs_backend_read_page(const AstraVfsBackend *backend,
     void *page, uint32_t *valid_bytes)
 {
     const PageCall *call = &calls[next_call - 1u];
+    assert((identity == NULL) == expect_unknown_identity);
     assert(backend->context == &calls &&
            pinned == call->request.cookie &&
            node == (call->request.cookie == 44u ? 55u : 56u) &&
-           identity->volume == 3u &&
-           identity->inode == (call->request.cookie == 44u ? 5u : 6u) &&
-           identity->generation == 7u &&
+           (identity == NULL ||
+            (identity->volume == 3u &&
+             identity->inode == (call->request.cookie == 44u ? 5u : 6u) &&
+             identity->generation == 7u)) &&
            offset == (call->request.cookie == 45u ?
                        UINT64_C(0x100000000) : 0u) +
                      call->request.offset);
@@ -148,6 +151,9 @@ int main(void)
 
     assert(!astra_vfs_file_page_source_init(&sources[0], &backend, 55u,
         NULL, 0u, 2u * ASTRA_MEMORY_PAGE_SIZE, 44u));
+    AstraVfsNodeMeta unknown_identity = {0};
+    assert(astra_vfs_file_page_source_init(&sources[0], &backend, 55u,
+        &unknown_identity, 0u, ASTRA_MEMORY_PAGE_SIZE, 44u));
     assert(!astra_vfs_file_page_source_init(&sources[0], &backend, 55u,
         &identity, 0u, ASTRA_MEMORY_PAGE_SIZE + 1u, 44u));
     assert(!astra_vfs_file_page_source_init(&sources[0], &backend, 55u,
@@ -203,6 +209,12 @@ int main(void)
            pin_count == 7u && release_count == 7u && pinned == 0u &&
            close_count == 8u);
     pager.stalled = 0u;
+    sources[0].identity = unknown_identity;
+    expect_unknown_identity = 1;
+    add_call(0u, ASTRA_VFS_OK, 5u, ASTRA_SYSCALL_OK);
+    assert(astra_vfs_file_pager_pump(&pager, 1u) == 1u &&
+           replies[8].status == ASTRA_STATUS_OK &&
+           read_count == 7u && close_count == 9u);
     receive_error = ASTRA_SYSCALL_IO_ERROR;
     assert(astra_vfs_file_pager_pump(&pager, 1u) == 0u &&
            pager.stalled == ASTRA_SYSCALL_IO_ERROR);

@@ -862,8 +862,7 @@ static uint32_t hostfs_file_area(void *context,
     if (status != ASTRA_VFS_OK) return status;
     status = ops->stat_node(&backend, node, &info);
     if (status != ASTRA_VFS_OK || info.kind != ASTRA_VFS_KIND_FILE ||
-        base >= info.size ||
-        !astra_vfs_node_identity_equal(&info.meta, &info.meta)) {
+        base >= info.size) {
         (void)ops->close(&backend, node);
         return status != ASTRA_VFS_OK ? status : ASTRA_VFS_ERR_INVALID;
     }
@@ -884,6 +883,7 @@ static uint32_t hostfs_file_area(void *context,
         if (entry->grant->owner == grant->owner &&
             entry->provider_epoch == provider_epoch && !entry->stale &&
             entry->source.base == base && entry->source.span == span &&
+            astra_vfs_node_identity_equal(&info.meta, &info.meta) &&
             astra_vfs_node_identity_equal(&entry->source.identity,
                                            &info.meta) &&
             astra_vfs_node_revision_equal(&entry->snapshot, &info)) {
@@ -953,6 +953,8 @@ static int file_areas_invalidate(HostfsVolume *volume, uint32_t kind,
     for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next)
         if (entry->grant->owner == volume &&
             (kind != ASTRA_HOST_FS_CHANGE_NODE ||
+             !astra_vfs_node_identity_equal(&entry->source.identity,
+                                            &entry->source.identity) ||
              entry->source.identity.inode == inode))
             entry->stale = 1u;
     astra_vfs_state_lock_release(&state_lock);
@@ -1041,8 +1043,11 @@ populated:
     for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next) {
         uint32_t released = 0u;
         if (entry->grant->owner != volume ||
-            (identity != NULL && !astra_vfs_node_identity_equal(
-                &entry->source.identity, identity)))
+            (identity != NULL &&
+             astra_vfs_node_identity_equal(&entry->source.identity,
+                                           &entry->source.identity) &&
+             !astra_vfs_node_identity_equal(
+                 &entry->source.identity, identity)))
             continue;
         entry->stale = 1u;
         status = astra_rt_area_reclaim(entry->area, 0u,
