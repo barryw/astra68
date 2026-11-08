@@ -12927,9 +12927,10 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
         kernel_enable_interrupts();
         if (thread->context.data[0] == ASTRA_SYSCALL_AREA_MAP_RANGE)
-            area_status = kernel_area_map_range(
+            area_status = kernel_area_map_range_at(
                 area, current->id, &current->address_space, permissions,
                 thread->context.data[3], thread->context.data[4],
+                thread->context.data[5],
                 &virtual_base, &byte_size);
         else
             area_status = kernel_area_map(

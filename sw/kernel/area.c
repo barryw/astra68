@@ -931,12 +931,13 @@ KernelAreaStatus kernel_area_child_release(KernelArea *area)
     return pool_corrupt == 0u ? KERNEL_AREA_OK : KERNEL_AREA_CORRUPT;
 }
 
-KernelAreaStatus kernel_area_map_range(KernelArea *area,
+KernelAreaStatus kernel_area_map_range_at(KernelArea *area,
                                        uint32_t process_id,
                                        KernelAddressSpace *space,
                                        uint32_t permissions,
                                        uint32_t source_offset,
                                        uint32_t view_bytes,
+                                       uint32_t requested_base,
                                        uint32_t *virtual_base,
                                        uint32_t *byte_size)
 {
@@ -955,6 +956,11 @@ KernelAreaStatus kernel_area_map_range(KernelArea *area,
         view_bytes > area->byte_size - source_offset ||
         ((view_bytes & (KERNEL_VM_SHARED_TABLE_SPAN - 1u)) != 0u &&
          view_bytes != area->byte_size - source_offset) ||
+        (requested_base != 0u &&
+         (requested_base < KERNEL_VM_AREA_BASE ||
+          requested_base >= KERNEL_VM_AREA_BASE +
+                            KERNEL_VM_AREA_SLOT_COUNT * KERNEL_VM_AREA_SLOT_SIZE ||
+          (requested_base & (KERNEL_VM_SHARED_TABLE_SPAN - 1u)) != 0u)) ||
         (permissions & KERNEL_VM_READ) == 0u ||
         (permissions & KERNEL_VM_EXEC) != 0u ||
         (permissions & ~(KERNEL_VM_READ | KERNEL_VM_WRITE)) != 0u)
@@ -982,7 +988,9 @@ KernelAreaStatus kernel_area_map_range(KernelArea *area,
             }
             if (mapping->process_id == process_id && mapping->area == area &&
                 mapping->source_offset == source_offset &&
-                mapping->mapped_bytes == view_bytes) {
+                mapping->mapped_bytes == view_bytes &&
+                (requested_base == 0u ||
+                 mapping->virtual_base == requested_base)) {
                 if (mapping->space != space ||
                     mapping->permissions != permissions)
                     return KERNEL_AREA_ACCESS_DENIED;
@@ -995,7 +1003,8 @@ KernelAreaStatus kernel_area_map_range(KernelArea *area,
     /* One source-aligned span or run of spans, shared by every view. */
     selected_span = (view_bytes + KERNEL_VM_SHARED_TABLE_SPAN - 1u) &
                     ~(KERNEL_VM_SHARED_TABLE_SPAN - 1u);
-    selected_base = KERNEL_VM_AREA_BASE;
+    selected_base = requested_base != 0u ? requested_base :
+                    KERNEL_VM_AREA_BASE;
     for (;;) {
         uint32_t next = selected_base;
         uint32_t window_offset = selected_base - KERNEL_VM_AREA_BASE;
@@ -1025,6 +1034,8 @@ KernelAreaStatus kernel_area_map_range(KernelArea *area,
         }
         if (next == selected_base)
             break;
+        if (requested_base != 0u)
+            return KERNEL_AREA_ALREADY_MAPPED;
         selected_base = next;
     }
     area_status = claim_mapping(process_id, &free_mapping);
@@ -1101,6 +1112,19 @@ KernelAreaStatus kernel_area_map_range(KernelArea *area,
     *virtual_base = selected_base;
     *byte_size = view_bytes;
     return KERNEL_AREA_OK;
+}
+
+KernelAreaStatus kernel_area_map_range(KernelArea *area,
+                                       uint32_t process_id,
+                                       KernelAddressSpace *space,
+                                       uint32_t permissions,
+                                       uint32_t source_offset,
+                                       uint32_t view_bytes,
+                                       uint32_t *virtual_base,
+                                       uint32_t *byte_size)
+{
+    return kernel_area_map_range_at(area, process_id, space, permissions,
+        source_offset, view_bytes, 0u, virtual_base, byte_size);
 }
 
 KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,

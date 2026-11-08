@@ -53,6 +53,8 @@
 #define ASTRA_SHARED_AREA_ADDRESS_START      ASTRA_DYNAMIC_IMAGE_END
 /** Byte size of one shared-area slot. */
 #define ASTRA_SHARED_AREA_SLOT_SIZE           0x00400000u
+/** Smallest shared-table span an area view can select. */
+#define ASTRA_SHARED_AREA_TABLE_SPAN          0x00040000u
 /** Number of shared-area slots the region holds. */
 #define ASTRA_SHARED_AREA_SLOT_COUNT          32u
 /** One past the last address of the shared-area region. */

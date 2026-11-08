@@ -2217,9 +2217,11 @@ done:
 
 static int area_range_gate(const char *directory)
 {
-    const uint32_t span = ASTRA_SHARED_AREA_SLOT_SIZE;
+    const uint32_t span = ASTRA_SHARED_AREA_TABLE_SPAN;
+    const uint32_t target = ASTRA_SHARED_AREA_ADDRESS_START + 16u * span;
     uint32_t area = 0u, size = 0u, released = 0u;
     void *tail = NULL, *head = NULL, *whole = NULL;
+    void *at_head = NULL, *at_tail = NULL, *collision = NULL;
     const char *stage = "create";
     int result = 2;
 
@@ -2248,20 +2250,42 @@ static int area_range_gate(const char *directory)
             &whole, &size) != ASTRA_SYSCALL_OK ||
         size != span + ASTRA_MEMORY_PAGE_SIZE)
         goto done;
+    stage = "map adjacent exact views";
+    if (astra_rt_area_map_range_at(area,
+            ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE, 0u, span,
+            target, &at_head, &size) != ASTRA_SYSCALL_OK ||
+        (uintptr_t)at_head != target || size != span ||
+        astra_rt_area_map_range_at(area,
+            ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE, span,
+            ASTRA_MEMORY_PAGE_SIZE, target + span, &at_tail,
+            &size) != ASTRA_SYSCALL_OK ||
+        (uintptr_t)at_tail != target + span ||
+        size != ASTRA_MEMORY_PAGE_SIZE)
+        goto done;
+    stage = "reject occupied target";
+    if (astra_rt_area_map_range_at(area, ASTRA_AREA_MAP_READ, 0u,
+            span, target + span, &collision, &size) !=
+            ASTRA_SYSCALL_INVALID_ARGUMENT || collision != NULL)
+        goto done;
     stage = "shared frames";
     ((volatile uint8_t *)tail)[0] = 0x5au;
     ((volatile uint8_t *)head)[0] = 0x33u;
     if (((volatile uint8_t *)whole)[span] != 0x5au ||
-        ((volatile uint8_t *)whole)[0] != 0x33u)
+        ((volatile uint8_t *)whole)[0] != 0x33u ||
+        ((volatile uint8_t *)at_tail)[0] != 0x5au ||
+        ((volatile uint8_t *)at_head)[0] != 0x33u)
         goto done;
     stage = "decommit and refault";
     if (astra_rt_area_decommit(tail, ASTRA_MEMORY_PAGE_SIZE, &released) !=
             ASTRA_SYSCALL_OK || released != 1u ||
         ((volatile uint8_t *)tail)[0] != 0u ||
-        ((volatile uint8_t *)whole)[span] != 0u)
+        ((volatile uint8_t *)whole)[span] != 0u ||
+        ((volatile uint8_t *)at_tail)[0] != 0u)
         goto done;
     result = 0;
 done:
+    if (at_tail != NULL) (void)astra_rt_area_unmap(at_tail);
+    if (at_head != NULL) (void)astra_rt_area_unmap(at_head);
     if (whole != NULL) (void)astra_rt_area_unmap(whole);
     if (head != NULL) (void)astra_rt_area_unmap(head);
     if (tail != NULL) (void)astra_rt_area_unmap(tail);

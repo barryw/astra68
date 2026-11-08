@@ -333,12 +333,22 @@ astra_rt_area_map_range(uint32_t handle, uint32_t permissions,
                         uint32_t source_offset, uint32_t view_bytes,
                         void **address, uint32_t *byte_size)
 {
+    return astra_rt_area_map_range_at(handle, permissions, source_offset,
+                                      view_bytes, 0u, address, byte_size);
+}
+
+uint32_t
+astra_rt_area_map_range_at(uint32_t handle, uint32_t permissions,
+                           uint32_t source_offset, uint32_t view_bytes,
+                           uint32_t requested_base, void **address,
+                           uint32_t *byte_size)
+{
     AstraSyscallResult result;
 
     if (address == NULL || byte_size == NULL)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     astra_syscall5(ASTRA_SYSCALL_AREA_MAP_RANGE, handle, permissions,
-                   source_offset, view_bytes, 0u, &result);
+                   source_offset, view_bytes, requested_base, &result);
     if (result.status == ASTRA_SYSCALL_OK) {
         *address = (void *)(uintptr_t)result.value0;
         *byte_size = result.value1;

@@ -304,11 +304,11 @@ uint32_t astra_rt_area_decommit(void *address, uint32_t byte_size,
 uint32_t astra_rt_area_map(uint32_t handle, uint32_t permissions,
                         void **address, uint32_t *byte_size);
 /**
- * Map a 4 MiB-aligned area subrange. A partial final span must reach area end.
+ * Map a 256 KiB-aligned area subrange. A partial final span must reach area end.
  * @param handle Area capability with map and requested access rights.
  * @param permissions Requested ASTRA_AREA_MAP_* access permissions.
- * @param source_offset 4 MiB-aligned byte offset within the area.
- * @param view_bytes Nonzero view length, a multiple of 4 MiB or terminal.
+ * @param source_offset 256 KiB-aligned byte offset within the area.
+ * @param view_bytes Nonzero view length, a multiple of 256 KiB or terminal.
  * @param address Receives mapping base.
  * @param byte_size Receives exact view length.
  * @return ASTRA_SYSCALL_* status.
@@ -316,6 +316,21 @@ uint32_t astra_rt_area_map(uint32_t handle, uint32_t permissions,
 uint32_t astra_rt_area_map_range(uint32_t handle, uint32_t permissions,
                                 uint32_t source_offset, uint32_t view_bytes,
                                 void **address, uint32_t *byte_size);
+/**
+ * Map an area subrange at an exact shared-table boundary.
+ * @param handle Area capability with map and requested access rights.
+ * @param permissions Requested ASTRA_AREA_MAP_* access permissions.
+ * @param source_offset 256 KiB-aligned byte offset within the area.
+ * @param view_bytes Nonzero view length, a multiple of 256 KiB or terminal.
+ * @param requested_base Exact 256 KiB-aligned address, or zero for any free span.
+ * @param address Receives mapping base.
+ * @param byte_size Receives exact view length.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_area_map_range_at(uint32_t handle, uint32_t permissions,
+                                   uint32_t source_offset, uint32_t view_bytes,
+                                   uint32_t requested_base, void **address,
+                                   uint32_t *byte_size);
 /**
  * Remove an area mapping from the current process.
  * @param address Exact mapping base.

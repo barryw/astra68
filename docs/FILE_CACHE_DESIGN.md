@@ -9,16 +9,23 @@ remain open.
 
 Native area subrange mapping, 2026-11-08: WIP kernel now records a source
 offset and view length for each mapping and attaches only corresponding
-existing shared tables. New syscall and runtime export require 4 MiB source
-alignment and full 4 MiB views except for a terminal partial span. Host tests
+existing shared tables. New syscall and runtime export require 256 KiB source
+alignment and full 256 KiB views except for a terminal partial span. Host tests
 cover distinct and overlapping views of one area, decommit/refault, terminal
-bounds, permissions, and process dispatch. MC68040 kernel/runtime builds, NDK
-`dist-check`, and 16-marker K1 QEMU gate passed. New range syscall needs
-target measurement and DE25 trial before it can be a file-cache dependency.
-This VM primitive
-does not yet unify file cache: HostFS still creates range-keyed areas and
-ordinary VFS I/O still bypasses mapped pages. Existing area-map performance
-budget covers new syscall. Haiku `src/system/kernel/cache/file_cache.cpp:745-850`
+bounds, permissions, and process dispatch. Exact-address mapping uses the
+existing syscall's fifth input; zero retains automatic placement. Host tests
+cover adjacent 256 KiB exact views, collision, and shared frames. MC68040
+kernel/runtime builds, NDK `dist-check`, and 16-marker K1 QEMU gate passed
+without overruns. A coherent Beast guest and a 300-second DE25 private trial
+passed native `fssem area-range` at 256 KiB granularity with exact adjacent
+placement, collision rejection, shared bytes, decommit, and refault. The
+trial also passed existing `fssem file-map`, read-only image `e2fsck`, and
+physical USB mounted-state check. Evidence is under
+`/home/barry/astra-evidence/file-cache-exact-20261108/` on Beast. K1 does not
+yet sample the new exact-address path; its existing area-map budget applies.
+This VM primitive does not yet unify file cache: HostFS still creates
+range-keyed areas and ordinary VFS I/O still bypasses mapped pages. Haiku
+`src/system/kernel/cache/file_cache.cpp:745-850`
 uses one vnode VMCache for file I/O and mappings; Astra reuses `KernelArea`.
 
 Exact change retirement, 2026-11-08: HostFS now has a cache cursor separate

@@ -258,7 +258,7 @@ KernelVmStatus kernel_vm_map_shared_range(
  * as the table. @p writable makes the pages writable wherever the attachment
  * itself is not write-protected.
  */
-#define KERNEL_VM_SHARED_TABLE_SPAN 0x00040000u
+#define KERNEL_VM_SHARED_TABLE_SPAN ASTRA_SHARED_AREA_TABLE_SPAN
 #define KERNEL_VM_SHARED_TABLE_PAGES \
     (KERNEL_VM_SHARED_TABLE_SPAN / KERNEL_PAGE_SIZE)
 KernelVmStatus kernel_vm_shared_table_create(

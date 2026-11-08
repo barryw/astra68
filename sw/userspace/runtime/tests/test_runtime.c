@@ -461,6 +461,7 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
     if (number != ASTRA_SYSCALL_PROCESS_CREATE &&
         number != ASTRA_SYSCALL_PROCESS_EXEC &&
         number != ASTRA_SYSCALL_RING_CREATE &&
+        number != ASTRA_SYSCALL_AREA_MAP_RANGE &&
         !(fake.active && number == ASTRA_SYSCALL_PORT_SEND_TRY)) {
         assert(argument4 == 0u);
     }
@@ -928,9 +929,17 @@ test_syscall_wrappers(void)
         assert(mock_argument0 == 7u &&
                mock_argument1 == ASTRA_AREA_MAP_READ &&
                mock_argument2 == 4u * 1024u * 1024u &&
-               mock_argument3 == 4096u);
+               mock_argument3 == 4096u && mock_argument4 == 0u);
         assert((uintptr_t)address == ASTRA_SYSCALL_ABI_VERSION);
         assert(mapped_bytes == 0x11111111u);
+        assert(astra_rt_area_map_range_at(7u, ASTRA_AREA_MAP_READ,
+                                         4u * 1024u * 1024u, 4096u,
+                                         ASTRA_SHARED_AREA_ADDRESS_START +
+                                             ASTRA_SHARED_AREA_TABLE_SPAN,
+                                         &address, &mapped_bytes) ==
+               ASTRA_SYSCALL_OK);
+        assert(mock_argument4 == ASTRA_SHARED_AREA_ADDRESS_START +
+                                 ASTRA_SHARED_AREA_TABLE_SPAN);
         assert(astra_rt_area_map_range(7u, ASTRA_AREA_MAP_READ, 0u,
                                         4096u, NULL, &mapped_bytes) ==
                ASTRA_SYSCALL_INVALID_ARGUMENT);

@@ -4,25 +4,33 @@ Status: active continuation map, 2026-11-08
 
 Native area subrange primitive, 2026-11-08: WIP kernel mapping records now
 carry source offset, exact view length, and attached shared-table span. New
-`ASTRA_SYSCALL_AREA_MAP_RANGE` and runtime export allow 4 MiB-aligned source
-ranges, complete 4 MiB views, and a terminal partial span. Existing whole-area
-maps retain their contract. Beast full kernel and runtime host suites,
-MC68040 kernel and runtime library builds, NDK `dist-check`, and K1 QEMU
-qualification passed all 16 markers with zero reported overruns. K1's
-existing area-map calls reached 2,232/125,000 cycles; new range syscall was
-not exercised by K1. A native `fssem area-range` guest gate passed on Beast
-with an image containing current userspace: it checked aligned subrange
-views, shared bytes, decommit, and refault. Verified private release
+`ASTRA_SYSCALL_AREA_MAP_RANGE` and runtime export allow 256 KiB-aligned source
+ranges, complete 256 KiB views, and a terminal partial span. Existing whole-area
+maps retain their contract. The exact-address form adds a fifth syscall input
+and `astra_rt_area_map_range_at`; zero keeps automatic placement. Its requested
+base must align to the real 256 KiB shared-table span, not the 4 MiB area slot.
+Host tests cover adjacent exact views, collision rejection, and shared frames.
+Beast full kernel and runtime host suites, MC68040 kernel and runtime library
+builds, NDK `dist-check`, and K1 QEMU qualification passed all 16 markers with
+zero reported overruns. K1 covers existing area-map work but does not yet time
+the exact-address form. A coherent Beast guest passed native `fssem area-range`
+at 256 KiB granularity, exact adjacent addresses, occupied-address rejection,
+shared bytes, decommit, and refault. The prior 4 MiB smoke release
 `5f44bd305667e202ea2cd6c3f3019cbbc5c1e71e1450b4e16df754bbde8bb6ff`
-ran 300 seconds on DE25 at stage 8. Native Terminal passed `fssem area-range`
+ran 300 seconds on DE25 at stage 8. Exact-address private release
+`4bb0b698288b4af89bdd671c93042d8eb98676d483906fcd0e2e41b79160e52c`
+also ran 300 seconds at stage 8. Native Terminal passed `fssem area-range`
 and existing `fssem file-map`, each 1/1; `disk list` showed both physical USB
 partitions mounted read/write. Trial image passed read-only `e2fsck` and its
-board/Beast SHA-256 matched `90044d86ef211488823f2b9adecf42dc8fd776e3615bb6adbb3c3bf9a1eb7803`.
-Console and RFB hashes matched archived Beast copies under
-`/home/barry/astra-evidence/file-cache-range-20261108/`. Wrapper restored the
+board/Beast SHA-256 matched `aa23c289c4d3a315e58b34872c7016ff6f7f973d64433513c39aa07deed3baad`.
+Console matched SHA-256 `eb5f0b17f152b52dcaeb685630677d8eee6434bf64738ca818cf0c3f655b656c`.
+Trial image, paired state, console, and RFB frames are archived under
+`/home/barry/astra-evidence/file-cache-exact-20261108/`; release and Beast
+build logs remain under `/home/barry/astra-evidence/file-cache-range-20261108/`.
+Wrapper restored the
 selected release; Astra, audio, and remote desktop are active with one
 production loop and 8.5 GiB free after trial cleanup. The USB cable was not
-replugged in this trial. This does not yet merge
+replugged in either trial. This does not yet merge
 HostFS's range-keyed file areas or route ordinary VFS I/O through cached
 frames. Haiku `src/system/kernel/cache/file_cache.cpp:745-850` guided single
 ownership; Astra extends existing `KernelArea` mappings.
@@ -44,10 +52,9 @@ and passed read-only `e2fsck`; console hashes matched and contained no panic
 or degraded markers. Trial wrapper restored the selected release. All three
 services remain active with one production loop and 8.5 GiB free after
 trial cleanup. WIP release was not selected. Board RFB also showed both USB
-volumes after reattachment; double-clicking `CLIFAT` opened Atlas at `/usb2`
+volumes mounted; double-clicking `CLIFAT` opened Atlas at `/usb2`
 and enumerated its `ChocolateDoom.` item. Selected-release boot log lacks a
-USB disconnect event, so this confirms mounted state, not timing of that
-cable cycle. RFB SHA-256 `7e2a3a9c48d1f6f10b64c31ba92c9cc2d6a07181fe1c49ed5babe0c6f8c3d687`
+USB disconnect event; no cable cycle happened. RFB SHA-256 `7e2a3a9c48d1f6f10b64c31ba92c9cc2d6a07181fe1c49ed5babe0c6f8c3d687`
 and Atlas SHA-256 `3393ae6d93f3f9f4c7c6c94a24a04fff8ea3a09392d15b09f98f2763a8ac1761`
 are archived with trial console, frames, image, and paired private state at
 `/home/barry/astra-evidence/file-cache-node-invalidation-20261108/` on Beast. Haiku
@@ -58,10 +65,10 @@ events; Astra retains its one HostFS area owner and existing change stream.
 Active file-cache blocker, 2026-11-08: ordinary VFS read/write still bypass
 resident mapped frames. HostFS's area key includes request base and span, so
 overlapping file ranges can own duplicate kernel frames even for one exact
-node. `kernel_area_map()` maps whole shared-table spans, while the current
+node. Native 256 KiB subrange and exact-address mapping now work, but the
 file-area API gives no offset within a canonical owner. The next correctness
-change must add a native area subrange mapping contract and consolidate HostFS
-ownership before routing ordinary I/O through those pages. Writable shared
+change must consolidate HostFS ownership before routing ordinary I/O through
+those pages. Writable shared
 pages then need a first-write trap, dirty state, bounded writeback, and
 conflict handling; the existing filesystem change topic remains the only
 external invalidation feed. See `docs/FILE_CACHE_DESIGN.md` for the inspected
