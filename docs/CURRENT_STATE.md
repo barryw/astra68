@@ -10,7 +10,10 @@ maps retain their contract. Beast full kernel and runtime host suites,
 MC68040 kernel and runtime library builds, NDK `dist-check`, and K1 QEMU
 qualification passed all 16 markers with zero reported overruns. K1's
 existing area-map calls reached 2,232/125,000 cycles; new range syscall was
-not exercised by K1. DE25 gate is pending. This does not yet merge
+not exercised by K1. A native `fssem area-range` guest gate passed on Beast
+with an image containing current userspace: it checked aligned subrange
+views, shared bytes, decommit, and refault. DE25 gate is pending. This does
+not yet merge
 HostFS's range-keyed file areas or route ordinary VFS I/O through cached
 frames. Haiku `src/system/kernel/cache/file_cache.cpp:745-850` guided single
 ownership; Astra extends existing `KernelArea` mappings.

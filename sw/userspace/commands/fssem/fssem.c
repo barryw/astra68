@@ -18,6 +18,7 @@
 #define _XOPEN_SOURCE 700
 
 #include <astra/host.h>
+#include <astra/address_space.h>
 #include <astra/limits.h>
 #include <astra/posix.h>
 #include <astra/program.h>
@@ -2214,6 +2215,64 @@ done:
     return result == 0 ? 0 : fail("file-map %s", stage);
 }
 
+static int area_range_gate(const char *directory)
+{
+    const uint32_t span = ASTRA_SHARED_AREA_SLOT_SIZE;
+    uint32_t area = 0u, size = 0u, released = 0u;
+    void *tail = NULL, *head = NULL, *whole = NULL;
+    const char *stage = "create";
+    int result = 2;
+
+    if (astra_rt_area_create_flagged(span + ASTRA_MEMORY_PAGE_SIZE,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP,
+            ASTRA_AREA_CREATE_RESERVED, &area) != ASTRA_SYSCALL_OK)
+        goto done;
+    stage = "reject unaligned offset";
+    if (astra_rt_area_map_range(area, ASTRA_AREA_MAP_READ, 1u,
+            ASTRA_MEMORY_PAGE_SIZE, &tail, &size) !=
+            ASTRA_SYSCALL_INVALID_ARGUMENT || tail != NULL)
+        goto done;
+    stage = "map terminal page";
+    if (astra_rt_area_map_range(area,
+            ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE, span,
+            ASTRA_MEMORY_PAGE_SIZE, &tail, &size) != ASTRA_SYSCALL_OK ||
+        size != ASTRA_MEMORY_PAGE_SIZE)
+        goto done;
+    stage = "map first span";
+    if (astra_rt_area_map_range(area,
+            ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE, 0u, span,
+            &head, &size) != ASTRA_SYSCALL_OK || size != span)
+        goto done;
+    stage = "map overlapping view";
+    if (astra_rt_area_map(area, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+            &whole, &size) != ASTRA_SYSCALL_OK ||
+        size != span + ASTRA_MEMORY_PAGE_SIZE)
+        goto done;
+    stage = "shared frames";
+    ((volatile uint8_t *)tail)[0] = 0x5au;
+    ((volatile uint8_t *)head)[0] = 0x33u;
+    if (((volatile uint8_t *)whole)[span] != 0x5au ||
+        ((volatile uint8_t *)whole)[0] != 0x33u)
+        goto done;
+    stage = "decommit and refault";
+    if (astra_rt_area_decommit(tail, ASTRA_MEMORY_PAGE_SIZE, &released) !=
+            ASTRA_SYSCALL_OK || released != 1u ||
+        ((volatile uint8_t *)tail)[0] != 0u ||
+        ((volatile uint8_t *)whole)[span] != 0u)
+        goto done;
+    result = 0;
+done:
+    if (whole != NULL) (void)astra_rt_area_unmap(whole);
+    if (head != NULL) (void)astra_rt_area_unmap(head);
+    if (tail != NULL) (void)astra_rt_area_unmap(tail);
+    if (area != 0u) (void)astra_close(area);
+    if (rmdir(directory) != 0 && result == 0) {
+        stage = "cleanup directory";
+        result = 2;
+    }
+    return result == 0 ? 0 : fail("area-range %s", stage);
+}
+
 static int flood(const char *directory, uint32_t limit, int wait)
 {
     AstraProcessFilesystem native = ASTRA_PROCESS_FILESYSTEM_INIT;
@@ -2504,6 +2563,7 @@ static const struct {
     {"raw-lane", case_raw_lane},
     {"lane-fork-exec", case_lane_fork_exec},
     {"shared-description", case_shared_description},
+    {"area-range", area_range_gate},
     {"file-map", file_map_gate},
     {"exec-inherit", case_exec_inherit},
     {"append-race", case_append_race},
