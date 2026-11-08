@@ -1138,8 +1138,10 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
     assert(kernel_area_pager_request(317u, &client,
                                      base + KERNEL_PAGE_SIZE, &request) ==
            KERNEL_AREA_OK);
+    assert(request.epoch == kernel_area_pager_epoch(area));
     assert(kernel_area_reclaim(area, 0u, KERNEL_PAGE_SIZE, &released) ==
-           KERNEL_AREA_BUSY && released == 0u);
+           KERNEL_AREA_OK && released == 1u);
+    assert(request.epoch != kernel_area_pager_epoch(area));
     assert(kernel_area_child_release(request.area) == KERNEL_AREA_OK);
     {
         uint8_t across[2] = {0x7eu, 0x7eu};
@@ -1149,7 +1151,7 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
         assert(across[0] == 0x7eu && across[1] == 0x7eu);
     }
     assert(kernel_area_reclaim(area, 0u, KERNEL_PAGE_SIZE, &released) ==
-           KERNEL_AREA_OK && released == 1u);
+           KERNEL_AREA_OK && released == 0u);
     assert(kernel_vm_switch(&client) == KERNEL_VM_OK);
     assert(!kernel_vm_test_translate_current(base, false, &physical));
     assert(kernel_vm_switch(&peer) == KERNEL_VM_OK);

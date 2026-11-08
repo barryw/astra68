@@ -3,6 +3,7 @@
 
 usage: test-fs-semantics.py QEMU ROM IMAGE [--case NAME]... [--check NAME]...
                             [--bench LABEL OUT.json] [--tree TREE]
+                            [--prepared] [--no-checks]
 
 Boots a copy of IMAGE with `fssem` installed. The provider root is a
 Linux-mounted ext4 image; QEMU itself runs as the caller, never as root
@@ -406,13 +407,20 @@ def main():
     parser.add_argument("--bench", nargs=2, metavar=("LABEL", "OUT"))
     parser.add_argument("--tree", default=ROOT,
                         help="source tree supplying this image's trace catalogs")
+    parser.add_argument("--prepared", action="store_true",
+                        help="IMAGE already contains current system products")
+    parser.add_argument("--no-checks", action="store_true",
+                        help="run selected fssem cases without orchestrated checks")
     arguments = parser.parse_args()
+    if arguments.no_checks and arguments.check:
+        parser.error("--no-checks cannot be combined with --check")
+    selected_checks = () if arguments.no_checks else (arguments.check or CHECKS)
     # fssem is a TEST_COMMAND: "make all" never builds it, so it is built
     # directly here before being installed, the same as every other gate's
     # test command (test-fpu.py's fpucheck, test-system-log.py's logburst).
     if not arguments.bench:
         targets = ["build/m68k/fssem"]
-        if "durability" in (arguments.check or CHECKS):
+        if "durability" in selected_checks:
             targets.append("build/m68k/posix")
         built = subprocess.run(
             astra_image._build_invocation(["make", "-C", os.path.join(ROOT, "sw", "userspace", "commands"),
@@ -426,11 +434,12 @@ def main():
         image = os.path.join(work, "card.img")
         shutil.copyfile(arguments.image, image)
         if not arguments.bench:
-            astra_image.install(image)
+            if not arguments.prepared:
+                astra_image.install(image)
             astra_image.install_test_command(image, "fssem")
-            if "durability" in (arguments.check or CHECKS):
+            if "durability" in selected_checks:
                 astra_image.install_test_command(image, "posix")
-        if not arguments.bench and {"hostfs-kill", "durability"} & set(arguments.check or CHECKS):
+        if not arguments.bench and {"hostfs-kill", "durability"} & set(selected_checks):
             if MANIFEST == astra_image.STARTUP_MANIFEST:
                 fail("HostFS startup manifest changed")
             manifest = os.path.join(work, "startup")
@@ -448,7 +457,7 @@ def main():
                 run_bench(machine, mount, *arguments.bench, tree=arguments.tree)
             else:
                 run_cases(machine, arguments.case or CASES)
-                for name in sorted(arguments.check or CHECKS, key=lambda name: (name in FINAL_CHECKS, name)):
+                for name in sorted(selected_checks, key=lambda name: (name in FINAL_CHECKS, name)):
                     CHECKS[name](machine, mount)
         except BaseException:
             print("native failure serial:")

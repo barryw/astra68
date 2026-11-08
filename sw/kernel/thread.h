@@ -247,6 +247,7 @@ typedef struct KernelThread {
     struct KernelThread *pager_next;
     uint32_t pager_offset;
     uint32_t pager_cookie;
+    uint32_t pager_epoch;
     uint32_t pager_saved_data[4];
     uint32_t pager_fault_address;
     uint64_t pager_deadline;

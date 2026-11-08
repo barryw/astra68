@@ -2,6 +2,33 @@
 
 Status: active continuation map, 2026-11-07
 
+In-flight pager revocation, 2026-11-07: the WIP file-cache branch now gives
+each pager-bound area an epoch. Synchronous reclaim withdraws resident pages
+and advances the epoch even while a fault holds an area child reference; a
+late reply from the prior epoch causes the existing bounded fault retry rather
+than publishing old bytes. HostFS no longer sleeps and times out after its
+provider write has committed. Beast kernel suite, HostFS host test, MC68040
+kernel and HostFS builds, and QEMU K1 qualification passed. K1 pager reply
+maximum was 2,993/75,000 cycles versus prior 2,981; reclaim was
+203/125,000, with zero overruns and all 16 markers. Prepared Beast guest
+`fssem file-map` and `volume-catalog` gates passed with provider `e2fsck`.
+The private DE25 trial booted the same release ROM to stage 8, then native
+Terminal `fssem file-map` passed 1/1 and `disk list` listed both physical USB
+partitions mounted read/write. The trial image passed read-only `e2fsck`.
+The wrapper restored the selected release; production reached stage 8 with
+three services active, zero Astra restarts, one production loop, and 8.5 GiB
+free after disposable trial state was removed. Checked console and RFB
+evidence is under `/home/barry/astra-evidence/file-cache-epoch-20261108/`
+on Beast; release ROM SHA-256 is
+`8f3f044ae0e33401fddb2a258dc0c5ce010995a5b9b924e8fb10a947ee4c2010`,
+trial console SHA-256
+`c9054e9f19424b097c16485b0048534872dabb0ceac6ff8165d819557bd2bc92`.
+The previous 23x random-write regression remains unresolved; trial-only
+`disk list` busy did not recur and its cause remains unassigned. Haiku
+`src/system/kernel/cache/file_cache.cpp:760-820` orders ordinary I/O against
+mapped pages under its VM cache lock; Astra keeps the same ordering through
+its native area epoch and HostFS owner.
+
 Immediate mapped-file coherence trial, 2026-11-07: DE25 `fssem file-map` now
 passes after completed `pwrite` and `ftruncate`; previously faulted pages show
 the new byte or zero tail at the return boundary, and extension refaults.
@@ -18,16 +45,16 @@ This is not a release candidate. DE25 `fsbench` median/p95 random 4 KiB write
 cost rose from 32,260/68,657 to 736,354/1,519,407 MC68040 cycles; random
 read rose from 31,156/60,126 to 38,961/125,209. Both 1,024-operation
 workloads completed without failed operations. Unconditional mutation-control
-exchange is too costly when no file mapping exists. Bounded `WOULD_BLOCK`
-reclaim retry after a committed provider write also needs a definitive
-completion policy. A native `disk list` check under the trial returned
+exchange is too costly when no file mapping exists. The original bounded
+`WOULD_BLOCK` reclaim retry after a committed provider write was resolved by
+the pager epoch described above. A native `disk list` check under that trial returned
 repeated `ASTRA_ERROR_BUSY` from volume/usage snapshot agreement. After
 restoring stable HostFS and Filesystem Kit binaries, the same command listed
 both replugged USB partitions mounted read/write at `/usb0` and `/usb2`.
 The trial-only busy result has not been assigned a cause. The trial commands,
 benchmark report, RFB helper, and captures were removed from DE25 after
 archiving checked evidence on Beast. Astra, HDMI audio, and remote desktop
-remain active with zero Astra restarts, only production loop0, and 8.5 GiB
+remained active with zero Astra restarts, one production loop, and 8.5 GiB
 free. The WIP code is pushed but not merged to main or selected on DE25.
 
 Read-only POSIX file mapping, 2026-11-07: `libc.library` now maps file-backed

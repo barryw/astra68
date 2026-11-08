@@ -66,6 +66,7 @@ typedef struct KernelAreaPagerRequest {
     KernelPort *port;
     uint32_t cookie;
     uint32_t offset;
+    uint32_t epoch;
 } KernelAreaPagerRequest;
 
 /* A physically contiguous run of an area's bytes. */
@@ -143,6 +144,7 @@ KernelAreaStatus kernel_area_publish_page(KernelArea *area, uint32_t offset,
                                           const void *source,
                                           uint32_t valid_bytes);
 bool kernel_area_page_resident(const KernelArea *area, uint32_t offset);
+uint32_t kernel_area_pager_epoch(const KernelArea *area);
 /*
  * Drops the committed pages of a reserved area that lie wholly inside the
  * range, and keeps the reservation. This is what makes freeing memory mean
@@ -160,7 +162,7 @@ KernelAreaStatus kernel_area_decommit(uint32_t process_id,
                                       uint32_t address, uint32_t byte_size,
                                       uint32_t *released_pages);
 /* ADMINISTER caller reclaims complete pages of a pager-bound area. Pending
- * faults block eviction; the pager supplies bytes again on the next fault. */
+ * replies from the prior epoch are stale; faults retry against fresh data. */
 KernelAreaStatus kernel_area_reclaim(KernelArea *area, uint32_t offset,
                                      uint32_t byte_size,
                                      uint32_t *released_pages);

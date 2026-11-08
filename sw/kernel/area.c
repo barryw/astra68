@@ -85,6 +85,7 @@ struct KernelArea {
     uint8_t reserved_form;
     KernelPort *pager;
     uint32_t pager_cookie;
+    uint32_t pager_epoch;
     KernelHandleRelease pager_release;
     void *pager_release_context;
     /* Frame of shared-table addresses, one per span; 0 until first map. */
@@ -698,6 +699,7 @@ static KernelAreaStatus close_area(KernelArea *area, uint32_t terminal_result)
         area->pager_release(area->pager, area->pager_release_context);
         area->pager = NULL;
         area->pager_cookie = 0u;
+        area->pager_epoch = 0u;
         area->pager_release = NULL;
         area->pager_release_context = NULL;
     }
@@ -850,6 +852,7 @@ KernelAreaStatus kernel_area_bind_pager(KernelArea *area, KernelPort *port,
         return KERNEL_AREA_INVALID_STATE;
     area->pager = port;
     area->pager_cookie = cookie;
+    area->pager_epoch = 1u;
     area->pager_release = release;
     area->pager_release_context = release_context;
     return KERNEL_AREA_OK;
@@ -1423,6 +1426,7 @@ KernelAreaStatus kernel_area_pager_request(uint32_t process_id,
     request->port = NULL;
     request->cookie = 0u;
     request->offset = 0u;
+    request->epoch = 0u;
     mapping = missing_reserved_mapping(process_id, space, address, &page);
     if (mapping == NULL)
         return KERNEL_AREA_NOT_MAPPED;
@@ -1435,6 +1439,7 @@ KernelAreaStatus kernel_area_pager_request(uint32_t process_id,
     request->port = mapping->area->pager;
     request->cookie = mapping->area->pager_cookie;
     request->offset = page * KERNEL_PAGE_SIZE;
+    request->epoch = mapping->area->pager_epoch;
     return KERNEL_AREA_OK;
 }
 
@@ -1469,6 +1474,12 @@ bool kernel_area_page_resident(const KernelArea *area, uint32_t offset)
            (offset & (KERNEL_PAGE_SIZE - 1u)) == 0u &&
            range_valid(area, offset, KERNEL_PAGE_SIZE) &&
            page_committed(area, offset / KERNEL_PAGE_SIZE);
+}
+
+uint32_t kernel_area_pager_epoch(const KernelArea *area)
+{
+    return valid_area(area) && area->state == KERNEL_AREA_LIVE &&
+           area->pager != NULL ? area->pager_epoch : 0u;
 }
 
 
@@ -1552,9 +1563,12 @@ KernelAreaStatus kernel_area_reclaim(KernelArea *area, uint32_t offset,
     if ((offset & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
         (byte_size & (KERNEL_PAGE_SIZE - 1u)) != 0u)
         return KERNEL_AREA_INVALID_ARGUMENT;
-    if (area->child_references != 0u)
-        return KERNEL_AREA_BUSY;
-    return decommit_range(area, offset, byte_size, released_pages);
+    KernelAreaStatus status = decommit_range(area, offset, byte_size,
+                                            released_pages);
+
+    if (status == KERNEL_AREA_OK)
+        area->pager_epoch = kernel_generation_next(area->pager_epoch);
+    return status;
 }
 
 KernelAreaStatus kernel_area_reclaim_pager_pages(
@@ -2020,6 +2034,7 @@ bool kernel_area_pool_valid(void)
                 area->child_references != 0u ||
                 area->mapping_references != 0u ||
                 area->pager != NULL || area->pager_cookie != 0u ||
+                area->pager_epoch != 0u ||
                 area->pager_release != NULL ||
                 area->pager_release_context != NULL ||
                 area->frames_released == 0u)
@@ -2036,9 +2051,11 @@ bool kernel_area_pool_valid(void)
             area->page_count > KERNEL_AREA_PAGE_MAX ||
             (area->pager != NULL &&
              (area->reserved_form == 0u || area->pager_cookie == 0u ||
+              area->pager_epoch == 0u ||
               area->pager_release == NULL)) ||
             (area->pager == NULL &&
-             (area->pager_cookie != 0u || area->pager_release != NULL ||
+             (area->pager_cookie != 0u || area->pager_epoch != 0u ||
+              area->pager_release != NULL ||
               area->pager_release_context != NULL)) ||
             area->byte_size != area->page_count * KERNEL_PAGE_SIZE)
             return false;

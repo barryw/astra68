@@ -10231,7 +10231,10 @@ static KernelProcessStatus deliver_pager_reply(
         reply->header.transaction_id == call && reply->reserved == 0u &&
         reply->cookie == caller->pager_cookie &&
         reply->offset == caller->pager_offset) {
-        if (reply->status == ASTRA_STATUS_OK &&
+        if (caller->pager_epoch !=
+            kernel_area_pager_epoch(caller->pager_area)) {
+            caller_result = ASTRA_SYSCALL_WOULD_BLOCK;
+        } else if (reply->status == ASTRA_STATUS_OK &&
             reply->valid_bytes != 0u &&
             reply->valid_bytes <= KERNEL_PAGE_SIZE &&
             kernel_handle_lookup(replier->handles, reply->data_area,
@@ -15493,6 +15496,7 @@ static void pager_wait_prepare(KernelThread *thread,
     thread->pager_area = request->area;
     thread->pager_offset = request->offset;
     thread->pager_cookie = request->cookie;
+    thread->pager_epoch = request->epoch;
     thread->pager_fault_address = frame->fault_address;
     thread->pager_fault_vector = (uint16_t)(frame->vector_offset >> 2);
     thread->pager_fault_status = frame->special_status;

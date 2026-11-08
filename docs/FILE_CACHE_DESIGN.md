@@ -29,8 +29,21 @@ passed immediate write, truncate, and extension/refault. `rand-read` and
 median/p95 rose to 38,961/125,209 cycles; write rose to
 736,354/1,519,407 cycles. The unconditional grant-control mutation exchange
 costs too much when no mapping exists, so this remains an unselected
-correctness trial. Bounded reclaim retry also needs a definitive outcome when
-a write has committed but an in-flight pager fault prevents revocation.
+correctness trial. The first bounded reclaim retry left an ambiguous outcome
+when a write had committed but an in-flight pager fault blocked revocation.
+The WIP branch now resolves that race at the native area owner: reclaim
+advances an epoch even with outstanding child references, and stale pager
+replies retry the fault without publishing old data. HostFS removed its
+one-second post-commit retry. Beast kernel and HostFS host tests, MC68040
+builds, and 16-marker QEMU K1 passed; pager reply maximum moved from 2,981
+to 2,993 cycles against its 75,000-cycle budget. Prepared Beast guest
+`fssem file-map` and `volume-catalog` passed with provider `e2fsck`. A
+five-minute private DE25 trial reached stage 8, passed native `fssem file-map`
+and `disk list` for both USB partitions, and its image passed read-only
+`e2fsck`. Selected release and production data were preserved; checked RFB
+and console evidence is under
+`/home/barry/astra-evidence/file-cache-epoch-20261108/` on Beast. The
+unconditional write-path performance regression remains open.
 Native direct and accelerated bulk operations plus ordinary service calls all
 reach the existing HostFS file-area owner. Do not reintroduce a separate cache
 or an asynchronous-only local write path.

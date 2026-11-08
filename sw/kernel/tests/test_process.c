@@ -8492,6 +8492,30 @@ static void test_bound_area_fault_calls_pager(void)
     reply.valid_bytes = 5u;
     assert(kernel_user_copy_to_asm(service_stack + 512u, &reply,
                                    sizeof(reply)) == KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_AREA_RECLAIM, target, 0u,
+                     KERNEL_PAGE_SIZE, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, service_stack + 512u, sizeof(reply),
+                     0u, 0u) == KERNEL_PROCESS_OK);
+    assert(kernel_thread_at(0u)->state == KERNEL_THREAD_BLOCKED);
+    assert(kernel_thread_at(0u)->pager_area != NULL);
+    assert(!kernel_area_page_resident(kernel_thread_at(0u)->pager_area, 0u));
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive,
+                     service_stack + 256u, sizeof(request),
+                     service_stack + 384u, 1u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&request, service_stack + 256u,
+                                     sizeof(request)) == KERNEL_USER_COPY_OK);
+    assert(kernel_user_copy_from_asm(&capability, service_stack + 384u,
+                                     sizeof(capability)) == KERNEL_USER_COPY_OK);
+    assert(kernel_user_copy_to_asm(source_base, "fresh", 5u) ==
+           KERNEL_USER_COPY_OK);
+    reply.header.transaction_id = request.header.transaction_id;
+    assert(kernel_user_copy_to_asm(service_stack + 512u, &reply,
+                                   sizeof(reply)) == KERNEL_USER_COPY_OK);
     assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
                      capability, service_stack + 512u, sizeof(reply),
                      0u, 0u) == KERNEL_PROCESS_OK);
@@ -8503,7 +8527,7 @@ static void test_bound_area_fault_calls_pager(void)
            KERNEL_PROCESS_CODE_BASE);
     assert(kernel_user_copy_from_asm(bytes, target_base, sizeof(bytes)) ==
            KERNEL_USER_COPY_OK);
-    assert(memcmp(bytes, "paged", 5u) == 0);
+    assert(memcmp(bytes, "fresh", 5u) == 0);
     assert(kernel_process_stats(&stats) && stats.user_faults == 0u);
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
                KERNEL_PROCESS_CODE_BASE, 0u);
@@ -8513,7 +8537,7 @@ static void test_bound_area_fault_calls_pager(void)
     assert(next->data[0] == ASTRA_SYSCALL_CLOSED);
     assert(kernel_user_copy_from_asm(bytes, target_base, sizeof(bytes)) ==
            KERNEL_USER_COPY_OK);
-    assert(memcmp(bytes, "paged", 5u) == 0);
+    assert(memcmp(bytes, "fresh", 5u) == 0);
 
     astra_message_header_set(&filler.header, sizeof(filler),
                              ASTRA_PAGER_PROTOCOL,

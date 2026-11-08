@@ -1018,7 +1018,6 @@ static uint32_t file_areas_reclaim_mutation(HostfsVolume *volume,
 {
     AstraVfsNodeInfo current = {0};
     const AstraVfsNodeMeta *identity = NULL;
-    uint64_t deadline = astra_clock_monotonic() + UINT64_C(1000000000);
     uint32_t status;
 
 
@@ -1038,35 +1037,24 @@ populated:
              node, &current) == ASTRA_VFS_OK &&
              astra_vfs_node_identity_equal(&current.meta, &current.meta))
         identity = &current.meta;
-    for (;;) {
-        if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
-        for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next) {
-            uint32_t released = 0u;
-            if (entry->grant->owner != volume ||
-                (identity != NULL && !astra_vfs_node_identity_equal(
-                    &entry->source.identity, identity)))
-                continue;
-            entry->stale = 1u;
-            status = astra_rt_area_reclaim(entry->area, 0u,
-                                           entry->source.span, &released);
-            if (status == ASTRA_SYSCALL_WOULD_BLOCK) {
-                astra_vfs_state_lock_release(&state_lock);
-                if (astra_clock_monotonic() >= deadline)
-                    return ASTRA_VFS_ERR_BUSY;
-                (void)astra_rt_thread_sleep(UINT64_C(1000000),
-                    ASTRA_THREAD_SLEEP_RELATIVE, 0u, NULL);
-                goto retry;
-            }
-            if (status != ASTRA_SYSCALL_OK) {
-                astra_vfs_state_lock_release(&state_lock);
-                return ASTRA_VFS_ERR_IO;
-            }
-            entry->stale = 0u;
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
+    for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next) {
+        uint32_t released = 0u;
+        if (entry->grant->owner != volume ||
+            (identity != NULL && !astra_vfs_node_identity_equal(
+                &entry->source.identity, identity)))
+            continue;
+        entry->stale = 1u;
+        status = astra_rt_area_reclaim(entry->area, 0u,
+                                       entry->source.span, &released);
+        if (status != ASTRA_SYSCALL_OK) {
+            astra_vfs_state_lock_release(&state_lock);
+            return ASTRA_VFS_ERR_IO;
         }
-        astra_vfs_state_lock_release(&state_lock);
-        return ASTRA_VFS_OK;
-retry:;
+        entry->stale = 0u;
     }
+    astra_vfs_state_lock_release(&state_lock);
+    return ASTRA_VFS_OK;
 }
 
 static HostfsVolume *hostfs_backend_volume(void *context)
