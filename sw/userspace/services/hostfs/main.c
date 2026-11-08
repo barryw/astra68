@@ -868,7 +868,7 @@ static uint32_t hostfs_file_area(void *context,
         return ASTRA_VFS_ERR_IO;
     }
     for (entry = file_areas; entry != NULL; entry = entry->next)
-        if (entry->grant == grant && !entry->stale &&
+        if (entry->grant->owner == grant->owner && !entry->stale &&
             entry->source.base == base && entry->source.span == span &&
             astra_vfs_node_identity_equal(&entry->source.identity,
                                            &info.meta) &&

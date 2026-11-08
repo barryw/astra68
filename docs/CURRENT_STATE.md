@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-11-07
 
+Cross-grant file-area sharing, 2026-11-07: HostFS now reuses one read-only
+pager area for the same complete node identity, revision, window, and live
+volume owner even when readers hold different grants. The original grant
+retains its provider description until all area handles, mappings, and
+in-flight faults retire. Different volume owners remain isolated. Beast host
+test first failed on the old per-grant lookup, then passed with the change and
+ASan/UBSan; MC68040 HostFS build passed. Targeted DE25 install passed stage 8;
+native Terminal `fssem file-map` reported `FSSEM DONE passed 1 failed 0`
+across two-page faults, ordinary write invalidation, shrink, and refault.
+The test-only command was removed. Final DE25 boot has Astra, HDMI audio, and
+remote desktop active, zero Astra restarts, both USB icons, only production
+loop0, and 8.5 GiB free. HostFS SHA-256 is
+`59f86325b5431d7b60570cfa94f2ce815d7c5c0fa5f612bffcee95a44d52f2bf`;
+checked terminal RFB SHA-256 is
+`31657d073489ad4992599ab320cc01be64ccfad1d5611729ca58d233c2cdde7b`.
+Evidence is under `/home/barry/astra-evidence/file-cache-grant-share-20261107/`
+on Beast; board trial captures were removed. Haiku
+`src/system/kernel/cache/file_cache.cpp:1418-1490` shares vnode cache pages
+between ordinary and mapped I/O; Astra presently shares mapped readers only.
+Ordinary I/O sharing, dirty writeback, strict ordered truncate/EOF revocation,
+and POSIX `mmap` remain open.
+
 Blocked-provider forced-reboot regression, 2026-11-07: with production
 services stopped and its storage image synced, the selected AArch64 QEMU and
 provider ran the existing `blocked_io_reboot` fixture on a disposable ext4

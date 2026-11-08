@@ -6,6 +6,20 @@ The existing pressure worker reclaims clean read-only pager frames on DE25.
 Ordinary I/O still does not share mapped resident frames; dirty writeback,
 full EOF/truncate mapping semantics, and POSIX `mmap` remain open.
 
+Cross-grant read-only sharing, 2026-11-07: HostFS now keys reuse by live volume
+owner, complete node identity, revision, and file window, rather than grant
+pointer. Its first grant keeps the provider description through the area's
+last mapping; a second authorized grant receives a handle to the same area.
+The host test proves one bind for two grants and a separate bind for another
+volume owner with the same reported metadata. The test failed before the
+change, then passed with sanitizers. Targeted DE25 HostFS install and native
+`fssem file-map` passed; checked RFB and binary evidence is under
+`/home/barry/astra-evidence/file-cache-grant-share-20261107/` on Beast.
+This does not route ordinary reads or writes through the cache. Haiku
+`src/system/kernel/cache/file_cache.cpp:1418-1490` uses one vnode cache for
+both ordinary and mapped I/O; Astra's volume owner and pager area are the
+existing pieces for mapped-reader sharing.
+
 Read-only pager pressure reclaim, 2026-11-07: kernel pressure worker runs a
 bounded area sweep after idle library reclaim. It skips in-flight faults and
 uses the existing shared-table withdrawal before freeing a resident frame;
