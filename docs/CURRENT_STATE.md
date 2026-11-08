@@ -30,6 +30,19 @@ are archived with trial console, frames, image, and paired private state at
 while ordering I/O, and `src/system/kernel/fs/node_monitor.cpp` routes node
 events; Astra retains its one HostFS area owner and existing change stream.
 
+Active file-cache blocker, 2026-11-08: ordinary VFS read/write still bypass
+resident mapped frames. HostFS's area key includes request base and span, so
+overlapping file ranges can own duplicate kernel frames even for one exact
+node. `kernel_area_map()` maps whole shared-table spans, while the current
+file-area API gives no offset within a canonical owner. The next correctness
+change must add a native area subrange mapping contract and consolidate HostFS
+ownership before routing ordinary I/O through those pages. Writable shared
+pages then need a first-write trap, dirty state, bounded writeback, and
+conflict handling; the existing filesystem change topic remains the only
+external invalidation feed. See `docs/FILE_CACHE_DESIGN.md` for the inspected
+Haiku and Astra seams. Do not treat the read-only file-map trial as completion
+of the six-gap file-cache goal.
+
 Incomplete-identity file areas, 2026-11-07: the WIP branch now keeps a
 read-only pager area scoped to its retained provider description when node
 metadata lacks a complete identity. It shares across opens only for complete

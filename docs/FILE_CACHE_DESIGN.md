@@ -713,6 +713,48 @@ pressure and tail latency remain unmeasured.
 
 ## Pager wiring through existing native objects
 
+### Shared page owner required for ordinary I/O
+
+Current `HostfsFileArea` is keyed by volume, identity, `base`, and `span`.
+Two overlapping requests with different ranges create separate `KernelArea`
+owners and frames. `read_acquired_file()` and `write_file()` in
+`sw/userspace/vfs/src/vfs_service_core.c` call backend I/O directly, so
+ordinary I/O does not consume those frames. `kernel_area_map()` attaches whole
+shared-table spans and reports the area's size; it cannot map a requested
+subrange of one node-wide owner. Canonicalizing HostFS's area lookup alone
+would therefore change callers' file offsets or reject legitimate overlapping
+and multi-span mappings. Keep this as one VM/VFS contract change, not a second
+userspace byte cache or an Atlas/SDL-specific path.
+
+Extend the existing `KernelArea` mapping record with source page offset and
+mapped length, and give the native area API an offset/length map operation.
+The VFS owner can then retain one cache object's area for a node incarnation
+and hand clients views onto its pages. Bound the owner by the existing area
+address-space limit; adjacent owners must still support one contiguous client
+mapping when a file crosses that limit. Ordinary VFS reads and writes must
+address the same owner pages. Their backend I/O and metadata checks remain in
+VFS; kernel VM remains the sole frame and mapping owner. Complete identity
+allows cross-open sharing; incomplete identity keeps the retained-description
+scope. The current change topic remains the only external invalidation feed.
+
+For writable shared views, the existing shared-table write protection can
+trap the first write, but `kernel_vm_shared_table_set()` only publishes an
+absent entry. Add a checked descriptor transition and per-page dirty state
+before enabling writes. `MAP_PRIVATE` needs per-process COW translations;
+globally changing the shared table would leak one client's private write to
+other mappings. `msync`, unmap, and last close must report failed writeback
+and retain dirty frames. New fault and write-protect paths require K1 cycle
+budgets before use by higher layers. Acceptance tests must cover overlapping
+range identity, ordinary read/write coherence, partial-page preservation,
+private isolation, shared dirty writeback, EOF/truncate, external conflict,
+pressure, and exact mapped-user safe-removal attribution.
+
+Haiku `src/system/kernel/cache/file_cache.cpp:760-850` locks one vnode cache
+while ordinary I/O uses its pages; `src/system/kernel/vm/VMCache.cpp` owns
+those pages and `src/system/kernel/vm/vm_page_writer.cpp` handles dirty-page
+writeback. Astra adapts that ownership to its native area, VFS service, and
+existing pressure worker.
+
 The VFS service creates one reserved area per cache object and binds its own
 port's send endpoint and a nonzero, service-owned cache cookie to that area.
 VFS must generation-tag the cookie and avoid reuse while an old area or
