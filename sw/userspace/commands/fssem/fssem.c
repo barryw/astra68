@@ -2079,6 +2079,7 @@ static int file_map_gate(const char *directory)
 {
     AstraProcessFilesystem native = ASTRA_PROCESS_FILESYSTEM_INIT;
     AstraFile file = ASTRA_FILE_INIT;
+    AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
     char path[192];
     uint32_t area = 0u, fresh_area = 0u, mapped_size = 0u;
     uint64_t file_size = 0u;
@@ -2256,6 +2257,27 @@ static int file_map_gate(const char *directory)
                 (unsigned)resident_status, (unsigned char)observed);
         goto done;
     }
+    stage = "borrowed read fills canonical page";
+    const uint8_t *borrowed = NULL;
+    uint32_t moved = 0u;
+    if (pwrite(fd, "B", 1u, 2u * ASTRA_MEMORY_PAGE_SIZE) != 1 ||
+        fsync(fd) != 0 || astra_process_vfs_source_open(path,
+            &source) != ASTRA_VFS_OK ||
+        astra_vfs_read_source_read_at(&source,
+            2u * ASTRA_MEMORY_PAGE_SIZE, 1u, &borrowed, &moved) != ASTRA_VFS_OK ||
+        moved != 1u || borrowed == NULL || borrowed[0] != 'B' ||
+        astra_rt_area_read_resident(area, 2u * ASTRA_MEMORY_PAGE_SIZE,
+            &observed, 1u) != ASTRA_SYSCALL_OK || observed != 'B') goto done;
+    if (astra_vfs_read_source_close(&source) != ASTRA_VFS_OK) goto done;
+    stage = "path read fills canonical page";
+    char whole[2u * ASTRA_MEMORY_PAGE_SIZE + 1u];
+    if (pwrite(fd, "H", 1u, 2u * ASTRA_MEMORY_PAGE_SIZE) != 1 ||
+        fsync(fd) != 0 || astra_process_read_file(&native, path,
+            whole, sizeof(whole), &moved) != ASTRA_VFS_OK ||
+        moved != sizeof(whole) || whole[0] != 'b' || whole[1] != 'c' ||
+        whole[2u * ASTRA_MEMORY_PAGE_SIZE] != 'H' ||
+        astra_rt_area_read_resident(area, 2u * ASTRA_MEMORY_PAGE_SIZE,
+            &observed, 1u) != ASTRA_SYSCALL_OK || observed != 'H') goto done;
     close(fd); fd = -1;
     stage = "cross-chunk file map";
     fd = open(path, O_RDWR);
@@ -2278,6 +2300,8 @@ static int file_map_gate(const char *directory)
     close(fd); fd = -1;
     result = 0;
 done:
+    if (source.file != ASTRA_VFS_FILE_INVALID)
+        (void)astra_vfs_read_source_close(&source);
     if (fd >= 0) close(fd);
     if (cross_mapping != MAP_FAILED)
         (void)munmap(cross_mapping, 2u * ASTRA_MEMORY_PAGE_SIZE);

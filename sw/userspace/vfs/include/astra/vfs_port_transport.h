@@ -90,16 +90,15 @@ uint32_t astra_vfs_port_connect_lazy_with_accelerator(
  * inherited the handles, but not ownership of the parent's service session. */
 void astra_vfs_port_abandon(AstraVfsClient *client);
 /*
- * Open, read whole, close -- one round trip -- answered in the transfer area.
+ * Open, read whole, close -- answered in this thread's transfer area.
  *
- * This is the shape almost every read in the system actually wants: a manifest,
- * an icon, a library image, a program. Doing it as three operations cost three
- * round trips, and a round trip is milliseconds. Same borrow lifetime as
- * astra_vfs_port_read_borrow: valid until the next operation on this thread's
- * lane.
+ * File-area providers read one retained description through the canonical
+ * page owner; other providers supply READ_PATH directly. Same borrow lifetime
+ * as astra_vfs_port_read_borrow: valid until the next operation on this
+ * thread's lane.
  *
- * Answers ASTRA_VFS_ERR_LIMIT for a file larger than the current area,
- * filling `node_size`; the client grows its area before retrying.
+ * Grows the transfer area as needed, refusing files beyond ASTRA_VFS_BULK_MAX
+ * with ASTRA_VFS_ERR_LIMIT and their size in `node_size`.
  */
 uint32_t astra_vfs_port_read_path(AstraVfsClient *client, const char *path,
                                   const uint8_t **bytes, uint32_t *moved,
@@ -117,6 +116,9 @@ uint32_t astra_vfs_port_read_path(AstraVfsClient *client, const char *path,
  * The pointer is valid until the next operation on the calling thread's lane,
  * because that lane reuses the area. Copy anything that has to outlive that.
  *
+ * File-area providers fill the transfer area through the canonical page
+ * owner, with the same I/O-error contract as positioned reads. Other
+ * providers supply the transfer area directly.
  * Refuses a length the area cannot hold; the caller falls back to read_bulk.
  */
 uint32_t astra_vfs_port_read_borrow(AstraVfsClient *client, AstraVfsFile file,

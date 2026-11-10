@@ -3,9 +3,38 @@
 Status: design contract; VFS description-retention, metadata, VM page
 publication, and read-only HostFS file areas passed host and DE25 gates.
 The existing pressure worker reclaims clean read-only pager frames on DE25.
-Sequential/borrowed reads and ordinary writes still bypass mapped resident frames; dirty writeback,
+Sequential reads and ordinary writes still bypass mapped resident frames; dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
+
+Borrowed and whole-path cache reads, 2026-11-10: file-area providers now use
+the same positioned reader for borrowed source reads and whole-file reads.
+The lane transfer area remains a temporary output buffer, not another file
+cache. During pager waits it belongs to the call so disconnect cannot unmap
+it; no inflight guard is held across operations that may refresh the client.
+On success the existing lane takes ownership again. Repeated reads reuse
+the same transfer allocation and consult canonical pages again. Whole-path
+reads open one retained description and close it on every outcome, including
+empty files, size refusal, and I/O failure. Existing non-file-area providers
+retain their native transfer path. No public ABI layout or export changed.
+VFS host tests, ASan/UBSan, target builds, library contracts, and NDK
+dist-check pass. A coherent Beast guest passed six native cases and
+basic/file-map after provider reset, with read-only e2fsck. The file-map
+case proves both public borrowed-source and whole-file reads populate the
+original canonical area after separate writes invalidate it. Host tests also
+disconnect during prefetch and require no dangling output or mapped-area
+leak. Coherent private DE25 release
+`61e358e881d869178cd73628e5ad0df517f6aa22bdc0fbe4184ec424b93859f9`
+passed all six native cases, visible provider loss/reopen, and basic/file-map
+after reset (2/2). It remained at stage 8 for 600 seconds with no
+panic/degraded markers and restored the selected runtime with result 0.
+Image/console hashes matched archived Beast copies and read-only e2fsck
+passed. Verified trial state was removed; all three services are active,
+only production loop0 remains, and 8.6 GiB is free. Exact evidence identities
+are recorded in CURRENT_STATE.md. Haiku
+`src/system/kernel/cache/file_cache.cpp:760-910` keeps the caller buffer and
+cache reference alive across waits; Astra applies that ownership rule to its
+existing borrowed transfer buffer.
 
 Covered notification replay, 2026-11-10: after bounded drain forces a full
 invalidation, the reconciliation watermark must not move backward when

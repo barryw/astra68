@@ -2,6 +2,40 @@
 
 Status: active continuation map, 2026-11-10
 
+Borrowed/path cache integration, 2026-11-10: Filesystem Kit borrowed source
+reads and whole-path reads now share the positioned canonical-page reader.
+The call temporarily owns its existing lane output area across pager waits,
+then returns ownership to the lane; no new cache, public layout, or export
+was added. This prevents disconnect from freeing the output while avoiding
+a self-deadlock on provider refresh. Whole-path reads use one retained open
+description and close it on success and failure. VFS host/sanitizer suites,
+target builds, library contracts, NDK dist-check, and a coherent Beast
+six-case guest gate pass. Provider-reset recovery also passes basic/file-map
+and read-only e2fsck. Native file-map now proves public borrowed-source and
+whole-file reads populate the original canonical page after separate writes.
+The existing area-range case was added to the semantic harness's selectable
+cases. Private DE25 release
+`61e358e881d869178cd73628e5ad0df517f6aa22bdc0fbe4184ec424b93859f9`
+passed all six native cases on DE25, visible provider loss/reopen
+(`FSSEM LOSS PASS after=215`), and basic/file-map after reset (2/2).
+Atlas enumerated Applications and Terminal launched through the updated
+loader/Filesystem Kit. The first 60-second loss probe ended before reset
+and supplies no loss result; the longer repeat above supplied the result.
+The runtime remained at stage 8 for 600 seconds without panic/degraded
+markers and restored the selected release with result 0. Board/Beast
+post-trial image and console SHA-256 matched:
+`4a7f4cfbd6cb6dd2a1ddb4f489ced1fed537d87155705f99ce022d679b44d505`
+and `84e2a1ae3856f13c2931fc72719ff7e4d1b1c7a7108f196162bbcad5824ebf9b`.
+Read-only e2fsck passed. Evidence is under
+`/home/barry/astra-evidence/file-cache-client-20261109/borrow-board-trial/`;
+the selected release and production data were preserved. Verified trial
+state was removed; all three services are active, only production loop0
+remains, and 8.6 GiB is free. Haiku
+`src/system/kernel/cache/file_cache.cpp:760-910` guided buffer/reference
+ownership across waits. Sequential reads, retention across independent
+ordinary reads, ordinary writes, writable mappings, and remaining six-gap
+work stay open.
+
 Covered cache notifications, 2026-11-10: a focused HostFS regression proved
 that bounded catch-up invalidated fresh pages again when older queued NODE
 records were read after a full invalidation. The cache reconciliation
