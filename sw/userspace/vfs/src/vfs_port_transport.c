@@ -440,7 +440,6 @@ port_client_handles_reset(AstraVfsClient *client)
     if (client->port_connect_lock != 0u)
         (void)astra_close(client->port_connect_lock);
     client->port_area_capable = 0u;
-    client->port_direct_detached = 0u;
     client->port_connect_lock = 0u;
     client->port_lane_lock = 0u;
 }
@@ -773,7 +772,6 @@ astra_vfs_port_connect_lazy_with_accelerator(
                           memory_order_relaxed);
     client->version = ASTRA_VFS_VERSION;
     client->port_area_capable = 1u;
-    client->port_direct_detached = 0u;
     client->port_service = service;
     client->features = 0u;
     memset(client->port_lanes, 0, sizeof(client->port_lanes));
@@ -1037,14 +1035,6 @@ astra_vfs_port_transport(void *context, uint32_t operation,
 
         if (!port_client_begin_drain(client))
             return ASTRA_VFS_ERR_PEER;
-        if (client->port_direct_detached != 0u &&
-            client->port_accelerator_ops != NULL) {
-            status = client->port_accelerator_ops->transport(
-                client, operation, request, transfer, reply);
-            port_call.request.flags = 0u;
-            port_client_finish(client, 0);
-            return status;
-        }
         lane = port_session_lane(client);
         status = lane == NULL ? ASTRA_VFS_ERR_BAD_HANDLE :
             vfs_port_transport_call(context, operation, request, transfer, reply, lane);
@@ -1424,10 +1414,7 @@ astra_vfs_grant_derive(AstraVfsClient *client, const char *root,
         if (status != ASTRA_VFS_OK)
             return astra_vfs_storage_status(status);
     }
-    /* A fork child's lane client holds no session at its grant's port
-     * (vfs_host_direct.c astra_vfs_host_direct_after_fork). */
     if ((client->features & ASTRA_VFS_FEATURE_GRANTS) == 0u ||
-        client->port_direct_detached != 0u ||
         port_client_session(client) == ASTRA_VFS_SESSION_INVALID)
         return ASTRA_VFS_ERR_UNSUPPORTED;
     memset(&request, 0, sizeof(request));
@@ -1478,7 +1465,6 @@ astra_vfs_file_area(AstraVfsClient *client, AstraVfsFile file,
             return astra_vfs_storage_status(status);
     }
     if ((client->features & ASTRA_VFS_FEATURE_FILE_AREAS) == 0u ||
-        client->port_direct_detached != 0u ||
         port_client_session(client) == ASTRA_VFS_SESSION_INVALID)
         return ASTRA_VFS_ERR_UNSUPPORTED;
     status = astra_vfs_share(client, file, &token);

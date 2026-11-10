@@ -80,7 +80,6 @@ static void client_clear(AstraVfsClient *client)
     client->port_direct_area = 0u;
     client->port_direct_scope = 0u;
     client->port_direct_session = ASTRA_VFS_SESSION_INVALID;
-    client->port_direct_detached = 0u;
     client->direct_backend_ops = NULL;
     client->direct_backend_context = NULL;
     client->direct_backend_enter = NULL;
@@ -125,7 +124,6 @@ static void client_bind(AstraVfsClient *client, AstraVfsHostDirect *direct,
     client->port_direct_area = area;
     client->port_direct_scope = scope;
     client->port_direct_session = session;
-    client->port_direct_detached = 0u;
     client->direct_backend_ops = astra_vfs_host_ops();
     client->direct_backend_context = &direct->backend;
     client->direct_backend_enter = lane_enter;
@@ -267,9 +265,8 @@ invalid:
     return ASTRA_VFS_ERR_INVALID;
 }
 
-/* A fork child's client: drop the parent's lane state and port session,
- * keep the inherited scope and negotiated contract, and drive a lane of
- * the child's own on that scope. */
+/* Keep inherited file authority, but bind the child's own control session
+ * before it can report mutations through the grant's port. */
 uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
 {
     AstraVfsHostDirect *direct;
@@ -278,9 +275,6 @@ uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
     uint32_t scope;
     uint32_t service;
     uint32_t status;
-    uint32_t features;
-    uint16_t version;
-    uint8_t area_capable;
 
     if (client == NULL || client->port_direct_address == NULL ||
         client->port_direct_area == 0u || client->port_direct_scope == 0u)
@@ -290,24 +284,19 @@ uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
     area = client->port_direct_area;
     scope = client->port_direct_scope;
     service = client->port_service;
-    features = client->features;
-    version = client->version;
-    area_capable = client->port_area_capable;
     client_clear(client);
     (void)astra_rt_area_unmap(direct);
     (void)astra_close(area);
     lane_release();
     client->port_accelerator_ops = NULL;
     astra_vfs_port_abandon(client);
-    status = astra_vfs_client_connect_service(client, service);
+    status = astra_vfs_host_port_connect(client, service);
     if (status != ASTRA_VFS_OK) {
         (void)astra_close(scope);
         return status;
     }
     client->activity = activity;
-    client->features = features;
-    client->version = version;
-    client->port_area_capable = area_capable;
+    astra_vfs_host_direct_disconnect(client);
     status = astra_vfs_host_direct_connect(client, scope);
     if (status != ASTRA_VFS_OK) {
         (void)astra_close(scope);
@@ -316,8 +305,6 @@ uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
             return astra_vfs_port_refresh(client);
         return status;
     }
-    client->session = client->port_direct_session;
-    client->port_direct_detached = 1u;
     return ASTRA_VFS_OK;
 }
 

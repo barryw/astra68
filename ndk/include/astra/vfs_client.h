@@ -165,7 +165,6 @@ typedef struct AstraVfsClient {
     ASTRA_VFS_ATOMIC(uint32_t) activity;
     /* Private state used by astra_vfs_port_connect/transport. */
     uint8_t port_area_capable;
-    uint8_t port_direct_detached;
     uint32_t port_service;
     void *port_direct_address;
     uint32_t port_direct_area;

@@ -13,6 +13,13 @@ the `MESSAGING` startup capability. `VOLUMES` still supplies catalog snapshots.
 All in-tree filesystem consumers use ABI 17.0; historical ABI 14–16 notes
 below describe earlier migrations, not supported coexistence.
 
+Forked file clients keep the inherited provider scope and create a fresh
+HostFS control session through the ordinary HELLO lifecycle. Provider session
+IDs are never used as control-port session IDs. File adoption, mutation
+notification, and exec therefore use a session bound to the child's PID.
+The detached-client bypass has been removed; removing its private byte leaves
+MC68040 client size and subsequent field offsets unchanged.
+
 ## Unreleased native volume migration
 
 Host transport is now `0x00030000`, command record 5. SESSION_OPEN takes a

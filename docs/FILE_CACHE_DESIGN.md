@@ -26,12 +26,35 @@ boundary. `fssem area-range` passed. Private DE25 release
 ran 300 seconds at stage 8; native Terminal passed both cases, 2/2, while
 Atlas enumerated Applications. Post-trial image/console hashes matched
 archived Beast copies; read-only `e2fsck` passed. Selected runtime and user
-data were preserved. The broader shared-description gate stalls on the
-candidate and on the prior image and remains under investigation.
+data were preserved. The broader shared-description gate initially stalled on the
+candidate and on the prior image; the fork control-session repair below
+resolves it.
 Haiku `src/system/kernel/cache/file_cache.cpp:760-910` guided common cache
 ownership, waiting for busy pages, and partial-I/O reporting. Sequential,
 borrowed, and path read shapes remain open; this does not claim cache
 retention across independent ordinary reads without a surviving area user.
+
+Forked cache users, 2026-11-09: fork now registers the child's own HostFS
+control session through ordinary HELLO while preserving its inherited
+provider scope and shared file descriptions. A provider session ID is not a
+control session ID: the old detached-client path sent mutation notifications
+under an unbound child/session and waited forever for the refused request.
+That bypass and private state byte are deleted. Client layout remains
+unchanged on MC68040. VFS host/sanitizer tests, target builds, NDK
+`dist-check`, and coherent Beast guest shared-description, exec-inherit,
+file-map, area-range, basic, and durable-save gates pass. The file-map gate
+now requires a child's write to invalidate the parent's mapped page.
+DE25 private release
+`3112da5a7c4556fa703ba505e77c4956e0e29029e7651109e745e56d732e6ea0`
+ran 240 seconds at stage 8. Native Terminal passed five cases, including
+shared-description and exec-inherit. The file-map case passed forked-write
+invalidation but later failed its immediate resident-copy proof after an
+ordinary read: combined suite is 5/6, not certified. Split the compound
+assertion before attributing that failure to I/O, ownership, or allowed page
+eviction. Pending node-event ordering also needs inspection. Haiku
+`src/system/kernel/fs/vfs.cpp:5026-5094` guided separate child I/O context
+ownership with retained shared file descriptions; Astra reuses its existing
+control registration and provider scope.
 
 Handle-based cache fill, 2026-11-09: `AREA_PREFETCH` requests a page through
 the existing native pager lifecycle using a READ handle, without a user

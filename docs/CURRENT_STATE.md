@@ -2,6 +2,42 @@
 
 Status: active continuation map, 2026-11-09
 
+Fork control-session repair, 2026-11-09: the shared-description stall below
+was caused by a fork child using its provider session ID on HostFS's control
+port. The service correctly refused the unbound child/session, while the
+client waited for a reply. Fork setup now reuses ordinary HELLO registration
+for a child-owned control session and reconnects its inherited provider scope
+before adopting shared descriptions. The detached-client bypass and private
+state byte were removed. MC68040 object measurements confirm unchanged
+client size and subsequent field offsets. VFS host/sanitizer suites, target
+builds, and NDK `dist-check` pass. A coherent Beast guest passes six cases:
+shared-description, exec-inherit, file-map, area-range, basic, durable-save.
+The file-map case now verifies that a forked child's write immediately
+invalidates the parent's mapped page. Private DE25 release
+`3112da5a7c4556fa703ba505e77c4956e0e29029e7651109e745e56d732e6ea0`
+ran 240 seconds at stage 8 without a panic/degraded marker. Native Terminal
+passed shared-description, exec-inherit, area-range, basic, and durable-save.
+The file-map case passed the new forked-write invalidation check, then failed
+at `ordinary read fills canonical page`: total 5/6. The failure is not yet
+classified among pread/fill failure, owner divergence, or legitimate eviction
+between pread and the resident-copy assertion. Do not claim the combined
+cache gate passed. An immediate repeat was interrupted by scheduled trial
+restoration and supplies no result. Next: split that assertion's operations
+and record exact statuses, then examine pending node invalidations and page
+reclaim. `file_areas_observe_nodes` drains eight records per pass and can
+advance its observed-node watermark on overflow while retaining older
+queued records; audit that ordering without weakening coherency checks.
+Post-trial image and console SHA-256 matched board and Beast:
+`35f7705b830f2614b24e2edb7f18cd9e5a77de4056f15eff09b577b3a93d8f54`
+and `908a67a3513fe48327872707d521ad5c53cb174e69a770b6327d1c9ff9f651c7`.
+Read-only `e2fsck` passed. Trial state was verified and removed; selected
+runtime and production data stayed intact, all three services are active,
+only production loop0 remains, and 8.6 GiB is free.
+Haiku `src/system/kernel/fs/vfs.cpp:5026-5094` gives each child its own I/O
+context while retaining shared file descriptions; Astra keeps its inherited
+scope and establishes the child's own control ownership. Evidence remains
+under `/home/barry/astra-evidence/file-cache-client-20261109/`.
+
 Shared positioned cache reads, 2026-11-09: Filesystem Kit scalar/bulk
 positioned reads now converge on canonical file areas, native prefetch, and
 resident copy. Removed the bypassed service-only adapter. HostFS preserves
@@ -26,12 +62,12 @@ were not root-owned; restoring the provider's existing ownership policy
 fixed that setup error. Selected runtime and production data stayed intact.
 Archived trial files were verified and removed from DE25; all three services
 are active, only production loop0 remains, and 8.6 GiB is free.
-The broader `shared-description` guest gate stalls on both this candidate
+The initial broader `shared-description` guest gate stalled on both this candidate
 and the prior immutable image; it is an open correctness investigation,
 not evidence of a cache regression or a passed fork gate. A detached-client
-eligibility experiment did not fix it and was removed. The child waits for a
+eligibility experiment did not fix it and was removed. The child waited for a
 VFS control-port reply, outside the pager; investigate control-session setup
-for detached post-fork clients before claiming the shared-description gate.
+for detached post-fork clients. The later repair above resolves that stall.
 Sequential/borrowed/path reads, retaining
 cache owners between independent ordinary reads, ordinary writes, writable
 shared maps, dirty writeback/conflicts, and remaining six-gap acceptance

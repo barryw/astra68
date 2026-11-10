@@ -2181,6 +2181,21 @@ static int file_map_gate(const char *directory)
     if (fd < 0 || pread(fd, &observed, 1u, ASTRA_MEMORY_PAGE_SIZE) != 1 ||
         observed != 'a') goto done;
     close(fd); fd = -1;
+    stage = "forked write invalidates parent mapping";
+    fd = open(path, O_RDWR);
+    if (fd < 0) goto done;
+    pid_t writer = fork();
+    if (writer < 0) goto done;
+    if (writer == 0) {
+        int written = pwrite(fd, "F", 1u, 0) == 1 && fsync(fd) == 0;
+        (void)close(fd);
+        _exit(written ? 0 : 1);
+    }
+    int writer_status = 0;
+    if (waitpid(writer, &writer_status, 0) != writer ||
+        !WIFEXITED(writer_status) || WEXITSTATUS(writer_status) != 0 ||
+        ((volatile const char *)mapping)[0] != 'F') goto done;
+    close(fd); fd = -1;
     stage = "mutation";
     fd = open(path, O_WRONLY);
     if (fd < 0 || pwrite(fd, "b", 1u, 0) != 1 || fsync(fd) != 0)
