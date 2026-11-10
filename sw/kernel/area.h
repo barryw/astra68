@@ -127,6 +127,9 @@ KernelAreaStatus kernel_area_pager_request(uint32_t process_id,
                                             KernelAddressSpace *space,
                                             uint32_t address,
                                             KernelAreaPagerRequest *request);
+/* Handle-authorized I/O uses the same retained request as a mapped fault. */
+KernelAreaStatus kernel_area_page_request(KernelArea *area, uint32_t offset,
+                                          KernelAreaPagerRequest *request);
 /*
  * Answers a fault inside the area window: commits the cluster containing the
  * address and publishes it into every address space that already has the area

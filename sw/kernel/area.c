@@ -1502,7 +1502,6 @@ KernelAreaStatus kernel_area_pager_request(uint32_t process_id,
 {
     uint32_t page;
     KernelAreaMapping *mapping;
-    KernelAreaStatus status;
 
     if (request == NULL)
         return KERNEL_AREA_INVALID_ARGUMENT;
@@ -1514,16 +1513,27 @@ KernelAreaStatus kernel_area_pager_request(uint32_t process_id,
     mapping = missing_reserved_mapping(process_id, space, address, &page);
     if (mapping == NULL)
         return KERNEL_AREA_NOT_MAPPED;
-    if (mapping->area->pager == NULL)
+    return kernel_area_page_request(mapping->area, page * KERNEL_PAGE_SIZE,
+                                     request);
+}
+
+KernelAreaStatus kernel_area_page_request(KernelArea *area, uint32_t offset,
+                                          KernelAreaPagerRequest *request)
+{
+    if (request == NULL || !valid_area(area) ||
+        (offset & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
+        !range_valid(area, offset, KERNEL_PAGE_SIZE))
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    if (area->pager == NULL || kernel_area_page_resident(area, offset))
         return KERNEL_AREA_INVALID_STATE;
-    status = kernel_area_child_retain(mapping->area);
+    KernelAreaStatus status = kernel_area_child_retain(area);
     if (status != KERNEL_AREA_OK)
         return status;
-    request->area = mapping->area;
-    request->port = mapping->area->pager;
-    request->cookie = mapping->area->pager_cookie;
-    request->offset = page * KERNEL_PAGE_SIZE;
-    request->epoch = mapping->area->pager_epoch;
+    request->area = area;
+    request->port = area->pager;
+    request->cookie = area->pager_cookie;
+    request->offset = offset;
+    request->epoch = area->pager_epoch;
     return KERNEL_AREA_OK;
 }
 

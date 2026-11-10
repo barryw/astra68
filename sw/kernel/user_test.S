@@ -891,6 +891,12 @@ _k1_survivor_image_entry:
 	bne     .Lmain_fail
 	move.l  %d1, KERNEL_QUALIFICATION_PAGER_THREAD_OFFSET(%a0)
 
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	moveq   #ASTRA_SYSCALL_AREA_PREFETCH, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
 	movea.l KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0), %a1
 	cmpi.l  #0x50414745, (%a1)
 	bne     .Lmain_fail

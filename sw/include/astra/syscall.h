@@ -1109,6 +1109,13 @@
  * pager page returns WOULD_BLOCK without faulting or touching destination.
  */
 #define ASTRA_SYSCALL_AREA_READ_RESIDENT 120
+/**
+ * Make one page resident through its existing pager. data[1] is a READ area
+ * handle and data[2] a page-aligned offset. Uses the same bounded pager wait,
+ * donation and retry lifecycle as a mapped fault, but returns an I/O status
+ * to the caller instead of retiring its process when the backing read fails.
+ */
+#define ASTRA_SYSCALL_AREA_PREFETCH 121
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */

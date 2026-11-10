@@ -294,6 +294,15 @@ uint32_t astra_rt_area_read_resident(uint32_t area, uint32_t offset,
     return result.status;
 }
 
+uint32_t astra_rt_area_prefetch(uint32_t area, uint32_t offset)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_AREA_PREFETCH, area, offset, 0u, 0u, 0u,
+                   &result);
+    return result.status;
+}
+
 uint32_t astra_rt_area_reclaim(uint32_t area, uint32_t offset,
                                uint32_t byte_size, uint32_t *released_pages)
 {

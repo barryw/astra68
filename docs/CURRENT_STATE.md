@@ -1,6 +1,39 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-11-08
+Status: active continuation map, 2026-11-09
+
+Handle-based pager reads, 2026-11-09: native `AREA_PREFETCH` uses READ
+authority to request an unmapped area's page through the existing pager
+call/reply, shared wait, priority donation, retry, and deadline lifecycle.
+Backing-read failure returns a syscall error; it does not retire the process
+as a failed mapped access must. Mapped faults and handle requests share one
+retained `kernel_area_page_request` builder. Full kernel/runtime host tests
+passed, including unmapped requests, reclaim during fill, invalid replies,
+permission denial, and timeout without a user fault. NDK `dist-check` passed.
+K1 exercises prefetch before the mapped access; final Beast and DE25 ROM
+passed all 16 markers with zero overruns. DE25 syscall dispatch max was
+2,994/50,000 cycles. ROM SHA-256
+`b5cca384629383e0d516ec03ec098ab6f2c45db5b75b38cdef5739fa292e6ab1`
+and log SHA-256
+`3ad21bf8d31cd8ee6dfddaffc41c1d6aa39247d38e74b1b11afec8be718dfc3b`
+matched archived Beast copies. Evidence is under
+`/home/barry/astra-evidence/file-cache-prefetch-20261109/` on Beast. The
+harness used a disposable copy of the immutable release image and ran QEMU
+as UID/GID 999 alongside the normal runtime. Normal build products were
+restored; disposable board harness files were removed. Application read
+integration and the remaining six-gap acceptance work are still open.
+
+Read coverage correction, 2026-11-09: production HostFS grant ports are
+control-only. Normal application reads use direct provider lanes, bypassing
+`HostfsVolume.ops.read`. The prior `fssem file-map` `pread` check proved read
+semantics, not resident-page reuse. Only the focused HostFS host test proved
+that service adapter's cache hit. Real positioned, bulk, borrowed, and
+sequential reads still need one shared client cache path. Reuse `FILE_AREA`,
+native prefetch and resident copy; do not add a second byte cache or allow
+ordinary read failure to become a fatal internal mapping fault. Haiku
+`src/system/kernel/cache/file_cache.cpp:760-910` uses one vnode cache and
+waits for busy pages; Astra keeps the native area/pager owner and reports
+ordinary I/O errors through its syscall boundary.
 
 Resident ordinary-read slice, 2026-11-08: native syscall 120 copies from one
 already resident area page through READ authority without raising a pager

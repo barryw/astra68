@@ -257,6 +257,7 @@ typedef struct KernelThread {
     uint8_t pager_primary;
     uint8_t pager_send_wait;
     uint8_t pager_retry;
+    uint8_t pager_syscall;
     uint32_t exit_status;
     uint32_t terminal_result;
     uint64_t deadline_cycles;

@@ -284,6 +284,14 @@ uint32_t astra_rt_area_references(uint32_t area, uint32_t *handles,
  */
 uint32_t astra_rt_area_read_resident(uint32_t area, uint32_t offset,
                                     void *destination, uint32_t length);
+
+/**
+ * Request one page through the area's pager, waiting for completion.
+ * @param area READ handle for a pager-bound area.
+ * @param offset Page-aligned byte offset in the area.
+ * @return Native syscall status; backing failure is reported as an error.
+ */
+uint32_t astra_rt_area_prefetch(uint32_t area, uint32_t offset);
 /** Reclaim clean pages of a pager-bound area through ADMINISTER authority.
  * In-flight page faults return WOULD_BLOCK; caller keeps its backing source.
  * @param area Pager-bound area handle with ADMINISTER rights.

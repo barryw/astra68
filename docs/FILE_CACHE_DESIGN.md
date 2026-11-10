@@ -7,6 +7,27 @@ Ordinary writes and read misses still bypass mapped resident frames; dirty write
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Handle-based cache fill, 2026-11-09: `AREA_PREFETCH` requests a page through
+the existing native pager lifecycle using a READ handle, without a user
+mapping. The same retained request builder serves mapped faults and handle
+I/O. A failed backing read reports a syscall error rather than killing the
+caller. Final kernel/runtime host tests, NDK `dist-check`, and all 16 K1
+markers on Beast/DE25 passed with zero overruns. DE25 syscall dispatch max
+was 2,994/50,000 cycles. Checksummed ROM/log evidence is archived under
+`/home/barry/astra-evidence/file-cache-prefetch-20261109/`; disposable board
+harness state was removed and normal build products restored.
+Haiku `src/system/kernel/cache/file_cache.cpp:760-910`
+waits on busy vnode-cache pages; Astra reuses its native pager waits and frame
+owner. This is a prerequisite for the shared client read adapter.
+
+Coverage correction: the resident ordinary-read service adapter below is not
+on production direct-lane application reads. The DE25 `pread` check proved
+semantics, not reuse of resident pages. Production grant ports are
+control-only; route real client reads through the existing canonical file
+area and the native pager, with I/O errors reported to the caller. Positioned,
+sequential, bulk, and borrowed reads must converge there before claiming
+ordinary-I/O cache integration.
+
 Resident ordinary-read slice, 2026-11-08: native area syscall 120 copies from
 one resident page through READ authority, returning WOULD_BLOCK on an absent
 page without triggering a pager fault in HostFS. HostFS ordinary reads consult

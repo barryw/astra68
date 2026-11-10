@@ -441,6 +441,7 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_AREA_BIND_PAGER &&
         number != ASTRA_SYSCALL_AREA_RECLAIM &&
         number != ASTRA_SYSCALL_AREA_READ_RESIDENT &&
+        number != ASTRA_SYSCALL_AREA_PREFETCH &&
         number != ASTRA_SYSCALL_AREA_MAP_RANGE &&
         number != ASTRA_SYSCALL_RING_CREATE &&
         number != ASTRA_SYSCALL_RING_READ_TRY &&
@@ -960,6 +961,9 @@ test_syscall_wrappers(void)
         assert(mock_argument0 == 7u && mock_argument1 == 32u &&
                mock_argument2 == (uint32_t)(uintptr_t)ring_bytes &&
                mock_argument3 == 4u);
+        assert(astra_rt_area_prefetch(7u, 4096u) == ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_AREA_PREFETCH &&
+               mock_argument0 == 7u && mock_argument1 == 4096u);
         assert(astra_rt_area_reclaim(7u, 0u, 4096u, &handles) ==
                ASTRA_SYSCALL_OK);
         assert(mock_number == ASTRA_SYSCALL_AREA_RECLAIM);

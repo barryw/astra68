@@ -8442,7 +8442,7 @@ static uint32_t pager_area_children(uint32_t creator)
     return children;
 }
 
-static void test_bound_area_fault_calls_pager(void)
+static void test_bound_area_fault_calls_pager(bool prefetch, bool timeout)
 {
     static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
     const uint32_t stack = KERNEL_PROCESS_STACK_TOP - 2048u;
@@ -8486,7 +8486,7 @@ static void test_bound_area_fault_calls_pager(void)
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_CREATE,
                      2u * KERNEL_PAGE_SIZE,
                      ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP |
-                         ASTRA_RIGHT_ADMINISTER,
+                         ASTRA_RIGHT_ADMINISTER | ASTRA_RIGHT_TRANSFER,
                      ASTRA_AREA_CREATE_RESERVED, 0u, 0u) ==
            KERNEL_PROCESS_OK);
     target = next->data[1];
@@ -8506,14 +8506,37 @@ static void test_bound_area_fault_calls_pager(void)
                      KERNEL_PAGE_SIZE - 1u, source_base + 64u, 5u, 0u) ==
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_PREFETCH,
+                     target, 1u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_PREFETCH,
+                     source, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_HANDLE_DUPLICATE,
+                     target, ASTRA_RIGHT_MAP, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    uint32_t map_only = next->data[1];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_PREFETCH,
+                     map_only, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     map_only, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    if (prefetch) {
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_UNMAP,
+                         target_base, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+    }
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_THREAD_CREATE,
                      KERNEL_PROCESS_CODE_BASE + 2u, 0u,
                      KERNEL_THREAD_PRIORITY_NORMAL - 1u,
                      KERNEL_THREAD_RIGHTS, 0u) == KERNEL_PROCESS_OK);
     registers[0] = 0xdeadbeefu;
-    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE,
+    make_frame(frame, prefetch ? 0u : 0x7u,
+               prefetch ? ASTRA_SYSCALL_VECTOR : 2u, KERNEL_PROCESS_CODE_BASE,
                target_base);
-    assert(kernel_process_on_fault(registers, stack, frame, &next) ==
+    assert((prefetch ? test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_PREFETCH,
+                                target, 0u, 0u, 0u, 0u) :
+            kernel_process_on_fault(registers, stack, frame, &next)) ==
            KERNEL_PROCESS_OK);
     assert(kernel_thread_at(0u)->state == KERNEL_THREAD_BLOCKED);
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
@@ -8572,9 +8595,17 @@ static void test_bound_area_fault_calls_pager(void)
     assert(kernel_thread_at(0u)->pager_area == NULL);
     assert(kernel_thread_at(0u)->pager_failed == 0u);
     assert(pager_area_children(process_id) == 0u);
-    assert(kernel_thread_at(0u)->context.data[0] == 0xdeadbeefu);
+    assert(kernel_thread_at(0u)->context.data[0] ==
+           (prefetch ? ASTRA_SYSCALL_OK : 0xdeadbeefu));
     assert(kernel_thread_at(0u)->context.program_counter ==
            KERNEL_PROCESS_CODE_BASE);
+    if (prefetch) {
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_MAP,
+                         target, ASTRA_AREA_MAP_READ, 0u, 0u, 0u) ==
+               KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        target_base = next->data[1];
+    }
     assert(kernel_user_copy_from_asm(bytes, target_base, sizeof(bytes)) ==
            KERNEL_USER_COPY_OK);
     assert(memcmp(bytes, "fresh", 5u) == 0);
@@ -8610,14 +8641,28 @@ static void test_bound_area_fault_calls_pager(void)
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     memset(registers, 0, sizeof(registers));
     registers[0] = 0xabcdef01u;
-    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE,
+    make_frame(frame, prefetch ? 0u : 0x7u,
+               prefetch ? ASTRA_SYSCALL_VECTOR : 2u, KERNEL_PROCESS_CODE_BASE,
                target_base + KERNEL_PAGE_SIZE);
-    assert(kernel_process_on_fault(registers, stack, frame, &next) ==
+    assert((prefetch ? test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_PREFETCH,
+                                target, KERNEL_PAGE_SIZE, 0u, 0u, 0u) :
+            kernel_process_on_fault(registers, stack, frame, &next)) ==
            KERNEL_PROCESS_OK);
     pager_deadline = kernel_thread_at(0u)->pager_deadline;
     assert(pager_deadline != 0u);
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
                KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    if (timeout) {
+        assert(prefetch);
+        scheduler_test_cycles = pager_deadline + 1u;
+        assert(kernel_process_on_timer(registers, service_stack, frame,
+                                        &next) == KERNEL_PROCESS_OK);
+        assert(kernel_thread_at(0u)->context.data[0] == ASTRA_SYSCALL_TIMED_OUT);
+        assert(kernel_process_stats(&stats) && stats.user_faults == 0u);
+        assert(pager_area_children(process_id) == 0u);
+        assert(kernel_area_pool_valid());
+        return;
+    }
     assert(test_trap(service_stack, frame, &next,
                      ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive,
                      service_stack + 256u, sizeof(request),
@@ -8644,12 +8689,18 @@ static void test_bound_area_fault_calls_pager(void)
                                    sizeof(reply)) == KERNEL_USER_COPY_OK);
     assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
                      capability, service_stack + 512u, sizeof(reply),
-                     0u, 0u) == KERNEL_PROCESS_NO_RUNNABLE);
+                     0u, 0u) == (prefetch ? KERNEL_PROCESS_OK :
+                                           KERNEL_PROCESS_NO_RUNNABLE));
     assert(kernel_process_snapshot(0u, &snapshot));
-    assert(snapshot.process_state == KERNEL_PROCESS_EXITING);
-    assert(snapshot.exit_reason == KERNEL_PROCESS_EXIT_USER_FAULT);
-    assert(snapshot.fault_address == target_base + KERNEL_PAGE_SIZE);
-    assert(kernel_process_stats(&stats) && stats.user_faults == 1u);
+    if (prefetch) {
+        assert(snapshot.process_state != KERNEL_PROCESS_EXITING);
+        assert(kernel_thread_at(0u)->context.data[0] == ASTRA_SYSCALL_IO_ERROR);
+    } else {
+        assert(snapshot.process_state == KERNEL_PROCESS_EXITING);
+        assert(snapshot.exit_reason == KERNEL_PROCESS_EXIT_USER_FAULT);
+        assert(snapshot.fault_address == target_base + KERNEL_PAGE_SIZE);
+    }
+    assert(kernel_process_stats(&stats) && stats.user_faults == (prefetch ? 0u : 1u));
     assert(pager_area_children(process_id) == 0u);
     assert(kernel_area_pool_valid());
 }
@@ -17725,7 +17776,9 @@ int main(void)
     test_area_publication_rolls_back_when_handle_table_full();
     test_pager_binding_retains_send_endpoint();
     test_pager_reply_publishes_before_wake();
-    test_bound_area_fault_calls_pager();
+    test_bound_area_fault_calls_pager(false, false);
+    test_bound_area_fault_calls_pager(true, false);
+    test_bound_area_fault_calls_pager(true, true);
     test_same_page_faults_wake_together(false, PAGER_TEST_REPLY);
     test_same_page_faults_wake_together(true, PAGER_TEST_REPLY);
     test_same_page_faults_wake_together(true, PAGER_TEST_TIMEOUT);
