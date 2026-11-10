@@ -1056,6 +1056,7 @@ astra_vfs_port_transport(void *context, uint32_t operation,
              operation == ASTRA_VFS_OP_READ_PATH ||
              operation == ASTRA_VFS_OP_CONFIG_CRYPT ||
              operation == ASTRA_VFS_OP_FILE_AREA ||
+             operation == ASTRA_VFS_OP_CACHE_RECLAIM ||
              operation == ASTRA_VFS_OP_FILE_MUTATED ?
         astra_vfs_port_client_enter(client) : port_data_enter(client);
     if (status != ASTRA_VFS_OK)
@@ -1172,6 +1173,7 @@ vfs_port_transport_call(void *context, uint32_t operation,
         (client->port_direct_address == NULL || operation == ASTRA_VFS_OP_GRANT_DERIVE ||
          operation == ASTRA_VFS_OP_BIND_AREA || operation == ASTRA_VFS_OP_CONFIG_CRYPT ||
          operation == ASTRA_VFS_OP_FILE_AREA ||
+         operation == ASTRA_VFS_OP_CACHE_RECLAIM ||
          operation == ASTRA_VFS_OP_FILE_MUTATED)) {
         if (lane == NULL)
             lane = port_lane(client);
@@ -1188,9 +1190,26 @@ vfs_port_transport_call(void *context, uint32_t operation,
         operation != ASTRA_VFS_OP_BIND_AREA &&
         operation != ASTRA_VFS_OP_CONFIG_CRYPT &&
         operation != ASTRA_VFS_OP_FILE_AREA &&
+        operation != ASTRA_VFS_OP_CACHE_RECLAIM &&
         operation != ASTRA_VFS_OP_FILE_MUTATED) {
-        return client->port_accelerator_ops->transport(
+        status = client->port_accelerator_ops->transport(
             client, operation, request, transfer, reply);
+        if (status == ASTRA_VFS_OK && reply->status == ASTRA_VFS_ERR_LIMIT &&
+            (client->features & ASTRA_VFS_FEATURE_CACHE_RECLAIM) != 0u &&
+            (operation == ASTRA_VFS_OP_OPEN || operation == ASTRA_VFS_OP_OPEN_AT ||
+             operation == ASTRA_VFS_OP_SHARE || operation == ASTRA_VFS_OP_ADOPT ||
+             operation == ASTRA_VFS_OP_LOOKUP || operation == ASTRA_VFS_OP_READ_PATH)) {
+            AstraVfsRequest reclaim = {.size = ASTRA_VFS_REQUEST_SIZE,
+                .version = client->version, .session = port_client_session(client),
+                .activity = request->activity};
+            AstraVfsReply result = {0};
+            if (vfs_port_transport_call(client, ASTRA_VFS_OP_CACHE_RECLAIM,
+                    &reclaim, NULL, &result, lane) == ASTRA_VFS_OK &&
+                result.status == ASTRA_VFS_OK)
+                status = client->port_accelerator_ops->transport(
+                    client, operation, request, transfer, reply);
+        }
+        return status;
     }
     if (lane == NULL)
         lane = port_lane(client);
@@ -1352,7 +1371,9 @@ vfs_port_transport_call(void *context, uint32_t operation,
          * data plane. A generic port client cannot make share tokens. */
         if (!direct_accelerated(client))
             reply->features &= ~(ASTRA_VFS_FEATURE_DESCRIPTIONS |
-                                 ASTRA_VFS_FEATURE_FILE_AREAS);
+                                 ASTRA_VFS_FEATURE_FILE_AREAS |
+                                 ASTRA_VFS_FEATURE_POSITION_ADVANCE |
+                                 ASTRA_VFS_FEATURE_CACHE_RECLAIM);
         port_client_publish_session(client, reply->session, reply->version,
                                     reply->features);
         lane->session = reply->session;
@@ -1584,6 +1605,66 @@ done:
     }
     *moved = copied;
     return copied != 0u ? ASTRA_VFS_OK : status;
+}
+
+uint32_t
+astra_vfs_port_read_cached_position(AstraVfsClient *client, AstraVfsFile file,
+    uint64_t offset, uint32_t flags, void *buffer, uint32_t length,
+    uint32_t *moved, uint64_t *position)
+{
+    uint32_t status;
+
+    if (client == NULL || buffer == NULL || moved == NULL || position == NULL ||
+        (flags & ~ASTRA_VFS_IO_SEQUENTIAL) != 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    *moved = 0u;
+    *position = offset;
+    if (flags == 0u) {
+        status = astra_vfs_port_read_cached(client, file, offset,
+                                            buffer, length, moved);
+        *position = offset + *moved;
+        return status;
+    }
+    status = port_cache_available(client);
+    if (status != ASTRA_VFS_OK) return status;
+    const uint32_t features = ASTRA_VFS_FEATURE_DESCRIPTIONS |
+                              ASTRA_VFS_FEATURE_POSITION_ADVANCE;
+    if ((client->features & features) != features)
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    status = astra_vfs_seek(client, file, 0, 1u, position);
+    if (status != ASTRA_VFS_OK) return status;
+    uint64_t deadline = astra_clock_monotonic() + ASTRA_PAGER_REQUEST_TIMEOUT_NS;
+    for (;;) {
+        uint64_t expected = *position;
+        uint32_t copied = 0u;
+        AstraVfsRequest request = {0};
+        AstraVfsReply reply = {0};
+
+        status = astra_vfs_port_read_cached(client, file, expected,
+                                            buffer, length, &copied);
+        if (status != ASTRA_VFS_OK) return status;
+        request.size = ASTRA_VFS_REQUEST_SIZE;
+        request.version = client->version;
+        request.session = port_client_session(client);
+        request.file = file;
+        request.activity = client->activity;
+        request.offset = expected;
+        request.length = copied;
+        status = astra_vfs_port_transport(client, ASTRA_VFS_OP_POSITION_ADVANCE,
+                                           &request, NULL, &reply);
+        if (status == ASTRA_VFS_OK) status = reply.status;
+        if (status != ASTRA_VFS_OK) return status;
+        if (reply.position > INT64_MAX || reply.count > 1u ||
+            (reply.count ? reply.position != expected + copied :
+                           reply.position == expected))
+            return ASTRA_VFS_ERR_PROTOCOL;
+        *position = reply.position;
+        if (reply.count != 0u) {
+            *moved = copied;
+            return ASTRA_VFS_OK;
+        }
+        if (astra_clock_monotonic() >= deadline) return ASTRA_VFS_ERR_BUSY;
+    }
 }
 
 static void
@@ -2096,14 +2177,9 @@ astra_vfs_port_read_bulk_position(AstraVfsClient *client, AstraVfsFile file,
     if (client == NULL || buffer == NULL || moved == NULL ||
         position == NULL || length == 0u)
         return ASTRA_VFS_ERR_INVALID;
-    if (flags == 0u) {
-        status = astra_vfs_port_read_cached(client, file, offset,
-                                            buffer, length, moved);
-        if (status != ASTRA_VFS_ERR_UNSUPPORTED) {
-            *position = offset + *moved;
-            return status;
-        }
-    }
+    status = astra_vfs_port_read_cached_position(client, file, offset, flags,
+                                                buffer, length, moved, position);
+    if (status != ASTRA_VFS_ERR_UNSUPPORTED) return status;
     status = port_data_enter(client);
     if (status == ASTRA_VFS_OK) {
         status = port_read_bulk_call(client, file, offset, flags, buffer,
@@ -2752,14 +2828,25 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
         if (wire_operation == ASTRA_VFS_OP_HELLO &&
             incoming->request.version >= ASTRA_VFS_VERSION_MIN && grant != NULL &&
             grant->scope != 0u) {
-            if (astra_rt_handle_duplicate(
+            uint32_t duplicated;
+            for (uint32_t attempt = 0u; ; ++attempt) {
+                duplicated = astra_rt_handle_duplicate(
                     grant->scope,
                     ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
                         ASTRA_RIGHT_TRANSFER,
-                    &outgoing_handles[0]) == ASTRA_SYSCALL_OK)
+                    &outgoing_handles[0]);
+                if (duplicated != ASTRA_SYSCALL_RESOURCE_LIMIT || attempt != 0u ||
+                    (grant->features & ASTRA_VFS_FEATURE_CACHE_RECLAIM) == 0u ||
+                    host->service->backend.ops->cache_reclaim == NULL)
+                    break;
+                host->service->backend.ops->cache_reclaim(host->service->backend.context);
+            }
+            if (duplicated == ASTRA_SYSCALL_OK)
                 outgoing_handle_count = 1u;
-            else
+            else {
+                (void)astra_log_failure("VFS grant scope duplicate", duplicated);
                 scope_refused = 1;
+            }
         }
 
         clear_service_reply(&outgoing->reply, incoming->request.version,
@@ -2837,6 +2924,7 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
             wire_operation != ASTRA_VFS_OP_BIND_AREA &&
             wire_operation != ASTRA_VFS_OP_CONFIG_CRYPT &&
             wire_operation != ASTRA_VFS_OP_FILE_AREA &&
+            wire_operation != ASTRA_VFS_OP_CACHE_RECLAIM &&
             wire_operation != ASTRA_VFS_OP_FILE_MUTATED) {
             /* A BIND_AREA's area is not the reply port: nothing keeps it. */
             if (handle_count != 0u && handles[0] != reply_handle)
@@ -3073,6 +3161,23 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
                     if (outgoing->reply.status == ASTRA_VFS_OK)
                         outgoing->reply.status = ASTRA_VFS_ERR_IO;
                 }
+            }
+        } else if (operation == ASTRA_VFS_OP_CACHE_RECLAIM) {
+            if (grant == NULL ||
+                (grant->features & ASTRA_VFS_FEATURE_CACHE_RECLAIM) == 0u ||
+                host->service->backend.ops->cache_reclaim == NULL)
+                outgoing->reply.status = ASTRA_VFS_ERR_UNSUPPORTED;
+            else if ((grant->rights & ASTRA_VFS_GRANT_READ) == 0u)
+                outgoing->reply.status = ASTRA_VFS_ERR_ACCESS;
+            else if (incoming->request.file != ASTRA_VFS_FILE_INVALID ||
+                     incoming->request.flags != 0u || incoming->request.offset != 0u ||
+                     incoming->request.length != 0u || incoming->request.write_limit != 0u ||
+                     incoming->request.body.paths.first_length != 0u ||
+                     incoming->request.body.paths.second_length != 0u)
+                outgoing->reply.status = ASTRA_VFS_ERR_INVALID;
+            else {
+                host->service->backend.ops->cache_reclaim(host->service->backend.context);
+                outgoing->reply.status = ASTRA_VFS_OK;
             }
         } else if (operation == ASTRA_VFS_OP_FILE_MUTATED) {
             if (grant == NULL || host->file_mutated == NULL ||

@@ -208,8 +208,13 @@ int astra_storage_control_call(int socket, const AstraStorageControlRequest *req
                     change->name[0] != '\0' :
                     change->parent_inode == 0u ||
                     change->name[0] == '\0'))) ||
-            (!exact && (reply->change.mount != 0u ||
-                reply->change.generation != 0u || change->inode != 0u ||
+            (!exact && ((change->kind == ASTRA_HOST_FS_CHANGE_NONE &&
+                (reply->change.mount != 0u || reply->change.generation != 0u)) ||
+                ((reply->change.mount == 0u) != (reply->change.generation == 0u)) ||
+                (change->kind == ASTRA_HOST_FS_CHANGE_GAP &&
+                 ((reply->change.mount != 0u && change->sequence == 0u) ||
+                  (change->sequence != 0u && change->sequence != reply->next))) ||
+                change->inode != 0u ||
                 change->parent_inode != 0u || change->name[0] != '\0')) ||
             (change->kind == ASTRA_HOST_FS_CHANGE_NONE &&
                 reply->next != request->sequence)) {

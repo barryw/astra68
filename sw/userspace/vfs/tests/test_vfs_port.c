@@ -66,6 +66,10 @@ static uint32_t cache_closed_area;
 static uint64_t cache_file_size = UINT64_C(0x100004000);
 static uint64_t cache_shrink_to;
 static AstraVfsClient *cache_disconnect_client;
+static uint64_t cache_position;
+static uint32_t cache_advances, cache_advance_conflicts, cache_advance_status;
+static uint32_t cache_admission_limits, cache_reclaims, cache_reclaim_ineffective;
+static int cache_advance_corrupt;
 static uint32_t mock_activity;
 /* Set while the transport is blocked, so the service runs inside its wait. */
 static AstraVfsPortService *served;
@@ -271,6 +275,12 @@ uint32_t astra_vfs_host_direct_transport(
     reply->version = client->version;
     reply->session = client->session;
     reply->status = ASTRA_VFS_OK;
+    if ((operation == ASTRA_VFS_OP_OPEN || operation == ASTRA_VFS_OP_SHARE) &&
+        cache_admission_limits != 0u) {
+        --cache_admission_limits;
+        reply->status = ASTRA_VFS_ERR_LIMIT;
+        return ASTRA_VFS_OK;
+    }
     if (operation == ASTRA_VFS_OP_OPEN) {
         reply->file = 0x12340001u;
         reply->kind = ASTRA_VFS_KIND_FILE;
@@ -282,6 +292,23 @@ uint32_t astra_vfs_host_direct_transport(
         reply->node_size = cache_file_size;
     } else if (operation == ASTRA_VFS_OP_FILE_FLAGS && cache_reads_active) {
         reply->open_flags = ASTRA_VFS_OPEN_READ;
+    } else if (operation == ASTRA_VFS_OP_SEEK && cache_reads_active) {
+        assert(request->offset == 0u && request->flags == 1u);
+        reply->position = cache_position;
+    } else if (operation == ASTRA_VFS_OP_POSITION_ADVANCE && cache_reads_active) {
+        assert(request->flags == 0u && request->write_limit == 0u);
+        ++cache_advances;
+        reply->status = cache_advance_status;
+        if (reply->status == ASTRA_VFS_OK) {
+            if (cache_advance_conflicts != 0u) {
+                --cache_advance_conflicts;
+                ++cache_position;
+            }
+            reply->count = cache_position == request->offset;
+            if (reply->count) cache_position += request->length;
+            reply->position = cache_position;
+            if (cache_advance_corrupt) reply->count = 2u;
+        }
     }
     return ASTRA_VFS_OK;
 }
@@ -1070,7 +1097,18 @@ backend_readlink(void *context, const char *path, void *buffer,
     return ASTRA_VFS_ERR_UNSUPPORTED;
 }
 
+static void backend_cache_reclaim(void *context)
+{
+    (void)context;
+    ++cache_reclaims;
+    if (!cache_reclaim_ineffective) {
+        cache_admission_limits = 0u;
+        mock_fail_duplicate = 0;
+    }
+}
+
 static const AstraVfsBackendOps backend_ops = {
+    .cache_reclaim = backend_cache_reclaim,
     .open = backend_open,
     .close = backend_close,
     .read = backend_read,
@@ -1846,6 +1884,19 @@ test_a_scoped_hello_without_its_scope_is_refused(void)
     assert(attached == 0u && backend_mkdir_calls == 0u);
     for (uint32_t index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index)
         assert(host.reply_sessions[index] == ASTRA_VFS_SESSION_INVALID);
+    grant.features |= ASTRA_VFS_FEATURE_CACHE_RECLAIM;
+    cache_reclaims = 0u;
+    cache_reclaim_ineffective = 1u;
+    mock_fail_duplicate = 1;
+    assert(scoped_hello(&host, &grant, ASTRA_VFS_VERSION,
+        ASTRA_VFS_FILE_INVALID, &attached) == ASTRA_VFS_ERR_LIMIT);
+    assert(cache_reclaims == 1u && attached == 0u);
+    for (uint32_t index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index)
+        assert(host.reply_sessions[index] == ASTRA_VFS_SESSION_INVALID);
+    cache_reclaim_ineffective = 0u;
+    assert(scoped_hello(&host, &grant, ASTRA_VFS_VERSION,
+        ASTRA_VFS_FILE_INVALID, &attached) == ASTRA_VFS_OK);
+    assert(cache_reclaims == 2u && attached == 1u);
 }
 
 static void
@@ -2720,6 +2771,66 @@ mock_file_area(void *context, const AstraVfsPortGrant *grant,
     return file_area_result;
 }
 
+static void test_cache_reclaim_admission_and_authority(void)
+{
+    AstraVfsPortService host;
+    AstraVfsPortGrant grant;
+    AstraVfsClient remote;
+    AstraVfsFile file;
+    AstraVfsRequestMessage request = {0};
+    AstraVfsReplyMessage reply;
+    uint32_t lane, received = 0u, session;
+
+    mock_reset();
+    service_start();
+    cache_reclaims = cache_reclaim_ineffective = 0u;
+    grant = full_grant(mock_open(MOCK_QUEUE_MAX), 9u);
+    grant.features |= ASTRA_VFS_FEATURE_CACHE_RECLAIM;
+    assert(astra_vfs_port_service_init(&host, grant.receive, &service));
+    served = &host;
+    served_grant = &grant;
+    assert(astra_vfs_port_connect_lazy_with_accelerator(&remote,
+        grant.receive, &mock_accelerator_ops) == ASTRA_VFS_OK);
+    cache_admission_limits = 1u;
+    uint32_t operations = direct_operations;
+    assert(astra_vfs_open(&remote, "/a", ASTRA_VFS_OPEN_READ,
+        &file, NULL, NULL) == ASTRA_VFS_OK);
+    assert(cache_reclaims == 1u && direct_operations == operations + 2u);
+    cache_admission_limits = 100u;
+    cache_reclaim_ineffective = 1u;
+    operations = direct_operations;
+    assert(astra_vfs_open(&remote, "/a", ASTRA_VFS_OPEN_READ,
+        &file, NULL, NULL) == ASTRA_VFS_ERR_LIMIT);
+    assert(cache_reclaims == 2u && direct_operations == operations + 2u);
+    grant.features &= ~ASTRA_VFS_FEATURE_CACHE_RECLAIM;
+    operations = direct_operations;
+    assert(astra_vfs_open(&remote, "/a", ASTRA_VFS_OPEN_READ,
+        &file, NULL, NULL) == ASTRA_VFS_ERR_LIMIT);
+    assert(cache_reclaims == 2u && direct_operations == operations + 1u);
+    cache_admission_limits = cache_reclaim_ineffective = 0u;
+    grant.features |= ASTRA_VFS_FEATURE_CACHE_RECLAIM;
+    lane = mock_open(4u);
+    assert(grant_round_trip(&host, &grant, ASTRA_VFS_OP_HELLO, 0u, 0u,
+        "", lane, lane, &reply, &received) == ASTRA_SYSCALL_OK);
+    session = reply.reply.session;
+    astra_message_header_set(&request.header, sizeof(request),
+        ASTRA_VFS_PROTOCOL, ASTRA_VFS_VERSION, ASTRA_VFS_OP_CACHE_RECLAIM, 1u);
+    request.request.size = ASTRA_VFS_REQUEST_SIZE;
+    request.request.version = ASTRA_VFS_VERSION;
+    request.request.session = session;
+    request.request.flags = 1u;
+    assert(grant_round_trip_message(&host, &grant, &request, 0u, lane,
+        &reply, &received) == ASTRA_SYSCALL_OK);
+    assert(reply.reply.status == ASTRA_VFS_ERR_INVALID && cache_reclaims == 2u);
+    request.request.flags = 0u;
+    grant.rights = ASTRA_VFS_GRANT_WRITE;
+    assert(grant_round_trip_message(&host, &grant, &request, 0u, lane,
+        &reply, &received) == ASTRA_SYSCALL_OK);
+    assert(reply.reply.status == ASTRA_VFS_ERR_ACCESS && cache_reclaims == 2u);
+    served = NULL;
+    served_grant = NULL;
+}
+
 static void
 test_file_area_grant_and_narrowed_reply(void)
 {
@@ -2864,7 +2975,8 @@ test_file_area_client_uses_grant_control(void)
     file_area_expected_token = 42u;
     grant = full_grant(mock_open(MOCK_QUEUE_MAX), 9u);
     grant.features = ASTRA_VFS_FEATURE_DESCRIPTIONS |
-                     ASTRA_VFS_FEATURE_FILE_AREAS;
+                     ASTRA_VFS_FEATURE_FILE_AREAS |
+                     ASTRA_VFS_FEATURE_POSITION_ADVANCE;
     assert(astra_vfs_port_service_init(&host, grant.receive, &service));
     assert(astra_vfs_port_service_set_file_area(&host, mock_file_area, NULL));
     served = &host;
@@ -2918,6 +3030,57 @@ test_file_area_client_uses_grant_control(void)
            memcmp(borrowed, bytes, moved) == 0 &&
            direct_bulk_operations == bulk_before && cache_prefetches == 4u &&
            mock_area_maps == maps_before);
+    uint8_t sequential[3];
+    cache_position = UINT64_C(0x100000fff);
+    cache_advances = cache_advance_conflicts = cache_advance_status = 0u;
+    assert(astra_vfs_read_position(&remote, file, 99u, ASTRA_VFS_IO_SEQUENTIAL,
+        sequential, sizeof(sequential), &moved, &position) == ASTRA_VFS_OK);
+    assert(moved == sizeof(sequential) && memcmp(sequential, bytes, moved) == 0 &&
+           position == UINT64_C(0x100001002) && cache_advances == 1u);
+    cache_position = UINT64_C(0x100000fff);
+    cache_advance_conflicts = 1u;
+    assert(astra_vfs_port_read_bulk_position(&remote, file, 99u,
+        ASTRA_VFS_IO_SEQUENTIAL, sequential, sizeof(sequential), &moved,
+        &position) == ASTRA_VFS_OK);
+    assert(moved == sizeof(sequential) && sequential[0] == 4096u % 251u &&
+           sequential[2] == 4098u % 251u && position == UINT64_C(0x100001003) &&
+           cache_advances == 3u && direct_bulk_operations == bulk_before);
+    cache_position = cache_file_size;
+    assert(astra_vfs_read_position(&remote, file, 99u, ASTRA_VFS_IO_SEQUENTIAL,
+        sequential, sizeof(sequential), &moved, &position) == ASTRA_VFS_OK);
+    assert(moved == 0u && position == cache_file_size);
+    cache_position = 0u;
+    cache_advance_status = ASTRA_VFS_ERR_IO;
+    assert(astra_vfs_read_position(&remote, file, 99u, ASTRA_VFS_IO_SEQUENTIAL,
+        sequential, sizeof(sequential), &moved, &position) == ASTRA_VFS_ERR_IO);
+    assert(moved == 0u && cache_position == 0u);
+    cache_advance_status = 0u;
+    cache_resident = 0u;
+    cache_prefetch_status = ASTRA_SYSCALL_IO_ERROR;
+    uint32_t advances_before = cache_advances;
+    assert(astra_vfs_read_position(&remote, file, 99u, ASTRA_VFS_IO_SEQUENTIAL,
+        sequential, sizeof(sequential), &moved, &position) == ASTRA_VFS_ERR_IO);
+    assert(moved == 0u && cache_position == 0u && cache_advances == advances_before);
+    cache_resident = 1u;
+    cache_position = 4095u;
+    assert(astra_vfs_read_position(&remote, file, 99u, ASTRA_VFS_IO_SEQUENTIAL,
+        sequential, sizeof(sequential), &moved, &position) == ASTRA_VFS_OK);
+    assert(moved == 1u && position == 4096u && cache_position == position);
+    cache_prefetch_status = 0u;
+    cache_resident = UINT32_MAX;
+    cache_position = 0u;
+    cache_advance_corrupt = 1;
+    assert(astra_vfs_read_position(&remote, file, 99u, ASTRA_VFS_IO_SEQUENTIAL,
+        sequential, sizeof(sequential), &moved, &position) == ASTRA_VFS_ERR_PROTOCOL);
+    assert(moved == 0u);
+    cache_advance_corrupt = 0;
+    cache_position = 0u;
+    cache_advance_conflicts = 1u;
+    cache_prefetch_drops = 1;
+    assert(astra_vfs_read_position(&remote, file, 99u, ASTRA_VFS_IO_SEQUENTIAL,
+        sequential, sizeof(sequential), &moved, &position) == ASTRA_VFS_ERR_BUSY);
+    assert(moved == 0u && cache_position == 1u);
+    cache_prefetch_drops = 0;
     assert(astra_vfs_read(&remote, file, cache_file_size,
         bytes, sizeof(bytes), &moved) == ASTRA_VFS_OK && moved == 0u);
     cache_resident = 0u;
@@ -3313,7 +3476,8 @@ test_descriptions_require_a_connected_data_plane(void)
     service_start();
     grant = full_grant(mock_open(MOCK_QUEUE_MAX), 1u);
     grant.features = ASTRA_VFS_FEATURE_DESCRIPTIONS |
-                     ASTRA_VFS_FEATURE_FILE_AREAS;
+                     ASTRA_VFS_FEATURE_FILE_AREAS |
+                     ASTRA_VFS_FEATURE_POSITION_ADVANCE;
     grant.scope = 0u;
     assert(astra_vfs_port_service_init(&host, grant.receive, &service));
     served = &host;
@@ -3435,6 +3599,7 @@ main(void)
     test_host_accelerator_moves_data_plane_out_of_the_service();
     test_config_crypt_is_bound_to_grant_even_with_accelerator();
     test_file_area_grant_and_narrowed_reply();
+    test_cache_reclaim_admission_and_authority();
     test_file_mutated_grant_barrier();
     test_file_area_client_uses_grant_control();
     test_grants_hand_out_their_scope_and_only_narrow();

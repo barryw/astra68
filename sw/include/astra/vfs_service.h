@@ -204,8 +204,13 @@
 /** A completed direct-lane mutation supplies a one-use file share token.
  * The cache owner revokes matching mapped pages before acknowledging it. */
 #define ASTRA_VFS_OP_FILE_MUTATED UINT32_C(46)
+/** Conditional description advance: offset is expected position, length is
+ * the completed byte count; reply count is 0/1 and position is observed/final. */
+#define ASTRA_VFS_OP_POSITION_ADVANCE UINT32_C(47)
+/** Release unused cache owners before retrying resource admission. No payload. */
+#define ASTRA_VFS_OP_CACHE_RECLAIM UINT32_C(48)
 /** Highest operation code this build defines. */
-#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_FILE_MUTATED
+#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_CACHE_RECLAIM
 
 /** Encrypt a Config Kit value under the receiving grant's provider root. */
 #define ASTRA_VFS_CONFIG_SEAL UINT32_C(1)
@@ -241,6 +246,10 @@
 #define ASTRA_VFS_FEATURE_CONFIG_CRYPT (UINT32_C(1) << 5)
 /** A grant exchanges one-use file shares for read-only mapped windows. */
 #define ASTRA_VFS_FEATURE_FILE_AREAS (UINT32_C(1) << 6)
+/** Shared descriptions support conditional byte-position advance. */
+#define ASTRA_VFS_FEATURE_POSITION_ADVANCE (UINT32_C(1) << 7)
+/** Resource admission may request release of unused cache references. */
+#define ASTRA_VFS_FEATURE_CACHE_RECLAIM (UINT32_C(1) << 8)
 /** Read at an open description's current directory cursor without seeking. */
 #define ASTRA_VFS_CURSOR_CURRENT UINT64_MAX
 

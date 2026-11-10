@@ -734,7 +734,7 @@ static void exfat_external_changes(AstraStorageProvider *provider,
                 &change, &next) == 0);
             if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
             if (change.change.kind == ASTRA_HOST_FS_CHANGE_GAP &&
-                change.mount == 0u && change.generation == 0u) ++gap;
+                change.mount == mount && change.generation == 1u) ++gap;
             cursor = next;
         }
         assert(gap >= 1);
@@ -772,7 +772,7 @@ static void exfat_external_changes(AstraStorageProvider *provider,
                 &change, &next) == 0);
             if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
             if (change.change.kind == ASTRA_HOST_FS_CHANGE_GAP &&
-                change.mount == 0u && change.generation == 0u) ++gap;
+                change.mount == mount && change.generation == 1u) ++gap;
             cursor = next;
         }
         assert(gap >= 1);
@@ -782,7 +782,7 @@ static void exfat_external_changes(AstraStorageProvider *provider,
         assert(astra_storage_provider_change_next(provider, cursor,
             &change, &next) == 0 &&
             change.change.kind == ASTRA_HOST_FS_CHANGE_GAP &&
-            change.mount == 0u && change.generation == 0u);
+            change.mount == mount && change.generation == 1u);
         provider->resource_limit = limit;
         sleep(1);
         assert(astra_storage_provider_change_next(provider,
@@ -1407,13 +1407,18 @@ static void network_mount_auth(AstraStorageProvider *provider, const char *serve
     assert(astra_storage_provider_release(provider, source) == 0);
 }
 
-static void external_changes(AstraStorageProvider *provider, int root)
+static void external_changes(AstraStorageProvider *provider, int root, uint64_t mount)
 {
-    uint64_t mount;
-    assert(provider->watch_fd >= 0);
-    assert(astra_storage_provider_export(provider, root, "/watch-test", 0u,
-        &mount) == 0);
+    int native = mount != 0u;
+    assert(provider->watch_fd >= 0 && provider->inotify_fd >= 0);
+    int fid = provider->watch_fd;
+    if (!native) {
+        provider->watch_fd = -1;
+        assert(astra_storage_provider_export(provider, root, "/watch-test", 0u,
+            &mount) == 0);
+    }
     assert(astra_storage_provider_poll(provider) >= 0);
+    assert(native ? provider->watch_count == 0u : provider->watch_count != 0u);
     uint64_t cursor = provider->watch_sequence;
     int file = openat(root, "inside-event", O_CREAT | O_EXCL | O_RDWR, 0600);
     struct stat created_info;
@@ -1425,8 +1430,14 @@ static void external_changes(AstraStorageProvider *provider, int root)
     assert(snprintf(sibling, sizeof(sibling), "%s/outside-event", outside) <
         (int)sizeof(sibling));
     file = open(sibling, O_CREAT | O_EXCL | O_RDWR, 0600);
-    assert(file >= 0 && close(file) == 0);
-    unsigned created = 0u, modified = 0u;
+    assert(file >= 0 && write(file, "x", 1u) == 1 && close(file) == 0 &&
+        chmod(sibling, 0644) == 0 &&
+        unlink(sibling) == 0);
+    struct stat root_info;
+    assert(fstat(root, &root_info) == 0 && fchmodat(root, ".", 0710, 0) == 0 &&
+        chmod(outside, 0710) == 0);
+    assert(rmdir(outside) == 0);
+    unsigned created = 0u, modified = 0u, directory_modified = 0u;
     for (unsigned at = 0u; at < 64u; ++at) {
         AstraStorageChangeRecord change;
         uint64_t next;
@@ -1438,22 +1449,79 @@ static void external_changes(AstraStorageProvider *provider, int root)
             strcmp(change.change.name, "outside-event") != 0);
         if (change.change.kind == ASTRA_HOST_FS_CHANGE_ENTRY_CREATED &&
             strcmp(change.change.name, "inside-event") == 0) {
-            assert(change.change.inode == (uint64_t)created_info.st_ino);
+            assert(change.change.inode == 0u ||
+                change.change.inode == (uint64_t)created_info.st_ino);
             ++created;
         }
-        if (change.change.kind == ASTRA_HOST_FS_CHANGE_NODE) ++modified;
+        if (change.change.kind == ASTRA_HOST_FS_CHANGE_NODE) {
+            if (change.change.inode == (uint64_t)created_info.st_ino)
+                ++modified;
+            if (change.change.inode == (uint64_t)root_info.st_ino)
+                ++directory_modified;
+        }
         cursor = next;
     }
-    assert(created >= 1u && modified >= 1u);
+    assert(created >= 1u && modified >= 1u && directory_modified >= 1u);
     assert(unlinkat(root, "inside-event", 0) == 0);
-    assert(unlink(sibling) == 0 && rmdir(outside) == 0);
-    close(provider->watch_fd);
+    if (!native) {
+        uint64_t witness;
+        char witness_path[] = "/var/tmp/astra-storage-watch-witness.XXXXXX";
+        assert(mkdtemp(witness_path) != NULL);
+        int witness_root = open(witness_path, O_PATH | O_DIRECTORY | O_CLOEXEC);
+        assert(witness_root >= 0 && astra_storage_provider_export(provider,
+            witness_root, "/watch-witness", 0u, &witness) == 0);
+        assert(astra_storage_provider_poll(provider) >= 0);
+        size_t baseline = provider->watch_count;
+        uint32_t generation = provider->inotify_generation;
+        cursor = provider->watch_sequence;
+        assert(mkdirat(root, "transient-directory", 0700) == 0);
+        for (unsigned phase = 0u; phase < 2u; ++phase) {
+            unsigned gap = 0u;
+            for (unsigned at = 0u; at < 64u; ++at) {
+                AstraStorageChangeRecord change;
+                uint64_t next;
+                assert(astra_storage_provider_change_next(provider, cursor,
+                    &change, &next) == 0);
+                if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
+                assert(change.mount == mount && change.generation == 1u);
+                if (change.change.kind == ASTRA_HOST_FS_CHANGE_GAP) ++gap;
+                cursor = next;
+            }
+            assert(gap != 0u && provider->inotify_generation == generation);
+            if (phase == 0u)
+                assert(unlinkat(root, "transient-directory", AT_REMOVEDIR) == 0);
+        }
+        assert(provider->watch_count == baseline);
+        assert(astra_storage_provider_loss(provider, witness, 1u) == 0);
+        assert(unmount_wait(provider, witness, 2u) == 0);
+        assert(astra_storage_provider_release(provider, witness) == 0);
+        close(witness_root);
+        assert(rmdir(witness_path) == 0);
+    }
+    cursor = provider->watch_sequence;
+    file = openat(root, "vanished-write", O_CREAT | O_EXCL | O_RDWR, 0600);
+    assert(file >= 0 && write(file, "x", 1u) == 1 &&
+        unlinkat(root, "vanished-write", 0) == 0 && close(file) == 0);
+    unsigned unknown_write = 0u;
+    for (unsigned at = 0u; at < 64u; ++at) {
+        AstraStorageChangeRecord change;
+        uint64_t next;
+        assert(astra_storage_provider_change_next(provider, cursor, &change, &next) == 0);
+        if (change.change.kind == ASTRA_HOST_FS_CHANGE_NONE) break;
+        if (change.change.kind == ASTRA_HOST_FS_CHANGE_GAP) {
+            assert(change.mount == mount && change.generation == 1u);
+            ++unknown_write;
+        }
+        cursor = next;
+    }
+    assert(unknown_write != 0u);
+    close(native ? provider->watch_fd : provider->inotify_fd);
     cursor = provider->watch_sequence;
     AstraStorageChangeRecord lost;
     uint64_t lost_next;
     assert(astra_storage_provider_change_next(provider, cursor, &lost,
         &lost_next) == 0 && lost.change.kind == ASTRA_HOST_FS_CHANGE_GAP);
-    assert(provider->watch_fd >= 0);
+    assert((native ? provider->watch_fd : provider->inotify_fd) >= 0);
     cursor = provider->watch_sequence;
     file = openat(root, "after-fid-loss", O_CREAT | O_EXCL | O_WRONLY, 0600);
     assert(file >= 0 && close(file) == 0);
@@ -1469,9 +1537,11 @@ static void external_changes(AstraStorageProvider *provider, int root)
         cursor = lost_next;
     }
     assert(restored == 1u && unlinkat(root, "after-fid-loss", 0) == 0);
+    if (native) close(root);
     assert(astra_storage_provider_loss(provider, mount, 1u) == 0);
     assert(unmount_wait(provider, mount, 2u) == 0);
     assert(astra_storage_provider_release(provider, mount) == 0);
+    if (!native) provider->watch_fd = fid;
 }
 
 int main(int argc, char **argv)
@@ -1566,7 +1636,16 @@ int main(int argc, char **argv)
     int file = openat(root, "private", O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
     assert(root >= 0 && file >= 0);
     close(file);
-    external_changes(&provider, root);
+    external_changes(&provider, root, 0u);
+    uint64_t watch_source, watch_mount;
+    int watch_root;
+    assert(astra_storage_ram_source(&provider.catalog, 0u, &watch_source) == 0);
+    assert(mount_wait(&provider, watch_source, 1u, 0u,
+        1024u * 1024u, 16u, &watch_mount) == 0);
+    assert(astra_storage_provider_root(&provider, watch_mount, 1u, &watch_root) == 0);
+    external_changes(&provider, watch_root, watch_mount);
+    assert(astra_storage_provider_loss(&provider, watch_source, 1u) == 0);
+    assert(astra_storage_provider_release(&provider, watch_source) == 0);
     for (unsigned at = 0; at < 18u; ++at) {
         char name[32];
         (void)snprintf(name, sizeof(name), "/export%u", at);

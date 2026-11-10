@@ -78,6 +78,8 @@
 #define ASTRA_HOST_CAP_CODEC (1u << 18)
 /** Host-held authenticated encryption for resident Config Kit clients. */
 #define ASTRA_HOST_CAP_CONFIG_SECRETS (1u << 19)
+/** Shared file descriptions support conditional position advance. */
+#define ASTRA_HOST_CAP_FS_POSITION_ADVANCE (1u << 20)
 /** Channel configuration: the scope words name a scope. Kernel-written. */
 #define ASTRA_HOST_SCOPE_BOUND     (1u << 0)
 /** The scope refuses every mutation (ASTRA_STATUS_READ_ONLY). */
@@ -300,6 +302,10 @@ _Static_assert(sizeof(AstraHostFsChangeRecord) == 304u,
 #define ASTRA_HOST_FS_WRITE_APPEND      (1u << 15)
 /** READ/WRITE at the shared position; value answers the position after. */
 #define ASTRA_HOST_FS_IO_SEQUENTIAL     (1u << 14)
+/** SEEK: advance by input value_lo only if current position equals offset.
+ * Input value_hi is zero; output value is the observed/resulting position,
+ * and result_value is one on advance, zero on comparison failure. */
+#define ASTRA_HOST_FS_SEEK_ADVANCE      4u
 /** ADOPT withdraws an unclaimed token; only its sharer may withdraw. */
 #define ASTRA_HOST_FS_ADOPT_DISCARD     (1u << 0)
 /** UNLINK flag: remove an empty directory; zero flags require a non-directory. */

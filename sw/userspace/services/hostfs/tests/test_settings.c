@@ -16,7 +16,11 @@ static uint32_t area_handles = 2u, area_mappings = 1u, next_area = 40u;
 static uint32_t open_file_size = ASTRA_MEMORY_PAGE_SIZE * 2u;
 static uint32_t open_file_identity_valid = 1u;
 static uint32_t open_file_generation = 11u;
+static uint32_t open_file_links = 1u;
 static uint32_t file_closes, area_reclaims, area_binds, area_duplicates;
+static uint32_t area_reference_queries;
+static uint32_t adopt_limits, area_limits, area_close_status, file_close_status;
+static uint32_t session_open_limits, session_opens;
 static uint32_t writes, truncates, opens;
 static uint32_t open_file_flags = ASTRA_VFS_OPEN_READ;
 static uint64_t node_sequence;
@@ -24,7 +28,10 @@ static uint64_t changed_inode = 7u;
 static int change_gap;
 static uint32_t changed_kind = ASTRA_HOST_FS_CHANGE_NODE;
 static uint32_t snapshot_calls;
+static uint32_t snapshot_failure;
 static uint32_t change_next_failure;
+static AstraResult filesystem_publish_result;
+static uint32_t filesystem_publications;
 uint32_t astra_log(const char *text) { (void)text; return ASTRA_SYSCALL_OK; }
 uint64_t astra_clock_monotonic(void) { return 1u; }
 uint32_t astra_rt_thread_sleep(uint64_t deadline, uint32_t flags,
@@ -35,8 +42,20 @@ uint32_t astra_vfs_host_change_snapshot(AstraVfsHostBackend *backend,
     uint64_t *nodes, uint64_t *entries)
 {
     assert(backend != NULL && nodes != NULL && entries != NULL);
+    if (snapshot_failure != 0u) return snapshot_failure;
     *nodes = node_sequence; *entries = 0u; ++snapshot_calls;
     return ASTRA_VFS_OK;
+}
+AstraResult astra_messaging_publish_reliable(AstraHandle broker, const char *topic,
+    const void *payload, uint32_t size, uint32_t transaction,
+    AstraMonotonicDeadline deadline, uint32_t *queued)
+{
+    const AstraFilesystemChange *change = payload;
+    assert(broker == 81u && strcmp(topic, ASTRA_FILESYSTEM_CHANGE_TOPIC) == 0 &&
+        size == sizeof(*change) && transaction != 0u && deadline > 1u && queued != NULL);
+    ++filesystem_publications;
+    *queued = filesystem_publish_result == ASTRA_OK ? 1u : 0u;
+    return filesystem_publish_result;
 }
 uint32_t astra_vfs_host_change_next(AstraVfsHostBackend *backend,
     uint64_t *cursor, AstraHostFsChangeRecord *record, uint32_t *kind)
@@ -46,6 +65,7 @@ uint32_t astra_vfs_host_change_next(AstraVfsHostBackend *backend,
     if (*cursor < node_sequence) {
         ++*cursor;
         *kind = change_gap ? ASTRA_HOST_FS_CHANGE_GAP : changed_kind;
+        if (change_gap) *cursor = node_sequence;
         *record = (AstraHostFsChangeRecord){.sequence = *cursor,
             .nodes = *cursor, .inode = changed_inode, .kind = *kind};
     } else {
@@ -89,9 +109,21 @@ uint32_t astra_host_scope_revoke(uint32_t scope)
 uint32_t astra_close(uint32_t handle)
 { assert(handle == 31u || handle == 32u || (handle >= 40u && handle <= 48u &&
          (handle & 1u) == 0u));
-  return handle >= 40u ? ASTRA_SYSCALL_OK : handle_close_failure; }
+  return handle >= 40u ? area_close_status : handle_close_failure; }
 uint32_t astra_vfs_host_session_close(AstraVfsHostTransport *host, uint32_t generation, uint32_t session)
 { assert(host == &transport && generation == 9u && session == 33u); return session_close_failure; }
+uint32_t astra_vfs_host_session_open(AstraVfsHostTransport *host,
+    uint32_t generation, uint32_t parent, const AstraVolumeReference *volume,
+    const char *root, uint16_t flags, uint32_t requester, uint32_t *session)
+{
+    assert(host == &transport && generation == 9u && parent == 0u &&
+        volume == NULL && strcmp(root, "/") == 0 && flags == 0u && requester == 0u);
+    ++session_opens;
+    *session = 0u;
+    if (session_open_limits != 0u) { --session_open_limits; return ASTRA_VFS_ERR_LIMIT; }
+    *session = 33u;
+    return ASTRA_VFS_OK;
+}
 void astra_vfs_port_service_release_grant(AstraVfsPortService *port, uint32_t id)
 { assert(port != NULL && id == 34u); ++released_grants; }
 uint32_t astra_log_failure(const char *name, uint32_t value)
@@ -110,6 +142,7 @@ uint32_t astra_rt_area_create_flagged(uint32_t size, uint32_t rights,
 { assert(size == ASTRA_AREA_SIZE_MAX &&
          rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER |
                     ASTRA_RIGHT_ADMINISTER) && flags == ASTRA_AREA_CREATE_RESERVED);
+  if (area_limits != 0u) { --area_limits; return ASTRA_SYSCALL_RESOURCE_LIMIT; }
   *area = next_area; next_area += 2u; return ASTRA_SYSCALL_OK; }
 uint32_t astra_rt_area_bind_pager(uint32_t area, uint32_t port, uint32_t cookie)
 { assert(area >= 40u && area <= 48u && (area & 1u) == 0u &&
@@ -124,6 +157,7 @@ uint32_t astra_rt_handle_duplicate(uint32_t source, uint32_t rights,
 uint32_t astra_rt_area_references(uint32_t area, uint32_t *handles,
     uint32_t *mappings, uint32_t *children)
 { assert(area >= 40u && area <= 48u && (area & 1u) == 0u);
+  ++area_reference_queries;
   *handles = area_handles; *mappings = area_mappings;
   *children = 0u; return ASTRA_SYSCALL_OK; }
 uint32_t astra_rt_area_reclaim(uint32_t area, uint32_t offset,
@@ -146,21 +180,22 @@ static uint32_t adopt_file(void *context, uint64_t token, uint32_t flags,
     uintptr_t *node)
 { assert(((AstraVfsHostBackend *)context)->session == 33u &&
          (token == 1234u || token == 1235u) && flags == 0u);
+  if (adopt_limits != 0u) { --adopt_limits; *node = 0u; return ASTRA_VFS_ERR_LIMIT; }
   *node = 55u; return ASTRA_VFS_OK; }
 static uint32_t stat_open_file(void *context, uintptr_t node,
     AstraVfsNodeInfo *info)
 { assert(((AstraVfsHostBackend *)context)->session == 33u && node == 55u);
   *info = (AstraVfsNodeInfo){.kind = ASTRA_VFS_KIND_FILE,
     .size = open_file_size,
-    .meta = {.valid = open_file_identity_valid ?
+    .meta = {.valid = ASTRA_VFS_META_NLINK | (open_file_identity_valid ?
                       ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_INODE |
-                      ASTRA_VFS_META_GENERATION : 0u,
+                      ASTRA_VFS_META_GENERATION : 0u), .nlink = open_file_links,
              .volume = 5u, .inode = 7u,
              .generation = open_file_generation}};
   return ASTRA_VFS_OK; }
 static uint32_t close_open_file(void *context, uintptr_t node)
 { assert(((AstraVfsHostBackend *)context)->session == 33u && node == 55u);
-  ++file_closes; return ASTRA_VFS_OK; }
+  ++file_closes; return file_close_status; }
 static uint32_t read_open_file(void *context, uintptr_t node, uint64_t offset,
     void *data, uint32_t length, uint32_t *moved)
 { assert(context != NULL && node == 55u && offset == 0u && length == 3u);
@@ -252,6 +287,13 @@ int main(void)
     /* Newly filled pages must survive queued events already reconciled by
        the full invalidation at the bounded-drain boundary. */
     changed.stale = other.stale = 0u;
+    changed.check_links = other.check_links = 0u;
+    change_gap = 1;
+    assert(file_areas_observe_nodes(&change_owner, node_sequence));
+    assert(!changed.stale && !other.stale && changed.check_links && other.check_links);
+    change_gap = 0;
+    /* Exercise the same covered snapshot with exact records still queued. */
+    change_owner.observed_cache_sequence = 8u;
     while (change_owner.observed_cache_sequence < node_sequence) {
         uint64_t previous = change_owner.observed_cache_sequence;
         assert(file_areas_observe_nodes(&change_owner, node_sequence));
@@ -260,9 +302,15 @@ int main(void)
                change_owner.observed_cache_sequence > previous);
     }
     node_sequence = 33u;
+    change_gap = 1;
     assert(file_areas_observe_nodes(&change_owner, 32u));
+    assert(changed.stale && other.stale && change_owner.observed_cache_nodes == 33u);
+    changed.stale = other.stale = 0u;
+    change_gap = 0;
+    node_sequence = 34u;
+    assert(file_areas_observe_nodes(&change_owner, 34u));
     assert(changed.stale && !other.stale &&
-           change_owner.observed_cache_nodes == 33u);
+           change_owner.observed_cache_nodes == 34u);
     changed.stale = other.stale = 0u;
     change_next_failure = ASTRA_VFS_ERR_IO;
     assert(file_areas_observe_nodes(&change_owner, node_sequence));
@@ -279,6 +327,37 @@ int main(void)
     assert(file_areas_observe_nodes(&change_owner, 1u));
     assert(changed.stale && !other.stale &&
            change_owner.observed_cache_nodes == 1u);
+    /* Publishing an old notification, including a broker retry, cannot
+       invalidate pages filled after cache reconciliation covered it. */
+    changed.stale = other.stale = 0u;
+    change_owner.service_ready = 1u;
+    volumes = &change_owner;
+    filesystem_publish_result = ASTRA_ERROR_BUSY;
+    publish_filesystem_changes(81u);
+    assert(filesystem_publications == 1u &&
+        change_owner.published_change_sequence == 0u && !changed.stale && !other.stale);
+    filesystem_publish_result = ASTRA_OK;
+    publish_filesystem_changes(81u);
+    assert(filesystem_publications == 2u &&
+        change_owner.published_change_sequence == 1u && !changed.stale && !other.stale);
+    change_gap = 1;
+    node_sequence = 2u;
+    assert(file_areas_observe_nodes(&change_owner, node_sequence));
+    assert(changed.stale && other.stale);
+    changed.stale = other.stale = 0u;
+    publish_filesystem_changes(81u);
+    assert(change_owner.published_change_sequence == 2u && !changed.stale && !other.stale);
+    change_gap = 0;
+    node_sequence = 3u;
+    publish_filesystem_changes(81u);
+    assert(changed.stale && !other.stale);
+    changed.stale = other.stale = 0u;
+    snapshot_failure = ASTRA_VFS_ERR_IO;
+    uint32_t publications = filesystem_publications;
+    publish_filesystem_changes(81u);
+    assert(changed.stale && other.stale && filesystem_publications == publications);
+    snapshot_failure = 0u;
+    volumes = NULL;
     file_areas = NULL;
     node_sequence = 0u;
     change_gap = 0;
@@ -364,11 +443,12 @@ int main(void)
     assert(file_areas->source.base == 0u &&
            file_areas->source.span == ASTRA_AREA_SIZE_MAX);
     mapped_owner.backend.session = 33u;
+    uint32_t references_before_hit = area_reference_queries;
     assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u,
         ASTRA_MEMORY_PAGE_SIZE, ASTRA_MEMORY_PAGE_SIZE, &mapped_area,
         &mapped_size) == ASTRA_VFS_OK);
     assert(mapped_area == 41u && mapped_grant.file_areas == 1u &&
-           area_binds == 1u);
+           area_binds == 1u && area_reference_queries == references_before_hit);
     assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u,
         ASTRA_AREA_SIZE_MAX - ASTRA_MEMORY_PAGE_SIZE,
         2u * ASTRA_MEMORY_PAGE_SIZE, &mapped_area,
@@ -430,11 +510,11 @@ int main(void)
     assert(mapped_owner.observed_cache_nodes == 1u &&
            !file_areas->stale && file_areas->next->stale &&
            file_areas->next->next->stale);
-    file_areas_maintain();
+    file_areas_maintain(1);
     assert(area_reclaims == 12u && !file_areas->stale &&
            !file_areas->next->stale && !file_areas->next->next->stale);
     area_handles = 1u; area_mappings = 0u;
-    file_areas_maintain();
+    file_areas_maintain(1);
     assert(file_areas == NULL && mapped_grant.file_areas == 0u &&
            other_grant.file_areas == 0u && file_closes == 7u);
     node_sequence = 1u;
@@ -445,7 +525,7 @@ int main(void)
         ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
     assert(mapped_area == 41u && area_binds == 4u);
     assert(file_areas_invalidate(&mapped_owner, ASTRA_HOST_FS_CHANGE_GAP, 0u));
-    file_areas_maintain();
+    file_areas_maintain(1);
     assert(!file_areas->stale && area_reclaims == 13u);
     provider_epoch = 51u;
     assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, 0u,
@@ -453,7 +533,7 @@ int main(void)
     assert(mapped_area == 43u && area_binds == 5u &&
            mapped_grant.file_areas == 2u);
     area_handles = 1u; area_mappings = 0u;
-    file_areas_maintain();
+    file_areas_maintain(1);
     assert(file_areas == NULL && mapped_grant.file_areas == 0u &&
            file_closes == 9u);
     provider_epoch = 0u;
@@ -471,7 +551,7 @@ int main(void)
     assert(hostfs_file_mutated(NULL, &mapped_grant.port, 1234u) ==
            ASTRA_VFS_OK && area_reclaims == 15u);
     area_handles = 1u; area_mappings = 0u;
-    file_areas_maintain();
+    file_areas_maintain(1);
     assert(file_areas == NULL && mapped_grant.file_areas == 0u);
     open_file_identity_valid = 0u;
     next_area = 46u;
@@ -484,14 +564,14 @@ int main(void)
     assert(mapped_area == 49u && another_grant.file_areas == 1u);
     assert(file_areas_invalidate(&mapped_owner, ASTRA_HOST_FS_CHANGE_NODE,
         999u) && file_areas->stale && file_areas->next->stale);
-    file_areas_maintain();
+    file_areas_maintain(1);
     assert(!file_areas->stale && !file_areas->next->stale);
     uint32_t reclaimed_before = area_reclaims;
     assert(hostfs_write(&mapped_owner.backend, 55u, 0u, 0u, 0u,
         "x", 1u, &moved, &position) == ASTRA_VFS_OK);
     assert(area_reclaims == reclaimed_before + 2u);
     area_handles = 1u; area_mappings = 0u;
-    file_areas_maintain();
+    file_areas_maintain(1);
     assert(file_areas == NULL && mapped_grant.file_areas == 0u &&
            another_grant.file_areas == 0u);
     open_file_identity_valid = 1u;
@@ -502,7 +582,105 @@ int main(void)
     assert(mapped_area == 0u && file_closes == closes_before_denied + 1u &&
            file_areas == NULL && mapped_grant.file_areas == 0u);
     open_file_flags = ASTRA_VFS_OPEN_READ;
+    next_area = 40u;
+    uint32_t retained_binds = area_binds;
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, 0u,
+        ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
+    file_areas_maintain(0);
+    assert(file_areas != NULL && mapped_grant.file_areas == 1u);
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, 0u,
+        ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
+    assert(mapped_area == 41u && area_binds == retained_binds + 1u);
+    file_areas->pins = 1u;
+    file_areas_maintain(1);
+    assert(file_areas != NULL);
+    file_areas->pins = 0u;
+    mapped_grant.retiring = 1u;
+    file_areas_maintain(0);
+    assert(file_areas == NULL && mapped_grant.file_areas == 0u);
+    mapped_grant.retiring = 0u;
+    next_area = 40u;
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, 0u,
+        ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
+    adopt_limits = 1u;
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, 0u,
+        ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
+    assert(mapped_area == 43u && mapped_grant.file_areas == 1u);
+    area_limits = 1u;
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, ASTRA_AREA_SIZE_MAX,
+        ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
+    assert(mapped_area == 45u && mapped_grant.file_areas == 1u);
+    file_areas->pins = 1u;
+    area_limits = 2u;
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, 0u,
+        ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_ERR_LIMIT);
+    assert(mapped_area == 0u && mapped_grant.file_areas == 1u && file_areas->pins == 1u);
+    file_areas->pins = 0u;
+    file_close_status = ASTRA_VFS_ERR_IO;
+    file_areas_maintain(1);
+    assert(file_areas != NULL && file_areas->source.node == 55u);
+    file_close_status = ASTRA_VFS_OK;
+    area_close_status = ASTRA_SYSCALL_IO_ERROR;
+    file_areas_maintain(1);
+    assert(file_areas != NULL && file_areas->source.node == 0u);
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, ASTRA_AREA_SIZE_MAX,
+        ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
+    assert(mapped_area == 47u && mapped_grant.file_areas == 2u);
+    area_close_status = ASTRA_SYSCALL_OK;
+    file_areas_maintain(0);
+    assert(file_areas != NULL && file_areas->next == NULL && mapped_grant.file_areas == 1u);
+    adopt_limits = 2u;
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, 0u,
+        ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_ERR_LIMIT);
+    assert(file_areas == NULL && mapped_area == 0u && mapped_grant.file_areas == 0u);
+    next_area = 40u;
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, 0u,
+        ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
+    session_open_limits = 1u;
+    uint32_t opened_session = 0u;
+    assert(hostfs_session_open(0u, NULL, "/", 0u, 0u, &opened_session) == ASTRA_VFS_OK);
+    assert(opened_session == 33u && session_opens == 2u && file_areas == NULL &&
+        mapped_grant.file_areas == 0u);
+    session_open_limits = 2u;
+    assert(hostfs_session_open(0u, NULL, "/", 0u, 0u, &opened_session) == ASTRA_VFS_ERR_LIMIT);
+    assert(opened_session == 0u && session_opens == 4u);
+    next_area = 40u;
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, 0u,
+        ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
+    assert(file_areas_invalidate(&mapped_owner, ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED, 0u));
+    open_file_links = 2u;
+    file_areas_maintain(0);
+    assert(file_areas != NULL && !file_areas->check_links);
+    area_handles = 2u; area_mappings = 1u;
+    assert(file_areas_invalidate(&mapped_owner, ASTRA_HOST_FS_CHANGE_ENTRY_REMOVED, 0u));
+    open_file_links = 0u;
+    file_areas_maintain(0);
+    assert(file_areas != NULL && file_areas->check_links);
+    area_handles = 1u; area_mappings = 0u;
+    file_areas_maintain(0);
+    assert(file_areas == NULL && mapped_grant.file_areas == 0u);
+    open_file_links = 1u;
+    next_area = 40u;
+    open_file_identity_valid = 0u;
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, 0u,
+        ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
+    file_areas_maintain(0);
+    assert(file_areas == NULL && mapped_grant.file_areas == 0u);
+    open_file_identity_valid = 1u;
+    open_file_links = 0u;
+    assert(hostfs_file_area(NULL, &mapped_grant.port, 1u, 1234u, 0u,
+        ASTRA_MEMORY_PAGE_SIZE, &mapped_area, &mapped_size) == ASTRA_VFS_OK);
+    file_areas_maintain(0);
+    assert(file_areas == NULL && mapped_grant.file_areas == 0u);
+    open_file_links = 1u;
     file_pager_thread = file_pager_send = 0u;
+    AstraMetricSample cache_samples[17u + CACHE_STAT_COUNT];
+    assert(sample_vfs(&mapped_owner, NULL, 0u) == 17u + CACHE_STAT_COUNT);
+    assert(sample_vfs(&mapped_owner, cache_samples, 17u + CACHE_STAT_COUNT) ==
+        17u + CACHE_STAT_COUNT);
+    assert(strcmp(cache_samples[17u + CACHE_HITS].name, "cache_hits") == 0 &&
+        cache_samples[17u + CACHE_HITS].value != 0u &&
+        cache_samples[17u + CACHE_CLOSES].value != 0u);
     HostfsGrant recovered = {.root = "/folder", .root_meta = {
         .valid = ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_INODE |
                  ASTRA_VFS_META_GENERATION,
@@ -534,7 +712,7 @@ int main(void)
     --second.reference.generation;
     assert(volume_metric_group(&first, "/usb0") && volume_metric_group(&second, "/usb0"));
     assert(strlen(first.metric_group) < ASTRA_METRIC_NAME_MAX && strcmp(first.metric_group, second.metric_group) != 0);
-    AstraMetricSample samples[17];
+    AstraMetricSample samples[17u + CACHE_STAT_COUNT];
     first.next = &second;
     first.service.stats.requests = 3u;
     second.service.stats.requests = 5u;
@@ -545,9 +723,9 @@ int main(void)
     volumes = &first;
     assert(sample_vfs_totals(NULL, NULL, 0u) == 12u);
     assert(sample_vfs_totals(NULL, samples, 17u) == 12u && samples[0].value == 8u);
-    assert(sample_vfs(&first, samples, 17u) == 17u && samples[12].value == 100u &&
+    assert(sample_vfs(&first, samples, 17u + CACHE_STAT_COUNT) == 17u + CACHE_STAT_COUNT && samples[12].value == 100u &&
            samples[15].value == ASTRA_VFS_ERR_IO);
-    assert(sample_vfs(&second, samples, 17u) == 17u && samples[12].value == 9u &&
+    assert(sample_vfs(&second, samples, 17u + CACHE_STAT_COUNT) == 17u + CACHE_STAT_COUNT && samples[12].value == 9u &&
            samples[15].value == ASTRA_VFS_ERR_ACCESS);
     volumes = NULL;
     AstraVfsHostBackend root = {0};

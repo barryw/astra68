@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "astra_storage_path.h"
+#include "astra_storage_transport.h"
 #include "astra68-resolve.h"
 
 #include <assert.h>
@@ -307,8 +308,48 @@ static void lending(int root)
     assert(unlinkat(root, "private", 0) == 0);
 }
 
+static void change_transport(void)
+{
+    const struct {
+        uint64_t mount, generation, sequence, next;
+        uint32_t kind;
+        int error;
+    } cases[] = {
+        {0u, 0u, 1u, 1u, ASTRA_HOST_FS_CHANGE_GAP, 0},
+        {42u, 7u, 1u, 1u, ASTRA_HOST_FS_CHANGE_GAP, 0},
+        {0u, 0u, 0u, 64u, ASTRA_HOST_FS_CHANGE_GAP, 0},
+        {0u, 7u, 1u, 1u, ASTRA_HOST_FS_CHANGE_GAP, EPROTO},
+        {42u, 0u, 1u, 1u, ASTRA_HOST_FS_CHANGE_GAP, EPROTO},
+        {42u, 7u, 0u, 1u, ASTRA_HOST_FS_CHANGE_GAP, EPROTO},
+        {42u, 7u, 2u, 1u, ASTRA_HOST_FS_CHANGE_GAP, EPROTO},
+        {0u, 0u, 0u, 0u, ASTRA_HOST_FS_CHANGE_NONE, 0},
+        {42u, 7u, 0u, 0u, ASTRA_HOST_FS_CHANGE_NONE, EPROTO},
+    };
+    int sockets[2];
+    assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets) == 0);
+    for (size_t at = 0u; at < sizeof(cases) / sizeof(cases[0]); ++at) {
+        AstraStorageControlRequest query = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
+            .operation = ASTRA_STORAGE_CONTROL_CHANGE_NEXT, .serial = 1u, .epoch = 1u};
+        AstraStorageControlReply response = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
+            .serial = 1u, .epoch = 1u, .next = cases[at].next,
+            .change = {.mount = cases[at].mount, .generation = cases[at].generation,
+                .change = {.kind = cases[at].kind, .sequence = cases[at].sequence}}};
+        assert(astra_storage_send_packet(sockets[0], &response, sizeof(response), NULL, 0u) == 0);
+        int root = -1;
+        assert(astra_storage_control_call(sockets[1], &query, -1, &response, &root) == cases[at].error);
+        assert(root == -1);
+        int descriptors[ASTRA_STORAGE_PROVIDER_FDS];
+        unsigned count = 0u;
+        assert(astra_storage_receive_packet(sockets[0], &query, sizeof(query),
+            descriptors, &count, NULL) == 0 && count == 0u);
+    }
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 int main(void)
 {
+    change_transport();
     char path[] = "/var/tmp/astra-storage-path-test.XXXXXX";
     assert(mkdtemp(path) != NULL);
     int root = open(path, O_PATH | O_DIRECTORY | O_CLOEXEC);

@@ -6851,7 +6851,7 @@ static void astra_host_external_change(Astra68State *s,
     const AstraStorageChangeRecord *change)
 {
     qemu_mutex_lock(&s->host.files_lock);
-    if (change->change.kind == ASTRA_HOST_FS_CHANGE_GAP) {
+    if (change->change.kind == ASTRA_HOST_FS_CHANGE_GAP && change->mount == 0u) {
         GHashTableIter iterator;
         gpointer value;
         g_hash_table_iter_init(&iterator, s->host.namespaces);
@@ -6869,7 +6869,10 @@ static void astra_host_external_change(Astra68State *s,
             &change->mount);
         if (namespace != NULL && namespace->generation == change->generation) {
             qemu_mutex_lock(&namespace->changes_lock);
-            if (change->change.kind == ASTRA_HOST_FS_CHANGE_NODE)
+            if (change->change.kind == ASTRA_HOST_FS_CHANGE_GAP) {
+                qatomic_inc(&namespace->changes_nodes);
+                qatomic_inc(&namespace->changes_entries);
+            } else if (change->change.kind == ASTRA_HOST_FS_CHANGE_NODE)
                 qatomic_inc(&namespace->changes_nodes);
             else
                 qatomic_inc(&namespace->changes_entries);
@@ -7462,8 +7465,39 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     case ASTRA_HOST_FS_SEEK: {
         off_t position;
 
-        if (flags > 2u || path[0] || path2[0] || file == NULL)
+        if ((flags > 2u && flags != ASTRA_HOST_FS_SEEK_ADVANCE) ||
+            path[0] || path2[0] || file == NULL)
             break;
+        if (flags == ASTRA_HOST_FS_SEEK_ADVANCE) {
+            uint64_t expected = astra_host_get64(command, HOST_FIELD(offset_hi));
+            uint64_t length = astra_host_get64(command, HOST_FIELD(value_hi));
+
+            if (ldl_be_p(command + HOST_FIELD(data_length)) != 0u ||
+                ldl_be_p(command + HOST_FIELD(data_capacity)) != 0u ||
+                expected > INT64_MAX || length > UINT32_MAX ||
+                length > INT64_MAX - expected)
+                break;
+            if (file->description->directory != NULL) {
+                status = ASTRA_STATUS_IS_DIR;
+                break;
+            }
+            position = lseek(file->description->fd, 0, SEEK_CUR);
+            if (position < 0) {
+                status = astra_host_path_status(errno, &resolved);
+                break;
+            }
+            bool advanced = (uint64_t)position == expected;
+            if (advanced)
+                position = lseek(file->description->fd, expected + length, SEEK_SET);
+            if (position < 0)
+                status = astra_host_path_status(errno, &resolved);
+            else {
+                astra_host_put64(command, HOST_FIELD(value_hi), position);
+                stl_be_p(command + HOST_FIELD(result_value), advanced);
+                status = ASTRA_STATUS_OK;
+            }
+            break;
+        }
         if (file->description->directory != NULL) {
             int64_t delta = astra_host_get64(command, HOST_FIELD(offset_hi));
 
@@ -9579,6 +9613,7 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
 #ifdef CONFIG_LINUX
                 ASTRA_HOST_CAP_FS_RESOLVES |
                 ASTRA_HOST_CAP_FS_DESCRIPTIONS |
+                ASTRA_HOST_CAP_FS_POSITION_ADVANCE |
                 ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS |
                 ASTRA_HOST_CAP_VOLUME_CATALOG |
                 (access(astra_host_font_worker_path(), X_OK) == 0 ?

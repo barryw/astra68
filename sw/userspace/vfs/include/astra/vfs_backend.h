@@ -219,6 +219,12 @@ typedef struct AstraVfsBackendOps {
     uint32_t (*directory_path)(void *, uintptr_t, void *, uint32_t, uint32_t *);
     /** Optional provider mutation counters for coherent retained page reads. */
     uint32_t (*change_snapshot)(void *, uint64_t *nodes, uint64_t *entries);
+    /** Atomically advance a description by length iff its position is expected.
+     * A mismatch succeeds with advanced zero and the observed position. */
+    uint32_t (*position_advance)(void *, uintptr_t, uint64_t expected,
+        uint32_t length, uint64_t *position, uint32_t *advanced);
+    /** Best-effort release of unused cache references for resource admission. */
+    void (*cache_reclaim)(void *);
 } AstraVfsBackendOps;
 
 struct AstraVfsBackend {

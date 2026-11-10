@@ -30,11 +30,13 @@ void *astra_runtime_allocate(size_t size) { return malloc(size); }
 #include <astra/vfs_path_payload.h>
 #include <astra/endian.h>
 
-uint32_t astra_vfs_port_read_cached(AstraVfsClient *client, AstraVfsFile file,
-    uint64_t offset, void *buffer, uint32_t length, uint32_t *moved)
+uint32_t astra_vfs_port_read_cached_position(AstraVfsClient *client,
+    AstraVfsFile file, uint64_t offset, uint32_t flags, void *buffer,
+    uint32_t length, uint32_t *moved, uint64_t *position)
 {
-    (void)client; (void)file; (void)offset; (void)buffer; (void)length;
+    (void)client; (void)file; (void)flags; (void)buffer; (void)length;
     *moved = 0u;
+    *position = offset;
     return ASTRA_VFS_ERR_UNSUPPORTED;
 }
 

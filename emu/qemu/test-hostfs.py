@@ -99,6 +99,7 @@ CHANGE_ENTRY_CREATED = 3
 CHANGE_ENTRY_REMOVED = 4
 CHANGE_RECORD_SIZE = 304
 IO_SEQUENTIAL = 1 << 14
+SEEK_ADVANCE = 4
 ADOPT_DISCARD = 1
 UNLINK_DIRECTORY = 1
 SESSION_READ_ONLY = 1
@@ -156,6 +157,7 @@ CAP_FS_RESOLVES = 1 << 12
 CAP_FS_DESCRIPTIONS = 1 << 13
 CAP_FS_DIRECTORY_BATCH = 1 << 14
 CAP_FS_PATHS = 1 << 15
+CAP_FS_POSITION_ADVANCE = 1 << 20
 CAP_VOLUME_CATALOG = 1 << 16
 VOLUME_PAGE_SIZE = 9512
 VOLUME_ROW_SIZE = 592
@@ -1065,7 +1067,8 @@ def run(qtest, root, outside, external=False):
     optional = CAP_FONT_CONVERT | CAP_CODEC | CAP_CONFIG_SECRETS | CAP_AUDIO_STREAM
     assert caps & ~optional == (511 | CAP_FS_SCOPE | CAP_FS_SESSIONS |
                                     CAP_FS_RESOLVES | CAP_FS_DESCRIPTIONS |
-                                    CAP_FS_DIRECTORY_BATCH | CAP_FS_PATHS | CAP_VOLUME_CATALOG), hex(caps)
+                                    CAP_FS_DIRECTORY_BATCH | CAP_FS_PATHS | CAP_VOLUME_CATALOG |
+                                    CAP_FS_POSITION_ADVANCE), hex(caps)
     assert qtest.read32(HACC_STATE) == 1
     assert qtest.read32(HACC_MAX_TRANSFER) == 2 * 1024 * 1024
     assert qtest.read32(HACC_MAX_COMMANDS) == 4096
@@ -1907,6 +1910,23 @@ def descriptions(qtest, root):
     assert status(sequential) == STATUS_OK and get64(sequential, 32) == 4
     assert qtest.read(buffer + get32(sequential, 40), 2) == b"cd"
     assert get64(parent(FS_SEEK, handle=handle, flags=1).raw, 32) == 4
+
+    mismatch = child(FS_SEEK, handle=alias, flags=SEEK_ADVANCE, offset=2, value=3)
+    assert status(mismatch) == STATUS_OK and get32(mismatch, 56) == 0
+    assert get64(mismatch, 32) == 4
+    advanced = child(FS_SEEK, handle=alias, flags=SEEK_ADVANCE, offset=4, value=2)
+    assert status(advanced) == STATUS_OK and get32(advanced, 56) == 1
+    assert get64(advanced, 32) == 6
+    assert get64(parent(FS_SEEK, handle=handle, flags=1).raw, 32) == 6
+    empty_advance = child(FS_SEEK, handle=alias, flags=SEEK_ADVANCE, offset=6)
+    assert status(empty_advance) == STATUS_OK and get32(empty_advance, 56) == 1
+    assert get64(empty_advance, 32) == 6
+    assert status(child(FS_SEEK, handle=alias, flags=SEEK_ADVANCE,
+                        offset=(1 << 63) - 1, value=1)) == STATUS_INVALID
+    assert status(child(FS_SEEK, handle=alias, flags=SEEK_ADVANCE,
+                        offset=6, value=1 << 32)) == STATUS_INVALID
+    assert get64(parent(FS_SEEK, handle=handle, flags=1).raw, 32) == 6
+    assert status(child(FS_SEEK, handle=alias, offset=4)) == STATUS_OK
 
     appended = child(FS_WRITE, handle=alias, flags=IO_SEQUENTIAL, value=7, data=b"XYZ")
     assert status(appended) == STATUS_OK and get64(appended, 32) == 7

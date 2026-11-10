@@ -2,6 +2,180 @@
 
 Status: active continuation map, 2026-11-10
 
+Current checkpoint, 2026-11-10: integration remains unqualified on DE25.
+The final native sequence passed ten cases, including three file-map rounds,
+descriptor pressure followed by fork/exec, provider loss/reopen, two recovery
+cases and read-only fsck. A private mutation forcing every resident check to
+WOULD_BLOCK fails as required. The file-map test now pins the original owner
+before the ordinary read and retries a missing page only when the native
+node generation demonstrably advanced during that read (four-second bound).
+A stable-generation miss, wrong bytes, or API failure still fails. This
+corrects a concurrent-invalidation precondition, not the residency contract.
+
+Publication no longer invalidates a second time after canonical event
+reconciliation. A covered GAP also preserves pages filled after its covered
+generation; a fresh snapshot detects genuinely newer changes. Focused
+red/green tests cover publication retry, covered/new GAP, new-node delivery
+and snapshot failure. Host, sanitizer and MC68040 builds pass.
+
+The first clean hardware trial missed its startup watchdog at 145 seconds
+without a panic. A diagnostic repeat reached desktop and remote desktop,
+then failed at 224 seconds after a slow GDB capture paused the guest; it is
+not acceptance evidence. Its snapshot found HostFS had made 5,250,520
+syscalls during boot. Maintenance queried references for every retained owner
+on every acquisition, even when that owner could not be retired. It now
+queries only retirement/link-check candidates; stale-page reclaim remains
+checked independently. The focused cost test fails before this change and
+passes afterward, as do HostFS sanitizer/target gates. No kernel hot path,
+watchdog deadline or production image changed. The new native ten-case gate,
+provider recovery (2/2) and fsck pass. Its clean, no-debugger hardware retry
+still missed the startup watchdog at 142 seconds without a panic. The
+reference-query repair does not resolve this blocker. All three failed or
+diagnostic images pass read-only fsck. Their image/console/overlay checksums
+match the Beast archives; private board trial state has been removed.
+Haiku cache/file_cache.cpp:760-910 and low_resource_manager.cpp:238-278
+informed bounded work and targeted resource checks. Integration remains on
+wip/file-cache-immediate-20261107 and must not be promoted as certified.
+
+The latest clean read diagnostic measured 32.065/29.588 ms cold/warm medians
+per 64 KiB, 2,076 WORK page requests and 38 invalidations. A private probe
+confirmed repeated GAP invalidations of the same retained owner with
+unchanged file metadata; this is not owner collection or revision mismatch.
+The probe remains only in explicitly named evidence binaries/images and is
+not installed. Scope/origin of those GAP records and page-fill transport
+amplification remain investigation targets; neither is yet established as
+the DE25 startup root cause. No watchdog relaxation or cache bypass is used.
+Board services astra, astra-audio-host and astra-remote-desktop are active;
+only the selected runtime's loop device remains. The literal cable-replug
+gate remains unperformed.
+
+The descriptor-pressure run separately reproduced EMFILE during fork's VFS
+control connect. HELLO scope duplication lacked the cache reclamation used
+by other admissions. Its existing negotiated reclaim callback now runs once
+on RESOURCE_LIMIT, then retries once. Focused red/green tests cover successful
+reclaim, ineffective reclaim and unchanged refusal without the feature.
+Host/sanitizer/target gates pass; a native 512-file run under a 512-descriptor
+budget followed by five fork/exec rounds passes, including fsck. Failed
+admissions now identify the scope/control boundary in logs. NDK dist-check
+passes. Haiku low_resource_manager.cpp:130-210 informed reclaim outside locks.
+
+Storage protocol 15 carries known-volume GAP with exact mount/generation.
+QEMU invalidates only that matching namespace; zero/zero remains global.
+Inotify repair now resets only affected mount watches and keeps shared
+watch descriptors until their last reference retires. Provider tests exercise
+real FID and forced fallback backends, independent witness exports, vanished
+inside writes, exact directory metadata, and backend loss/recovery. Transport
+tests reject half-scoped and malformed sequence records. Provider, sanitizer,
+host/AArch64 builds and the full QEMU protocol suite pass. An external gate
+proves an unresolved WORK write emits GAP while DH0 generations stay unchanged.
+No temporary probes remain in tracked source or the installed host provider.
+
+The all-export inotify experiment was rejected: it passed isolated scope
+tests but duplicated Astra's own mutations in the full protocol oracle.
+Original fanotify selection and peer filtering are retained; unsupported
+filesystems still use the existing bounded recursive fallback. Latest retained
+measurement before the publisher fix remains slow (30.054/30.057 ms cold/warm,
+2,075 WORK page requests, 54 invalidations). This is not speed qualification.
+All evidence is under /home/barry/astra-evidence/file-cache-sequential-20261110/.
+
+Watcher scope experiments, 2026-11-10: directory parsing alone reduced WORK
+invalidations from 194 to 183. Filtering provably outside parents and expired
+link-count metadata reduced them to 13, but cold/warm reads still took
+30.667/31.699 ms per 64 KiB and refilled 2,070 pages. Temporary event probes
+identified unrelated host processes modifying and deleting temporary trees:
+FAN_MARK_FILESYSTEM on a directory export watched the entire host root
+filesystem, and both target and parent could disappear before scope checks.
+Those experiments and failed measurements remain in the evidence directory;
+the probes and partial scope filters have been removed.
+
+The directory-export inotify experiment passed the isolated provider and
+sanitizer tests, then failed the full protocol oracle because a native create
+was delivered twice. It is not retained. Its measured cold/warm medians were
+56.459/33.063 ms, with 2,087 WORK page requests and 23 invalidations. The
+scoped-GAP/repair implementation above preserves the original backend choice.
+Haiku node_monitor.cpp:716-764 guided volume/directory/node scope; Astra reuses
+its existing watchers rather than adding another notification mechanism.
+
+Earlier integration checkpoint, 2026-11-10: kernel idle-dispatch repair below is committed
+and pushed as `b42d1533`; cache integration is NOT certified. The retained
+fixture passed six native cases, recovery and the new 512-file test under a
+512-descriptor provider budget. The final idle-eligibility fixture then
+passed five of six cases: exec-inherit failed during child filesystem
+reinitialization with errno 24 (`EMFILE`). Remote desktop also missed launch
+readiness. This failure remains open; no panic occurred. Retention alone
+did not fix the read regression: final cold/warm medians were 98.846/193.347
+ms per 64 KiB. A diagnostic with counters in existing per-volume metrics
+proved retention worked (one WORK owner, 127 hits), but 194 invalidations
+caused 2,113 page requests. Boot already showed 68,900 invalidations across
+111 DH0 owners. New metrics report hits, creates, page requests, closes,
+invalidations and retirement causes; no new settings or diagnostic service.
+
+The provider misclassified valid Linux directory metadata events as lost
+events: FAN_REPORT_DFID_NAME identifies the changed directory itself with
+name `.`; it need not carry a separate target FID. That emitted global GAP
+and invalidated unrelated volumes. The parser now accepts the directory's
+DFID_NAME/DFID identity for FAN_ONDIR metadata and normalizes NODE names to
+empty. A real provider-boundary test chmods directories both inside and
+outside the export, requires the exact inside inode, and refuses any GAP.
+It fails before the fix and passes afterward. Full provider and ASan/UBSan
+suites pass; both host and AArch64 providers build with verified ELF machine
+types. The fixed host provider is installed on Beast for fresh gates.
+Haiku `src/system/kernel/fs/node_monitor.cpp:716-764` targets stat changes
+by device/node; Linux's documented directory identity contract is at
+https://man7.org/linux/man-pages/man2/fanotify_init.2.html . No wire or ABI
+changed. A fresh native read/counter capture with this provider is running;
+fork/admission and DE25 gates must follow. The staged but unrun retained
+DE25 release was removed. All three selected services remain active, only
+production loop0 remains, and 8.5 GiB is free. Production data was preserved.
+
+Sequential cache integration WIP, 2026-11-10: scalar and bulk sequential
+reads use canonical pages, then conditionally advance the existing shared
+description cursor by the actual copied count. A racing cursor causes a
+bounded retry; failed fills do not commit position. The additive host
+capability and VFS feature are negotiated, preserving additive installation
+in either order. Host/sanitizer/target and NDK gates passed the initial slice;
+an old-provider guest also passed four cases including forked shared reads.
+The new path exposed a real kernel panic twice: a blocked user pager fault
+with no runnable thread returned RESUME, which access-fault assembly treated
+as supervisor copy recovery. It overwrote A0 with `80038FF8` and resumed the
+same user instruction, causing a second fault and panic. IDLE now has a
+distinct dispatch target shared by all four assembly entries. The focused
+test fails before the repair; full kernel tests, MC68040 verification,
+six-case guest gate, provider reset/reopen, post-reset basic/file-map and
+read-only e2fsck pass. Beast and DE25 K1 both pass all 16 markers with zero
+overruns; syscall max remains 2,994/50,000 cycles. This does not classify the
+earlier intermittent resident-page assertion failure.
+
+The first combined DE25 candidate
+`4469a086368365ec041dc0a9ef625dca38d1395e4a5502e61fda4710d44f9235`
+FAILED: startup heartbeat never began and the watchdog stopped it at 142s.
+No kernel panic was recorded. Selected services recovered with result 1
+(trial failure), and production data remained untouched. The pre-retention
+Beast read baseline regressed from 0.615/0.635 ms cold/warm medians to
+57.487/82.110 ms; host commands rose from 135/127 to 12,682/13,220. This is
+not an accepted runtime. Routine maintenance destroyed the canonical owner
+when an ordinary reader closed its temporary area handle. Retention is now
+under test: idle owners survive ordinary reads, while retirement, provider
+reset, removal, shutdown and resource admission can collect them. Active
+handles, mappings, children and pager pins prevent collection; failed closes
+remain charged and retryable. A negotiated CACHE_RECLAIM control request lets
+failed direct opens/shares retry once after unused references are released;
+HostFS session admission uses the same bounded reclaim policy. This prevents
+the cache itself from permanently exhausting descriptor admission.
+Host and sanitizer tests pass; final guest, quota, read baseline and DE25
+gates are pending. Evidence: `/home/barry/astra-evidence/file-cache-sequential-20261110/`.
+Haiku `src/system/kernel/fs/fd.cpp:715-845`,
+`src/system/kernel/cache/file_cache.cpp:760-910`,
+`src/system/kernel/scheduler/scheduler.cpp:386-440`,
+`src/system/kernel/arch/m68k/arch_int.cpp:175-255`, and
+`src/system/kernel/low_resource_manager.cpp:130-210` guided shared cursor
+ownership, retained cache references, explicit idle selection, copy-fault
+separation and resource reclaim. Astra extends its existing descriptions,
+area owners and authenticated VFS control port; no second cursor/cache exists.
+Ordinary writes, writable shared mappings, dirty writeback/conflicts, full
+EOF/truncate, COW/anonymous mmap, pressure/accounting and safe-removal gates
+remain open. The physical USB cable gate has not been performed.
+
 Borrowed/path cache integration, 2026-11-10: Filesystem Kit borrowed source
 reads and whole-path reads now share the positioned canonical-page reader.
 The call temporarily owns its existing lane output area across pager waits,

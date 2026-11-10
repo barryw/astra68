@@ -136,6 +136,11 @@ uint32_t astra_vfs_port_read_bulk_position(AstraVfsClient *client,
  * areas; all supported reads use the existing kernel page owner. */
 uint32_t astra_vfs_port_read_cached(AstraVfsClient *client, AstraVfsFile file,
     uint64_t offset, void *buffer, uint32_t length, uint32_t *moved);
+/* Positioned or shared-description cache read; offset advances only after
+ * successful fill and conditional commit of exactly the returned bytes. */
+uint32_t astra_vfs_port_read_cached_position(AstraVfsClient *client,
+    AstraVfsFile file, uint64_t offset, uint32_t flags, void *buffer,
+    uint32_t length, uint32_t *moved, uint64_t *position);
 
 /* Version 9: one write from the caller's bound transfer area. */
 uint32_t astra_vfs_port_write_bulk(AstraVfsClient *client, AstraVfsFile file,

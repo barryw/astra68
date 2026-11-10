@@ -927,6 +927,40 @@ static uint32_t host_seek(void *context, uintptr_t node, int64_t delta,
     return status;
 }
 
+static uint32_t host_position_advance(void *context, uintptr_t node,
+    uint64_t expected, uint32_t length, uint64_t *position, uint32_t *advanced)
+{
+    AstraVfsHostBackend *backend = context;
+    AstraVfsHostRequest request;
+    uint32_t status;
+
+    if (position == NULL || advanced == NULL) return ASTRA_VFS_ERR_INVALID;
+    *position = 0u;
+    *advanced = 0u;
+    if (node == 0u || node > UINT32_MAX || expected > INT64_MAX ||
+        length > INT64_MAX - expected)
+        return ASTRA_VFS_ERR_INVALID;
+    status = command_begin(backend, &request, ASTRA_HOST_FS_SEEK, 0u, NULL, NULL);
+    if (status != ASTRA_VFS_OK) return status;
+    request.command->handle = (uint32_t)node;
+    request.command->flags = ASTRA_HOST_FS_SEEK_ADVANCE;
+    request.command->offset_hi = (uint32_t)(expected >> 32);
+    request.command->offset_lo = (uint32_t)expected;
+    request.command->value_lo = length;
+    status = submit(backend, &request, NULL, 0u, NULL, 0u);
+    if (status == ASTRA_VFS_OK) {
+        uint64_t observed = ((uint64_t)request.command->value_hi << 32) |
+                            request.command->value_lo;
+        uint32_t committed = request.command->result_value;
+        if (observed > INT64_MAX || committed > 1u ||
+            (committed ? observed != expected + length : observed == expected))
+            return ASTRA_VFS_ERR_PROTOCOL;
+        *position = observed;
+        *advanced = committed;
+    }
+    return status;
+}
+
 static uint32_t host_share(void *context, uintptr_t node, uint64_t *token)
 {
     AstraVfsHostBackend *backend = context;
@@ -1021,6 +1055,7 @@ static const AstraVfsBackendOps host_ops = {
     .link_at = host_link_at, .symlink_at = host_symlink_at,
     .readlink_at = host_readlink_at, .directory_path = host_directory_path,
     .change_snapshot = host_change_snapshot,
+    .position_advance = host_position_advance,
 };
 
 int astra_vfs_host_init(AstraVfsHostBackend *backend,

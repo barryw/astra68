@@ -3,9 +3,96 @@
 Status: design contract; VFS description-retention, metadata, VM page
 publication, and read-only HostFS file areas passed host and DE25 gates.
 The existing pressure worker reclaims clean read-only pager frames on DE25.
-Sequential reads and ordinary writes still bypass mapped resident frames; dirty writeback,
+Sequential reads use canonical pages in the unqualified integration branch;
+ordinary writes still bypass mapped resident frames. Dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
+
+Publication reconciliation, 2026-11-10: notification delivery no longer
+invalidates pages independently after the cache observer reconciles the same
+event. Both acquisition and publication use file_areas_observe_nodes() and
+its watermark; genuinely newer events still invalidate, and snapshot failure
+remains fail-closed. A focused test fails before this repair and passes after
+it, including broker BUSY retry, covered GAP, new-node delivery, and snapshot
+failure. Host/sanitizer/target builds pass. A ten-case native sequence,
+provider-reset recovery and fsck pass; DE25 acceptance remains pending.
+The native residency probe pins the original owner and tolerates only a
+proven concurrent node-generation advance. A private always-missing mutation
+is rejected; stable-generation misses remain failures.
+
+Maintenance admission, 2026-11-10: stable retained owners no longer incur
+reference queries when neither retirement nor a link check can collect them.
+Discard, retiring grants, stale epochs, closed sources, unknown identities,
+missing links and check_links still query exact kernel references. Pins,
+mappings and children still prevent collection; failed cleanup stays charged.
+A focused cost test fails before the change and passes afterward, with the
+existing retirement tests and sanitizer/target builds. The updated native
+ten-case gate, provider recovery and fsck pass, but the clean DE25 retry still
+misses startup watchdog at 142 seconds. All three failed/diagnostic images
+pass read-only fsck and are archived with verified checksums. Board trial
+state is removed and selected services restored. Hardware qualification is
+still required; the watchdog deadline remains unchanged.
+
+Control admission, 2026-11-10: HELLO scope duplication uses the existing
+negotiated cache reclamation once on RESOURCE_LIMIT, then retries once.
+Ineffective reclaim returns LIMIT without creating a session. A failing
+focused test now passes, and a native 512-file/512-descriptor workload plus
+five fork/exec rounds passes with fsck. Storage protocol 15 scopes known
+watcher GAP and repair to the exact volume incarnation; actual global loss
+still invalidates all. Provider and QEMU tests cover both scopes and reject
+malformed authority pairs. Original fanotify selection and peer filtering
+are retained. No new cache, observer, or resource pool was added.
+
+Watcher scope experiments, 2026-11-10: filesystem-wide fanotify on directory
+exports caused unrelated host cleanup to invalidate all canonical pages when
+deleted objects could no longer be scoped. Parent/metadata filters reduced
+but did not eliminate this (13 WORK invalidations, 2,070 page requests,
+30.667/31.699 ms cold/warm medians per 64 KiB); those filters are not retained.
+An all-export recursive-inotify experiment passed isolated scope tests but
+failed the full protocol oracle by duplicating Astra's own mutations; it is
+not retained. Its 56.459/33.063 ms cold/warm medians and 2,087 requests remain
+recorded. Scoped GAP/repair is retained, with real FID and forced-fallback
+tests, ASan/UBSan, and the full QEMU protocol oracle. Unknown changes still
+produce GAP. CURRENT_STATE.md records evidence and the Haiku scope reference.
+
+Earlier qualification checkpoint, 2026-11-10: retained owners alone did not
+remove the read regression. Existing metrics now expose per-volume cache
+hits, creates, requests, invalidations and retirement reasons. A native
+diagnostic showed one WORK owner and 127 hits, but 194 invalidations and
+2,113 page requests. The Linux provider turned directory metadata events
+without a separate target FID into global GAP records. Its parser now uses
+the directory's DFID_NAME/DFID identity and emits a nameless exact NODE
+record. A provider-boundary inside/outside directory chmod test fails before
+the repair and passes afterward; full provider and sanitizer suites pass.
+Fresh guest/counter and hardware gates remain required. The final retained
+fixture also exposed child filesystem reinitialization failing with EMFILE
+in exec-inherit (five of six cases passed); control admission above repairs
+that failure. No new runtime is certified. Kernel dispatch repair is pushed
+as b42d1533. Exact evidence,
+failed measurements, Haiku references and provider documentation are recorded
+in CURRENT_STATE.md.
+
+Sequential reads and owner retention WIP, 2026-11-10: one shared reader now
+serves positioned, sequential scalar and sequential bulk requests. Sequential
+reads conditionally advance the native shared description after copying,
+retrying a cursor race within the pager deadline. Actual copied bytes alone
+advance position. Host cap POSITION_ADVANCE and its VFS feature make this an
+additive protocol operation, with no public layout or export change.
+The full guest sequence exposed a kernel fault-to-idle dispatch defect;
+RESUME and IDLE are now distinct, and every assembly entry decodes the same
+target contract. Kernel tests and Beast/DE25 K1 pass, as do six native guest
+cases and provider-reset recovery. The first combined hardware runtime
+failed its startup watchdog because the cache reader was roughly 100 times
+slower. That failed experiment is retained, not certified. Its maintenance
+closed idle canonical owners before the next ordinary read could reuse them.
+Retention and explicit best-effort CACHE_RECLAIM admission are under test.
+Pinned, mapped, child-owned and externally held areas cannot be collected;
+failed cleanup remains charged. The client retries resource-consuming direct
+admission once, and only when the grant advertises reclaim. HostFS also
+reclaims before retrying session creation and before removal/usage/shutdown.
+No public object layout changed. Host/sanitizer tests pass; new native
+retention/quota probes, baseline comparison and a fresh DE25 trial remain
+required. CURRENT_STATE.md records evidence paths and Haiku references.
 
 Borrowed and whole-path cache reads, 2026-11-10: file-area providers now use
 the same positioned reader for borrowed source reads and whole-file reads.

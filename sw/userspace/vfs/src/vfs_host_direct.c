@@ -292,6 +292,7 @@ uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
     astra_vfs_port_abandon(client);
     status = astra_vfs_host_port_connect(client, service);
     if (status != ASTRA_VFS_OK) {
+        (void)astra_log_failure("fork VFS control connect", status);
         (void)astra_close(scope);
         return status;
     }
@@ -299,6 +300,7 @@ uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
     astra_vfs_host_direct_disconnect(client);
     status = astra_vfs_host_direct_connect(client, scope);
     if (status != ASTRA_VFS_OK) {
+        (void)astra_log_failure("fork VFS direct connect", status);
         (void)astra_close(scope);
         /* An unused parent client can still carry a pre-reset scope. */
         if (status == ASTRA_VFS_ERR_LOST)
@@ -537,6 +539,15 @@ uint32_t astra_vfs_host_direct_transport(
             ops->seek(backend.context, request->file,
                       (int64_t)request->offset, request->flags,
                       &reply->position);
+        break;
+    case ASTRA_VFS_OP_POSITION_ADVANCE:
+        reply->status = request->flags != 0u || request->offset > INT64_MAX ||
+            request->length > INT64_MAX - request->offset ||
+            request->write_limit != 0u ? ASTRA_VFS_ERR_INVALID :
+            ops->position_advance == NULL ? ASTRA_VFS_ERR_UNSUPPORTED :
+            ops->position_advance(backend.context, request->file,
+                request->offset, request->length, &reply->position,
+                &reply->count);
         break;
     case ASTRA_VFS_OP_SHARE:
         reply->status = ops->share == NULL ? ASTRA_VFS_ERR_UNSUPPORTED :

@@ -35,7 +35,7 @@ typedef struct AstraStorageRecord {
 
 /* Private Linux protocol. Only the launched QEMU peer receives its socket;
  * application authority remains in the native rooted scopes. */
-#define ASTRA_STORAGE_PROVIDER_VERSION 14u
+#define ASTRA_STORAGE_PROVIDER_VERSION 15u
 #define ASTRA_STORAGE_PROVIDER_PATH_MAX 4096u
 #define ASTRA_STORAGE_PROVIDER_FDS 3u
 #define ASTRA_STORAGE_PROVIDER_PAGE 16u
@@ -63,7 +63,7 @@ enum AstraStorageControlOperation {
 };
 
 /* Root provider filters host events before this private QEMU-only record.
- * A zero mount with GAP invalidates every active native volume namespace. */
+ * GAP names its affected mount/generation; both zero means all namespaces. */
 typedef struct AstraStorageChangeRecord {
     uint64_t mount;
     uint64_t generation;

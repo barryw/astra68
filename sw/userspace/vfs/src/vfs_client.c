@@ -477,13 +477,10 @@ astra_vfs_read_position(AstraVfsClient *client, AstraVfsFile file,
     if (length > ASTRA_VFS_IO_MAX) {
         length = ASTRA_VFS_IO_MAX;
     }
-    if (flags == 0u && length != 0u) {
-        status = astra_vfs_port_read_cached(client, file, offset,
-                                            buffer, length, moved);
-        if (status != ASTRA_VFS_ERR_UNSUPPORTED) {
-            *position = offset + *moved;
-            return status;
-        }
+    if (length != 0u) {
+        status = astra_vfs_port_read_cached_position(client, file, offset, flags,
+                                                     buffer, length, moved, position);
+        if (status != ASTRA_VFS_ERR_UNSUPPORTED) return status;
     }
     if (client->direct_backend_ops != NULL) {
         status = backend_enter(client, &ops, &context);

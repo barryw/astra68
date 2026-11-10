@@ -42,10 +42,11 @@ def external_change_gate(gate, qtest, root, outside):
     generation = qtest.read32(gate.HACC_GENERATION)
     assert gate.claim(qtest, generation) == gate.STATUS_OK
     session = gate.open_session(qtest, generation)
+    system_session = gate.open_session(qtest, generation, volume="/dh0")
 
-    def call(operation, **kwargs):
+    def call(operation, session_id=session, **kwargs):
         answer = gate.execute(qtest, [gate.Command(
-            generation, operation, session=session, **kwargs)])[0]
+            generation, operation, session=session_id, **kwargs)])[0]
         assert gate.status(answer) == gate.STATUS_OK
         return answer
 
@@ -77,6 +78,7 @@ def external_change_gate(gate, qtest, root, outside):
         raise AssertionError((expected, name, cursor))
 
     root_stat = call(gate.FS_STAT, path="/")
+    system_before = call(gate.FS_CHANGE_SNAPSHOT, session_id=system_session)
     parent_inode = gate.get64(root_stat.raw, gate.NODE_INODE)
     directory = root / "work" / "linux-origin"
     outsider = outside / "unrelated"
@@ -84,7 +86,7 @@ def external_change_gate(gate, qtest, root, outside):
         directory.mkdir()
         data = await_change(gate.CHANGE_ENTRY_CREATED, b"linux-origin")
         assert gate.get64(data, 32) == parent_inode
-        assert gate.get64(data, 24) == directory.stat().st_ino
+        assert gate.get64(data, 24) in (0, directory.stat().st_ino)
         assert data[48:].split(b"\0", 1)[0] == b"linux-origin"
 
         outsider.write_bytes(b"outside")
@@ -108,6 +110,25 @@ def external_change_gate(gate, qtest, root, outside):
         await_change(gate.CHANGE_ENTRY_CREATED, b"moved")
         moved.unlink()
         await_change(gate.CHANGE_ENTRY_REMOVED, b"moved")
+        directory.rmdir()
+        await_change(gate.CHANGE_ENTRY_REMOVED, b"linux-origin")
+        directory.mkdir()
+        await_change(gate.CHANGE_ENTRY_CREATED, b"linux-origin")
+        vanished = directory / "vanished-write"
+        vanished.write_bytes(b"unresolved")
+        vanished.unlink()
+        scoped_gap = False
+        for _ in range(64):
+            cursor, kind, _ = next_change(cursor)
+            if kind == gate.CHANGE_NONE:
+                break
+            if kind == gate.CHANGE_GAP:
+                scoped_gap = True
+        assert scoped_gap, "unresolved WORK write did not invalidate WORK"
+        system_after = call(gate.FS_CHANGE_SNAPSHOT, session_id=system_session)
+        assert (gate.get64(system_before.raw, 24), gate.get64(system_before.raw, 32)) == (
+            gate.get64(system_after.raw, 24), gate.get64(system_after.raw, 32)), \
+            "WORK directory-watch repair changed DH0"
 
         overflow = [directory / f"overflow-{index}" for index in range(80)]
         for entry in overflow:
@@ -125,6 +146,7 @@ def external_change_gate(gate, qtest, root, outside):
         directory.rmdir()
         outsider.unlink(missing_ok=True)
         call(gate.FS_SESSION_CLOSE)
+        call(gate.FS_SESSION_CLOSE, session_id=system_session)
 
 
 def blocked_io_gate(gate, qtest, process, qemu_pid, reboot_ready=None, scratch=None):
@@ -241,7 +263,6 @@ def main(argv=None):
     uid, gid = args.uid, args.gid
     assert os.geteuid() == 0 and uid != 0 and gid != 0
     uuid = "e1f97188-8405-4bd3-9f3b-3b8bb123dd1f"
-    before = set(Path("/var/tmp").glob("astra-storage.*"))
     with isolated_scratch() as work:
         control = work / "control"
         control.mkdir()
@@ -306,7 +327,7 @@ def main(argv=None):
         if args.scenario == "memory":
             environment.update(ASTRA_HOSTFS_MAX_DESCRIPTORS="4096", ASTRA_HOSTFS_MAX_DIRECTORIES="512")
         with tempfile.TemporaryFile(mode="w+") as errors:
-            process = subprocess.Popen(command, env=environment, stdout=subprocess.DEVNULL,
+            process = subprocess.Popen(command, env=environment, stdout=errors,
                                        stderr=errors, text=True)
             qtest = None
             try:
@@ -747,12 +768,17 @@ def main(argv=None):
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait()
+            errors.seek(0)
+            owned = [Path(line.split()[2]) for line in errors
+                     if line.startswith("ASTRA-STORAGE-PROVIDER ")]
+            assert len(owned) == 1 and owned[0].parent == Path("/var/tmp") and \
+                owned[0].name.startswith("astra-storage."), owned
+            assert not owned[0].exists(), "provider retained its private root: " + str(owned[0])
         subprocess.run(["e2fsck", "-fn", str(image)], check=True)
         data = subprocess.run(["debugfs", "-R", "cat /home/private", str(image)],
                               check=True, capture_output=True, text=True).stdout
         expected = "private-dataAstra" if args.scenario == "full" else "private-data"
         assert data == expected, data
-    assert set(Path("/var/tmp").glob("astra-storage.*")) == before
     print("QEMU provider bridge: native grants/descriptions/path oracle, preserved root-owned data, unprivileged QEMU and real cleanup PASS")
 
 

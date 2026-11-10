@@ -28,6 +28,8 @@ typedef struct FakeHost {
     uint32_t change_kind;
     uint32_t change_corrupt;
     uint32_t change_no_inode;
+    uint32_t advanced;
+    uint64_t position;
     AstraVolumeReference expected_volume;
 } FakeHost;
 
@@ -364,6 +366,16 @@ uint32_t astra_vfs_host_transport_submit(
         command->value_lo = 20u;
         break;
     case ASTRA_HOST_FS_SEEK:
+        if (command->flags == ASTRA_HOST_FS_SEEK_ADVANCE) {
+            assert(command->handle == 0x1234u && command->offset_hi == 0u &&
+                   command->offset_lo == 9u && command->value_hi == 0u &&
+                   command->value_lo == 3u && input_size == 0u &&
+                   output_capacity == 0u);
+            command->value_hi = (uint32_t)(host->position >> 32);
+            command->value_lo = (uint32_t)host->position;
+            command->result_value = host->advanced;
+            break;
+        }
         assert(command->handle == 0x1234u && command->flags == 2u &&
                command->offset_hi == UINT32_MAX &&
                command->offset_lo == UINT32_MAX - 1u);
@@ -920,6 +932,23 @@ int main(void)
         host.expected_operation = ASTRA_HOST_FS_SEEK;
         assert(ops->seek(&backend, 0x1234u, -2, 2u, &position) == ASTRA_VFS_OK &&
                position == 9u);
+        uint32_t advanced;
+        host.position = 12u;
+        host.advanced = 1u;
+        assert(ops->position_advance(&backend, 0x1234u, 9u, 3u,
+            &position, &advanced) == ASTRA_VFS_OK && position == 12u && advanced == 1u);
+        host.advanced = 0u;
+        assert(ops->position_advance(&backend, 0x1234u, 9u, 3u,
+            &position, &advanced) == ASTRA_VFS_OK && position == 12u && advanced == 0u);
+        host.position = 9u;
+        assert(ops->position_advance(&backend, 0x1234u, 9u, 3u,
+            &position, &advanced) == ASTRA_VFS_ERR_PROTOCOL && position == 0u && advanced == 0u);
+        host.position = 12u;
+        host.advanced = 2u;
+        assert(ops->position_advance(&backend, 0x1234u, 9u, 3u,
+            &position, &advanced) == ASTRA_VFS_ERR_PROTOCOL);
+        assert(ops->position_advance(&backend, 0x1234u, INT64_MAX, 1u,
+            &position, &advanced) == ASTRA_VFS_ERR_INVALID);
         host.expected_operation = ASTRA_HOST_FS_SHARE;
         assert(ops->share(&backend, 0x1234u, &token) == ASTRA_VFS_OK &&
                token == UINT64_C(0x0123456789abcdef));

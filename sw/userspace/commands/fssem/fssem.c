@@ -24,6 +24,7 @@
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/vfs_assign.h>
+#include <astra/vfs_backend.h>
 #include <astra/vfs_process.h>
 #include <astra/vfs_service.h>
 #include <astra/volume.h>
@@ -710,6 +711,74 @@ static int case_lane_fork_exec(const char *directory)
           WEXITSTATUS(status));
     return 0;
 }
+static int case_cache_pressure(const char *directory)
+{
+    char path[192];
+
+    for (unsigned index = 0u; index < 512u; ++index) {
+        (void)snprintf(path, sizeof(path), "%s/cache-%u", directory, index);
+        unsigned char expected = (unsigned char)(index % 251u), actual = 0u;
+        int fd = open(path, O_CREAT | O_EXCL | O_RDWR, 0600);
+        CHECK(fd >= 0, "cache pressure open %u: %s", index, strerror(errno));
+        CHECK(write(fd, &expected, 1u) == 1 &&
+            pread(fd, &actual, 1u, 0u) == 1 && actual == expected && close(fd) == 0,
+            "cache pressure read %u: %s", index, strerror(errno));
+    }
+    return 0;
+}
+
+static int case_sequential_race(const char *directory)
+{
+    char path[160];
+    unsigned char sequence[32], counts[32] = {0}, child_counts[32];
+    unsigned char byte;
+    int gate[2], result[2], status, failed = 0;
+    uint32_t reads = 0u;
+    ssize_t moved;
+
+    join(path, sizeof(path), directory, "sequential-race");
+    for (uint32_t index = 0u; index < sizeof(sequence); ++index)
+        sequence[index] = (unsigned char)index;
+    int fd = open(path, O_RDWR | O_CREAT | O_EXCL, 0600);
+    CHECK(fd >= 0 && write(fd, sequence, sizeof(sequence)) == sizeof(sequence) &&
+          lseek(fd, 0, SEEK_SET) == 0 && pipe(gate) == 0 && pipe(result) == 0,
+          "sequential race setup: %s", strerror(errno));
+    pid_t child = fork();
+    CHECK(child >= 0, "sequential race fork: %s", strerror(errno));
+    if (child == 0) {
+        (void)close(gate[1]); (void)close(result[0]);
+        if (read(gate[0], &byte, 1u) != 1) _exit(1);
+        (void)close(gate[0]);
+    } else {
+        (void)close(gate[0]); (void)close(result[1]);
+        CHECK(write(gate[1], "g", 1u) == 1, "sequential race release");
+        (void)close(gate[1]);
+    }
+    while ((moved = read(fd, &byte, 1u)) == 1) {
+        if (byte >= sizeof(counts) || ++reads > sizeof(sequence)) {
+            failed = 1;
+            break;
+        }
+        ++counts[byte];
+    }
+    if (moved != 0) failed = 1;
+    if (child == 0) {
+        if (write(result[1], counts, sizeof(counts)) != sizeof(counts)) failed = 1;
+        (void)close(result[1]); (void)close(fd);
+        _exit(failed);
+    }
+    CHECK(read(result[0], child_counts, sizeof(child_counts)) == sizeof(child_counts) &&
+          waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+          WEXITSTATUS(status) == 0 && !failed &&
+          lseek(fd, 0, SEEK_CUR) == sizeof(sequence), "sequential race result");
+    (void)close(result[0]); (void)close(fd);
+    for (uint32_t index = 0u; index < sizeof(counts); ++index)
+        CHECK(counts[index] + child_counts[index] == 1u,
+              "sequential race byte %u delivered %u times", index,
+              counts[index] + child_counts[index]);
+    return 0;
+}
+
 static int case_shared_description(const char *directory)
 {
     char path[160];
@@ -784,7 +853,7 @@ static int case_shared_description(const char *directory)
     (void)close(go[1]); (void)close(done[0]);
     CHECK(read_text(path, bytes, sizeof(bytes)) == 6 &&
           strcmp(bytes, "QbXdef") == 0, "parent-exit data");
-    return 0;
+    return case_sequential_race(directory);
 }
 
 static int case_exec_inherit(const char *directory)
@@ -2075,11 +2144,77 @@ static int wait_mapped_byte(const volatile char *mapping, size_t offset,
     return mapping[offset] == expected;
 }
 
+static int file_map_nodes(AstraVfsClient *client, uint64_t *nodes)
+{
+    uint64_t entries;
+    if (client == NULL || client->direct_backend_enter == NULL ||
+        client->direct_backend_leave == NULL ||
+        client->direct_backend_enter(client) != ASTRA_VFS_OK) return 0;
+    uint32_t status = client->direct_backend_ops != NULL &&
+        client->direct_backend_ops->change_snapshot != NULL ?
+        client->direct_backend_ops->change_snapshot(client->direct_backend_context,
+            nodes, &entries) : ASTRA_VFS_ERR_UNSUPPORTED;
+    client->direct_backend_leave(client);
+    return status == ASTRA_VFS_OK;
+}
+
+enum FileMapRead { FILE_MAP_POSITIONED, FILE_MAP_BORROWED, FILE_MAP_PATH,
+                   FILE_MAP_SEQUENTIAL };
+
+/* Keep the original owner pinned; retry only a proven concurrent change,
+   never a stable-generation failure to populate that owner's page. */
+static int file_map_cached_page(AstraVfsClient *client, uint32_t area,
+    uint32_t offset, int fd, char expected, enum FileMapRead kind,
+    AstraProcessFilesystem *native, const char *path)
+{
+    uint64_t deadline = astra_clock_monotonic() + UINT64_C(4000000000);
+    for (;;) {
+        uint64_t before, after;
+        char observed = 0;
+        if (!file_map_nodes(client, &before)) return 0;
+        if (kind == FILE_MAP_POSITIONED) {
+            if (pread(fd, &observed, 1u, offset) != 1 || observed != expected) return 0;
+        } else if (kind == FILE_MAP_BORROWED) {
+            AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
+            const uint8_t *bytes = NULL;
+            uint32_t moved = 0u;
+            uint32_t status = astra_process_vfs_source_open(path, &source);
+            if (status == ASTRA_VFS_OK)
+                status = astra_vfs_read_source_read_at(&source, offset, 1u,
+                    &bytes, &moved);
+            int valid = status == ASTRA_VFS_OK && moved == 1u &&
+                bytes != NULL && bytes[0] == (uint8_t)expected;
+            if (source.file != ASTRA_VFS_FILE_INVALID &&
+                astra_vfs_read_source_close(&source) != ASTRA_VFS_OK) valid = 0;
+            if (!valid) return 0;
+        } else if (kind == FILE_MAP_PATH) {
+            char whole[2u * ASTRA_MEMORY_PAGE_SIZE + 1u];
+            uint32_t moved = 0u;
+            if (astra_process_read_file(native, path, whole, sizeof(whole),
+                    &moved) != ASTRA_VFS_OK || moved != sizeof(whole) ||
+                whole[0] != 'b' || whole[1] != 'c' || whole[offset] != expected)
+                return 0;
+        } else {
+            if (lseek(fd, offset, SEEK_SET) != (off_t)offset ||
+                read(fd, &observed, 1u) != 1 || observed != expected ||
+                lseek(fd, 0, SEEK_CUR) != (off_t)offset + 1) return 0;
+        }
+        uint32_t status = astra_rt_area_read_resident(area, offset, &observed, 1u);
+        if (status == ASTRA_SYSCALL_OK) return observed == expected;
+        if (status != ASTRA_SYSCALL_WOULD_BLOCK ||
+            !file_map_nodes(client, &after) || after <= before ||
+            astra_clock_monotonic() >= deadline) {
+            fprintf(stderr, "FSSEM canonical resident status %u area %08lx offset %lu\n",
+                (unsigned)status, (unsigned long)area, (unsigned long)offset);
+            return 0;
+        }
+    }
+}
+
 static int file_map_gate(const char *directory)
 {
     AstraProcessFilesystem native = ASTRA_PROCESS_FILESYSTEM_INIT;
     AstraFile file = ASTRA_FILE_INIT;
-    AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
     char path[192];
     uint32_t area = 0u, fresh_area = 0u, mapped_size = 0u;
     uint64_t file_size = 0u;
@@ -2162,10 +2297,16 @@ static int file_map_gate(const char *directory)
     stage = "open";
     if (astra_filesystem_open(&native.filesystem, path,
         ASTRA_VFS_OPEN_READ, &file) != ASTRA_VFS_OK) goto done;
+    AstraVfsClient *cache_client = file._private_client;
     stage = "area";
     if (astra_filesystem_file_area(&file, 0u, sizeof(bytes),
-        &area, &file_size) != ASTRA_VFS_OK || file_size != sizeof(bytes))
-        goto done;
+        &area, &file_size) != ASTRA_VFS_OK || file_size != sizeof(bytes)) goto done;
+    stage = "ordinary read retains canonical page";
+    fd = open(path, O_RDWR);
+    if (fd < 0 || pwrite(fd, "a", 1u, 0u) != 1 || fsync(fd) != 0 ||
+        !file_map_cached_page(cache_client, area, 0u, fd, 'a',
+            FILE_MAP_POSITIONED, &native, path)) goto done;
+    close(fd); fd = -1;
     if (astra_filesystem_close(&file) != ASTRA_VFS_OK) goto done;
     stage = "map";
     if (astra_rt_area_map_range(area, ASTRA_AREA_MAP_READ, 0u,
@@ -2242,42 +2383,21 @@ static int file_map_gate(const char *directory)
     if (fd < 0 || pwrite(fd, "P", 1u, 2u * ASTRA_MEMORY_PAGE_SIZE) != 1 ||
         fsync(fd) != 0) goto done;
     stage = "ordinary read fills canonical page";
-    ssize_t read_count = pread(fd, &observed, 1u,
-                               2u * ASTRA_MEMORY_PAGE_SIZE);
-    if (read_count != 1 || observed != 'P') {
-        fprintf(stderr, "FSSEM canonical pread count %ld errno %d byte %u\n",
-                (long)read_count, errno, (unsigned char)observed);
-        goto done;
-    }
-    stage = "ordinary read reuses canonical owner";
-    uint32_t resident_status = astra_rt_area_read_resident(area,
-        2u * ASTRA_MEMORY_PAGE_SIZE, &observed, 1u);
-    if (resident_status != ASTRA_SYSCALL_OK || observed != 'P') {
-        fprintf(stderr, "FSSEM canonical resident status %u byte %u\n",
-                (unsigned)resident_status, (unsigned char)observed);
-        goto done;
-    }
+    if (!file_map_cached_page(cache_client, area, 2u * ASTRA_MEMORY_PAGE_SIZE,
+        fd, 'P', FILE_MAP_POSITIONED, &native, path)) goto done;
     stage = "borrowed read fills canonical page";
-    const uint8_t *borrowed = NULL;
-    uint32_t moved = 0u;
     if (pwrite(fd, "B", 1u, 2u * ASTRA_MEMORY_PAGE_SIZE) != 1 ||
-        fsync(fd) != 0 || astra_process_vfs_source_open(path,
-            &source) != ASTRA_VFS_OK ||
-        astra_vfs_read_source_read_at(&source,
-            2u * ASTRA_MEMORY_PAGE_SIZE, 1u, &borrowed, &moved) != ASTRA_VFS_OK ||
-        moved != 1u || borrowed == NULL || borrowed[0] != 'B' ||
-        astra_rt_area_read_resident(area, 2u * ASTRA_MEMORY_PAGE_SIZE,
-            &observed, 1u) != ASTRA_SYSCALL_OK || observed != 'B') goto done;
-    if (astra_vfs_read_source_close(&source) != ASTRA_VFS_OK) goto done;
+        fsync(fd) != 0 || !file_map_cached_page(cache_client, area,
+            2u * ASTRA_MEMORY_PAGE_SIZE, fd, 'B', FILE_MAP_BORROWED, &native, path))
+        goto done;
     stage = "path read fills canonical page";
-    char whole[2u * ASTRA_MEMORY_PAGE_SIZE + 1u];
     if (pwrite(fd, "H", 1u, 2u * ASTRA_MEMORY_PAGE_SIZE) != 1 ||
-        fsync(fd) != 0 || astra_process_read_file(&native, path,
-            whole, sizeof(whole), &moved) != ASTRA_VFS_OK ||
-        moved != sizeof(whole) || whole[0] != 'b' || whole[1] != 'c' ||
-        whole[2u * ASTRA_MEMORY_PAGE_SIZE] != 'H' ||
-        astra_rt_area_read_resident(area, 2u * ASTRA_MEMORY_PAGE_SIZE,
-            &observed, 1u) != ASTRA_SYSCALL_OK || observed != 'H') goto done;
+        fsync(fd) != 0 || !file_map_cached_page(cache_client, area,
+            2u * ASTRA_MEMORY_PAGE_SIZE, fd, 'H', FILE_MAP_PATH, &native, path)) goto done;
+    stage = "sequential read fills canonical page";
+    if (pwrite(fd, "S", 1u, 2u * ASTRA_MEMORY_PAGE_SIZE) != 1 ||
+        fsync(fd) != 0 || !file_map_cached_page(cache_client, area,
+            2u * ASTRA_MEMORY_PAGE_SIZE, fd, 'S', FILE_MAP_SEQUENTIAL, &native, path)) goto done;
     close(fd); fd = -1;
     stage = "cross-chunk file map";
     fd = open(path, O_RDWR);
@@ -2300,8 +2420,6 @@ static int file_map_gate(const char *directory)
     close(fd); fd = -1;
     result = 0;
 done:
-    if (source.file != ASTRA_VFS_FILE_INVALID)
-        (void)astra_vfs_read_source_close(&source);
     if (fd >= 0) close(fd);
     if (cross_mapping != MAP_FAILED)
         (void)munmap(cross_mapping, 2u * ASTRA_MEMORY_PAGE_SIZE);
@@ -2704,6 +2822,7 @@ static const struct {
     {"shared-description", case_shared_description},
     {"area-range", area_range_gate},
     {"file-map", file_map_gate},
+    {"cache-pressure", case_cache_pressure},
     {"exec-inherit", case_exec_inherit},
     {"append-race", case_append_race},
     {"file-size-limit", case_file_size_limit},
