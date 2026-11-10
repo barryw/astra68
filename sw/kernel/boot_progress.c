@@ -75,6 +75,7 @@ uint32_t kernel_boot_progress_command(uint32_t command)
 {
     uint32_t argument = command & ASTRA_PROGRESS_BOOT_ARGUMENT_MASK;
     uint32_t announced = astra_boot_progress_announced(boot_progress);
+    uint32_t previous = boot_progress;
 
     if (astra_boot_progress_state(boot_progress) ==
         ASTRA_BOOT_PROGRESS_STATE_DONE)
@@ -84,14 +85,17 @@ uint32_t kernel_boot_progress_command(uint32_t command)
         if (announced)
             return ASTRA_SYSCALL_INVALID_ARGUMENT;
         publish(astra_boot_progress_announce(boot_progress, argument));
-        return ASTRA_SYSCALL_OK;
+        break;
     case ASTRA_PROGRESS_BOOT_SERVICE:
         if (!announced || argument > ASTRA_PROGRESS_SERVICE_SKIPPED)
             return ASTRA_SYSCALL_INVALID_ARGUMENT;
         publish(astra_boot_progress_service(
             boot_progress, argument == ASTRA_PROGRESS_SERVICE_FAILED));
-        return ASTRA_SYSCALL_OK;
+        break;
     default:
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     }
+    if (boot_progress != previous)
+        kernel_platform_guest_heartbeat();
+    return ASTRA_SYSCALL_OK;
 }

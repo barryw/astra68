@@ -2,7 +2,115 @@
 
 Status: active continuation map, 2026-11-10
 
-Current checkpoint, 2026-11-10: integration remains unqualified on DE25.
+Startup liveness repair, 2026-11-10: the supervisor reports each boot service
+before entering its heartbeat watch loop, but those accepted progress reports
+did not feed the watchdog. The existing kernel boot-command path now pulses
+the existing platform heartbeat only when the accepted boot record changes.
+Duplicate announcements, invalid commands and unchanged repeated reports do
+not pulse it. Only the initial image may issue these commands, as before.
+No watchdog threshold changed: 120 seconds before first progress, 60 seconds
+without progress thereafter. The focused kernel test fails before the repair
+and passes afterward. Full kernel tests/MC68040 verification, runtime-watchdog
+tests and NDK dist-check pass. Beast and DE25 K1 both pass all 16 markers,
+zero budget overruns; page publication remains 6,534/20,000 cycles.
+
+The clean HostFS candidate with this ROM reached stage 8, desktop and remote
+desktop and completed a 600-second private DE25 trial without panic/degraded
+markers. Its archive hashes match and read-only fsck passes. Startup still
+takes about three minutes; this is not performance qualification. A repeat
+observer mistakenly held the runtime watchdog's single-client QMP listener:
+the observer saw counter 5 while the watchdog saw EAGAIN and counter 0. That
+trial is diagnostic, not evidence of a guest stall. Its failed image/logs are
+archived with matching hashes and read-only fsck passes. The private harness
+now supplies a separate QMP listener through run-arty.sh's existing argument
+passthrough; production QMP configuration is unchanged. An isolated repeat
+then passed all ten native cases (including three file-map rounds), Atlas
+and Terminal launch, visible provider loss/reopen, basic/file-map after reset
+and a full 600-second trial. It observed heartbeat 0 through 16 before stage
+8 at 165 seconds. Archive hashes match and read-only fsck passes. Two shared
+library consumers of the same transport fix are now staged with their Kit
+manifests/provider records through the existing kit_companions() helper;
+that coherent overlay passed all ten native cases, Atlas/Terminal and 600
+seconds without panic/degraded markers. Its recovery probe did not arm:
+the prior trial left /work/loss-reopen.root, and the test correctly refused
+that pre-existing replacement directory with EEXIST. The archived image/logs
+and old harness have verified hashes and pass read-only fsck. The shared
+semantic harness now derives a fresh loss-probe path per invocation instead
+of assuming a new WORK tree. No product behavior changed for this fixture
+repair. Two consecutive provider resets with basic/file-map after each are
+now passing on the same coherent binaries in a 400-second private trial:
+loss/reopen passed after 12 and 9 observations, and all four post-reset cases
+passed. The trial, startup observer and repeated-recovery gate all returned
+zero, with no panic/degraded markers. This qualifies the retained read-cache
+slice's functional integration, not writable mappings, dirty writeback or
+performance. The final image/console/overlay/proof/harness hashes match their
+Beast archive and read-only fsck passes. Verified private board state and the
+extra test QMP socket/ring have been removed. All three selected services are
+active, the selected guest is at stage 8, only its production loop0 remains,
+and 8.5 GiB is free. Production image/user data was not opened or changed by
+the trial tooling. The larger filesystem goal remains open; no main promotion.
+Normal ROM SHA-256 is
+77d5a49312c90da9b3b08580071ba68165e2769836efb1d7e8072a6be73534aa;
+HostFS is 35436af202ced37393baaf77e207243de229031d8835a1ae7e8b4c942eaba9e1;
+filesystem.library.17 is
+bb706fd9f3bcd7af388fee1c150007b11c04e5b61f05915e4fb001957e93f68f;
+loader.library.1 is
+abd50b6d97abd2ccc6917c0a20044731650a45c38d13c205da9246319c9b9069.
+No library ABI, export or dependency version changed.
+Haiku src/servers/launch/LaunchDaemon.cpp:484-490,1124-1144 records real job
+launches and triggers explicit launch events; Astra adapts that progress
+boundary to its existing authenticated boot record, rather than synthesizing
+background heartbeats. No new service, syscall, counter or boot state exists.
+
+The page-read diagnostic failed the original startup watchdog at 142 seconds.
+Across 1,536 sampled page reads, its five guarded operations consumed about
+12.8 seconds in total. It does not explain the complete startup delay. Its
+image/logs are archived, hashes match and read-only fsck passes; no probe or
+tuning is retained. All current evidence is under
+/home/barry/astra-evidence/file-cache-sequential-20261110/ on Beast.
+
+Rejected query-batching experiment, 2026-11-10: paired node/counter query batching is rejected.
+It passed VFS/HostFS host, sanitizer, target and NDK distribution checks, ten
+native cases, provider recovery (2/2) and fsck, but DE25 still missed startup
+watchdog at 141 seconds without a panic. Its cold/warm 64 KiB medians were
+28.916/28.888 ms; warm traffic still issued 6,065 host commands. The optional
+node_snapshot callback and scoped-batch API have been removed. No read guard,
+identity check, short-read loop or watchdog deadline has been relaxed.
+Its source patch, binary/image identities and failed hardware image/logs
+remain under file-cache-sequential-20261110 on Beast; archive hashes match.
+
+Two independent existing batch defects are retained: replies now collect
+returned 64-bit offsets, and increasing command capacity reopens the ring
+even when the existing DMA allocation has enough bytes. A focused test grows
+a completed one-command lane to two commands and checks distinct replies
+and full counters. Separate private mutations restoring each old behavior
+are rejected. Host/sanitizer/target gates pass. The real ELF-library fixture
+now uses production dynamic-region limits rather than its synthetic 64-page
+test limit; it still rejects the same library with a one-page-short budget.
+Production loader limits and kernel code are unchanged. Haiku elf.cpp:2216-2245
+validates actual reserved mapping extent; Astra uses its native VM constants.
+
+A private HostFS maintenance probe failed the same startup watchdog at 142
+seconds. Its 36 captured iterations above 50 ms peaked at 187,026 us total:
+catalog poll 7,781 us, retirement plus volume announcement 59,531 us,
+publication 55,928 us and area maintenance 101,092 us. No iteration reached
+the one-second period, so this does not support periodic catch-up starvation;
+the cadence is unchanged. Archive hashes match. The retained source has no
+probe. A second private candidate compiled only the existing host transport
+with ASTRA_VFS_HOST_COMPLETION_POLLS=8 instead of 512, then used the existing
+interrupt-backed wait. Its host suite, four native cases, provider recovery
+(2/2) and fsck passed, but DE25 still missed startup watchdog at 144 seconds.
+That tuning is rejected and the default remains 512. Both new failed images
+and the query-batching image pass read-only fsck; archive hashes match.
+Haiku virtio_block.cpp:174-185,209-234 queues work and waits on its existing
+interrupt condition; Astra reuses its existing channel completion wait.
+A private page-read probe now measures the existing five page-in operations
+separately (snapshot/stat/read/stat/snapshot), reporting cumulative sums and
+maxima every 64 completed operations. It does not alter their guards, order,
+transport settings or watchdog. This probe is now complete as recorded above;
+no runtime probe is retained in source.
+
+Earlier checkpoint, 2026-11-10: integration remained unqualified on DE25.
 The final native sequence passed ten cases, including three file-map rounds,
 descriptor pressure followed by fork/exec, provider loss/reopen, two recovery
 cases and read-only fsck. A private mutation forcing every resident check to

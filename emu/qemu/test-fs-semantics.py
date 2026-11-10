@@ -168,7 +168,8 @@ FINAL_CHECKS = ("hostfs-kill",)
 
 def loss(machine, mode, act):
     before = machine.sequence()
-    machine.qmp.type_line("fssem --loss-probe /work/loss-%s 120 %s &" % (mode, mode))
+    path = "/work/loss-%s-%x" % (mode, time.monotonic_ns())
+    machine.qmp.type_line("fssem --loss-probe %s 120 %s &" % (path, mode))
     if machine.wait_for_text("FSSEM LOSS armed", 60, before)[0] is None:
         fail("loss probe never armed: %r" % machine.said(before)[0][-20:])
     machine.settle()

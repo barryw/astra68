@@ -266,11 +266,46 @@ static void test_kernel(void)
     assert(record() == rom);
 }
 
+static void test_startup_heartbeat(void)
+{
+    static const struct {
+        uint32_t command;
+        uint32_t result;
+        uint32_t heartbeat;
+    } cases[] = {
+        { ASTRA_PROGRESS_BOOT_SERVICE, ASTRA_SYSCALL_INVALID_ARGUMENT, 0u },
+        { ASTRA_PROGRESS_BOOT_SERVICES | 3u, ASTRA_SYSCALL_OK, 1u },
+        { ASTRA_PROGRESS_BOOT_SERVICES | 3u, ASTRA_SYSCALL_INVALID_ARGUMENT, 0u },
+        { ASTRA_PROGRESS_BOOT_SERVICE | 7u, ASTRA_SYSCALL_INVALID_ARGUMENT, 0u },
+        { ASTRA_PROGRESS_BOOT_HEARTBEAT, ASTRA_SYSCALL_INVALID_ARGUMENT, 0u },
+        { ASTRA_PROGRESS_BOOT_SERVICE | ASTRA_PROGRESS_SERVICE_READY,
+          ASTRA_SYSCALL_OK, 1u },
+        { ASTRA_PROGRESS_BOOT_SERVICE | ASTRA_PROGRESS_SERVICE_SKIPPED,
+          ASTRA_SYSCALL_OK, 1u },
+        { ASTRA_PROGRESS_BOOT_SERVICE | ASTRA_PROGRESS_SERVICE_FAILED,
+          ASTRA_SYSCALL_OK, 1u },
+        { ASTRA_PROGRESS_BOOT_SERVICE, ASTRA_SYSCALL_OK, 0u },
+        { ASTRA_PROGRESS_BOOT_SERVICE, ASTRA_SYSCALL_OK, 0u },
+    };
+    VestaRegs *registers = kernel_platform_test_registers();
+
+    rom_wrote(PACK(BOOTING, 0u, ASTRA_BOOT_PROGRESS_ROM_STEPS, 0u, 0u));
+    kernel_boot_progress_init();
+    kernel_and_stages();
+    for (size_t index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        registers->GUEST_HEARTBEAT = 0u;
+        assert(kernel_boot_progress_command(cases[index].command) ==
+               cases[index].result);
+        assert(registers->GUEST_HEARTBEAT == cases[index].heartbeat);
+    }
+}
+
 int main(void)
 {
     test_transitions();
     test_fill();
     test_kernel();
+    test_startup_heartbeat();
     puts("KERNEL BOOT PROGRESS PASS");
     return 0;
 }

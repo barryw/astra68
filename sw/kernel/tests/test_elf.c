@@ -1071,6 +1071,13 @@ static void test_real_image(void)
 static void test_real_library(void)
 {
     const char *path = getenv("ASTRA_LIBRARY_FIXTURE");
+    const KernelElfLimits real_limits = {
+        .minimum_address = 0u,
+        .maximum_address = KERNEL_VM_DYNAMIC_END - KERNEL_VM_DYNAMIC_BASE - 1u,
+        .maximum_pages =
+            (KERNEL_VM_DYNAMIC_END - KERNEL_VM_DYNAMIC_BASE) / KERNEL_PAGE_SIZE,
+        .page_size = KERNEL_PAGE_SIZE,
+    };
     KernelElfImage plan;
     KernelElfStatus status;
     static uint8_t fixture[512u * 1024u];
@@ -1088,7 +1095,7 @@ static void test_real_library(void)
     length = fread(fixture, 1u, sizeof(fixture), file);
     fclose(file);
     status = kernel_elf_accept_library(fixture, (uint32_t)length,
-                                       &library_limits, &plan);
+                                       &real_limits, &plan);
     if (status != KERNEL_ELF_OK) {
         printf("FAIL library fixture %s: %s\n", path,
                kernel_elf_status_text(status));
@@ -1097,6 +1104,10 @@ static void test_real_library(void)
     }
     printf("library fixture %s: %u segments, %u pages\n", path,
            (unsigned)plan.segment_count, (unsigned)plan.total_pages);
+    KernelElfLimits too_small = real_limits;
+    too_small.maximum_pages = plan.total_pages - 1u;
+    assert(kernel_elf_accept_library(fixture, (uint32_t)length,
+        &too_small, &plan) == KERNEL_ELF_TOO_LARGE);
 }
 
 int main(void)

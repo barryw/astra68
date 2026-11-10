@@ -27,6 +27,15 @@ assert watchdog.observe(181, None) == "guest heartbeat stalled"
 assert watchdog.observe(182, 2) is None
 assert watchdog.observe(183, 0) is None  # guest reset starts a new incarnation
 
+# Finite service completions can keep a slow startup alive beyond 120 seconds;
+# a stopped startup still expires 60 seconds after its last real progress.
+watchdog = GuestWatchdog(Path("/absent"), Path("/absent"))
+watchdog.started = 0
+for counter, now in enumerate((30, 80, 130, 180), start=1):
+    assert watchdog.observe(now, counter) is None
+    assert watchdog.observe(now + 49, None) is None
+assert watchdog.observe(240, None) == "guest heartbeat stalled"
+
 with tempfile.TemporaryDirectory() as directory:
     path = Path(directory) / "watchdog-latest.log"
     record_watchdog(path, "guest heartbeat stalled", 2, "QMP timed out")

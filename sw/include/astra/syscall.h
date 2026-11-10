@@ -68,7 +68,7 @@
 #define ASTRA_PROGRESS_BOOT_COMMAND_PREFIX 0x42530000u
 /** A boot command's argument, bits 11..0. */
 #define ASTRA_PROGRESS_BOOT_ARGUMENT_MASK  0x00000fffu
-/** SERVICES | N: N boot services will each report once before stage 8. Once. */
+/** SERVICES | N: announce N services once; forward boot progress feeds watchdog. */
 #define ASTRA_PROGRESS_BOOT_SERVICES (ASTRA_PROGRESS_BOOT_COMMAND_PREFIX | 0x1000u)
 /** SERVICE | result: one announced boot service finished launching. */
 #define ASTRA_PROGRESS_BOOT_SERVICE  (ASTRA_PROGRESS_BOOT_COMMAND_PREFIX | 0x2000u)

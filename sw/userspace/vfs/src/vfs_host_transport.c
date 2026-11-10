@@ -92,6 +92,8 @@ static void collect_command(AstraHostCommand *destination,
 {
     destination->status = source->status;
     destination->handle = source->handle;
+    destination->offset_hi = source->offset_hi;
+    destination->offset_lo = source->offset_lo;
     destination->value_hi = source->value_hi;
     destination->value_lo = source->value_lo;
     destination->result_length = source->result_length;
@@ -353,7 +355,7 @@ static uint32_t lane_resize(AstraVfsHostTransport *transport,
         if (!lane_layout(transport, target_capacity, data_bytes, &needed))
             return ASTRA_VFS_ERR_LIMIT;
     }
-    if (lane->byte_size >= needed)
+    if (lane->byte_size >= needed && lane->command_capacity == target_capacity)
         return ASTRA_VFS_OK;
     if (transport->channel_supported != 0u)
         (void)astra_host_channel_close(scope != 0u ? scope :

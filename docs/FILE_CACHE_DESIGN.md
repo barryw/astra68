@@ -3,10 +3,47 @@
 Status: design contract; VFS description-retention, metadata, VM page
 publication, and read-only HostFS file areas passed host and DE25 gates.
 The existing pressure worker reclaims clean read-only pager frames on DE25.
-Sequential reads use canonical pages in the unqualified integration branch;
+Sequential reads use canonical pages and pass scoped DE25 correctness gates;
 ordinary writes still bypass mapped resident frames. Dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
+
+Startup liveness, 2026-11-10: accepted, changing boot-service progress now
+feeds the existing watchdog before the supervisor enters its normal watch
+loop. Invalid or unchanged reports cannot keep it alive. The 120/60-second
+deadlines are unchanged. Kernel tests/verification, runtime-watchdog tests,
+NDK distribution checks and Beast/DE25 K1 (16 markers, zero overruns) pass.
+A clean 600-second DE25 startup/stability trial passes; its verified archive
+passes read-only fsck. An isolated repeat also passes ten native cases,
+Atlas/Terminal, provider loss/reopen and basic/file-map after reset, observing
+heartbeat before stage 8. Its verified archive passes fsck. A final repeat
+with both rebuilt shared libraries and matching provider metadata passed all
+ten cases and 600 seconds. Recovery hit an old fixture directory (EEXIST);
+the harness now uses fresh probe paths. Two consecutive resets, visible
+loss/reopen and basic/file-map after each pass on the same binaries in a
+400-second trial. Trial/observer/recovery gates all returned zero, with no
+panic/degraded markers. Final archive hashes match and read-only fsck passes;
+private board state is removed, all three selected services are active at
+stage 8, only production loop0 remains and 8.5 GiB is free. No product change
+or image rebuild was needed for the fixture repair.
+Tests use a separate private QMP listener: the first observer repeat
+monopolized the watchdog listener and is diagnostic only. Startup speed remains unqualified.
+The private page-read profile is complete and archived; its five guarded
+operations account for about 12.8 seconds over 1,536 pages. No probe remains.
+CURRENT_STATE.md records the Haiku reference, identities and latest gate.
+
+Rejected query-batching experiment, 2026-11-10: independent metadata/counter
+samples shared a host submission on each side of page I/O. All identity,
+revision, short-read and mutation-counter checks were retained. Host,
+sanitizer, target, NDK and native recovery gates passed, but the clean DE25
+trial still failed startup watchdog at 141 seconds. The optional callback
+and scoped-batch API are removed; evidence is retained. Two independently
+proven existing transport defects (ring growth and returned offsets) remain
+fixed. No runtime parser limit or watchdog deadline was increased. Periodic
+maintenance peaked at 187 ms, below its one-second cadence; that scheduling
+hypothesis is unsupported. A private eight-poll variant passed native recovery
+but still missed DE25 startup watchdog at 144 seconds, so the 512-poll default
+is retained. The completed page-in profile is recorded above.
 
 Publication reconciliation, 2026-11-10: notification delivery no longer
 invalidates pages independently after the cache observer reconciles the same

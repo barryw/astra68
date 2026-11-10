@@ -220,6 +220,11 @@ static void complete_channel(uint32_t slot, uint32_t producer)
             astra_host_metric_set(snapshot, ASTRA_HOST_METRIC_HOST_COMMANDS,
                                   mock_metric_value);
             command->result_length = sizeof(*snapshot);
+        } else if (command->operation == ASTRA_HOST_FS_CHANGE_SNAPSHOT) {
+            command->offset_hi = 0x12345678u;
+            command->offset_lo = 0x9abcdef0u;
+            command->value_hi = 0x23456789u;
+            command->value_lo = 0xabcdef01u;
         } else if (command->operation == ASTRA_HOST_FS_WRITE) {
             assert(command->data_length == 4u);
             assert(memcmp(dma_storage[slot] + command->data_offset,
@@ -368,6 +373,34 @@ static void *execute_thread(void *opaque)
     thread->status = astra_vfs_host_transport_execute(
         thread->transport, &command, NULL, 0u, NULL, 0u);
     return NULL;
+}
+
+static void test_batch_grows_an_existing_ring(void)
+{
+    AstraVfsHostTransport transport;
+    AstraVfsHostRequest request;
+    AstraHostCommand commands[2] = {{0}};
+    AstraVfsHostTransfer transfers[2] = {{0}};
+    assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
+        &lock_depth));
+    assert(astra_vfs_host_transport_begin(&transport, 0u, 0u, &request) == ASTRA_VFS_OK);
+    request.command->generation = transport.generation;
+    request.command->operation = ASTRA_HOST_FS_CHANGE_SNAPSHOT;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+        NULL, 0u) == ASTRA_VFS_OK);
+    uint32_t opens = channel_opens;
+    for (uint32_t at = 0u; at < 2u; ++at) {
+        commands[at].generation = transport.generation;
+        commands[at].operation = ASTRA_HOST_FS_CHANGE_SNAPSHOT;
+        transfers[at].command = &commands[at];
+    }
+    assert(astra_vfs_host_transport_execute_batch(&transport, transfers, 2u) == ASTRA_VFS_OK);
+    assert(channel_opens == opens + 1u && transport.lanes[0].command_capacity == 2u);
+    for (uint32_t at = 0u; at < 2u; ++at)
+        assert(commands[at].handle == 0x5678u + at &&
+            commands[at].offset_hi == 0x12345678u && commands[at].offset_lo == 0x9abcdef0u &&
+            commands[at].value_hi == 0x23456789u && commands[at].value_lo == 0xabcdef01u);
+    astra_vfs_host_transport_destroy(&transport);
 }
 
 /* One lane per thread carries every scope its process uses: the first
@@ -753,6 +786,7 @@ int main(void)
     astra_vfs_host_transport_destroy(&transport);
     channel_open_status = ASTRA_SYSCALL_OK;
     test_lane_carries_scopes();
+    test_batch_grows_an_existing_ring();
     test_sensitive_input_is_retired();
     test_a_forgotten_scope_is_attached_again();
     test_scope_cache_rotation();
