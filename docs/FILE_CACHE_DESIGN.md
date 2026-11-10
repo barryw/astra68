@@ -7,6 +7,32 @@ Sequential/borrowed reads and ordinary writes still bypass mapped resident frame
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Covered notification replay, 2026-11-10: after bounded drain forces a full
+invalidation, the reconciliation watermark must not move backward when
+older queued records arrive. HostFS now ignores NODE records covered by that
+watermark and avoids another drain-limit invalidation for the same snapshot.
+Newer records still invalidate, including those newer than the caller's
+snapshot; GAP and enumeration errors remain fail-closed. A lower fresh
+snapshot after provider restart/rollover invalidates all pages and resets
+the cursor for the new stream. A focused test failed on old code and passes
+with the fix, along with HostFS ASan/UBSan, MC68040 build, coherent Beast
+six-case gate, and basic/file-map after provider reset. A 600-second DE25
+private trial of the final HostFS binary passed six native cases, visible
+loss/reopen identity checks, and basic/file-map after each of two resets.
+The stopped disposable image received only the HostFS update through existing
+installer helpers; the verified base runtime and selected production data
+were preserved. Post-trial image/console hashes matched board and Beast,
+read-only e2fsck passed, and verified trial state was removed. All three
+services recovered, only production loop0 remains, and 8.6 GiB is free.
+Exact base, overlay, image, and evidence identities are in CURRENT_STATE.md.
+Diagnostic-only hardware run passed six cases plus six additional
+file-map cases without the observer fix; the earlier intermittent residency
+failure remains unclassified. The diagnostic does not weaken that assertion.
+Haiku `src/system/kernel/cache/file_cache.cpp:760-910` and
+`src/system/kernel/fs/node_monitor.cpp:716-764` guided retained cache identity
+and exact-node notification routing. Astra extends its existing reconciliation
+state rather than adding another event or cache owner.
+
 Shared client reads, 2026-11-09: positioned scalar and bulk reads now use
 one Filesystem Kit adapter over canonical `FILE_AREA`, `AREA_PREFETCH`, and
 resident copy. The service-only read adapter has been deleted. Misses use the

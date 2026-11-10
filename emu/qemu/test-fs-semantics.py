@@ -198,9 +198,7 @@ def loss(machine, mode, act):
 def check_provider_reset(machine, mount):
     loss(machine, "reopen", lambda: machine.qmp.execute("qom-set", {
         "path": "/machine", "property": "astra-host-fs-reset", "value": True}))
-    lines, status = command(machine, "fssem basic", 120, 31)
-    if status != 0:
-        fail("fssem after provider reset: %r" % lines[-20:])
+    run_cases(machine, ("basic", "file-map"))
     print("PASS provider-reset")
 
 

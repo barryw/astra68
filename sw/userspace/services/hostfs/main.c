@@ -992,23 +992,34 @@ static int file_areas_invalidate(HostfsVolume *volume, uint32_t kind,
 
 static int file_areas_observe_nodes(HostfsVolume *volume, uint64_t nodes)
 {
+    if (nodes < volume->observed_cache_nodes) {
+        if (!file_areas_invalidate(volume, ASTRA_HOST_FS_CHANGE_GAP, 0u))
+            return 0;
+        volume->observed_cache_sequence = 0u;
+        volume->observed_cache_nodes = nodes;
+    }
     for (uint32_t limit = 0u; limit < 8u; ++limit) {
         AstraHostFsChangeRecord record = {0};
         uint64_t cursor = volume->observed_cache_sequence;
         uint32_t kind;
         if (astra_vfs_host_change_next(&volume->backend, &cursor,
-                &record, &kind) != ASTRA_VFS_OK)
-            break;
+                &record, &kind) != ASTRA_VFS_OK) {
+            kind = ASTRA_HOST_FS_CHANGE_GAP;
+            cursor = volume->observed_cache_sequence;
+        }
         if (kind == ASTRA_HOST_FS_CHANGE_NODE &&
+            record.nodes > volume->observed_cache_nodes &&
             !file_areas_invalidate(volume, kind, record.inode))
             return 0;
         if (kind == ASTRA_HOST_FS_CHANGE_GAP ||
             (kind == ASTRA_HOST_FS_CHANGE_NONE &&
-             nodes != volume->observed_cache_nodes)) {
+             nodes > volume->observed_cache_nodes)) {
             if (!file_areas_invalidate(volume, ASTRA_HOST_FS_CHANGE_GAP, 0u))
                 return 0;
-            volume->observed_cache_nodes = nodes;
-        } else if (kind != ASTRA_HOST_FS_CHANGE_NONE) {
+            if (nodes > volume->observed_cache_nodes)
+                volume->observed_cache_nodes = nodes;
+        } else if (kind != ASTRA_HOST_FS_CHANGE_NONE &&
+                   record.nodes > volume->observed_cache_nodes) {
             volume->observed_cache_nodes = record.nodes;
         }
         volume->observed_cache_sequence = cursor;
@@ -1016,9 +1027,12 @@ static int file_areas_observe_nodes(HostfsVolume *volume, uint64_t nodes)
             kind == ASTRA_HOST_FS_CHANGE_NONE)
             return 1;
     }
-    if (!file_areas_invalidate(volume, ASTRA_HOST_FS_CHANGE_GAP, 0u))
-        return 0;
-    volume->observed_cache_nodes = nodes;
+    /* The full invalidation covers queued records through this snapshot. */
+    if (nodes > volume->observed_cache_nodes) {
+        if (!file_areas_invalidate(volume, ASTRA_HOST_FS_CHANGE_GAP, 0u))
+            return 0;
+        volume->observed_cache_nodes = nodes;
+    }
     return 1;
 }
 

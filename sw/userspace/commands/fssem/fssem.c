@@ -2236,14 +2236,26 @@ static int file_map_gate(const char *directory)
     close(fd); fd = -1;
     stage = "refault";
     if (!wait_mapped_byte(mapping, 1u, 'c')) goto done;
-    stage = "ordinary read fills canonical page";
+    stage = "canonical page write";
     fd = open(path, O_RDWR);
     if (fd < 0 || pwrite(fd, "P", 1u, 2u * ASTRA_MEMORY_PAGE_SIZE) != 1 ||
-        fsync(fd) != 0 ||
-        pread(fd, &observed, 1u, 2u * ASTRA_MEMORY_PAGE_SIZE) != 1 ||
-        observed != 'P' || astra_rt_area_read_resident(area,
-            2u * ASTRA_MEMORY_PAGE_SIZE, &observed, 1u) != ASTRA_SYSCALL_OK ||
-        observed != 'P') goto done;
+        fsync(fd) != 0) goto done;
+    stage = "ordinary read fills canonical page";
+    ssize_t read_count = pread(fd, &observed, 1u,
+                               2u * ASTRA_MEMORY_PAGE_SIZE);
+    if (read_count != 1 || observed != 'P') {
+        fprintf(stderr, "FSSEM canonical pread count %ld errno %d byte %u\n",
+                (long)read_count, errno, (unsigned char)observed);
+        goto done;
+    }
+    stage = "ordinary read reuses canonical owner";
+    uint32_t resident_status = astra_rt_area_read_resident(area,
+        2u * ASTRA_MEMORY_PAGE_SIZE, &observed, 1u);
+    if (resident_status != ASTRA_SYSCALL_OK || observed != 'P') {
+        fprintf(stderr, "FSSEM canonical resident status %u byte %u\n",
+                (unsigned)resident_status, (unsigned char)observed);
+        goto done;
+    }
     close(fd); fd = -1;
     stage = "cross-chunk file map";
     fd = open(path, O_RDWR);

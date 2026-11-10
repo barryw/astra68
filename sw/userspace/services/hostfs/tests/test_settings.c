@@ -24,6 +24,7 @@ static uint64_t changed_inode = 7u;
 static int change_gap;
 static uint32_t changed_kind = ASTRA_HOST_FS_CHANGE_NODE;
 static uint32_t snapshot_calls;
+static uint32_t change_next_failure;
 uint32_t astra_log(const char *text) { (void)text; return ASTRA_SYSCALL_OK; }
 uint64_t astra_clock_monotonic(void) { return 1u; }
 uint32_t astra_rt_thread_sleep(uint64_t deadline, uint32_t flags,
@@ -41,6 +42,7 @@ uint32_t astra_vfs_host_change_next(AstraVfsHostBackend *backend,
     uint64_t *cursor, AstraHostFsChangeRecord *record, uint32_t *kind)
 {
     assert(backend != NULL && cursor != NULL && record != NULL && kind != NULL);
+    if (change_next_failure != 0u) return change_next_failure;
     if (*cursor < node_sequence) {
         ++*cursor;
         *kind = change_gap ? ASTRA_HOST_FS_CHANGE_GAP : changed_kind;
@@ -240,6 +242,43 @@ int main(void)
     changed.stale = other.stale = 0u;
     assert(file_areas_observe_nodes(&change_owner, 4u));
     assert(changed.stale && other.stale);
+    change_gap = 0;
+    changed_kind = ASTRA_HOST_FS_CHANGE_NODE;
+    node_sequence = 32u;
+    assert(file_areas_observe_nodes(&change_owner, node_sequence));
+    assert(changed.stale && other.stale &&
+           change_owner.observed_cache_nodes == node_sequence &&
+           change_owner.observed_cache_sequence < node_sequence);
+    /* Newly filled pages must survive queued events already reconciled by
+       the full invalidation at the bounded-drain boundary. */
+    changed.stale = other.stale = 0u;
+    while (change_owner.observed_cache_sequence < node_sequence) {
+        uint64_t previous = change_owner.observed_cache_sequence;
+        assert(file_areas_observe_nodes(&change_owner, node_sequence));
+        assert(!changed.stale && !other.stale &&
+               change_owner.observed_cache_nodes == node_sequence &&
+               change_owner.observed_cache_sequence > previous);
+    }
+    node_sequence = 33u;
+    assert(file_areas_observe_nodes(&change_owner, 32u));
+    assert(changed.stale && !other.stale &&
+           change_owner.observed_cache_nodes == 33u);
+    changed.stale = other.stale = 0u;
+    change_next_failure = ASTRA_VFS_ERR_IO;
+    assert(file_areas_observe_nodes(&change_owner, node_sequence));
+    assert(changed.stale && other.stale);
+    change_next_failure = 0u;
+    /* A provider restart or generation rollover begins a fresh stream. */
+    node_sequence = 0u;
+    assert(file_areas_observe_nodes(&change_owner, 0u));
+    assert(changed.stale && other.stale &&
+           change_owner.observed_cache_nodes == 0u &&
+           change_owner.observed_cache_sequence == 0u);
+    changed.stale = other.stale = 0u;
+    node_sequence = 1u;
+    assert(file_areas_observe_nodes(&change_owner, 1u));
+    assert(changed.stale && !other.stale &&
+           change_owner.observed_cache_nodes == 1u);
     file_areas = NULL;
     node_sequence = 0u;
     change_gap = 0;

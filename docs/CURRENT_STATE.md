@@ -1,6 +1,56 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-11-09
+Status: active continuation map, 2026-11-10
+
+Covered cache notifications, 2026-11-10: a focused HostFS regression proved
+that bounded catch-up invalidated fresh pages again when older queued NODE
+records were read after a full invalidation. The cache reconciliation
+watermark now advances monotonically, skips already-covered NODE records,
+and does not repeat full invalidation at the drain limit when its snapshot
+is already covered. A concurrent newer record cannot be rolled back by an
+older snapshot. GAP and enumeration failures still invalidate the volume.
+A lower fresh snapshot after provider restart/rollover invalidates the volume
+and resets its cursor before consuming the new stream. HostFS tests,
+ASan/UBSan, MC68040 build, and a coherent Beast six-case guest gate pass.
+The provider-reset guest gate now also requires both basic and file-map
+after recovery; it passes with read-only e2fsck. On DE25, the final HostFS
+binary `fea4070d7c5f2ec6c299bcfdd0a7d5e7a76ecde0200d6cbd05579316a8474f3e`
+was installed into the stopped disposable image using the existing installer
+helpers, retaining verified base runtime
+`95d7c17b0481d91191c712563861689336a4eb89d75f028d0eb37ab8ac4201cc`.
+The resulting pretrial image was
+`cbeeccac7c69dfb849f0177437c43a8f9032dd784745b617020b1b3c41cabdff`.
+The 600-second private trial passed all six native cases, then basic/file-map
+after a provider reset (2/2). A second visible loss probe passed stale
+descriptor/directory/CWD, fresh-open, retained-grant, fork, and CWD-recovery
+checks (`FSSEM LOSS PASS after=33`); basic/file-map passed afterward (2/2).
+The first loss probe's redirected output became stale with the provider, so
+it supplies no loss-probe result. The runtime stayed at stage 8 without
+panic/degraded markers and restored the selected runtime with result 0.
+Post-trial image/console hashes matched board and Beast:
+`21de23aa342e54e20a7cbebbff903a955a3ff5fdb154a77858e6ab726d77cb63`
+and `6e50658d10ef6bff5879cedfbe8f205a86b0739d9a36709ac074437777083903`.
+Read-only e2fsck passed. Verified trial state was removed; all three services
+are active, only production loop0 remains, and 8.6 GiB is free. This is the
+verified base runtime plus the recorded private service overlay, not a claim
+that the immutable base release contains the final HostFS binary.
+The diagnostic-only DE25 release
+`a19721124fa9aaa60f76848166bf400f4765d5dde26924d3604a3dc1a0aa55b2`
+ran 480 seconds at stage 8 and passed all six cases, then two sets of three
+file-map cases, the second during 671 writes to a different file. It still
+contains the unfixed HostFS observer. Thus the earlier intermittent failure
+has not yet yielded an exact status; do not attribute it to this ordering
+defect without evidence. `fssem file-map` now reports separate write, pread,
+and resident-copy failures with exact counts/statuses. Diagnostic image and
+console hashes matched board/Beast
+`baee96f407fc44f663b2b37b78c9516c363e122aaa5ce5e0130357fb3ee1b368`
+and `b538c86bdc36987fe0d0aa4a02c1789d701433121a54d1309ded7aa10c96cafc`;
+read-only `e2fsck` passed. Diagnostic trial state was archived and removed.
+Evidence remains under `/home/barry/astra-evidence/file-cache-client-20261109/`.
+Haiku `src/system/kernel/cache/file_cache.cpp:760-910` retains one cache
+owner across I/O, and `src/system/kernel/fs/node_monitor.cpp:716-764`
+targets stat notifications by device/node. Astra retains its existing area
+owner and exact mutation stream, adding no notification mechanism.
 
 Fork control-session repair, 2026-11-09: the shared-description stall below
 was caused by a fork child using its provider session ID on HostFS's control
