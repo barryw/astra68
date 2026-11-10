@@ -1,4 +1,4 @@
-"""GDB command that prints Axiom's live scheduler state."""
+"""GDB command that prints Astra's live scheduler state through QEMU."""
 
 import gdb
 
@@ -10,7 +10,29 @@ def number(value):
 def entries(name):
     values = gdb.parse_and_eval(name)
     first, last = values.type.range()
-    return ((index, values[index]) for index in range(first, last + 1))
+    for index in range(first, last + 1):
+        value = values[index]
+        if value.type.code == gdb.TYPE_CODE_PTR:
+            if number(value) == 0:
+                continue
+            value = value.dereference()
+        yield index, value
+
+
+def pool_entries(name, leaf_entries, field=None):
+    directory = gdb.parse_and_eval(name)
+    first, last = directory.type.range()
+    for leaf in range(first, last + 1):
+        if number(directory[leaf]) == 0:
+            continue
+        for slot in range(leaf_entries):
+            value = directory[leaf][slot]
+            if field is not None:
+                value = value[field]
+                if number(value) == 0:
+                    continue
+                value = value.dereference()
+            yield leaf * leaf_entries + slot, value
 
 
 def address(value):
@@ -28,7 +50,7 @@ def stack_usage(thread):
     observed = top - number(thread["kernel_stack_low_water"])
     poison = b"\xa5\xa5\xa5\xa5"
     contents = bytes(gdb.selected_inferior().read_memory(
-        base + 4, top - base - 4))
+        number(thread["stack_physical"]) + 4, top - base - 4))
     poisoned = 0
     for offset in range(0, len(contents), 4):
         if contents[offset:offset + 4] != poison:
@@ -42,6 +64,17 @@ class AstraKernelSnapshot(gdb.Command):
         super().__init__("astra-kernel-snapshot", gdb.COMMAND_STATUS)
 
     def invoke(self, _argument, _from_tty):
+        previous = gdb.execute("maintenance packet qqemu.PhyMemMode",
+                               to_string=True)
+        physical = 'received: "1"' in previous
+        gdb.execute("maintenance packet Qqemu.PhyMemMode:1", to_string=True)
+        try:
+            self.snapshot()
+        finally:
+            gdb.execute("maintenance packet Qqemu.PhyMemMode:%u" % physical,
+                        to_string=True)
+
+    def snapshot(self):
         stats = gdb.parse_and_eval("scheduler_stats")
         gdb.write(
             "scheduler current=%08x/%08x live=%u/%u switches=%u "
@@ -87,7 +120,7 @@ class AstraKernelSnapshot(gdb.Command):
                         number(entry["rights"]), number(entry["object"]),
                         number(entry["release_context"])))
 
-        for index, thread in entries("threads"):
+        for index, thread in pool_entries("thread_directory", 256, "thread"):
             if number(thread["occupied"]) == 0:
                 continue
             context = thread["context"]
@@ -102,17 +135,25 @@ class AstraKernelSnapshot(gdb.Command):
                     number(thread["wait_member_count"]),
                     number(thread["syscall_count"]),
                     number(thread["run_count"]), used, capacity))
+            gdb.write(
+                "  call=%u owner=%08x pager=%08x offset=%08x "
+                "epoch=%u retry=%u syscall=%u data=%s\n" % (
+                    number(thread["call"]), number(thread["wait_owner_id"]),
+                    number(thread["pager_area"]), number(thread["pager_offset"]),
+                    number(thread["pager_epoch"]), number(thread["pager_retry"]),
+                    number(thread["pager_syscall"]),
+                    "/".join("%08x" % number(context["data"][register])
+                             for register in range(5))))
 
             for member in range(number(thread["wait_member_count"])):
-                registration = gdb.parse_and_eval(
-                    "wait_registrations[%u][%u]" % (index, member))
+                registration = thread["wait_registrations"][member]
                 gdb.write(
                     "  W%-2u queue=%08x previous=%u next=%u\n" % (
                         member, number(registration["queue"]),
                         number(registration["previous"]),
                         number(registration["next"])))
 
-        for index, port in entries("ports"):
+        for index, port in pool_entries("port_directory", 64):
             if number(port["state"]) == 0:
                 continue
             gdb.write(
@@ -132,7 +173,7 @@ class AstraKernelSnapshot(gdb.Command):
                     number(port["writable"]["sequence"]),
                     address(port["readable"]), address(port["writable"])))
 
-        for index, message in entries("messages"):
+        for index, message in pool_entries("message_directory", 8):
             if number(message["state"]) == 0:
                 continue
             size = number(message["size"])
@@ -145,9 +186,10 @@ class AstraKernelSnapshot(gdb.Command):
                     number(message["next"]),
                     prefix(message["data"], min(size, 24))))
 
-        for index, load in entries("executable_loads"):
-            if number(load["stage"]) == 0:
-                continue
+        load_pointer = gdb.parse_and_eval("executable_loads")
+        index = 0
+        while number(load_pointer) != 0:
+            load = load_pointer.dereference()
             process = load["process"]
             process_id = 0 if number(process) == 0 else number(
                 process.dereference()["id"])
@@ -155,6 +197,8 @@ class AstraKernelSnapshot(gdb.Command):
                 "L%-2u stage=%u process=%08x segment=%u page=%u\n" % (
                     index, number(load["stage"]), process_id,
                     number(load["segment"]), number(load["page"])))
+            load_pointer = load["next"]
+            index += 1
 
 
 AstraKernelSnapshot()

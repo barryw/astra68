@@ -27,6 +27,8 @@
 #include <astra/runtime.h>
 #include <astra/utf8.h>
 #include <astra/syscall.h>
+#include <astra/pager_service.h>
+#include <astra/address_space.h>
 
 #include <stddef.h>
 #include <string.h>
@@ -1505,6 +1507,87 @@ astra_vfs_file_area(AstraVfsClient *client, AstraVfsFile file,
     return ASTRA_VFS_OK;
 }
 
+uint32_t
+astra_vfs_port_read_cached(AstraVfsClient *client, AstraVfsFile file,
+    uint64_t offset, void *buffer, uint32_t length, uint32_t *moved)
+{
+    AstraVfsDirEntry info = {0};
+    uint32_t area = 0u, copied = 0u, status, wanted;
+    uint64_t owner_base = UINT64_MAX, size = 0u;
+
+    if (client == NULL || buffer == NULL || moved == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    *moved = 0u;
+    if (client->transport != astra_vfs_port_transport)
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    if (client->port_accelerator_ops != NULL) {
+        status = ensure_accelerated_connection(client);
+        if (status != ASTRA_VFS_OK) return astra_vfs_storage_status(status);
+    }
+    if ((client->features & ASTRA_VFS_FEATURE_FILE_AREAS) == 0u)
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    status = astra_vfs_stat_file_meta(client, file, &info);
+    if (status != ASTRA_VFS_OK) return status;
+    if (info.kind != ASTRA_VFS_KIND_FILE)
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    if (offset >= info.size || length == 0u) {
+        uint32_t flags = 0u;
+        status = astra_vfs_file_flags(client, file, 0u, 0u, &flags);
+        return status != ASTRA_VFS_OK ? status :
+            (flags & ASTRA_VFS_OPEN_READ) != 0u ? ASTRA_VFS_OK :
+                                                ASTRA_VFS_ERR_ACCESS;
+    }
+    wanted = info.size - offset < length ? (uint32_t)(info.size - offset) : length;
+    while (copied < wanted) {
+        uint64_t position = offset + copied;
+        uint64_t base = position - position % ASTRA_AREA_SIZE_MAX;
+        uint32_t within = (uint32_t)(position - base);
+        uint32_t page = within - within % ASTRA_MEMORY_PAGE_SIZE;
+        uint32_t chunk = ASTRA_MEMORY_PAGE_SIZE - within % ASTRA_MEMORY_PAGE_SIZE;
+        if (chunk > wanted - copied) chunk = wanted - copied;
+        if (base != owner_base) {
+            if (area != 0u) (void)astra_close(area);
+            area = 0u;
+            status = astra_vfs_file_area(client, file,
+                position - position % ASTRA_MEMORY_PAGE_SIZE,
+                ASTRA_MEMORY_PAGE_SIZE, &area, &size);
+            if (status != ASTRA_VFS_OK) goto done;
+            owner_base = base;
+            if (position >= size) break;
+            if (size - offset < wanted) wanted = (uint32_t)(size - offset);
+            if (chunk > wanted - copied) chunk = wanted - copied;
+        }
+        uint64_t deadline = astra_clock_monotonic() + ASTRA_PAGER_REQUEST_TIMEOUT_NS;
+        for (;;) {
+            uint32_t result = astra_rt_area_read_resident(area, within,
+                (uint8_t *)buffer + copied, chunk);
+            if (result == ASTRA_SYSCALL_OK) break;
+            if (result != ASTRA_SYSCALL_WOULD_BLOCK ||
+                astra_rt_area_prefetch(area, page) != ASTRA_SYSCALL_OK) {
+                status = ASTRA_VFS_ERR_IO;
+                goto done;
+            }
+            if (astra_clock_monotonic() >= deadline) {
+                status = ASTRA_VFS_ERR_BUSY;
+                goto done;
+            }
+        }
+        copied += chunk;
+    }
+    status = ASTRA_VFS_OK;
+done:
+    if (area != 0u) (void)astra_close(area);
+    if (copied != 0u) {
+        uint32_t checked = astra_vfs_stat_file_meta(client, file, &info);
+        if (checked != ASTRA_VFS_OK) return checked;
+        if (info.kind != ASTRA_VFS_KIND_FILE) return ASTRA_VFS_ERR_LOST;
+        if (offset >= info.size) copied = 0u;
+        else if (info.size - offset < copied) copied = (uint32_t)(info.size - offset);
+    }
+    *moved = copied;
+    return copied != 0u ? ASTRA_VFS_OK : status;
+}
+
 static void
 prepare_request(AstraVfsClient *client, uint32_t operation)
 {
@@ -1942,6 +2025,14 @@ astra_vfs_port_read_bulk_position(AstraVfsClient *client, AstraVfsFile file,
     if (client == NULL || buffer == NULL || moved == NULL ||
         position == NULL || length == 0u)
         return ASTRA_VFS_ERR_INVALID;
+    if (flags == 0u) {
+        status = astra_vfs_port_read_cached(client, file, offset,
+                                            buffer, length, moved);
+        if (status != ASTRA_VFS_ERR_UNSUPPORTED) {
+            *position = offset + *moved;
+            return status;
+        }
+    }
     status = port_data_enter(client);
     if (status == ASTRA_VFS_OK) {
         status = port_read_bulk_call(client, file, offset, flags, buffer,

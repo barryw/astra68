@@ -15660,9 +15660,9 @@ static KernelProcessStatus request_pager_page(
     deadline = thread->pager_deadline;
     if (deadline == 0u) {
         now_ns = kernel_platform_monotonic_ns();
-        if (now_ns > (uint64_t)INT64_MAX - UINT64_C(30000000000) ||
+        if (now_ns > (uint64_t)INT64_MAX - ASTRA_PAGER_REQUEST_TIMEOUT_NS ||
             !kernel_platform_deadline_to_cycles(
-                (int64_t)(now_ns + UINT64_C(30000000000)), &deadline))
+                (int64_t)(now_ns + ASTRA_PAGER_REQUEST_TIMEOUT_NS), &deadline))
             goto release;
         thread->pager_deadline = deadline;
     }

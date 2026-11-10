@@ -25,9 +25,18 @@ void *astra_runtime_allocate(size_t size) { return malloc(size); }
 #include <time.h>
 
 #include <astra/vfs_local_transport.h>
+#include <astra/vfs_port_transport.h>
 #include <astra/vfs_service_core.h>
 #include <astra/vfs_path_payload.h>
 #include <astra/endian.h>
+
+uint32_t astra_vfs_port_read_cached(AstraVfsClient *client, AstraVfsFile file,
+    uint64_t offset, void *buffer, uint32_t length, uint32_t *moved)
+{
+    (void)client; (void)file; (void)offset; (void)buffer; (void)length;
+    *moved = 0u;
+    return ASTRA_VFS_ERR_UNSUPPORTED;
+}
 
 #define FAKE_NODE_MAX 8u
 #define FAKE_BYTES_MAX 512u

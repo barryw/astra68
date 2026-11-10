@@ -10,6 +10,9 @@
 #define ASTRA_PAGER_OPERATION_PAGE_REPLY 2u
 
 #ifndef __ASSEMBLER__
+/** Upper bound for one native pager request, including transient retries. */
+#define ASTRA_PAGER_REQUEST_TIMEOUT_NS UINT64_C(30000000000)
+
 /* Kernel requests one aligned page in a bound area. Reply capability is the
  * sole attached handle; cookie belongs to the service that bound the area. */
 typedef struct AstraPagerPageRequest {

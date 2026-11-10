@@ -538,11 +538,14 @@ uint32_t astra_filesystem_close(AstraFile *file)
 uint32_t astra_filesystem_file_area(const AstraFile *file, uint64_t base,
     uint32_t span, uint32_t *area, uint64_t *file_size)
 {
+    if (area != NULL) *area = 0u;
+    if (file_size != NULL) *file_size = 0u;
     uint32_t status = file_owner_status(file);
     if (status != ASTRA_VFS_OK) return status;
-    if (file->_private_kind != ASTRA_VFS_KIND_FILE ||
-        (file->_private_flags & ASTRA_VFS_OPEN_READ) == 0u)
+    if (file->_private_kind != ASTRA_VFS_KIND_FILE)
         return ASTRA_VFS_ERR_INVALID;
+    if ((file->_private_flags & ASTRA_VFS_OPEN_READ) == 0u)
+        return ASTRA_VFS_ERR_ACCESS;
     return astra_vfs_file_area(file->_private_client, file->_private_file,
                                 base, span, area, file_size);
 }

@@ -129,6 +129,8 @@ ASTRA_RUNTIME_3.0 {
         astra_rt_area_map;
         astra_rt_area_map_range;
         astra_rt_area_map_range_at;
+        astra_rt_area_prefetch;
+        astra_rt_area_read_resident;
         astra_rt_area_references;
         astra_rt_area_reclaim;
         astra_rt_area_unmap;

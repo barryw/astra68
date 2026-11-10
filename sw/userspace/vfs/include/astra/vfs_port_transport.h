@@ -130,6 +130,11 @@ uint32_t astra_vfs_port_read_bulk_position(AstraVfsClient *client,
     AstraVfsFile file, uint64_t offset, uint32_t flags, void *buffer,
     uint32_t length, uint32_t *moved, uint64_t *position);
 
+/* Shared positioned-read path. UNSUPPORTED selects a backend without file
+ * areas; all supported reads use the existing kernel page owner. */
+uint32_t astra_vfs_port_read_cached(AstraVfsClient *client, AstraVfsFile file,
+    uint64_t offset, void *buffer, uint32_t length, uint32_t *moved);
+
 /* Version 9: one write from the caller's bound transfer area. */
 uint32_t astra_vfs_port_write_bulk(AstraVfsClient *client, AstraVfsFile file,
                                    uint64_t offset, uint64_t max_end, const void *buffer,

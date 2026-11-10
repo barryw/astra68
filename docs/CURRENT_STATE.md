@@ -2,6 +2,48 @@
 
 Status: active continuation map, 2026-11-09
 
+Shared positioned cache reads, 2026-11-09: Filesystem Kit scalar/bulk
+positioned reads now converge on canonical file areas, native prefetch, and
+resident copy. Removed the bypassed service-only adapter. HostFS preserves
+one exact node/chunk owner across revision changes by reclaiming and
+refreshing it; it rejects write-only file-area requests. The native wrapper
+now reports ACCESS consistently and clears refused outputs. Runtime exports
+include both native area I/O wrappers. VFS and HostFS host/sanitizer gates,
+target builds, and NDK `dist-check` passed. A coherent Beast guest passed
+`fssem file-map` with a real resident-copy proof after ordinary `pread`, file
+growth, and a sparse 128 MiB boundary; `fssem area-range` also passed.
+Evidence is under `/home/barry/astra-evidence/file-cache-client-20261109/`.
+Coherent private release
+`48fcb42da30a7ecbdb665ed04204e042978dd842920edc4b29228761dd753963`
+ran 300 seconds at stage 8 on DE25. Native Terminal passed `file-map` and
+`area-range`, 2/2, and Atlas enumerated Applications. Board/Beast image and
+console SHA-256 matched
+`692e7ca791da888a39910fd45bb71d2b3d14979aacdbc6ae198f47ab5c046f86`
+and `a15dd90453281dc38509f97bb7ff5b5afcf9e5b3e1d17e10d398d995db85be9c`;
+offline read-only `e2fsck` passed. An earlier fixture attempt was refused
+before guest boot because the copied test credential key and its parent
+were not root-owned; restoring the provider's existing ownership policy
+fixed that setup error. Selected runtime and production data stayed intact.
+Archived trial files were verified and removed from DE25; all three services
+are active, only production loop0 remains, and 8.6 GiB is free.
+The broader `shared-description` guest gate stalls on both this candidate
+and the prior immutable image; it is an open correctness investigation,
+not evidence of a cache regression or a passed fork gate. A detached-client
+eligibility experiment did not fix it and was removed. The child waits for a
+VFS control-port reply, outside the pager; investigate control-session setup
+for detached post-fork clients before claiming the shared-description gate.
+Sequential/borrowed/path reads, retaining
+cache owners between independent ordinary reads, ordinary writes, writable
+shared maps, dirty writeback/conflicts, and remaining six-gap acceptance
+work are still open. The apparent guest probe stall was a fast permission
+test failure whose trace output was overwritten; redirected output exposed
+it. The existing GDB snapshot tool was repaired for dynamic object pools,
+per-thread wait registrations, linked executable loads, and snapshots while
+the CPU is in user mode. No panic or pager deadlock was found in the read
+probe. Haiku `src/system/kernel/cache/file_cache.cpp:760-910`
+guided common ownership and partial-I/O behavior. USB cable replug remains
+unperformed.
+
 Handle-based pager reads, 2026-11-09: native `AREA_PREFETCH` uses READ
 authority to request an unmapped area's page through the existing pager
 call/reply, shared wait, priority donation, retry, and deadline lifecycle.

@@ -11,6 +11,7 @@
 #include <astra/vfs_path_payload.h>
 #include <astra/vfs_reply.h>
 #include <astra/vfs_call_storage.h>
+#include <astra/vfs_port_transport.h>
 #include <astra/runtime.h>
 
 #include <stddef.h>
@@ -475,6 +476,14 @@ astra_vfs_read_position(AstraVfsClient *client, AstraVfsFile file,
         return ASTRA_VFS_ERR_UNSUPPORTED;
     if (length > ASTRA_VFS_IO_MAX) {
         length = ASTRA_VFS_IO_MAX;
+    }
+    if (flags == 0u && length != 0u) {
+        status = astra_vfs_port_read_cached(client, file, offset,
+                                            buffer, length, moved);
+        if (status != ASTRA_VFS_ERR_UNSUPPORTED) {
+            *position = offset + *moved;
+            return status;
+        }
     }
     if (client->direct_backend_ops != NULL) {
         status = backend_enter(client, &ops, &context);

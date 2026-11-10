@@ -1175,6 +1175,14 @@ int main(void)
                          ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE,
                          &file) == ASTRA_VFS_OK);
     assert(stat_calls == 0u && open_calls == 1u);
+    {
+        uint32_t area = 99u;
+        uint64_t size = 99u;
+        uint32_t calls = file_area_calls;
+        assert(astra_filesystem_file_area(&file, 0u,
+            ASTRA_MEMORY_PAGE_SIZE, &area, &size) == ASTRA_VFS_ERR_ACCESS);
+        assert(area == 0u && size == 0u && file_area_calls == calls);
+    }
     assert(astra_filesystem_close(&file) == ASTRA_VFS_OK);
     stat_calls = 0u;
     renamed_file = 0u;

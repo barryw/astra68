@@ -3,9 +3,35 @@
 Status: design contract; VFS description-retention, metadata, VM page
 publication, and read-only HostFS file areas passed host and DE25 gates.
 The existing pressure worker reclaims clean read-only pager frames on DE25.
-Ordinary writes and read misses still bypass mapped resident frames; dirty writeback,
+Sequential/borrowed reads and ordinary writes still bypass mapped resident frames; dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
+
+Shared client reads, 2026-11-09: positioned scalar and bulk reads now use
+one Filesystem Kit adapter over canonical `FILE_AREA`, `AREA_PREFETCH`, and
+resident copy. The service-only read adapter has been deleted. Misses use the
+existing pager without a private mapping, so failed ordinary I/O cannot kill
+the client with a mapped fault. The adapter closes its area handles, bounds
+repeated eviction retries by the pager deadline, clamps concurrent shrink,
+and preserves partial reads. Read permission is checked both at the native
+wrapper and at the service trust boundary. Runtime exports now include the
+two native area I/O wrappers. Exact identity/chunk reuse survives revision
+changes: HostFS reclaims and refreshes the existing owner instead of creating
+a competing owner alongside older mappings. VFS/HostFS host and sanitizer
+gates, target builds, and NDK `dist-check` passed. Coherent Beast guest
+`fssem file-map` proves that `pread` populates a page observed through the
+original canonical handle after growth; it also reads across a sparse 128 MiB
+boundary. `fssem area-range` passed. Private DE25 release
+`48fcb42da30a7ecbdb665ed04204e042978dd842920edc4b29228761dd753963`
+ran 300 seconds at stage 8; native Terminal passed both cases, 2/2, while
+Atlas enumerated Applications. Post-trial image/console hashes matched
+archived Beast copies; read-only `e2fsck` passed. Selected runtime and user
+data were preserved. The broader shared-description gate stalls on the
+candidate and on the prior image and remains under investigation.
+Haiku `src/system/kernel/cache/file_cache.cpp:760-910` guided common cache
+ownership, waiting for busy pages, and partial-I/O reporting. Sequential,
+borrowed, and path read shapes remain open; this does not claim cache
+retention across independent ordinary reads without a surviving area user.
 
 Handle-based cache fill, 2026-11-09: `AREA_PREFETCH` requests a page through
 the existing native pager lifecycle using a READ handle, without a user

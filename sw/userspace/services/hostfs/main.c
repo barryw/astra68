@@ -869,6 +869,12 @@ static uint32_t hostfs_file_area(void *context,
         return ASTRA_VFS_ERR_LOST;
     status = ops->adopt(&backend, token, 0u, &node);
     if (status != ASTRA_VFS_OK) return status;
+    uint32_t open_flags = 0u;
+    status = ops->file_flags(&backend, node, 0u, 0u, &open_flags);
+    if (status != ASTRA_VFS_OK || (open_flags & ASTRA_VFS_OPEN_READ) == 0u) {
+        (void)ops->close(&backend, node);
+        return status != ASTRA_VFS_OK ? status : ASTRA_VFS_ERR_ACCESS;
+    }
     status = ops->stat_node(&backend, node, &info);
     if (status != ASTRA_VFS_OK || info.kind != ASTRA_VFS_KIND_FILE ||
         base >= info.size) {
@@ -898,8 +904,18 @@ static uint32_t hostfs_file_area(void *context,
             entry->source.span == ASTRA_AREA_SIZE_MAX &&
             astra_vfs_node_identity_equal(&info.meta, &info.meta) &&
             astra_vfs_node_identity_equal(&entry->source.identity,
-                                           &info.meta) &&
-            astra_vfs_node_revision_equal(&entry->snapshot, &info)) {
+                                           &info.meta)) {
+            if (!astra_vfs_node_revision_equal(&entry->snapshot, &info)) {
+                uint32_t released = 0u;
+                if (astra_rt_area_reclaim(entry->area, 0u,
+                        entry->source.span, &released) != ASTRA_SYSCALL_OK) {
+                    entry->stale = 1u;
+                    astra_vfs_state_lock_release(&state_lock);
+                    (void)ops->close(&backend, node);
+                    return ASTRA_VFS_ERR_IO;
+                }
+                entry->snapshot = info;
+            }
             status = astra_rt_handle_duplicate(entry->area,
                 ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
                 area);
@@ -1103,81 +1119,6 @@ populated:
 static HostfsVolume *hostfs_backend_volume(void *context)
 {
     return (HostfsVolume *)((char *)context - offsetof(HostfsVolume, backend));
-}
-
-static uint32_t hostfs_read(void *context, uintptr_t node, uint64_t offset,
-    void *buffer, uint32_t length, uint32_t *moved)
-{
-    HostfsVolume *volume = hostfs_backend_volume(context);
-    AstraVfsNodeInfo before = {0}, after = {0};
-    uint64_t nodes_before = 0u, nodes_after = 0u, entries = 0u;
-    uint32_t area = 0u, wanted, copied = 0u;
-    uint64_t base;
-
-    if (!astra_vfs_state_lock_acquire(&state_lock))
-        return ASTRA_VFS_ERR_IO;
-    int has_areas = 0;
-    for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next)
-        if (entry->grant->owner == volume) { has_areas = 1; break; }
-    astra_vfs_state_lock_release(&state_lock);
-    if (!has_areas || length == 0u)
-        return astra_vfs_host_ops()->read(context, node, offset,
-                                          buffer, length, moved);
-    if (astra_vfs_host_change_snapshot(&volume->backend, &nodes_before,
-            &entries) != ASTRA_VFS_OK ||
-        !file_areas_observe_nodes(volume, nodes_before))
-        goto provider;
-    if (astra_vfs_host_ops()->stat_node(context, node, &before) !=
-            ASTRA_VFS_OK ||
-        before.kind != ASTRA_VFS_KIND_FILE ||
-        !astra_vfs_node_identity_equal(&before.meta, &before.meta))
-        goto provider;
-    if (offset >= before.size) {
-        *moved = 0u;
-        return ASTRA_VFS_OK;
-    }
-    wanted = before.size - offset < length ?
-        (uint32_t)(before.size - offset) : length;
-    base = offset - offset % ASTRA_AREA_SIZE_MAX;
-    if (wanted > ASTRA_AREA_SIZE_MAX - offset % ASTRA_AREA_SIZE_MAX)
-        goto provider;
-    if (!astra_vfs_state_lock_acquire(&state_lock))
-        return ASTRA_VFS_ERR_IO;
-    for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next)
-        if (entry->grant->owner == volume && !entry->stale &&
-            entry->provider_epoch == provider_epoch &&
-            entry->source.base == base &&
-            astra_vfs_node_identity_equal(&entry->source.identity,
-                                           &before.meta) &&
-            astra_vfs_node_revision_equal(&entry->snapshot, &before)) {
-            area = entry->area;
-            break;
-        }
-    while (area != 0u && copied < wanted) {
-        uint32_t position = (uint32_t)(offset - base) + copied;
-        uint32_t chunk = ASTRA_MEMORY_PAGE_SIZE -
-            position % ASTRA_MEMORY_PAGE_SIZE;
-        if (chunk > wanted - copied) chunk = wanted - copied;
-        if (astra_rt_area_read_resident(area, position,
-                (uint8_t *)buffer + copied, chunk) != ASTRA_SYSCALL_OK)
-            break;
-        copied += chunk;
-    }
-    astra_vfs_state_lock_release(&state_lock);
-    if (area == 0u || copied != wanted ||
-        astra_vfs_host_change_snapshot(&volume->backend, &nodes_after,
-            &entries) != ASTRA_VFS_OK ||
-        nodes_after != nodes_before ||
-        astra_vfs_host_ops()->stat_node(context, node, &after) !=
-            ASTRA_VFS_OK ||
-        !astra_vfs_node_identity_equal(&before.meta, &after.meta) ||
-        !astra_vfs_node_revision_equal(&before, &after))
-        goto provider;
-    *moved = wanted;
-    return ASTRA_VFS_OK;
-provider:
-    return astra_vfs_host_ops()->read(context, node, offset,
-                                      buffer, length, moved);
 }
 
 static uint32_t hostfs_open(void *context, const char *path, uint32_t flags,
@@ -1630,7 +1571,6 @@ static uint32_t volume_add(const AstraVolumeReference *reference, const char *na
         volume->ops = *astra_vfs_host_ops();
         volume->ops.open = hostfs_open;
         volume->ops.open_at = hostfs_open_at;
-        volume->ops.read = hostfs_read;
         volume->ops.write = hostfs_write;
         volume->ops.truncate = hostfs_truncate;
         volume->service_ready = astra_vfs_service_init(&volume->service, &volume->ops, &volume->backend,

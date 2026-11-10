@@ -2147,6 +2147,17 @@ static int file_map_gate(const char *directory)
     stage = "attach";
     if (astra_process_filesystem_open(&native, astra_posix_startup()) !=
         ASTRA_VFS_OK) goto done;
+    stage = "write-only area refusal";
+    if (astra_filesystem_open(&native.filesystem, path,
+        ASTRA_VFS_OPEN_WRITE, &file) != ASTRA_VFS_OK) goto done;
+    uint32_t area_status = astra_filesystem_file_area(&file, 0u,
+        sizeof(bytes), &area, &file_size);
+    if (area_status != ASTRA_VFS_ERR_ACCESS || area != 0u) {
+        fprintf(stderr, "FSSEM write-only area status %u handle %u\n",
+                (unsigned)area_status, (unsigned)area);
+        goto done;
+    }
+    if (astra_filesystem_close(&file) != ASTRA_VFS_OK) goto done;
     stage = "open";
     if (astra_filesystem_open(&native.filesystem, path,
         ASTRA_VFS_OPEN_READ, &file) != ASTRA_VFS_OK) goto done;
@@ -2210,6 +2221,15 @@ static int file_map_gate(const char *directory)
     close(fd); fd = -1;
     stage = "refault";
     if (!wait_mapped_byte(mapping, 1u, 'c')) goto done;
+    stage = "ordinary read fills canonical page";
+    fd = open(path, O_RDWR);
+    if (fd < 0 || pwrite(fd, "P", 1u, 2u * ASTRA_MEMORY_PAGE_SIZE) != 1 ||
+        fsync(fd) != 0 ||
+        pread(fd, &observed, 1u, 2u * ASTRA_MEMORY_PAGE_SIZE) != 1 ||
+        observed != 'P' || astra_rt_area_read_resident(area,
+            2u * ASTRA_MEMORY_PAGE_SIZE, &observed, 1u) != ASTRA_SYSCALL_OK ||
+        observed != 'P') goto done;
+    close(fd); fd = -1;
     stage = "cross-chunk file map";
     fd = open(path, O_RDWR);
     if (fd < 0 || pwrite(fd, "L", 1u,
@@ -2221,9 +2241,12 @@ static int file_map_gate(const char *directory)
         ASTRA_AREA_SIZE_MAX - ASTRA_MEMORY_PAGE_SIZE);
     if (cross_mapping == MAP_FAILED ||
         ((volatile const char *)cross_mapping)[0] != 'L' ||
-        ((volatile const char *)cross_mapping)[ASTRA_MEMORY_PAGE_SIZE] != 'R' ||
-        munmap(cross_mapping, 2u * ASTRA_MEMORY_PAGE_SIZE) != 0)
+        ((volatile const char *)cross_mapping)[ASTRA_MEMORY_PAGE_SIZE] != 'R')
         goto done;
+    char boundary[2];
+    if (pread(fd, boundary, sizeof(boundary), ASTRA_AREA_SIZE_MAX - 1u) != 2 ||
+        boundary[0] != '\0' || boundary[1] != 'R' ||
+        munmap(cross_mapping, 2u * ASTRA_MEMORY_PAGE_SIZE) != 0) goto done;
     cross_mapping = MAP_FAILED;
     close(fd); fd = -1;
     result = 0;
