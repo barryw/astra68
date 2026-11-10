@@ -28,6 +28,16 @@ _kernel_vectors:
 	.size   _kernel_vectors, . - _kernel_vectors
 
 	.section .text, "ax", @progbits
+	.macro  select_dispatch_target
+	cmpi.l  #KERNEL_DISPATCH_WORKER, %d0
+	bne     1f
+	jmp     _kernel_restore_worker_context
+1:	cmpi.l  #KERNEL_DISPATCH_IDLE, %d0
+	beq     .Lkernel_idle
+	tst.l   %d0
+	bne     _kernel_restore_user_context
+	.endm
+
 	.globl  _kernel_exception_entry
 	.type   _kernel_exception_entry, @function
 _kernel_exception_entry:
@@ -42,12 +52,7 @@ _kernel_exception_entry:
 	move.l  %a0, -(%sp)
 	jsr     kernel_exception_entry_dispatch
 	lea     12(%sp), %sp
-	cmpi.l  #KERNEL_DISPATCH_WORKER, %d0
-	bne     .Lexception_not_worker
-	jmp     _kernel_restore_worker_context
-.Lexception_not_worker:
-	tst.l   %d0
-	bne     _kernel_restore_user_context
+	select_dispatch_target
 	bra     .Lkernel_idle
 
 	.globl  _kernel_access_fault_entry
@@ -64,12 +69,7 @@ _kernel_access_fault_entry:
 	move.l  %a0, -(%sp)
 	jsr     kernel_access_entry_dispatch
 	lea     12(%sp), %sp
-	cmpi.l  #KERNEL_DISPATCH_WORKER, %d0
-	bne     .Laccess_not_worker
-	jmp     _kernel_restore_worker_context
-.Laccess_not_worker:
-	tst.l   %d0
-	bne     _kernel_restore_user_context
+	select_dispatch_target
 	moveq   #0, %d0
 	move.w  60(%sp), %d0
 	andi.w  #0x0700, %d0
@@ -113,12 +113,7 @@ _kernel_syscall_entry:
 	move.l  %a0, -(%sp)
 	jsr     kernel_syscall_entry_dispatch
 	lea     12(%sp), %sp
-	cmpi.l  #KERNEL_DISPATCH_WORKER, %d0
-	bne     .Lsyscall_not_worker
-	jmp     _kernel_restore_worker_context
-.Lsyscall_not_worker:
-	tst.l   %d0
-	bne     _kernel_restore_user_context
+	select_dispatch_target
 	bra     .Lkernel_idle
 
 	.globl  _kernel_interrupt_entry
@@ -135,12 +130,7 @@ _kernel_interrupt_entry:
 	move.l  %a0, -(%sp)
 	jsr     kernel_interrupt_entry_dispatch
 	lea     12(%sp), %sp
-	cmpi.l  #KERNEL_DISPATCH_WORKER, %d0
-	bne     .Linterrupt_not_worker
-	jmp     _kernel_restore_worker_context
-.Linterrupt_not_worker:
-	tst.l   %d0
-	bne     _kernel_restore_user_context
+	select_dispatch_target
 	moveq   #0, %d0
 	move.w  60(%sp), %d0
 	andi.w  #0x0700, %d0

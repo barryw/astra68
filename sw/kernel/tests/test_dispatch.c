@@ -789,16 +789,25 @@ static void test_last_process_fault_selects_worker(void)
 static void test_blocked_fault_enters_idle_or_worker(void)
 {
     uint32_t registers[15] = {0u};
-    uint8_t frame[8];
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
 
     reset_fakes();
     fault_result = KERNEL_PROCESS_NO_RUNNABLE;
     fault_maintenance = false;
     make_frame(frame, 0x0000u, 4u * 4u);
     assert(kernel_exception_entry_dispatch(registers, frame, 0x70000f80u) ==
-           KERNEL_DISPATCH_RESUME);
+           KERNEL_DISPATCH_IDLE);
     assert(worker_select_calls == 1u && idle_resume_calls == 1u);
     assert(worker_schedule_calls == 0u && !process_is_active);
+
+    reset_fakes();
+    fault_result = KERNEL_PROCESS_NO_RUNNABLE;
+    fault_maintenance = false;
+    make_access_frame(frame, 0u, 0x0521u, captured_fault.logical_address);
+    assert(kernel_access_entry_dispatch(registers, frame, 0x70000f80u) ==
+           KERNEL_DISPATCH_IDLE);
+    assert(worker_select_calls == 1u && idle_resume_calls == 1u &&
+           !process_is_active);
 
     reset_fakes();
     fault_result = KERNEL_PROCESS_NO_RUNNABLE;
@@ -902,7 +911,7 @@ static void test_last_runnable_block_enters_kernel_idle(void)
     make_frame(frame, 0x0000u, ASTRA_SYSCALL_VECTOR * 4u);
 
     assert(kernel_syscall_entry_dispatch(registers, frame, 0x70000f80u) ==
-           KERNEL_DISPATCH_RESUME);
+           KERNEL_DISPATCH_IDLE);
     assert(syscall_calls == 1u);
     assert(worker_select_calls == 1u);
     assert(worker_schedule_calls == 0u);

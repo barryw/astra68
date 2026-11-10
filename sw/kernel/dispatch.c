@@ -265,7 +265,7 @@ KernelDispatchTarget dispatch_user_fault_fast(const uint32_t *registers,
             return KERNEL_DISPATCH_WORKER;
         next = kernel_process_resume_idle();
         if (next == NULL)
-            return KERNEL_DISPATCH_RESUME;
+            return KERNEL_DISPATCH_IDLE;
     }
     return kernel_dispatch_user_target(next);
 }
@@ -378,7 +378,7 @@ KernelDispatchTarget syscall_entry_dispatch_fast(
         next = kernel_process_resume_idle();
         if (next != NULL)
             return kernel_dispatch_user_target(next);
-        return KERNEL_DISPATCH_RESUME;
+        return KERNEL_DISPATCH_IDLE;
     }
     scheduler_trace(0x4b534f55u); /* KSOU */
     return kernel_dispatch_user_target(next);
