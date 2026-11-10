@@ -8,6 +8,19 @@ ordinary writes still bypass mapped resident frames. Dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Checked shared-page protection prerequisite, 2026-11-10: VM can update a
+current owned page's write-protection bit without unmapping or replacing its
+frame. Expected-frame validation refuses stale transitions; other descriptor
+bits and read-only attachments survive. Shared-table metadata validation is
+centralized, including explicit alignment (generic frame queries round down).
+The existing VM test covers rights, stale/corrupt inputs, flush/no-op behavior
+and teardown. Four independent broken-behavior mutations fail. Full kernel
+host/MC68040 verification and Beast/DE25 K1 pass: 17 markers, 43/128 cycles
+against a 54-cycle clear/set baseline, no overruns. Verified hardware evidence
+is archived; private board state is removed, selected services/stage 8 and
+8.5 GiB free verified. Haiku references and identities are in CURRENT_STATE.
+Pager-area writes remain refused; dirty state and writeback must precede use.
+
 Startup liveness, 2026-11-10: accepted, changing boot-service progress now
 feeds the existing watchdog before the supervisor enters its normal watch
 loop. Invalid or unchanged reports cannot keep it alive. The 120/60-second

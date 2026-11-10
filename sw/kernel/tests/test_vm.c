@@ -1512,6 +1512,12 @@ static void test_shared_table_maps_a_span_with_one_descriptor(void)
     assert(kernel_vm_shared_table_create(owner, staged, false, &table) ==
            KERNEL_VM_OK);
     assert(kernel_vm_shared_table_attachments(table) == 0u);
+    assert(kernel_vm_shared_table_attachments(table + sizeof(uint32_t)) ==
+           UINT32_MAX);
+    assert(kernel_vm_shared_table_release(owner, table + sizeof(uint32_t)) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_attach_shared_table(&first, span_base,
+               table + sizeof(uint32_t), true) == KERNEL_VM_INVALID_ARGUMENT);
 
     assert(kernel_vm_attach_shared_table(&first, span_base + KERNEL_PAGE_SIZE, table, true) ==
            KERNEL_VM_INVALID_ARGUMENT);
@@ -1546,6 +1552,69 @@ static void test_shared_table_maps_a_span_with_one_descriptor(void)
     assert(kernel_vm_probe_address_space(&child, span_base, &physical) ==
            KERNEL_VM_MAPPING_READ_ONLY && physical == pages[0]);
     assert(child.mapped_pages == 0u);
+    {
+        KernelAddressSpace writer = {0};
+        uint32_t *descriptors = physical_words(table);
+        uint32_t original = descriptors[0] | 0x18u;
+
+        assert(kernel_vm_create_address_space(73u, &writer) == KERNEL_VM_OK);
+        assert(kernel_vm_attach_shared_table(&writer, span_base, table, false) ==
+               KERNEL_VM_OK);
+        uint32_t flushes = flush_count;
+        uint32_t invalidations = cache_invalidation_count;
+        descriptors[0] = original;
+        assert(kernel_vm_shared_table_set(owner, table + sizeof(uint32_t),
+                   0u, pages[0], true) == KERNEL_VM_INVALID_ARGUMENT);
+        assert(kernel_vm_shared_table_clear(owner, table + sizeof(uint32_t),
+                   0u) == KERNEL_VM_INVALID_ARGUMENT);
+        assert(kernel_vm_shared_table_protect(owner + 1u, table, 0u,
+                   pages[0], true) == KERNEL_VM_INVALID_ARGUMENT);
+        assert(kernel_vm_shared_table_protect(owner, table + sizeof(uint32_t),
+                   0u, pages[0], true) == KERNEL_VM_INVALID_ARGUMENT);
+        assert(kernel_vm_shared_table_protect(owner, table, 0u,
+                   pages[0] + 1u, true) == KERNEL_VM_INVALID_ARGUMENT);
+        assert(kernel_vm_shared_table_protect(owner, table,
+                   KERNEL_VM_SHARED_TABLE_PAGES, pages[0], true) ==
+               KERNEL_VM_INVALID_ARGUMENT);
+        assert(kernel_vm_shared_table_protect(owner, table, 2u,
+                   pages[0], true) == KERNEL_VM_NOT_MAPPED);
+        assert(kernel_vm_shared_table_protect(owner, table, 0u,
+                   pages[1], true) == KERNEL_VM_BUSY);
+        assert(descriptors[0] == original && flush_count == flushes &&
+               cache_invalidation_count == invalidations);
+        descriptors[0] = pages[0] | 2u;
+        assert(kernel_vm_shared_table_protect(owner, table, 0u,
+                   pages[0], true) == KERNEL_VM_CORRUPT);
+        assert(descriptors[0] == (pages[0] | 2u));
+        descriptors[0] = table | 1u;
+        assert(kernel_vm_shared_table_protect(owner, table, 0u,
+                   table, true) == KERNEL_VM_CORRUPT);
+        assert(descriptors[0] == (table | 1u) && flush_count == flushes &&
+               cache_invalidation_count == invalidations);
+        descriptors[0] = original;
+        assert(kernel_vm_shared_table_protect(owner, table, 0u,
+                   pages[0], true) == KERNEL_VM_OK);
+        assert(descriptors[0] == (original & ~4u) &&
+               flush_count == flushes + 1u &&
+               cache_invalidation_count == invalidations + 1u);
+        assert(kernel_vm_probe_address_space(&writer, span_base, &physical) ==
+               KERNEL_VM_MAPPING_READ_WRITE && physical == pages[0]);
+        assert(kernel_vm_probe_address_space(&first, span_base, &physical) ==
+               KERNEL_VM_MAPPING_READ_ONLY && physical == pages[0]);
+        assert(kernel_vm_probe_address_space(&child, span_base, &physical) ==
+               KERNEL_VM_MAPPING_READ_ONLY && physical == pages[0]);
+        assert(kernel_vm_shared_table_protect(owner, table, 0u,
+                   pages[0], true) == KERNEL_VM_OK);
+        assert(flush_count == flushes + 1u &&
+               cache_invalidation_count == invalidations + 1u);
+        assert(kernel_vm_shared_table_protect(owner, table, 0u,
+                   pages[0], false) == KERNEL_VM_OK);
+        assert(descriptors[0] == original && flush_count == flushes + 2u &&
+               cache_invalidation_count == invalidations + 2u);
+        assert(kernel_vm_probe_address_space(&writer, span_base, &physical) ==
+               KERNEL_VM_MAPPING_READ_ONLY && physical == pages[0]);
+        assert(kernel_vm_destroy_address_space(&writer) == KERNEL_VM_OK);
+    }
     assert(kernel_vm_shared_table_release(owner, table) == KERNEL_VM_BUSY);
 
     assert(kernel_vm_destroy_address_space(&child) == KERNEL_VM_OK);

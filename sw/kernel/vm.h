@@ -273,6 +273,13 @@ KernelVmStatus kernel_vm_shared_table_set(uint32_t owner,
                                           uint32_t table_physical,
                                           uint32_t index, uint32_t physical,
                                           bool writable);
+/* Change only protection, retaining descriptor state and the mapped frame.
+ * A different current frame returns BUSY without changing the table. */
+KernelVmStatus kernel_vm_shared_table_protect(uint32_t owner,
+                                              uint32_t table_physical,
+                                              uint32_t index,
+                                              uint32_t expected_physical,
+                                              bool writable);
 KernelVmStatus kernel_vm_shared_table_clear(uint32_t owner,
                                             uint32_t table_physical,
                                             uint32_t index);

@@ -2309,13 +2309,20 @@ static bool shared_page_valid(uint32_t owner, uint32_t physical)
            frame.references != 0u;
 }
 
+static bool shared_table_info(uint32_t table_physical, KernelFrameInfo *table)
+{
+    return initialized &&
+        (table_physical & (KERNEL_PAGE_SIZE - 1u)) == 0u &&
+        kernel_memory_frame_info(table_physical, table) &&
+        table->state == KERNEL_FRAME_PAGE_TABLE && table->references != 0u;
+}
+
 static volatile uint32_t *shared_table_words(uint32_t owner,
                                              uint32_t table_physical)
 {
     KernelFrameInfo table;
 
-    if (!initialized || !kernel_memory_frame_info(table_physical, &table) ||
-        table.owner != owner || table.state != KERNEL_FRAME_PAGE_TABLE)
+    if (!shared_table_info(table_physical, &table) || table.owner != owner)
         return NULL;
     return physical_words(table_physical);
 }
@@ -2378,6 +2385,36 @@ KernelVmStatus kernel_vm_shared_table_set(uint32_t owner,
     return KERNEL_VM_OK;
 }
 
+KernelVmStatus kernel_vm_shared_table_protect(uint32_t owner,
+                                              uint32_t table_physical,
+                                              uint32_t index,
+                                              uint32_t expected_physical,
+                                              bool writable)
+{
+    volatile uint32_t *table = shared_table_words(owner, table_physical);
+    uint32_t descriptor, updated;
+
+    if (table == NULL || index >= VM_PAGE_ENTRIES ||
+        (expected_physical & (KERNEL_PAGE_SIZE - 1u)) != 0u)
+        return KERNEL_VM_INVALID_ARGUMENT;
+    descriptor = table[index];
+    if ((descriptor & VM_DESC_TYPE_MASK) == VM_DESC_INVALID)
+        return KERNEL_VM_NOT_MAPPED;
+    if ((descriptor & VM_DESC_TYPE_MASK) != VM_DESC_PAGE ||
+        !shared_page_valid(owner, descriptor & VM_DESC_PAGE_ADDRESS))
+        return KERNEL_VM_CORRUPT;
+    if ((descriptor & VM_DESC_PAGE_ADDRESS) != expected_physical)
+        return KERNEL_VM_BUSY;
+    updated = (descriptor & ~VM_DESC_WRITE_PROTECT) |
+              (writable ? 0u : VM_DESC_WRITE_PROTECT);
+    if (updated != descriptor) {
+        table[index] = updated;
+        invalidate_caches();
+        flush_all();
+    }
+    return KERNEL_VM_OK;
+}
+
 KernelVmStatus kernel_vm_shared_table_clear(uint32_t owner,
                                             uint32_t table_physical,
                                             uint32_t index)
@@ -2399,9 +2436,8 @@ KernelVmStatus kernel_vm_shared_table_release(uint32_t owner,
 {
     KernelFrameInfo table;
 
-    if (!initialized || owner == 0u ||
-        !kernel_memory_frame_info(table_physical, &table) ||
-        table.owner != owner || table.state != KERNEL_FRAME_PAGE_TABLE)
+    if (owner == 0u || !shared_table_info(table_physical, &table) ||
+        table.owner != owner)
         return KERNEL_VM_INVALID_ARGUMENT;
     if (table.references != 1u)
         return KERNEL_VM_BUSY;
@@ -2415,8 +2451,7 @@ uint32_t kernel_vm_shared_table_attachments(uint32_t table_physical)
 {
     KernelFrameInfo table;
 
-    if (!kernel_memory_frame_info(table_physical, &table) ||
-        table.state != KERNEL_FRAME_PAGE_TABLE || table.references == 0u)
+    if (!shared_table_info(table_physical, &table))
         return UINT32_MAX;
     return table.references - 1u;
 }
@@ -2439,8 +2474,7 @@ KernelVmStatus kernel_vm_attach_shared_table(KernelAddressSpace *space,
         !valid_user_page(virtual_address) ||
         !valid_user_page(virtual_address + KERNEL_VM_SHARED_TABLE_SPAN -
                          KERNEL_PAGE_SIZE) ||
-        !kernel_memory_frame_info(table_physical, &table) ||
-        table.state != KERNEL_FRAME_PAGE_TABLE ||
+        !shared_table_info(table_physical, &table) ||
         table.owner == space->owner)
         return KERNEL_VM_INVALID_ARGUMENT;
     root = physical_words(space->root_physical);
@@ -2532,8 +2566,7 @@ KernelVmStatus kernel_vm_detach_shared_table(KernelAddressSpace *space,
     descriptor = pointer[VM_POINTER_INDEX(virtual_address)];
     if (!shared_table_descriptor(descriptor))
         return KERNEL_VM_NOT_MAPPED;
-    if (!kernel_memory_frame_info(descriptor & VM_DESC_TABLE_ADDRESS,
-                                  &table))
+    if (!shared_table_info(descriptor & VM_DESC_TABLE_ADDRESS, &table))
         return KERNEL_VM_CORRUPT;
     pointer[VM_POINTER_INDEX(virtual_address)] = VM_DESC_INVALID;
     if (active_user_space(space)) {

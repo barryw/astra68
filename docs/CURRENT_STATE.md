@@ -2,6 +2,49 @@
 
 Status: active continuation map, 2026-11-10
 
+Writable-cache protection prerequisite, 2026-11-10: reviewed existing
+shared-table set/clear, strict process-private read-only sealing, area pager
+guards and tests before extending VM. Process-private sealing deliberately
+rejects shared tables, so it cannot perform an owner-authorized file-page
+protection change. The new operation must retain frame/descriptor state,
+check the expected frame, preserve read-only attachments and flush stale ATC
+entries. File-area writes remain refused until dirty/writeback ownership is
+implemented. No new write path is enabled by this prerequisite.
+
+Haiku's m68k/040/M68KVMTranslationMap040.cpp:743-819 returns ENOSYS for
+Protect; its disabled draft is not implementation evidence. The working
+x86/paging/32bit/X86VMTranslationMap32Bit.cpp:508-583 preserves descriptor
+state while changing protection and invalidating translations. Astra uses
+its existing single-MC68040 shared-table authority and cache/ATC routines.
+The existing K1 harness now samples 64 clear/set transitions across writable
+and sealed attachments. Beast and DE25 both measure a 54-cycle maximum,
+with all 16 existing markers passing and zero budget overruns. A 128-cycle
+budget is assigned to the checked in-place operation before implementation.
+Baseline source patch, ROM/ELF, compiler/config and verified hardware log/ROM
+are under /home/barry/astra-evidence/shared-page-protection-20261110/.
+The checked operation now updates only the existing page's write-protection
+bit after validating table/frame ownership and the expected frame. Other
+descriptor bits survive, unchanged requests do not flush, and sealed views
+remain sealed. Shared-table address/state validation is centralized for
+lookup, release, attachment counting, attach and detach: generic frame-info
+queries intentionally round an address down, so they alone did not reject
+misaligned table addresses. A focused existing VM test fails on that old
+behavior and passes with the shared validation. Four private mutations that
+drop descriptor state, omit ATC flush, ignore the expected frame, or remove
+the alignment guard are rejected. Full kernel host/MC68040 verification passes.
+Beast and DE25 K1 both pass 17 markers, with protection at 43/128 cycles and
+page publication at 6,542/20,000 (baseline 6,534). No cycle budget overran.
+Qualified ROM SHA-256 is
+c0f498541112f3717a17fe6ead9c68f3503d2471e088ce2730317d70d6775f37.
+Hardware log/ROM archive hashes match. The private K1 fixture and scratch
+state are removed; selected services are active at stage 8, loop0 only,
+8.5 GiB free. Normal build artifacts are restored and MC68040 verification
+passes; normal ROM SHA-256 is
+c92a527f983b98e5829711717c64d293e764dc0116f70b90966494e9cc1724c4.
+Qualification and normal ROM/ELF copies are preserved separately. This
+certifies the internal VM prerequisite, not file
+writes, writable mappings or writeback. No public NDK contract changed.
+
 Startup liveness repair, 2026-11-10: the supervisor reports each boot service
 before entering its heartbeat watch loop, but those accepted progress reports
 did not feed the watchdog. The existing kernel boot-command path now pulses

@@ -52,6 +52,7 @@
 #define KERNEL_SELFTEST_USER_ADDRESS 0x10000000u
 #define KERNEL_SOAK_REPORT_INTERVAL 1000u
 #define KERNEL_AREA_PUBLISH_BUDGET_CYCLES 20000u
+#define KERNEL_SHARED_PROTECT_BUDGET_CYCLES 128u
 #define PANIC_SCREEN_TRACE_RECORDS 6u
 #define PANIC_REPORT_TRACE_RECORDS 32u
 
@@ -106,6 +107,7 @@ static struct {
 static uint32_t qualification_survivor_process_id;
 static bool qualification_publish_page(uint32_t *cycles,
                                        uint32_t *reclaim_cycles);
+static bool qualification_shared_protection(uint32_t *cycles);
 #endif
 static KernelAddressSpace user_copy_selftest_space;
 static const KernelMonitorBuildInfo monitor_build_info = {
@@ -1834,6 +1836,16 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     if (reclaim_cycles > KERNEL_PERFORMANCE_BUDGET_LIBRARY_CACHE)
         kernel_panic("K1 pager pressure budget exceeded");
     console_puts(" PASS\n");
+    uint32_t protect_cycles;
+    if (!qualification_shared_protection(&protect_cycles))
+        kernel_panic("K1 shared protection failed");
+    console_puts("K8 SHARED PROTECT cycles=");
+    console_dec32(protect_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_SHARED_PROTECT_BUDGET_CYCLES);
+    if (protect_cycles > KERNEL_SHARED_PROTECT_BUDGET_CYCLES)
+        kernel_panic("K1 shared protection budget exceeded");
+    console_puts(" PASS\n");
     console_puts("K8 PAGER GUEST PASS\n");
     if (performance_mask == KERNEL_PERFORMANCE_RELEASE_MASK)
         console_puts("K10 PERFORMANCE PASS\n");
@@ -1952,6 +1964,64 @@ static KernelWorkerServiceResult pressure_reclaim(uint32_t batch_limit,
 }
 
 #if ASTRA_KERNEL_K1_QUALIFICATION
+static bool qualification_shared_protection(uint32_t *cycles)
+{
+    const uint32_t owner = KERNEL_SELFTEST_OWNER + 1u;
+    const uint32_t base = KERNEL_VM_DYNAMIC_BASE;
+    KernelAddressSpace writable = {0};
+    KernelAddressSpace sealed = {0};
+    uint32_t pages[KERNEL_VM_SHARED_TABLE_PAGES] = {0};
+    uint32_t table = 0u, physical = 0u;
+    bool passed = false;
+
+    *cycles = 0u;
+    if (kernel_vm_create_address_space(KERNEL_SELFTEST_OWNER, &writable) !=
+            KERNEL_VM_OK ||
+        kernel_vm_create_address_space(KERNEL_SELFTEST_OWNER + 2u, &sealed) !=
+            KERNEL_VM_OK ||
+        kernel_memory_alloc_pages_zeroed(1u, KERNEL_FRAME_SHARED, owner,
+                                         pages) != KERNEL_MEMORY_OK ||
+        kernel_vm_shared_table_create(owner, pages, false, &table) !=
+            KERNEL_VM_OK ||
+        kernel_vm_attach_shared_table(&writable, base, table, false) !=
+            KERNEL_VM_OK ||
+        kernel_vm_attach_shared_table(&sealed, base, table, true) !=
+            KERNEL_VM_OK)
+        goto done;
+    for (uint32_t sample = 0u; sample < 32u; ++sample) {
+        for (uint32_t write = 0u; write < 2u; ++write) {
+            uint32_t started = kernel_platform_cpu_cycles_low();
+            if (kernel_vm_shared_table_protect(owner, table, 0u, pages[0],
+                                                write != 0u) != KERNEL_VM_OK)
+                goto done;
+            uint32_t elapsed = kernel_platform_cpu_cycles_low() - started;
+            if (elapsed > *cycles) *cycles = elapsed;
+            if (kernel_vm_probe_address_space(&writable, base, &physical) !=
+                    (write != 0u ? KERNEL_VM_MAPPING_READ_WRITE :
+                                   KERNEL_VM_MAPPING_READ_ONLY) ||
+                physical != pages[0] ||
+                kernel_vm_probe_address_space(&sealed, base, &physical) !=
+                    KERNEL_VM_MAPPING_READ_ONLY || physical != pages[0])
+                goto done;
+        }
+    }
+    passed = true;
+done:
+    if (writable.initialized && kernel_vm_destroy_address_space(&writable) !=
+                                   KERNEL_VM_OK)
+        passed = false;
+    if (sealed.initialized && kernel_vm_destroy_address_space(&sealed) !=
+                                 KERNEL_VM_OK)
+        passed = false;
+    if (table != 0u && kernel_vm_shared_table_release(owner, table) !=
+                           KERNEL_VM_OK)
+        passed = false;
+    if (pages[0] != 0u && kernel_memory_release(pages[0], 1u, owner) !=
+                            KERNEL_MEMORY_OK)
+        passed = false;
+    return passed;
+}
+
 static bool qualification_publish_page(uint32_t *cycles,
                                        uint32_t *reclaim_cycles)
 {
