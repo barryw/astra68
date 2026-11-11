@@ -2,6 +2,46 @@
 
 Status: active continuation map, 2026-11-11
 
+Native VFS description transfer qualified on DE25, 2026-11-11. The service owns pending
+SHARE references in its existing generation-checked file table, charged to
+the authenticated session. ADOPT preserves the captured backend and provider
+cursor, rejects other grants/incarnations, transfers native ownership once,
+and reserves the receiving owner's quota before backend I/O. Withdrawal is
+restricted to the sharer. Cleanup failures retain the token/backend charge;
+closing sessions lose admission authority immediately and the existing port
+reaper retries cleanup even after reply lanes disappear. HostFS applies its
+existing owner_files setting to this native accounting. Direct and service
+adapters share request validation. Haiku fs/fd.cpp:188-240,364-390 guides open
+reference retention and duplication without another cursor. Review exposed
+an in-flight adoption race: a competing claim saw BAD_HANDLE before backend
+failure could restore the token. Explicit TRANSFERRING state now returns BUSY
+after authority checks, retains source accounting and rolls back the target
+reservation on failure. The original failing assertion is retained.
+Full VFS/HostFS host and sanitizer gates, Supervisor tests and coherent target
+builds pass; all 13 ownership/rollback mutations are rejected. ThreadSanitizer
+also passes the million-operation forced-switch model and port suite after
+fixing two shared counters in the host fake backend. The original race report
+is retained; product and native test binaries are unchanged by that fixture fix.
+Beast passes 16 native
+cases, provider reset, two fresh I/O cases and read-only fsck. Native scoped-io
+uses two real roots and concurrent claim/withdraw probes, including injected
+I/O failure followed by successful retry without duplicate provider submission.
+Supervisor/Events/HostFS are rebuilt for the private core layout; kernel
+BIN/ELF hashes stay unchanged. Public protocol/ABI are unchanged. DE25 passes
+10 native cases, provider reset and two fresh I/O cases. Startup observer,
+native gate and 600-second trial return zero without panic/degraded markers.
+Candidate:
+a47dc5b95e1e6f924798789f48dd14b1bb7a18132027a8e5f9a0d5073891ebbd.
+All 560 archived hashes match, including the offline trial image and paired
+private settings/key; read-only fsck passes. Final product/native source
+matches the candidate; only host counter atomics differ. Private trial state
+is removed. Selected services are restored at stage 8 with zero restarts,
+loop0 only and 8.4 GiB free. Trial tooling did not open production image/data.
+Grant DATA remains guarded pending canonical file-area ownership, cached
+mutation/writeback, writable/private maps and exact mapped-user attribution.
+Evidence:
+/home/barry/astra-evidence/vfs-native-shares-20261111/.
+
 Grant admission pressure qualified on DE25, 2026-11-11. Native diagnostics pin the
 raw-orphans failure to grant-port creation returning RESOURCE_LIMIT: the
 preceding scope handle is 1278 (slot 254), leaving only one of 255 handles,

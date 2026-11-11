@@ -2564,13 +2564,235 @@ static void scoped_io_release(void *context, const AstraVfsBackend *backend)
     else --bindings->references[i];
 }
 
+static struct {
+    uint32_t (*adopt)(void *, uint64_t, uint32_t, uintptr_t *);
+    pthread_mutex_t mutex;
+    pthread_cond_t changed;
+    AstraVfsService *core;
+    uint32_t source, target, owner;
+    uint64_t token;
+    int enabled, entered, probed, done, unexpected, passed, fail_adopt;
+} scoped_transfer_probe;
+
+static int scoped_core_lock(void *context)
+{ return pthread_mutex_lock(context) == 0; }
+static void scoped_core_unlock(void *context)
+{ (void)pthread_mutex_unlock(context); }
+
+/* Hold before provider submission: its borrowed channel stays on this thread. */
+static uint32_t scoped_transfer_adopt(void *context, uint64_t token,
+    uint32_t flags, uintptr_t *node)
+{
+    if (scoped_transfer_probe.enabled && token == scoped_transfer_probe.token) {
+        if (pthread_mutex_lock(&scoped_transfer_probe.mutex) != 0) return ASTRA_VFS_ERR_IO;
+        if (scoped_transfer_probe.entered || flags != 0u) {
+            scoped_transfer_probe.unexpected = 1;
+            (void)pthread_mutex_unlock(&scoped_transfer_probe.mutex);
+            return ASTRA_VFS_ERR_IO;
+        }
+        scoped_transfer_probe.entered = 1;
+        (void)pthread_cond_broadcast(&scoped_transfer_probe.changed);
+        while (!scoped_transfer_probe.probed)
+            (void)pthread_cond_wait(&scoped_transfer_probe.changed, &scoped_transfer_probe.mutex);
+        int fail_adopt = scoped_transfer_probe.fail_adopt;
+        (void)pthread_mutex_unlock(&scoped_transfer_probe.mutex);
+        if (fail_adopt) return ASTRA_VFS_ERR_IO;
+    }
+    return scoped_transfer_probe.adopt(context, token, flags, node);
+}
+
+static void *scoped_transfer_compete(void *unused)
+{
+    AstraVfsReply reply;
+    AstraVfsRequest request = {.size = ASTRA_VFS_REQUEST_SIZE, .version = ASTRA_VFS_VERSION,
+        .session = scoped_transfer_probe.target, .offset = scoped_transfer_probe.token};
+    (void)unused;
+    (void)pthread_mutex_lock(&scoped_transfer_probe.mutex);
+    while (!scoped_transfer_probe.entered && !scoped_transfer_probe.done)
+        (void)pthread_cond_wait(&scoped_transfer_probe.changed, &scoped_transfer_probe.mutex);
+    int entered = scoped_transfer_probe.entered;
+    (void)pthread_mutex_unlock(&scoped_transfer_probe.mutex);
+    int passed = 0;
+    if (entered) {
+        astra_vfs_service_dispatch_from(scoped_transfer_probe.core, scoped_transfer_probe.owner,
+            ASTRA_VFS_OP_ADOPT, &request, NULL, &reply);
+        passed = reply.status == ASTRA_VFS_ERR_BUSY;
+        request.session = scoped_transfer_probe.source;
+        request.flags = ASTRA_VFS_ADOPT_DISCARD;
+        astra_vfs_service_dispatch(scoped_transfer_probe.core, ASTRA_VFS_OP_ADOPT,
+            &request, NULL, &reply);
+        passed = passed && reply.status == ASTRA_VFS_ERR_BUSY;
+    }
+    (void)pthread_mutex_lock(&scoped_transfer_probe.mutex);
+    scoped_transfer_probe.passed = passed;
+    scoped_transfer_probe.probed = 1;
+    (void)pthread_cond_broadcast(&scoped_transfer_probe.changed);
+    (void)pthread_mutex_unlock(&scoped_transfer_probe.mutex);
+    return NULL;
+}
+
+static int scoped_transfer_claim(AstraVfsService *core, uint32_t source,
+    uint32_t owner, const AstraVfsRequest *request, int fail_adopt, AstraVfsReply *reply)
+{
+    pthread_t thread;
+    scoped_transfer_probe.core = core;
+    scoped_transfer_probe.source = source;
+    scoped_transfer_probe.target = request->session;
+    scoped_transfer_probe.owner = owner;
+    scoped_transfer_probe.token = request->offset;
+    scoped_transfer_probe.entered = scoped_transfer_probe.probed = scoped_transfer_probe.done = 0;
+    scoped_transfer_probe.unexpected = scoped_transfer_probe.passed = 0;
+    scoped_transfer_probe.fail_adopt = fail_adopt;
+    CHECK(pthread_mutex_init(&scoped_transfer_probe.mutex, NULL) == 0, "transfer probe mutex");
+    if (pthread_cond_init(&scoped_transfer_probe.changed, NULL) != 0) {
+        (void)pthread_mutex_destroy(&scoped_transfer_probe.mutex);
+        return fail("transfer probe condition");
+    }
+    scoped_transfer_probe.enabled = 1;
+    if (pthread_create(&thread, NULL, scoped_transfer_compete, NULL) != 0) {
+        scoped_transfer_probe.enabled = 0;
+        (void)pthread_cond_destroy(&scoped_transfer_probe.changed);
+        (void)pthread_mutex_destroy(&scoped_transfer_probe.mutex);
+        return fail("transfer probe thread");
+    }
+    astra_vfs_service_dispatch_from(core, owner, ASTRA_VFS_OP_ADOPT, request, NULL, reply);
+    (void)pthread_mutex_lock(&scoped_transfer_probe.mutex);
+    scoped_transfer_probe.done = 1;
+    (void)pthread_cond_broadcast(&scoped_transfer_probe.changed);
+    (void)pthread_mutex_unlock(&scoped_transfer_probe.mutex);
+    int joined = pthread_join(thread, NULL);
+    if (joined != 0) {
+        (void)fail("native transfer probe join: %d", joined);
+        _exit(2);
+    }
+    scoped_transfer_probe.enabled = 0;
+    (void)pthread_cond_destroy(&scoped_transfer_probe.changed);
+    (void)pthread_mutex_destroy(&scoped_transfer_probe.mutex);
+    CHECK(scoped_transfer_probe.passed && !scoped_transfer_probe.unexpected &&
+        reply->status == (fail_adopt ? ASTRA_VFS_ERR_IO : ASTRA_VFS_OK),
+        "native concurrent transfer/withdrawal status %u", (unsigned)reply->status);
+    return 0;
+}
+
+static int scoped_io_shares(AstraVfsService *core, AstraVfsFile original,
+    uint32_t source, ScopedIoBindings *bindings)
+{
+    AstraVfsRequest request = {.size = ASTRA_VFS_REQUEST_SIZE, .version = ASTRA_VFS_VERSION};
+    AstraVfsReply reply;
+    uint32_t owner = (uint32_t)getpid(), target, foreign;
+    uint64_t token;
+    AstraVfsFile adopted, extra;
+    uint8_t path[16];
+    uint32_t used;
+    AstraVfsTransfer transfer = {.input = path};
+
+    CHECK(astra_vfs_service_set_owner_files(core, 2u), "native file quota setup");
+    request.session = source; request.file = original;
+    astra_vfs_service_dispatch(core, ASTRA_VFS_OP_SHARE, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK && reply.token != 0u, "native SHARE");
+    token = reply.token;
+    request.session = request.file = 0u;
+    astra_vfs_service_dispatch_from(core, owner, ASTRA_VFS_OP_HELLO, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK, "native receiver HELLO");
+    target = reply.session;
+    astra_vfs_service_dispatch_grant(core, owner + 1u, 91u, 0u,
+        ASTRA_VFS_OP_HELLO, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK, "foreign grant HELLO");
+    foreign = request.session = reply.session; request.offset = token;
+    astra_vfs_service_dispatch_grant(core, owner + 1u, 91u, 0u,
+        ASTRA_VFS_OP_ADOPT, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_ERR_ACCESS, "share crossed native grant");
+    astra_vfs_service_release_session(core, foreign);
+    bindings->selected = 1u;
+    request.session = target; request.offset = 0u;
+    astra_vfs_service_dispatch_from(core, owner, ASTRA_VFS_OP_HELLO, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK, "rebind receiver root");
+    request.offset = token;
+    astra_vfs_service_dispatch_from(core, owner, ASTRA_VFS_OP_ADOPT, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_ERR_LOST, "share crossed provider incarnation/root");
+    bindings->selected = 0u; request.offset = 0u;
+    astra_vfs_service_dispatch_from(core, owner, ASTRA_VFS_OP_HELLO, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK, "restore receiver root");
+    request.session = source; request.file = original; request.length = 1u;
+    request.flags = ASTRA_VFS_IO_SEQUENTIAL;
+    astra_vfs_service_dispatch(core, ASTRA_VFS_OP_READ, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK && reply.count == 1u && reply.position == 1u &&
+        reply.payload[0] == 'l', "shared source cursor");
+    request.session = target; request.file = request.flags = request.length = 0u;
+    request.offset = token;
+    CHECK(scoped_transfer_claim(core, source, owner, &request, 1, &reply) == 0,
+        "failed claim retains native token");
+    CHECK(core->open_files == 2u, "failed claim kept its native reference");
+    CHECK(scoped_transfer_claim(core, source, owner, &request, 0, &reply) == 0,
+        "retry native token after failed claim");
+    CHECK(reply.status == ASTRA_VFS_OK && reply.file != 0u, "native ADOPT");
+    adopted = reply.file;
+    astra_vfs_service_dispatch_from(core, owner, ASTRA_VFS_OP_ADOPT, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_ERR_BAD_HANDLE, "share token replay");
+    request.offset = 0u; request.file = adopted; request.length = 1u;
+    request.flags = ASTRA_VFS_IO_SEQUENTIAL;
+    astra_vfs_service_dispatch_from(core, owner + 1u, ASTRA_VFS_OP_READ, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_ERR_ACCESS, "adopted file crossed native owner");
+    astra_vfs_service_dispatch_from(core, owner, ASTRA_VFS_OP_READ, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK && reply.count == 1u && reply.position == 2u &&
+        reply.payload[0] == 'e', "adopted shared cursor");
+    request.write_limit = UINT64_MAX; request.body.payload[0] = 'f';
+    astra_vfs_service_dispatch_from(core, owner, ASTRA_VFS_OP_WRITE, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK && reply.count == 1u && reply.position == 3u,
+        "adopted access flags/write cursor");
+    request.session = source; request.file = original;
+    memset(&request.body, 0, sizeof(request.body));
+    astra_vfs_service_dispatch(core, ASTRA_VFS_OP_READ, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK && reply.position == 4u && reply.payload[0] == 't',
+        "source observes adopted cursor");
+    request.flags = request.length = 0u; request.write_limit = 0u;
+    astra_vfs_service_dispatch(core, ASTRA_VFS_OP_SEEK, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK && reply.position == 0u, "reset shared cursor");
+    request.session = target; request.file = 0u; request.flags = ASTRA_VFS_OPEN_READ;
+    CHECK(astra_vfs_path_pack("/same", NULL, path, sizeof(path), &request.body.paths, &used) ==
+        ASTRA_VFS_OK, "quota path");
+    transfer.input_size = used;
+    astra_vfs_service_dispatch_from(core, owner, ASTRA_VFS_OP_OPEN, &request, &transfer, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK, "receiver second file");
+    extra = reply.file;
+    astra_vfs_service_dispatch_from(core, owner, ASTRA_VFS_OP_OPEN, &request, &transfer, &reply);
+    CHECK(reply.status == ASTRA_VFS_ERR_LIMIT, "native receiver quota");
+    request.flags = 0u; request.file = extra;
+    memset(&request.body, 0, sizeof(request.body));
+    astra_vfs_service_dispatch_from(core, owner, ASTRA_VFS_OP_CLOSE, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK, "close quota file");
+    request.file = adopted;
+    astra_vfs_service_dispatch_from(core, owner, ASTRA_VFS_OP_CLOSE, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK, "close adopted file");
+    request.session = source; request.file = original;
+    astra_vfs_service_dispatch(core, ASTRA_VFS_OP_SHARE, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK, "native share for withdrawal");
+    request.offset = reply.token;
+    request.session = target; request.file = 0u; request.flags = ASTRA_VFS_ADOPT_DISCARD;
+    astra_vfs_service_dispatch_from(core, owner, ASTRA_VFS_OP_ADOPT, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_ERR_ACCESS, "foreign withdrawal");
+    request.session = source;
+    astra_vfs_service_dispatch(core, ASTRA_VFS_OP_ADOPT, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_OK, "owner withdrawal");
+    request.session = target; request.flags = 0u;
+    astra_vfs_service_dispatch_from(core, owner, ASTRA_VFS_OP_ADOPT, &request, NULL, &reply);
+    CHECK(reply.status == ASTRA_VFS_ERR_BAD_HANDLE, "withdrawn token replay");
+    astra_vfs_service_release_session(core, target);
+    CHECK(core->open_sessions == 1u && core->open_files == 1u &&
+        bindings->references[0] == 2u && bindings->references[1] == 0u,
+        "native transfer backing lifetime");
+    return 0;
+}
+
 static int case_scoped_io(const char *directory)
 {
     static const AstraVfsBackendBindingOps ops = {scoped_io_acquire, scoped_io_retain, scoped_io_release};
     AstraVfsClient *clients = calloc(3u, sizeof(*clients));
     AstraVfsService core = {0};
-    AstraVfsSessionSlot sessions[1] = {0};
-    AstraVfsOpenFile files[2] = {0};
+    AstraVfsSessionSlot sessions[3] = {0};
+    AstraVfsOpenFile files[4] = {0};
+    AstraVfsBackendOps backends[2];
+    pthread_mutex_t core_mutex = PTHREAD_MUTEX_INITIALIZER;
     ScopedIoBindings bindings = {0};
     AstraVfsFile file = 0u, retained = 0u;
     AstraVfsClient *parent = NULL;
@@ -2599,12 +2821,17 @@ static int case_scoped_io(const char *directory)
             clients[i].direct_backend_enter == NULL || clients[i].direct_backend_leave == NULL ||
             clients[i].direct_backend_enter(&clients[i]) != ASTRA_VFS_OK) goto done;
         entered[i] = 1u;
-        bindings.roots[i] = (AstraVfsBackend){clients[i].direct_backend_ops,
+        backends[i] = *clients[i].direct_backend_ops;
+        if (i == 0u) scoped_transfer_probe.adopt = backends[i].adopt;
+        if (backends[i].adopt == NULL || backends[i].adopt != scoped_transfer_probe.adopt) goto done;
+        backends[i].adopt = scoped_transfer_adopt;
+        bindings.roots[i] = (AstraVfsBackend){&backends[i],
             clients[i].direct_backend_context};
     }
     stage = "bind service";
     if (!astra_vfs_service_init(&core, parent->direct_backend_ops,
-        parent->direct_backend_context, sessions, 1u, files, 2u) ||
+        parent->direct_backend_context, sessions, 3u, files, 4u) ||
+        !astra_vfs_service_set_state_lock(&core, scoped_core_lock, scoped_core_unlock, &core_mutex) ||
         !astra_vfs_service_set_backend_bindings(&core, &ops, &bindings)) goto done;
     ready = 1u;
     if (astra_vfs_connect(&clients[2], astra_vfs_local_transport, &core) != ASTRA_VFS_OK ||
@@ -2620,6 +2847,8 @@ static int case_scoped_io(const char *directory)
             (uint8_t *)bytes, sizeof(bytes), &used, &next) != ASTRA_VFS_OK ||
         used != ASTRA_VFS_DIRENT_HEADER + 4u ||
         memcmp(bytes + ASTRA_VFS_DIRENT_HEADER, "same", 4u) != 0) goto done;
+    stage = "scoped description transfer";
+    if (scoped_io_shares(&core, file, clients[2].session, &bindings) != 0) goto done;
     stage = "rebind without redirecting old file";
     bindings.selected = 1u;
     AstraVfsRequest request = {.size = ASTRA_VFS_REQUEST_SIZE, .version = ASTRA_VFS_VERSION,
@@ -2646,6 +2875,9 @@ static int case_scoped_io(const char *directory)
 done:
     if (ready && clients != NULL && clients[2].session != 0u)
         (void)astra_vfs_disconnect(&clients[2]);
+    if (ready)
+        for (uint32_t i = 0u; i < 3u; ++i)
+            if (sessions[i].id != 0u) astra_vfs_service_release_session(&core, sessions[i].id);
     if (retained != 0u) (void)astra_vfs_service_release_retained(&core, retained);
     for (uint32_t i = 0u; i < 2u; ++i) {
         if (entered[i]) clients[i].direct_backend_leave(&clients[i]);
@@ -2660,6 +2892,7 @@ done:
     (void)unlink(paths[0]); (void)unlink(paths[1]);
     (void)rmdir(roots[0]); (void)rmdir(roots[1]);
     free(clients);
+    (void)pthread_mutex_destroy(&core_mutex);
     return result == 0 ? 0 : fail("scoped-io %s", stage);
 }
 

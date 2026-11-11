@@ -13,6 +13,17 @@ static inline uint32_t astra_vfs_storage_status(uint32_t status)
     return status == ASTRA_VFS_ERR_PEER ? ASTRA_VFS_ERR_LOST : status;
 }
 
+static inline int astra_vfs_description_transfer_valid(uint32_t operation,
+    const AstraVfsRequest *request)
+{
+    if (request == NULL || request->length != 0u || request->write_limit != 0u)
+        return 0;
+    if (operation == ASTRA_VFS_OP_SHARE)
+        return request->flags == 0u && request->offset == 0u;
+    return operation == ASTRA_VFS_OP_ADOPT && request->file == ASTRA_VFS_FILE_INVALID &&
+        request->offset != 0u && (request->flags & ~ASTRA_VFS_ADOPT_DISCARD) == 0u;
+}
+
 /*
  * What a filesystem has to provide to sit behind the storage protocol.
  *

@@ -74,11 +74,11 @@ typedef struct FakeFs {
     uint32_t write_overreport;
     uint32_t sync_status;
     uint32_t write_limit;
-    uint32_t write_calls;
+    atomic_uint write_calls;
     uint32_t write_fail_call;
     uint32_t write_zero;
     uint32_t write_bad_position;
-    uint32_t sync_calls;
+    atomic_uint sync_calls;
     uint32_t sync_shrink;
     uint32_t sync_drop_identity;
     uint32_t write_bump_timestamps;
@@ -917,6 +917,7 @@ typedef struct BoundBackend {
 
 typedef struct BackendBindings {
     BoundBackend *selected;
+    const AstraVfsBackendOps *ops;
     uint32_t status;
     uint32_t invalid_ops;
     uint32_t acquired;
@@ -935,7 +936,7 @@ static uint32_t binding_acquire(void *context, uint32_t owner, uint32_t grant,
     ++bindings->acquired;
     ++bindings->selected->references;
     *backend = (AstraVfsBackend){bindings->invalid_ops == 2u ? NULL :
-        bindings->invalid_ops ? &invalid_ops : &fake_ops,
+        bindings->invalid_ops ? &invalid_ops : bindings->ops != NULL ? bindings->ops : &fake_ops,
         bindings->selected};
     return ASTRA_VFS_OK;
 }
@@ -3547,9 +3548,390 @@ static void test_service_io_uses_backend_position(void)
     astra_vfs_service_release_session(&service, session);
 }
 
+static struct {
+    FakeNode *node;
+    void *context;
+    uint64_t token;
+    uint32_t shares, adopts, discards, status, share_status;
+} description_share;
+
+static uint32_t fake_description_share(void *context, uintptr_t node,
+    uint64_t *token)
+{
+    assert(description_share.node == NULL);
+    ++description_share.shares;
+    if (description_share.share_status != ASTRA_VFS_OK) return description_share.share_status;
+    description_share.node = (FakeNode *)node;
+    description_share.context = context;
+    ++description_share.node->open_count;
+    *token = ++description_share.token;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t fake_description_adopt(void *context, uint64_t token,
+    uint32_t flags, uintptr_t *node)
+{
+    assert(description_share.node != NULL && token == description_share.token &&
+        context == description_share.context);
+    assert(description_share.adopts + description_share.discards < 8u);
+    if (flags == ASTRA_VFS_ADOPT_DISCARD) ++description_share.discards;
+    else { assert(flags == 0u && node != NULL); ++description_share.adopts; }
+    if (flags == 0u) hold_slow_backend();
+    if (description_share.status != ASTRA_VFS_OK) return description_share.status;
+    if (flags == ASTRA_VFS_ADOPT_DISCARD) --description_share.node->open_count;
+    else *node = (uintptr_t)description_share.node;
+    description_share.node = NULL;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t description_session(uint32_t owner, uint32_t grant)
+{
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    begin_request(&request, 0u, NULL);
+    fixture_dispatch_grant(&service, owner, grant, ASTRA_VFS_FEATURE_DESCRIPTIONS,
+        ASTRA_VFS_OP_HELLO, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    return reply.session;
+}
+
+static void test_service_shares_keep_native_ownership(void)
+{
+    AstraVfsBackendOps descriptions = fake_ops;
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    BoundBackend first = {0}, second = {0};
+    BackendBindings bindings = {.selected = &first, .ops = &descriptions};
+    reset();
+    memset(&description_share, 0, sizeof(description_share));
+    description_share.token = UINT64_C(0x100000000);
+    descriptions.share = fake_description_share;
+    descriptions.adopt = fake_description_adopt;
+    descriptions.read_sequential = fake_read_sequential;
+    service.backend.ops = &descriptions;
+    service.file_capacity = 2u;
+    assert(astra_vfs_service_set_backend_bindings(&service, &backend_bindings, &bindings));
+    FakeNode *node = fake_create("/shared", ASTRA_VFS_KIND_FILE);
+    assert(node != NULL);
+    memcpy(node->bytes, "abcd", 4u); node->size = 4u;
+    uint32_t source = description_session(11u, 71u);
+    uint32_t target = description_session(22u, 71u);
+    uint32_t other = description_session(33u, 72u);
+    begin_request(&request, source, "/shared"); request.write_limit = 0u;
+    request.flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_OPEN, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && node->open_count == 1);
+    AstraVfsFile original = reply.file;
+    begin_request(&request, source, NULL); request.write_limit = 0u;
+    request.file = original;
+    for (unsigned i = 0u; i < 4u; ++i) {
+        AstraVfsRequest malformed = request;
+        if (i == 0u) malformed.flags = 1u;
+        if (i == 1u) malformed.offset = 1u;
+        if (i == 2u) malformed.length = 1u;
+        if (i == 3u) malformed.write_limit = 1u;
+        fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_SHARE, &malformed, &reply);
+        assert(reply.status == ASTRA_VFS_ERR_INVALID && description_share.shares == 0u &&
+            service.open_files == 1u && first.references == 4u);
+    }
+    description_share.share_status = ASTRA_VFS_ERR_IO;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_SHARE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_IO && node->open_count == 1 &&
+        service.open_files == 1u && first.references == 4u);
+    description_share.share_status = ASTRA_VFS_OK;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_SHARE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && reply.token != 0u &&
+        node->open_count == 2 && service.open_files == 2u && first.references == 5u);
+    uint64_t token = reply.token;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_SHARE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_LIMIT && description_share.shares == 2u);
+    for (unsigned i = 0u; i < 5u; ++i) {
+        AstraVfsRequest malformed;
+        begin_request(&malformed, target, NULL); malformed.write_limit = 0u; malformed.offset = token;
+        if (i == 0u) malformed.flags = 2u;
+        if (i == 1u) malformed.file = original;
+        if (i == 2u) malformed.length = 1u;
+        if (i == 3u) malformed.write_limit = 1u;
+        if (i == 4u) malformed.offset = 0u;
+        fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_ADOPT, &malformed, &reply);
+        assert(reply.status == ASTRA_VFS_ERR_INVALID && description_share.adopts == 0u &&
+            description_share.discards == 0u && service.open_files == 2u);
+    }
+    begin_request(&request, other, NULL); request.write_limit = 0u; request.offset = token;
+    fixture_dispatch_grant(&service, 33u, 72u, 0u, ASTRA_VFS_OP_ADOPT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_ACCESS && description_share.adopts == 0u);
+    begin_request(&request, target, NULL); request.write_limit = 0u; request.offset = token;
+    request.flags = ASTRA_VFS_ADOPT_DISCARD;
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_ADOPT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_ACCESS && description_share.discards == 0u);
+    begin_request(&request, source, NULL); request.write_limit = 0u; request.file = original;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_CLOSE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && node->open_count == 1 && service.open_files == 1u &&
+        first.references == 4u);
+    bindings.selected = &second;
+    begin_request(&request, target, NULL);
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_HELLO, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && first.references == 3u && second.references == 1u);
+    begin_request(&request, target, NULL); request.write_limit = 0u; request.offset = token;
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_ADOPT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_LOST && description_share.adopts == 0u);
+    bindings.selected = &first;
+    begin_request(&request, target, NULL);
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_HELLO, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && first.references == 4u && second.references == 0u);
+    begin_request(&request, target, NULL); request.write_limit = 0u; request.offset = token;
+    description_share.status = ASTRA_VFS_ERR_IO;
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_ADOPT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_IO && node->open_count == 1 && service.open_files == 1u);
+    description_share.status = ASTRA_VFS_OK;
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_ADOPT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && reply.file != 0u && node->open_count == 1);
+    AstraVfsFile adopted = reply.file;
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_ADOPT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_BAD_HANDLE && description_share.adopts == 2u);
+    begin_request(&request, target, NULL); request.write_limit = 0u; request.file = adopted; request.length = 2u;
+    request.flags = ASTRA_VFS_IO_SEQUENTIAL;
+    fake.position = 1u;
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_READ, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && reply.position == 3u &&
+        memcmp(reply.payload, "bc", 2u) == 0);
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_READ, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_ACCESS && fake.position == 3u);
+    begin_request(&request, target, NULL); request.write_limit = 0u; request.file = adopted;
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_SHARE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && node->open_count == 2);
+    token = reply.token;
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_CLOSE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && node->open_count == 1);
+    description_share.status = ASTRA_VFS_ERR_IO;
+    astra_vfs_service_release_session(&service, target);
+    assert(node->open_count == 1 && service.open_files == 1u &&
+        description_share.discards == 1u);
+    assert(!astra_vfs_service_session_bound(&service, target, 22u, 71u));
+    description_share.status = ASTRA_VFS_OK;
+    astra_vfs_service_reap(&service);
+    assert(node->open_count == 0 && service.open_files == 0u &&
+        description_share.discards == 2u);
+    begin_request(&request, source, NULL); request.write_limit = 0u; request.offset = token;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_ADOPT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_BAD_HANDLE);
+    astra_vfs_service_release_session(&service, source);
+    astra_vfs_service_release_session(&service, other);
+    assert(service.open_sessions == 0u && first.references == 0u && second.references == 0u);
+}
+
+typedef struct ShareCloseRace {
+    uint32_t session;
+    AstraVfsFile file;
+    uint64_t token;
+    unsigned armed;
+} ShareCloseRace;
+
+static void share_close_race(void *context, uint32_t point)
+{
+    ShareCloseRace *race = context;
+    if (!race->armed ||
+        point != (race->token == 0u ? ASTRA_VFS_TEST_AFTER_STATE_RELEASE : ASTRA_VFS_TEST_DURING_CLOSE))
+        return;
+    race->armed = 0u;
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    begin_request(&request, race->session, NULL); request.write_limit = 0u;
+    if (race->token != 0u) {
+        request.offset = race->token;
+        fixture_dispatch_from(&service, 11u, ASTRA_VFS_OP_ADOPT, &request, &reply);
+        assert(reply.status == ASTRA_VFS_ERR_BUSY);
+    } else {
+        request.file = race->file;
+        fixture_dispatch_from(&service, 11u, ASTRA_VFS_OP_CLOSE, &request, &reply);
+        /* With no waiter installed, close must refuse the busy file, never free it. */
+        assert(reply.status == ASTRA_VFS_ERR_IO);
+    }
+}
+
+static void test_share_pins_source_through_backend_io(void)
+{
+    AstraVfsBackendOps descriptions = fake_ops;
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    ShareCloseRace race = {0};
+    reset();
+    memset(&description_share, 0, sizeof(description_share));
+    descriptions.share = fake_description_share;
+    descriptions.adopt = fake_description_adopt;
+    service.backend.ops = &descriptions;
+    FakeNode *node = fake_create("/share-race", ASTRA_VFS_KIND_FILE);
+    begin_request(&request, 0u, NULL);
+    fixture_dispatch_from(&service, 11u, ASTRA_VFS_OP_HELLO, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    race.session = reply.session;
+    begin_request(&request, race.session, "/share-race"); request.flags = ASTRA_VFS_OPEN_READ;
+    fixture_dispatch_from(&service, 11u, ASTRA_VFS_OP_OPEN, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    race.file = reply.file; race.armed = 1u;
+    astra_vfs_service_set_test_transition(&service, share_close_race, &race);
+    begin_request(&request, race.session, NULL); request.write_limit = 0u; request.file = race.file;
+    fixture_dispatch_from(&service, 11u, ASTRA_VFS_OP_SHARE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && race.armed == 0u && node->open_count == 2);
+    race.token = reply.token; race.armed = 1u;
+    request.file = 0u; request.offset = race.token; request.flags = ASTRA_VFS_ADOPT_DISCARD;
+    fixture_dispatch_from(&service, 11u, ASTRA_VFS_OP_ADOPT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && race.armed == 0u && node->open_count == 1);
+    astra_vfs_service_set_test_transition(&service, NULL, NULL);
+    astra_vfs_service_release_session(&service, race.session);
+    assert(service.open_files == 0u && service.open_sessions == 0u && node->open_count == 0);
+}
+
+static void test_service_transfer_quota_is_owned_by_native_caller(void)
+{
+    AstraVfsBackendOps descriptions = fake_ops;
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    reset();
+    memset(&description_share, 0, sizeof(description_share));
+    descriptions.share = fake_description_share;
+    descriptions.adopt = fake_description_adopt;
+    service.backend.ops = &descriptions;
+    service.file_capacity = 4u;
+    assert(astra_vfs_service_set_owner_files(&service, 2u));
+    FakeNode *node = fake_create("/quota", ASTRA_VFS_KIND_FILE);
+    uint32_t source = description_session(11u, 71u);
+    uint32_t same_owner = description_session(11u, 71u);
+    uint32_t target = description_session(22u, 71u);
+    uint32_t same_target = description_session(22u, 71u);
+    begin_request(&request, source, "/quota"); request.flags = ASTRA_VFS_OPEN_READ;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_OPEN, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    AstraVfsFile file = reply.file;
+    begin_request(&request, source, NULL); request.write_limit = 0u; request.file = file;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_SHARE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    uint64_t token = reply.token;
+    begin_request(&request, same_owner, "/quota"); request.flags = ASTRA_VFS_OPEN_READ;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_OPEN, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_LIMIT && node->open_count == 2);
+    begin_request(&request, same_owner, NULL); request.write_limit = 0u; request.offset = token;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_ADOPT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && node->open_count == 2);
+    request.file = reply.file; request.offset = 0u;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_SHARE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_LIMIT && description_share.shares == 1u);
+    astra_vfs_service_release_session(&service, same_owner);
+    begin_request(&request, source, NULL); request.write_limit = 0u; request.file = file;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_SHARE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    token = reply.token;
+    const uint32_t sessions[] = {target, same_target};
+    for (unsigned i = 0; i < 2u; ++i) {
+        begin_request(&request, sessions[i], "/quota"); request.flags = ASTRA_VFS_OPEN_READ;
+        fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_OPEN, &request, &reply);
+        assert(reply.status == ASTRA_VFS_OK);
+    }
+    assert(service.open_files == 4u && node->open_count == 4);
+    begin_request(&request, target, NULL); request.write_limit = 0u; request.offset = token;
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_ADOPT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_LIMIT && description_share.adopts == 1u);
+    assert(astra_vfs_service_set_owner_files(&service, 3u));
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_ADOPT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && service.open_files == 4u && node->open_count == 4);
+    astra_vfs_service_release_session(&service, source);
+    astra_vfs_service_release_session(&service, target);
+    astra_vfs_service_release_session(&service, same_target);
+    assert(service.open_files == 0u && service.open_sessions == 0u && node->open_count == 0);
+}
+
+typedef struct DescriptionAdoptCall {
+    uint32_t session;
+    uint64_t token;
+    AstraVfsReply reply;
+} DescriptionAdoptCall;
+
+static void *run_description_adopt(void *context)
+{
+    DescriptionAdoptCall *call = context;
+    AstraVfsRequest request;
+    begin_request(&request, call->session, NULL); request.write_limit = 0u; request.offset = call->token;
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_ADOPT, &request, &call->reply);
+    return NULL;
+}
+
+static void test_adoption_reserves_quota_before_backend_io(int fail_adopt)
+{
+    pthread_mutex_t state_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_t thread;
+    AstraVfsBackendOps descriptions = fake_ops;
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    DescriptionAdoptCall call = {0};
+    reset();
+    memset(&description_share, 0, sizeof(description_share));
+    descriptions.share = fake_description_share;
+    descriptions.adopt = fake_description_adopt;
+    service.backend.ops = &descriptions;
+    assert(astra_vfs_service_set_state_lock(&service, test_lock_acquire, test_lock_release, &state_mutex));
+    FakeNode *node = fake_create("/adopting", ASTRA_VFS_KIND_FILE);
+    uint32_t source = description_session(11u, 71u);
+    call.session = description_session(22u, 71u);
+    begin_request(&request, source, "/adopting"); request.flags = ASTRA_VFS_OPEN_READ;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_OPEN, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    begin_request(&request, source, NULL); request.write_limit = 0u; request.file = reply.file;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_SHARE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    call.token = reply.token;
+    description_share.status = fail_adopt ? ASTRA_VFS_ERR_IO : ASTRA_VFS_OK;
+    assert(astra_vfs_service_set_owner_files(&service, 1u));
+    assert(pthread_mutex_init(&concurrent_gate.mutex, NULL) == 0);
+    assert(pthread_cond_init(&concurrent_gate.changed, NULL) == 0);
+    concurrent_gate.enabled = 1;
+    concurrent_gate.slow_entered = concurrent_gate.release_slow = 0;
+    assert(pthread_create(&thread, NULL, run_description_adopt, &call) == 0);
+    assert(pthread_mutex_lock(&concurrent_gate.mutex) == 0);
+    while (!concurrent_gate.slow_entered)
+        assert(pthread_cond_wait(&concurrent_gate.changed, &concurrent_gate.mutex) == 0);
+    assert(pthread_mutex_unlock(&concurrent_gate.mutex) == 0);
+    begin_request(&request, call.session, NULL); request.write_limit = 0u; request.offset = call.token;
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_ADOPT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_BUSY && description_share.adopts == 1u);
+    request.session = source; request.flags = ASTRA_VFS_ADOPT_DISCARD;
+    fixture_dispatch_grant(&service, 11u, 71u, 0u, ASTRA_VFS_OP_ADOPT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_BUSY && description_share.discards == 0u);
+    begin_request(&request, call.session, "/adopting"); request.flags = ASTRA_VFS_OPEN_READ;
+    fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_OPEN, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_LIMIT && node->open_count == 2);
+    astra_vfs_service_release_session(&service, source);
+    assert(service.open_sessions == 2u && service.open_files == 1u && node->open_count == 1);
+    assert(pthread_mutex_lock(&concurrent_gate.mutex) == 0);
+    concurrent_gate.release_slow = 1;
+    assert(pthread_cond_broadcast(&concurrent_gate.changed) == 0);
+    assert(pthread_mutex_unlock(&concurrent_gate.mutex) == 0);
+    assert(pthread_join(thread, NULL) == 0);
+    assert(call.reply.status == (fail_adopt ? ASTRA_VFS_ERR_IO : ASTRA_VFS_OK) &&
+        service.open_sessions == (fail_adopt ? 2u : 1u) && service.open_files == 1u);
+    concurrent_gate.enabled = 0;
+    if (fail_adopt) {
+        description_share.status = ASTRA_VFS_OK;
+        begin_request(&request, call.session, "/adopting"); request.flags = ASTRA_VFS_OPEN_READ;
+        fixture_dispatch_grant(&service, 22u, 71u, 0u, ASTRA_VFS_OP_OPEN, &request, &reply);
+        assert(reply.status == ASTRA_VFS_OK && service.open_files == 2u && node->open_count == 2);
+        astra_vfs_service_reap(&service);
+        assert(service.open_sessions == 1u && service.open_files == 1u && node->open_count == 1);
+    }
+    astra_vfs_service_release_session(&service, call.session);
+    assert(service.open_sessions == 0u && service.open_files == 0u && node->open_count == 0);
+    assert(pthread_cond_destroy(&concurrent_gate.changed) == 0);
+    assert(pthread_mutex_destroy(&concurrent_gate.mutex) == 0);
+    assert(pthread_mutex_destroy(&state_mutex) == 0);
+}
+
 int
 main(void)
 {
+    test_service_shares_keep_native_ownership();
+    test_share_pins_source_through_backend_io();
+    test_service_transfer_quota_is_owned_by_native_caller();
+    test_adoption_reserves_quota_before_backend_io(0);
+    test_adoption_reserves_quota_before_backend_io(1);
     test_scoped_backend_lifetime_and_rebind();
     test_service_description_controls_use_backend_state();
     test_service_io_uses_backend_position();

@@ -36,7 +36,11 @@
 
 typedef struct AstraVfsOpenFile {
     AstraVfsBackend backend;
-    uintptr_t node;
+    /* A pending transfer owns a description too, in the same bounded table. */
+    union {
+        uintptr_t node;
+        uint64_t token;
+    };
     uint32_t session;       /* the owning session id, 0 when the slot is free */
     uint32_t flags;
     volatile uint32_t sequence __attribute__((aligned(4)));
@@ -53,7 +57,9 @@ enum {
     ASTRA_VFS_FILE_OPENING,
     ASTRA_VFS_FILE_OPEN,
     ASTRA_VFS_FILE_CLOSING,
-    ASTRA_VFS_FILE_DETACHED
+    ASTRA_VFS_FILE_DETACHED,
+    ASTRA_VFS_FILE_SHARED,
+    ASTRA_VFS_FILE_TRANSFERRING
 };
 
 typedef struct AstraVfsSessionSlot {
@@ -145,6 +151,7 @@ typedef struct AstraVfsService {
     uint16_t open_sessions;
     uint32_t open_files;
     uint32_t owner_session_limit;
+    uint32_t owner_file_limit;
     AstraVfsStateAcquire state_acquire;
     AstraVfsStateRelease state_release;
     AstraVfsStateWait state_wait;
@@ -184,6 +191,8 @@ int astra_vfs_service_change_snapshot(AstraVfsService *service,
 /* Per-owner sessions in this service; zero disables the bound. */
 int astra_vfs_service_set_owner_sessions(AstraVfsService *service,
                                          uint32_t sessions);
+/* Open and pending-transfer references per native owner; zero disables it. */
+int astra_vfs_service_set_owner_files(AstraVfsService *service, uint32_t files);
 #ifdef ASTRA_VFS_TEST_HOOKS
 void astra_vfs_service_set_test_transition(AstraVfsService *service,
                                            AstraVfsTestTransition transition,
@@ -320,6 +329,8 @@ uint32_t astra_vfs_service_readdir_file_into(
  */
 void astra_vfs_service_release_session(AstraVfsService *service,
                                        uint32_t session);
+/* Retry closing sessions after transport reply lanes have already retired. */
+void astra_vfs_service_reap(AstraVfsService *service);
 
 /*
  * The transport must have stopped accepting requests and joined its workers.

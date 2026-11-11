@@ -540,17 +540,15 @@ uint32_t astra_vfs_host_direct_transport(
             request->file, operation, request, reply);
         break;
     case ASTRA_VFS_OP_SHARE:
-        reply->status = ops->share == NULL ? ASTRA_VFS_ERR_UNSUPPORTED :
-            request->flags != 0u ? ASTRA_VFS_ERR_INVALID :
+        reply->status = !astra_vfs_description_transfer_valid(operation, request) ? ASTRA_VFS_ERR_INVALID :
+            ops->share == NULL ? ASTRA_VFS_ERR_UNSUPPORTED :
             ops->share(backend.context, request->file, &reply->token);
         break;
     case ASTRA_VFS_OP_ADOPT: {
         uintptr_t node = 0u;
 
-        reply->status = ops->adopt == NULL ? ASTRA_VFS_ERR_UNSUPPORTED :
-            request->file != ASTRA_VFS_FILE_INVALID ||
-            (request->flags & ~ASTRA_VFS_ADOPT_DISCARD) != 0u ?
-                ASTRA_VFS_ERR_INVALID :
+        reply->status = !astra_vfs_description_transfer_valid(operation, request) ? ASTRA_VFS_ERR_INVALID :
+            ops->adopt == NULL ? ASTRA_VFS_ERR_UNSUPPORTED :
             ops->adopt(backend.context, request->offset, request->flags,
                        &node);
         if (reply->status == ASTRA_VFS_OK)

@@ -578,7 +578,7 @@ finish_file_close(AstraVfsService *service, AstraVfsOpenFile *file,
 
     release_backend(service, &file->backend);
     file->session = 0u;
-    file->node = 0u;
+    file->token = 0u;
     file->flags = 0u;
     file->kind = ASTRA_VFS_KIND_UNKNOWN;
     file->state = ASTRA_VFS_FILE_FREE;
@@ -603,13 +603,16 @@ static uint32_t
 close_file(AstraVfsService *service, AstraVfsOpenFile *file)
 {
     uintptr_t node = file->node;
+    uint64_t token = file->token;
+    uint8_t state = file->state;
     uint32_t status;
 
-    if (file->state != ASTRA_VFS_FILE_OPEN)
+    if (state != ASTRA_VFS_FILE_OPEN && state != ASTRA_VFS_FILE_SHARED)
         return ASTRA_VFS_ERR_BUSY;
-    file->state = ASTRA_VFS_FILE_CLOSING;
+    file->state = state == ASTRA_VFS_FILE_SHARED ?
+        ASTRA_VFS_FILE_TRANSFERRING : ASTRA_VFS_FILE_CLOSING;
     if (!file_wait_idle(service, file)) {
-        file->state = ASTRA_VFS_FILE_OPEN;
+        file->state = state;
         return ASTRA_VFS_ERR_IO;
     }
     if (file->retained != 0u) {
@@ -624,11 +627,18 @@ close_file(AstraVfsService *service, AstraVfsOpenFile *file)
     }
     state_release(service);
     test_transition(service, ASTRA_VFS_TEST_DURING_CLOSE);
-    status = file->backend.ops->close(file->backend.context, node);
+    status = state == ASTRA_VFS_FILE_SHARED ?
+        file->backend.ops->adopt(file->backend.context, token, ASTRA_VFS_ADOPT_DISCARD, NULL) :
+        file->backend.ops->close(file->backend.context, node);
     if (!state_acquire(service))
         return ASTRA_VFS_ERR_IO;
+    if (state == ASTRA_VFS_FILE_SHARED && status != ASTRA_VFS_OK &&
+        status != ASTRA_VFS_ERR_BAD_HANDLE && status != ASTRA_VFS_ERR_LOST) {
+        file->state = state;
+        return status;
+    }
     finish_file_close(service, file, 0u);
-    return status;
+    return state == ASTRA_VFS_FILE_SHARED ? ASTRA_VFS_OK : status;
 }
 
 int
@@ -751,6 +761,14 @@ astra_vfs_service_set_owner_sessions(AstraVfsService *service, uint32_t sessions
     return 1;
 }
 
+int astra_vfs_service_set_owner_files(AstraVfsService *service, uint32_t files)
+{
+    if (service == NULL || !state_acquire(service)) return 0;
+    service->owner_file_limit = files;
+    state_release(service);
+    return 1;
+}
+
 static void
 handle_hello(AstraVfsService *service, uint32_t owner, uint32_t grant,
              uint32_t features, const AstraVfsRequest *request,
@@ -837,22 +855,29 @@ reap_session(AstraVfsService *service, AstraVfsSessionSlot *slot)
 {
     uint32_t session = slot->id;
 
+    ++slot->inflight;
     for (;;) {
         AstraVfsOpenFile *file = NULL;
 
         for (uint32_t index = 0u; index < service->file_high_water; ++index) {
             if (service->files[index].session == session &&
-                service->files[index].state == ASTRA_VFS_FILE_OPEN) {
+                (service->files[index].state == ASTRA_VFS_FILE_OPEN ||
+                 service->files[index].state == ASTRA_VFS_FILE_SHARED)) {
                 file = &service->files[index];
                 break;
             }
         }
         if (file == NULL)
             break;
-        (void)close_file(service, file);
+        if (close_file(service, file) != ASTRA_VFS_OK &&
+            file->state != ASTRA_VFS_FILE_FREE &&
+            file->state != ASTRA_VFS_FILE_DETACHED)
+            break;
     }
-    if (slot->open_files != 0u)
+    if (slot->open_files != 0u) {
+        --slot->inflight;
         return;
+    }
     release_backend(service, &slot->backend);
     slot->id = 0u;
     slot->owner = 0u;
@@ -1001,6 +1026,82 @@ astra_vfs_service_shutdown(AstraVfsService *service,
     return mount->unmount(context);
 }
 
+void astra_vfs_service_reap(AstraVfsService *service)
+{
+    if (service == NULL || !state_acquire(service)) return;
+    for (uint32_t at = 0u; at < service->session_capacity; ++at) {
+        AstraVfsSessionSlot *slot = &service->sessions[at];
+        if (slot->id != 0u && slot->closing && slot->inflight == 0u)
+            reap_session(service, slot);
+    }
+    state_release(service);
+}
+
+static int owner_files_full(AstraVfsService *service, uint32_t owner)
+{
+    uint32_t held = 0u;
+    if (owner == 0u || service->owner_file_limit == 0u) return 0;
+    for (uint32_t at = 0u; at < service->session_capacity; ++at)
+        if (service->sessions[at].id != 0u && service->sessions[at].owner == owner)
+            held += service->sessions[at].open_files;
+    if (held < service->owner_file_limit) return 0;
+    ++service->stats.owner_quota_denied;
+    return 1;
+}
+
+/* An open and a pending transfer reserve the same resource before backend I/O. */
+static AstraVfsOpenFile *reserve_file(AstraVfsService *service,
+    AstraVfsSessionSlot *slot, const AstraVfsBackend *backend, uint32_t *status)
+{
+    uint32_t index;
+    *status = ASTRA_VFS_ERR_LIMIT;
+    if (owner_files_full(service, slot->owner)) return NULL;
+    for (index = 0u; index < service->file_high_water; ++index) {
+        if (service->files[index].state == ASTRA_VFS_FILE_FREE) {
+            break;
+        }
+    }
+    if (index == service->file_high_water) {
+        if (service->file_high_water == service->file_capacity) {
+            return NULL;
+        }
+        ++service->file_high_water;
+        memset(&service->files[index], 0, sizeof(service->files[index]));
+        service->files[index].generation = 1u;
+    }
+    if (index >= service->file_capacity) {
+        return NULL;
+    }
+    *status = service->backend_bindings == NULL ? ASTRA_VFS_OK :
+        service->backend_bindings->retain(service->backend_binding_context, backend);
+    if (*status != ASTRA_VFS_OK) return NULL;
+    service->files[index].backend = *backend;
+    service->files[index].session = slot->id;
+    service->files[index].state = ASTRA_VFS_FILE_OPENING;
+    ++service->open_files;
+    ++slot->open_files;
+    test_transition(service, ASTRA_VFS_TEST_AFTER_SESSION_RESERVE);
+    return &service->files[index];
+}
+
+static void cancel_file_reservation(AstraVfsService *service, AstraVfsOpenFile *file)
+{
+    AstraVfsSessionSlot *slot = find_session(service, file->session);
+    release_backend(service, &file->backend);
+    file->session = 0u;
+    file->token = 0u;
+    file->state = ASTRA_VFS_FILE_FREE;
+    --service->open_files;
+    --slot->open_files;
+}
+
+static void file_opened(AstraVfsService *service)
+{
+    ++service->stats.files_opened;
+    if (service->open_files > service->stats.peak_open_files)
+        service->stats.peak_open_files = service->open_files;
+}
+
 static void
 handle_open(AstraVfsService *service, uint32_t session,
             const AstraVfsRequest *request, const char *path, AstraVfsOpenFile *directory,
@@ -1009,8 +1110,8 @@ handle_open(AstraVfsService *service, uint32_t session,
     AstraVfsSessionSlot *session_slot = find_session(service, session);
     AstraVfsNodeInfo info;
     AstraVfsBackend backend;
+    AstraVfsOpenFile *file;
     uintptr_t node = 0u;
-    uint32_t index;
     uint32_t status;
 
     if (session_slot == NULL) {
@@ -1019,55 +1120,16 @@ handle_open(AstraVfsService *service, uint32_t session,
     }
     if ((request->flags & ~ASTRA_VFS_OPEN_MASK) != 0u ||
         ((request->flags & ASTRA_VFS_OPEN_EXCLUSIVE) != 0u &&
-         (request->flags & ASTRA_VFS_OPEN_CREATE) == 0u)) {
+         (request->flags & ASTRA_VFS_OPEN_CREATE) == 0u) ||
+        ((request->flags & ASTRA_VFS_OPEN_CREATE) != 0u &&
+         request->offset != ASTRA_VFS_MODE_DEFAULT &&
+         request->offset > ASTRA_VFS_MODE_MASK)) {
         reply->status = ASTRA_VFS_ERR_INVALID;
         return;
     }
-    if ((request->flags & ASTRA_VFS_OPEN_CREATE) != 0u &&
-        request->offset != ASTRA_VFS_MODE_DEFAULT &&
-        request->offset > ASTRA_VFS_MODE_MASK) {
-        reply->status = ASTRA_VFS_ERR_INVALID;
-        return;
-    }
-    /* A slot is found before the backend is asked, so a full table costs no
-     * open that would then have to be undone. */
-    for (index = 0u; index < service->file_high_water; ++index) {
-        if (service->files[index].state == ASTRA_VFS_FILE_FREE) {
-            break;
-        }
-    }
-    if (index == service->file_high_water) {
-        if (service->file_high_water == service->file_capacity) {
-            reply->status = ASTRA_VFS_ERR_LIMIT;
-            return;
-        }
-        ++service->file_high_water;
-        service->files[index].node = 0u;
-        service->files[index].backend = (AstraVfsBackend){0};
-        service->files[index].session = 0u;
-        service->files[index].flags = 0u;
-        service->files[index].sequence = 0u;
-        service->files[index].generation = 1u;
-        service->files[index].kind = ASTRA_VFS_KIND_UNKNOWN;
-        service->files[index].state = ASTRA_VFS_FILE_FREE;
-        service->files[index].active = 0u;
-        service->files[index].retained = 0u;
-    }
-    if (index >= service->file_capacity) {
-        reply->status = ASTRA_VFS_ERR_LIMIT;
-        return;
-    }
-
     backend = directory != NULL ? directory->backend : session_slot->backend;
-    status = service->backend_bindings == NULL ? ASTRA_VFS_OK :
-        service->backend_bindings->retain(service->backend_binding_context, &backend);
-    if (status != ASTRA_VFS_OK) { reply->status = status; return; }
-    service->files[index].backend = backend;
-    service->files[index].session = session;
-    service->files[index].state = ASTRA_VFS_FILE_OPENING;
-    test_transition(service, ASTRA_VFS_TEST_AFTER_SESSION_RESERVE);
-    ++service->open_files;
-    ++session_slot->open_files;
+    file = reserve_file(service, session_slot, &backend, &reply->status);
+    if (file == NULL) return;
 
     node_info_clear(&info);
     state_release(service);
@@ -1091,26 +1153,128 @@ handle_open(AstraVfsService *service, uint32_t session,
         return;
     }
     if (status != ASTRA_VFS_OK) {
-        release_backend(service, &service->files[index].backend);
-        service->files[index].session = 0u;
-        service->files[index].state = ASTRA_VFS_FILE_FREE;
-        --service->open_files;
-        --session_slot->open_files;
+        cancel_file_reservation(service, file);
         reply->status = status;
         return;
     }
-    service->files[index].node = node;
-    service->files[index].session = session;
-    service->files[index].flags = request->flags;
-    service->files[index].kind = info.kind;
-    service->files[index].state = ASTRA_VFS_FILE_OPEN;
-    reply->file = HANDLE_MAKE(index, service->files[index].generation);
+    file->node = node;
+    file->flags = request->flags;
+    file->kind = info.kind;
+    file->state = ASTRA_VFS_FILE_OPEN;
+    reply->file = HANDLE_MAKE((uint32_t)(file - service->files), file->generation);
     astra_vfs_node_info_publish(reply, &info);
     reply->status = ASTRA_VFS_OK;
-    ++service->stats.files_opened;
-    if (service->open_files > service->stats.peak_open_files) {
-        service->stats.peak_open_files = service->open_files;
+    file_opened(service);
+}
+
+static void handle_share(AstraVfsService *service, AstraVfsSessionSlot *slot,
+    const AstraVfsRequest *request, AstraVfsReply *reply)
+{
+    AstraVfsOpenFile *source, *pending;
+    uint64_t token = 0u;
+
+    if (!astra_vfs_description_transfer_valid(ASTRA_VFS_OP_SHARE, request)) {
+        reply->status = ASTRA_VFS_ERR_INVALID;
+        return;
     }
+    source = find_file(service, slot->id, request->file, &reply->status);
+    if (source == NULL) return;
+    if (source->backend.ops->share == NULL || source->backend.ops->adopt == NULL) {
+        reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
+        return;
+    }
+    if (!file_acquire(service, source)) { reply->status = ASTRA_VFS_ERR_BUSY; return; }
+    pending = reserve_file(service, slot, &source->backend, &reply->status);
+    if (pending == NULL) { file_release(service, source); return; }
+    pending->flags = source->flags;
+    pending->kind = source->kind;
+    state_release(service);
+    uint32_t status = source->backend.ops->share(source->backend.context, source->node, &token);
+    if (!state_acquire(service)) { reply->status = ASTRA_VFS_ERR_IO; return; }
+    file_release(service, source);
+    if (status == ASTRA_VFS_OK && token == 0u) status = ASTRA_VFS_ERR_PROTOCOL;
+    if (status != ASTRA_VFS_OK) cancel_file_reservation(service, pending);
+    else {
+        pending->token = token;
+        pending->state = ASTRA_VFS_FILE_SHARED;
+        reply->token = token;
+        file_opened(service);
+    }
+    reply->status = status;
+}
+
+static void handle_adopt(AstraVfsService *service, AstraVfsSessionSlot *slot,
+    const AstraVfsRequest *request, AstraVfsReply *reply)
+{
+    AstraVfsOpenFile *pending = NULL;
+    AstraVfsSessionSlot *source = NULL;
+    uintptr_t node = 0u;
+    uint32_t status;
+
+    if (!astra_vfs_description_transfer_valid(ASTRA_VFS_OP_ADOPT, request)) {
+        reply->status = ASTRA_VFS_ERR_INVALID;
+        return;
+    }
+    reply->status = ASTRA_VFS_ERR_BAD_HANDLE;
+    for (uint32_t at = 0u; at < service->file_high_water; ++at) {
+        AstraVfsOpenFile *candidate = &service->files[at];
+        if ((candidate->state != ASTRA_VFS_FILE_SHARED &&
+             candidate->state != ASTRA_VFS_FILE_TRANSFERRING) ||
+            candidate->token != request->offset)
+            continue;
+        AstraVfsSessionSlot *owner = find_session(service, candidate->session);
+        if (owner == NULL) { reply->status = ASTRA_VFS_ERR_PROTOCOL; return; }
+        if (owner->grant != slot->grant ||
+            (request->flags != 0u && owner->owner != slot->owner)) {
+            reply->status = ASTRA_VFS_ERR_ACCESS;
+            continue;
+        }
+        if (request->flags == 0u && (owner->closing ||
+            candidate->backend.ops != slot->backend.ops ||
+            candidate->backend.context != slot->backend.context)) {
+            reply->status = ASTRA_VFS_ERR_LOST;
+            continue;
+        }
+        if (candidate->state == ASTRA_VFS_FILE_TRANSFERRING) {
+            reply->status = ASTRA_VFS_ERR_BUSY;
+            return;
+        }
+        pending = candidate; source = owner;
+        break;
+    }
+    if (pending == NULL) return;
+    if (request->flags != 0u) reply->status = close_file(service, pending);
+    else {
+        if (source->owner != slot->owner && owner_files_full(service, slot->owner)) {
+            reply->status = ASTRA_VFS_ERR_LIMIT;
+            return;
+        }
+        int reserve_target = source->owner != slot->owner;
+        if (reserve_target) ++slot->open_files;
+        /* The original owner stays charged while its token is in flight. */
+        pending->state = ASTRA_VFS_FILE_TRANSFERRING;
+        state_release(service);
+        status = pending->backend.ops->adopt(pending->backend.context,
+            request->offset, 0u, &node);
+        if (!state_acquire(service)) { reply->status = ASTRA_VFS_ERR_IO; return; }
+        if (reserve_target) --slot->open_files;
+        if (status != ASTRA_VFS_OK) pending->state = ASTRA_VFS_FILE_SHARED;
+        else if (node == 0u) {
+            finish_file_close(service, pending, 0u);
+            status = ASTRA_VFS_ERR_PROTOCOL;
+        } else {
+            --source->open_files;
+            ++slot->open_files;
+            pending->session = slot->id;
+            pending->token = 0u;
+            pending->node = node;
+            pending->state = ASTRA_VFS_FILE_OPEN;
+            reply->file = HANDLE_MAKE((uint32_t)(pending - service->files), pending->generation);
+        }
+        reply->status = status;
+    }
+    if (source != slot && source->closing && source->inflight == 0u)
+        reap_session(service, source);
 }
 
 static uint32_t
@@ -2013,6 +2177,12 @@ dispatch_unlocked(AstraVfsService *service, uint32_t owner, uint32_t grant,
     case ASTRA_VFS_OP_OPEN:
         handle_open(service, slot->id, request, paths.first, NULL, reply);
         break;
+    case ASTRA_VFS_OP_SHARE:
+        handle_share(service, slot, request, reply);
+        break;
+    case ASTRA_VFS_OP_ADOPT:
+        handle_adopt(service, slot, request, reply);
+        break;
     case ASTRA_VFS_OP_OPEN_AT:
         if (paths.first[0] == '/' ||
             paths.first[0] == '\0') {
@@ -2430,7 +2600,8 @@ astra_vfs_service_session_bound(const AstraVfsService *service,
         return 0;
     for (uint32_t index = 0u; index < service->session_capacity; ++index)
         if (service->sessions[index].id == session) {
-            bound = service->sessions[index].owner == owner &&
+            bound = !service->sessions[index].closing &&
+                    service->sessions[index].owner == owner &&
                     service->sessions[index].grant == grant;
             break;
         }

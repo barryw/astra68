@@ -3364,8 +3364,10 @@ astra_vfs_port_service_release_grant(AstraVfsPortService *host,
 void
 astra_vfs_port_service_reap(AstraVfsPortService *host)
 {
-    if (host != NULL && host->service != NULL)
+    if (host != NULL && host->service != NULL) {
         reply_reap_dead(host);
+        astra_vfs_service_reap(host->service);
+    }
 }
 
 uint32_t

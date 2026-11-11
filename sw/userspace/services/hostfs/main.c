@@ -1840,6 +1840,7 @@ static uint32_t volume_add(const AstraVolumeReference *reference, const char *na
          !astra_vfs_service_set_state_wait(&volume->service, astra_vfs_state_futex_wait,
              astra_vfs_state_futex_wake) ||
          !astra_vfs_service_set_owner_sessions(&volume->service, owner_sessions) ||
+         !astra_vfs_service_set_owner_files(&volume->service, owner_files) ||
          !astra_vfs_service_set_backend_bindings(&volume->service, &hostfs_backend_bindings, volume) ||
          !astra_vfs_service_set_session_changed(&volume->service, hostfs_sessions_changed, NULL)))
         status = ASTRA_STATUS_LIMIT;

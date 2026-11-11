@@ -8,6 +8,51 @@ ordinary writes still bypass mapped resident frames. Dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Native description transfer, 2026-11-11: SHARE reserves an existing native
+file slot and pins its captured backend before provider I/O. Pending one-use
+tokens remain charged to the authenticated source session. ADOPT requires
+the same grant and backend incarnation, reserves the target owner's quota
+before I/O and transfers the slot in place, including at table capacity.
+Only the sharer may withdraw a pending token. Failed adoption or withdrawal
+retains ownership for retry; closing-session authority is revoked immediately
+and the existing port reaper retries failed cleanup after reply-lane retirement.
+OPEN and SHARE reuse reservation/accounting; direct and service adapters share
+transfer request validation. There is no second cursor or token table.
+
+Haiku `src/system/kernel/fs/fd.cpp:188-240,364-390` retains underlying open
+descriptions separately from descriptor slots. Astra adapts that lifetime
+through its existing generation-checked table and scoped backend references.
+Review found a race where an in-flight token appeared absent even though a
+failed backend adoption could restore it. Explicit TRANSFERRING state now
+returns BUSY after authentication; source charge remains and failed target
+reservation rolls back. Both the failing assertion and final tests are kept.
+Full VFS/HostFS host and ASan/UBSan gates, Supervisor tests and coherent target
+builds pass; all 13 injected ownership/rollback regressions are rejected.
+ThreadSanitizer also passes the million-operation model and port suite after
+making two shared host fake-backend counters atomic. The initial race report
+is retained; that fixture change affects no product or native test binary.
+Beast passes 16 native cases, provider reset, two fresh I/O cases and fsck.
+The native scoped-io probe drives concurrent claim/withdraw and failed claim
+retry against real provider descriptions, submitting provider work only on
+the borrowed channel's owning thread. Kernel BIN/ELF remain byte-identical;
+public protocol/ABI stay unchanged. DE25 passes 10 native cases, provider
+reset and two fresh I/O cases; startup observer, native gate and 600-second
+trial return zero without panic/degraded markers. Candidate:
+`a47dc5b95e1e6f924798789f48dd14b1bb7a18132027a8e5f9a0d5073891ebbd`.
+All 560 archived hashes match, including the offline trial image and paired
+private settings/key; read-only fsck passes. Final product/native source
+matches the candidate; only host fixture counter atomics differ. Private
+trial state is removed. Selected services are restored at stage 8 with zero
+restarts, loop0 only and 8.4 GiB free. Production image/data were not opened
+by trial tooling.
+Evidence: `/home/barry/astra-evidence/vfs-native-shares-20261111/`.
+
+Grant DATA remains guarded. FILE_AREA still consumes a direct provider token;
+it must instead join authenticated native retained-description ownership when
+ordinary I/O moves behind the service. Cached mutation/writeback, dirty-page
+conflicts, writable/private mappings and exact mapped-user attribution remain
+required. Do not add a raw-token fallback or a second provider owner ledger.
+
 Grant admission pressure, 2026-11-11: idle read-cache areas retained HostFS
 handles until scope creation occupied slot 254; creating the next grant port
 needed two slots and returned RESOURCE_LIMIT. Grant scope/port admission now
