@@ -851,7 +851,7 @@ _k1_survivor_image_entry:
 	tst.l   %d0
 	bne     .Lmain_fail
 	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
-	moveq   #1, %d2
+	moveq   #3, %d2
 	moveq   #ASTRA_SYSCALL_AREA_MAP, %d0
 	trap    #ASTRA_SYSCALL_TRAP
 	tst.l   %d0
@@ -925,6 +925,11 @@ _k1_survivor_image_entry:
 	tst.b   199(%a1)
 	bne     .Lmain_fail
 
+	| A direct user write faults a clean pager page into dirty shared state.
+	movea.l KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0), %a1
+	move.l  #0x5750494f, 8(%a1)
+	cmpi.l  #0x5750494f, 8(%a1)
+	bne     .Lmain_fail
 	| Pager owner modifies the same mapped bytes, preserving the rest.
 	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
 	moveq   #0, %d2
@@ -960,15 +965,9 @@ _k1_survivor_image_entry:
 	cmpi.l  #0x50414745, 8(%a1)
 	bne     .Lmain_fail
 	move.l  #0x4e455721, 16(%a1)
-	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
-	moveq   #8, %d2
-	move.l  %a1, %d3
-	addi.l  #16, %d3
-	moveq   #4, %d4
-	moveq   #ASTRA_SYSCALL_AREA_WRITE_PAGER, %d0
-	trap    #ASTRA_SYSCALL_TRAP
-	tst.l   %d0
-	bne     .Lmain_fail
+	| Snapshot sealing must trap this write and preserve the older snapshot.
+	movea.l KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0), %a1
+	move.l  #0x4e455721, 8(%a1)
 	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
 	moveq   #0, %d2
 	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d3
@@ -1044,6 +1043,35 @@ _k1_survivor_image_entry:
 	cmpi.b  #0x21, 4(%a1)
 	bne     .Lmain_fail
 	tst.b   4095(%a1)
+	bne     .Lmain_fail
+
+	| Kernel output into a clean writable pager view must dirty it too.
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	move.l  KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0), %d3
+	addi.l  #16, %d3
+	moveq   #4, %d4
+	moveq   #ASTRA_SYSCALL_AREA_READ_RESIDENT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	movea.l KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0), %a1
+	cmpi.l  #0x50414745, 16(%a1)
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d3
+	moveq   #ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, %d3
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	moveq   #1, %d4
+	moveq   #ASTRA_SYSCALL_AREA_WRITEBACK_COMPLETE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
 	bne     .Lmain_fail
 
 	move.l  KERNEL_QUALIFICATION_PAGER_THREAD_OFFSET(%a0), %d1

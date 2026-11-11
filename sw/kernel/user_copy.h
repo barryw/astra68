@@ -41,7 +41,7 @@ bool kernel_user_copy_recover_frame(
 
 /*
  * Commits grow-on-touch user pages covering the range for the running thread.
- * Implemented by the process layer, which owns stack and private reservations;
+ * Implemented by the process layer, which owns stack/private/area mappings;
  * the copy path can meet either before the user takes the fault that would
  * ordinarily commit it.
  */

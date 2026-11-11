@@ -511,7 +511,7 @@ static void test_process_clone_inherits_area_mappings(void)
     assert(kernel_area_map(area, 1300u, &parent,
                            KERNEL_VM_READ | KERNEL_VM_WRITE,
                            &base, &size) == KERNEL_AREA_OK);
-    assert(kernel_area_fault(1300u, &parent, base));
+    assert(kernel_area_fault(1300u, &parent, base, false));
     assert(kernel_vm_clone_address_space(&parent, 1301u, &child) ==
            KERNEL_VM_OK);
     assert(kernel_area_clone_process(1300u, &parent, 1301u, &child) ==
@@ -852,7 +852,7 @@ static void test_reserved_area_commits_only_what_is_touched(void)
                                              true, &physical));
 
     assert(kernel_memory_stats(&before));
-    assert(kernel_area_fault(300u, &space, base + touched * KERNEL_PAGE_SIZE));
+    assert(kernel_area_fault(300u, &space, base + touched * KERNEL_PAGE_SIZE, false));
     assert(kernel_memory_stats(&after));
     /*
      * The cluster, its page-vector leaf, plus the 68040 pointer and page tables
@@ -876,8 +876,8 @@ static void test_reserved_area_commits_only_what_is_touched(void)
 
     /* A page already committed is not a fault this answers. */
     assert(!kernel_area_fault(300u, &space,
-                              base + touched * KERNEL_PAGE_SIZE));
-    assert(!kernel_area_fault(300u, &space, base + first * KERNEL_PAGE_SIZE));
+                              base + touched * KERNEL_PAGE_SIZE, false));
+    assert(!kernel_area_fault(300u, &space, base + first * KERNEL_PAGE_SIZE, false));
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == cluster);
 
@@ -887,7 +887,7 @@ static void test_reserved_area_commits_only_what_is_touched(void)
      */
     assert(kernel_memory_stats(&before));
     assert(kernel_area_fault(300u, &space,
-                             base + (first + cluster) * KERNEL_PAGE_SIZE));
+                             base + (first + cluster) * KERNEL_PAGE_SIZE, false));
     assert(kernel_memory_stats(&after));
     assert(before.free_frames - after.free_frames == cluster);
     assert(kernel_area_snapshot(0u, &snapshot));
@@ -935,7 +935,7 @@ static void test_reserved_area_commit_reaches_every_mapping(void)
     assert(owner_base == peer_base);
 
     /* The owner touches it; the peer never faults at all. */
-    assert(kernel_area_fault(310u, &owner, owner_base));
+    assert(kernel_area_fault(310u, &owner, owner_base, false));
     assert(kernel_vm_switch(&owner) == KERNEL_VM_OK);
     assert(kernel_vm_test_translate_current(owner_base, true,
                                             &owner_physical));
@@ -1138,6 +1138,93 @@ static void test_pager_writeback_preserves_failed_and_newer_data(void)
     assert(kernel_area_pool_valid());
 }
 
+static void test_pager_writable_views_redirty_after_snapshot(bool publish_first)
+{
+    KernelAddressSpace owner = {0}, reader = {0};
+    KernelArea *area = NULL;
+    uint8_t page[KERNEL_PAGE_SIZE], snapshot[KERNEL_PAGE_SIZE];
+    uint32_t base, read_base, size, physical, token, newer, released;
+    const uint32_t offset = KERNEL_VM_SHARED_TABLE_SPAN;
+
+    initialize_test();
+    assert(kernel_vm_create_address_space(380u, &owner) == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(381u, &reader) == KERNEL_VM_OK);
+    assert(kernel_area_create(380u, offset + KERNEL_PAGE_SIZE,
+                              KERNEL_AREA_CREATE_RESERVED, &area) == KERNEL_AREA_OK);
+    assert(kernel_area_bind_pager(area, (KernelPort *)(uintptr_t)1u, 1u,
+        release_test_pager, (void *)(uintptr_t)2u) == KERNEL_AREA_OK);
+    memset(page, 0x31, sizeof(page));
+    if (publish_first)
+        assert(kernel_area_publish_page(area, offset, page, sizeof(page)) == KERNEL_AREA_OK);
+    assert(kernel_area_map_range(area, 380u, &owner,
+        KERNEL_VM_READ | KERNEL_VM_WRITE, offset, KERNEL_PAGE_SIZE,
+        &base, &size) == KERNEL_AREA_OK);
+    assert(kernel_area_map_range(area, 381u, &reader, KERNEL_VM_READ, offset,
+        KERNEL_PAGE_SIZE, &read_base, &size) == KERNEL_AREA_OK);
+    assert(kernel_area_pool_valid());
+    KernelAreaPagerRequest request;
+    assert(kernel_area_pager_request(381u, &reader, read_base, true, &request) ==
+           KERNEL_AREA_NOT_MAPPED && request.area == NULL);
+    if (!publish_first) {
+        assert(kernel_area_pager_request(380u, &owner, base, true, &request) == KERNEL_AREA_OK &&
+               request.offset == offset);
+        assert(kernel_area_child_release(request.area) == KERNEL_AREA_OK);
+        assert(kernel_area_publish_page(area, offset, page, sizeof(page)) == KERNEL_AREA_OK);
+    }
+    assert(kernel_vm_switch(&owner) == KERNEL_VM_OK);
+    assert(!kernel_vm_test_translate_current(base, true, &physical));
+    assert(!kernel_area_fault(380u, &owner, base + 17u, false));
+    assert(kernel_area_writeback_begin(area, offset, snapshot, &token) ==
+           KERNEL_AREA_INVALID_STATE);
+    kernel_allocation_test_fail_site(KERNEL_ALLOCATION_SITE_AREA_PAGE_METADATA, 1u);
+    assert(!kernel_area_fault(380u, &owner, base + 17u, true));
+    kernel_allocation_test_clear_failure();
+    assert(!kernel_vm_test_translate_current(base, true, &physical));
+    assert(kernel_area_pool_valid());
+    assert(kernel_area_fault(380u, &owner, base + 17u, true));
+    assert(kernel_vm_test_translate_current(base, true, &physical));
+    assert(kernel_area_pool_valid());
+    memset(kernel_memory_access(physical, sizeof(page)), 0x52, sizeof(page));
+    assert(!kernel_area_fault(381u, &reader, read_base + 17u, true));
+    assert(!kernel_area_fault(380u, &reader, base + 17u, true));
+    assert(kernel_vm_switch(&reader) == KERNEL_VM_OK);
+    assert(!kernel_vm_test_translate_current(read_base, true, &physical));
+    assert(kernel_vm_test_translate_current(read_base, false, &physical));
+    assert(kernel_area_writeback_begin(area, offset, snapshot, &token) == KERNEL_AREA_OK);
+    assert(snapshot[0] == 0x52u && snapshot[sizeof(snapshot) - 1u] == 0x52u);
+    assert(kernel_vm_switch(&owner) == KERNEL_VM_OK);
+    assert(!kernel_vm_test_translate_current(base, true, &physical));
+    assert(kernel_area_fault(380u, &owner, base + 17u, true));
+    assert(kernel_vm_test_translate_current(base, true, &physical));
+    memset(kernel_memory_access(physical, sizeof(page)), 0x73, sizeof(page));
+    assert(snapshot[0] == 0x52u && snapshot[sizeof(snapshot) - 1u] == 0x52u);
+    assert(kernel_area_writeback_complete(area, offset, token, true) == KERNEL_AREA_OK);
+    assert(kernel_area_pool_valid());
+    assert(kernel_area_reclaim(area, offset, KERNEL_PAGE_SIZE, &released) == KERNEL_AREA_BUSY);
+    assert(kernel_area_writeback_begin(area, offset, snapshot, &newer) == KERNEL_AREA_OK &&
+           newer != token && snapshot[0] == 0x73u);
+    assert(kernel_area_writeback_complete(area, offset, newer, true) == KERNEL_AREA_OK);
+    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+    assert(kernel_area_unmap(380u, &owner, base) == KERNEL_AREA_OK);
+    assert(kernel_area_unmap(381u, &reader, read_base) == KERNEL_AREA_OK);
+    assert(kernel_area_map_range(area, 380u, &owner,
+        KERNEL_VM_READ | KERNEL_VM_WRITE, offset, KERNEL_PAGE_SIZE,
+        &base, &size) == KERNEL_AREA_OK);
+    assert(kernel_area_map_range(area, 381u, &reader, KERNEL_VM_READ, offset,
+        KERNEL_PAGE_SIZE, &read_base, &size) == KERNEL_AREA_OK);
+    assert(kernel_vm_switch(&owner) == KERNEL_VM_OK);
+    assert(!kernel_vm_test_translate_current(base, true, &physical));
+    assert(kernel_area_reclaim(area, offset, KERNEL_PAGE_SIZE, &released) == KERNEL_AREA_OK &&
+           released == 1u);
+    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+    assert(kernel_area_unmap(380u, &owner, base) == KERNEL_AREA_OK);
+    assert(kernel_area_unmap(381u, &reader, read_base) == KERNEL_AREA_OK);
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_vm_destroy_address_space(&owner) == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&reader) == KERNEL_VM_OK);
+    assert(kernel_area_pool_valid());
+}
+
 static void test_pager_dirty_lifetime_pressure_and_allocation_rollback(void)
 {
     KernelArea *area = NULL;
@@ -1145,7 +1232,7 @@ static void test_pager_dirty_lifetime_pressure_and_allocation_rollback(void)
     KernelAllocationStats before, after;
     uint8_t snapshot[KERNEL_PAGE_SIZE] = {0};
     uint32_t released, total, token, handles, mappings, children;
-    const uint32_t far = 512u * KERNEL_PAGE_SIZE;
+    const uint32_t far = (KERNEL_AREA_PAGE_MAX - 1u) * KERNEL_PAGE_SIZE;
 
     initialize_test();
     pager_release_count = 0u;
@@ -1191,12 +1278,25 @@ static void test_pager_dirty_lifetime_pressure_and_allocation_rollback(void)
                                         &after));
     assert(after.current_units == before.current_units);
     assert(kernel_area_mark_dirty(area, far) == KERNEL_AREA_OK);
+    assert(kernel_area_reclaim(area, 0u, far + KERNEL_PAGE_SIZE, &released) ==
+           KERNEL_AREA_BUSY && released == 0u && kernel_area_page_resident(area, 0u));
     assert(kernel_area_references(area, &handles, &mappings, &children));
     assert(children == 1u);
     assert(kernel_area_writeback_begin(area, far, snapshot, &token) ==
            KERNEL_AREA_OK);
     assert(kernel_area_writeback_complete(area, far, token, true) ==
            KERNEL_AREA_OK);
+    /* A skipped metadata hole must not skip the next leaf's first page. */
+    const uint32_t middle = 2048u * KERNEL_PAGE_SIZE;
+    assert(kernel_area_publish_page(area, middle, snapshot, sizeof(snapshot)) == KERNEL_AREA_OK);
+    assert(kernel_area_mark_dirty(area, middle) == KERNEL_AREA_OK);
+    assert(kernel_area_reclaim(area, middle / 2u, middle / 2u + KERNEL_PAGE_SIZE,
+                               &released) == KERNEL_AREA_BUSY && released == 0u);
+    assert(kernel_area_writeback_begin(area, middle, snapshot, &token) == KERNEL_AREA_OK);
+    assert(kernel_area_writeback_complete(area, middle, token, true) == KERNEL_AREA_OK);
+    assert(kernel_area_reclaim(area, middle / 2u, middle / 2u + KERNEL_PAGE_SIZE,
+                               &released) == KERNEL_AREA_OK && released == 1u);
+    assert(kernel_area_page_resident(area, 0u) && kernel_area_page_resident(area, far));
     assert(kernel_area_references(area, &handles, &mappings, &children));
     assert(children == 1u);
     assert(kernel_area_child_retain(area) == KERNEL_AREA_OK);
@@ -1272,7 +1372,7 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
     assert(kernel_area_map(other, 317u, &client, KERNEL_VM_READ,
                            &other_base, &size) == KERNEL_AREA_OK);
     assert(other_base != base);
-    assert(kernel_area_pager_request(317u, &client, other_base,
+    assert(kernel_area_pager_request(317u, &client, other_base, false,
                                      &request) == KERNEL_AREA_OK);
     assert(request.area == other && request.cookie == 2u &&
            request.offset == 0u);
@@ -1296,27 +1396,24 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
                                   release_test_pager,
                                   (void *)(uintptr_t)2u) ==
            KERNEL_AREA_INVALID_STATE);
-    assert(kernel_area_map(area, 317u, &client,
-                           KERNEL_VM_READ | KERNEL_VM_WRITE, &base,
-                           &size) == KERNEL_AREA_ACCESS_DENIED);
     assert(kernel_area_map(area, 317u, &client, KERNEL_VM_READ, &base,
                            &size) == KERNEL_AREA_OK);
     assert(kernel_area_map(area, 318u, &peer, KERNEL_VM_READ, &peer_base,
                            &size) == KERNEL_AREA_OK);
-    assert(kernel_area_pager_request(318u, &client, base, &request) ==
+    assert(kernel_area_pager_request(318u, &client, base, false, &request) ==
            KERNEL_AREA_NOT_MAPPED && request.area == NULL);
-    assert(kernel_area_pager_request(317u, &client, base + 17u,
+    assert(kernel_area_pager_request(317u, &client, base + 17u, false,
                                      &request) == KERNEL_AREA_OK);
     assert(request.area == area &&
            request.port == (KernelPort *)(uintptr_t)1u &&
            request.cookie == 1u && request.offset == 0u);
     assert(kernel_area_child_release(request.area) == KERNEL_AREA_OK);
     assert(kernel_area_pager_request(317u, &client,
-                                     base + KERNEL_PAGE_SIZE + 5u,
+                                     base + KERNEL_PAGE_SIZE + 5u, false,
                                      &request) == KERNEL_AREA_OK);
     assert(request.offset == KERNEL_PAGE_SIZE);
     assert(kernel_area_child_release(request.area) == KERNEL_AREA_OK);
-    assert(!kernel_area_fault(317u, &client, base));
+    assert(!kernel_area_fault(317u, &client, base, false));
     assert(kernel_area_read(area, 0u, &byte, 1u) ==
            KERNEL_AREA_INVALID_STATE);
     assert(byte == 0xa5u);
@@ -1329,7 +1426,7 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
     assert(kernel_vm_test_translate_current(base, false, &physical));
     assert(kernel_vm_switch(&peer) == KERNEL_VM_OK);
     assert(kernel_vm_test_translate_current(peer_base, false, &physical));
-    assert(kernel_area_pager_request(317u, &client, base, &request) ==
+    assert(kernel_area_pager_request(317u, &client, base, false, &request) ==
            KERNEL_AREA_NOT_MAPPED && request.area == NULL);
     byte = 0u;
     assert(kernel_area_read(area, 0u, &byte, 1u) == KERNEL_AREA_OK);
@@ -1341,7 +1438,7 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
     assert(kernel_area_reclaim(area, 0u, 0u, &released) ==
            KERNEL_AREA_INVALID_ARGUMENT && released == 0u);
     assert(kernel_area_pager_request(317u, &client,
-                                     base + KERNEL_PAGE_SIZE, &request) ==
+                                     base + KERNEL_PAGE_SIZE, false, &request) ==
            KERNEL_AREA_OK);
     assert(request.epoch == kernel_area_pager_epoch(area));
     assert(kernel_area_reclaim(area, 0u, KERNEL_PAGE_SIZE, &released) ==
@@ -1363,15 +1460,15 @@ static void test_pager_area_never_zero_fills_missing_file_data(void)
     assert(!kernel_vm_test_translate_current(peer_base, false, &physical));
     assert(kernel_area_read(area, 0u, &byte, 1u) ==
            KERNEL_AREA_INVALID_STATE);
-    assert(kernel_area_pager_request(317u, &client, base, &request) ==
+    assert(kernel_area_pager_request(317u, &client, base, false, &request) ==
            KERNEL_AREA_OK && request.offset == 0u);
     assert(kernel_area_child_release(request.area) == KERNEL_AREA_OK);
-    assert(kernel_area_pager_request(318u, &peer, peer_base, &request) ==
+    assert(kernel_area_pager_request(318u, &peer, peer_base, false, &request) ==
            KERNEL_AREA_OK && request.offset == 0u);
     assert(kernel_area_child_release(request.area) == KERNEL_AREA_OK);
     assert(kernel_area_publish_page(area, 0u, &byte, 1u) == KERNEL_AREA_OK);
     assert(kernel_area_pager_request(317u, &client,
-                                    base + KERNEL_PAGE_SIZE, &request) ==
+                                    base + KERNEL_PAGE_SIZE, false, &request) ==
            KERNEL_AREA_OK);
     total = 0u;
     for (uint32_t at = 0u; at < 32u; ++at) {
@@ -1437,16 +1534,16 @@ static void test_reserved_area_fault_requires_authority(void)
                            &size) == KERNEL_AREA_OK);
 
     /* Right address, wrong process. */
-    assert(!kernel_area_fault(321u, &stranger, base));
+    assert(!kernel_area_fault(321u, &stranger, base, false));
     /* Right process, but an address space it does not hold the area in. */
-    assert(!kernel_area_fault(320u, &stranger, base));
+    assert(!kernel_area_fault(320u, &stranger, base, false));
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == 0u);
 
     /* An address outside every area slot is not this path's business. */
-    assert(!kernel_area_fault(320u, &owner, KERNEL_VM_AREA_BASE - 4u));
+    assert(!kernel_area_fault(320u, &owner, KERNEL_VM_AREA_BASE - 4u, false));
     /* Nor is one past the end of the reservation. */
-    assert(!kernel_area_fault(320u, &owner, base + 64u * KERNEL_PAGE_SIZE));
+    assert(!kernel_area_fault(320u, &owner, base + 64u * KERNEL_PAGE_SIZE, false));
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == 0u);
 
@@ -1456,7 +1553,7 @@ static void test_reserved_area_fault_requires_authority(void)
     assert(kernel_area_map(eager, 320u, &owner,
                            KERNEL_VM_READ | KERNEL_VM_WRITE, &eager_base,
                            &size) == KERNEL_AREA_OK);
-    assert(!kernel_area_fault(320u, &owner, eager_base));
+    assert(!kernel_area_fault(320u, &owner, eager_base, false));
     assert(kernel_area_pool_valid());
 
     assert(kernel_area_unmap(320u, &owner, base) == KERNEL_AREA_OK);
@@ -1543,7 +1640,7 @@ static void test_reserved_area_decommit_returns_frames(void)
                            &size) == KERNEL_AREA_OK);
     assert(kernel_area_map(area, 341u, &peer, KERNEL_VM_READ, &peer_base,
                            &size) == KERNEL_AREA_OK);
-    assert(kernel_area_fault(340u, &owner, base));
+    assert(kernel_area_fault(340u, &owner, base, false));
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == cluster);
 
@@ -1572,7 +1669,7 @@ static void test_reserved_area_decommit_returns_frames(void)
     assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
 
     /* And the reservation still works: touching it again re-commits. */
-    assert(kernel_area_fault(340u, &owner, base));
+    assert(kernel_area_fault(340u, &owner, base, false));
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == cluster);
     /* Dropping nothing is not an error, it is a range with nothing in it. */
@@ -1649,7 +1746,7 @@ static void test_reserved_area_commits_holes_and_short_tails(void)
                            &size) == KERNEL_AREA_OK);
 
     /* The last cluster is short, and takes only the pages that exist. */
-    assert(kernel_area_fault(350u, &owner, base + 18u * KERNEL_PAGE_SIZE));
+    assert(kernel_area_fault(350u, &owner, base + 18u * KERNEL_PAGE_SIZE, false));
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == pages - cluster);
     assert(kernel_vm_switch(&owner) == KERNEL_VM_OK);
@@ -1659,7 +1756,7 @@ static void test_reserved_area_commits_holes_and_short_tails(void)
         base + (pages - 1u) * KERNEL_PAGE_SIZE, true, &physical));
 
     /* Now a full cluster, then a hole in the middle of it. */
-    assert(kernel_area_fault(350u, &owner, base));
+    assert(kernel_area_fault(350u, &owner, base, false));
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == pages);
     assert(kernel_area_decommit(350u, &owner, base + 5u * KERNEL_PAGE_SIZE,
@@ -1675,7 +1772,7 @@ static void test_reserved_area_commits_holes_and_short_tails(void)
      * Touching the hole refills exactly it -- one page, because its
      * neighbours on both sides are already there.
      */
-    assert(kernel_area_fault(350u, &owner, base + 5u * KERNEL_PAGE_SIZE));
+    assert(kernel_area_fault(350u, &owner, base + 5u * KERNEL_PAGE_SIZE, false));
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == pages);
     assert(kernel_vm_test_translate_current(base + 5u * KERNEL_PAGE_SIZE,
@@ -1686,7 +1783,7 @@ static void test_reserved_area_commits_holes_and_short_tails(void)
                                 3u * KERNEL_PAGE_SIZE, &released) ==
            KERNEL_AREA_OK);
     assert(released == 3u);
-    assert(kernel_area_fault(350u, &owner, base + 9u * KERNEL_PAGE_SIZE));
+    assert(kernel_area_fault(350u, &owner, base + 9u * KERNEL_PAGE_SIZE, false));
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == pages);
     for (uint32_t page = 8u; page < 11u; ++page)
@@ -1728,7 +1825,7 @@ static void test_reserved_area_commit_stops_at_physical_memory(void)
     /* Commit until actual memory policy says no. */
     while (page < KERNEL_AREA_PAGE_MAX) {
         if (!kernel_area_fault(360u, &owner,
-                               base + page * KERNEL_PAGE_SIZE))
+                               base + page * KERNEL_PAGE_SIZE, false))
             break;
         committed += KERNEL_AREA_COMMIT_CLUSTER_PAGES;
         page += KERNEL_AREA_COMMIT_CLUSTER_PAGES;
@@ -1787,13 +1884,13 @@ static void test_area_subrange_maps_distinct_source_spans(void)
     assert(kernel_vm_test_translate_current(
         whole + KERNEL_VM_SHARED_TABLE_SPAN, false, &physical));
     assert(physical == expected);
-    assert(!kernel_area_fault(370u, &space, first + KERNEL_PAGE_SIZE));
+    assert(!kernel_area_fault(370u, &space, first + KERNEL_PAGE_SIZE, false));
     assert(!kernel_vm_test_translate_current(second, false, &physical));
-    assert(kernel_area_fault(370u, &space, second));
+    assert(kernel_area_fault(370u, &space, second, false));
     assert(kernel_area_decommit(370u, &space, first, KERNEL_PAGE_SIZE,
                                 &released) == KERNEL_AREA_OK);
     assert(released == 1u);
-    assert(kernel_area_fault(370u, &space, first));
+    assert(kernel_area_fault(370u, &space, first, false));
     assert(kernel_area_page_physical(area, KERNEL_VM_SHARED_TABLE_SPAN,
                                      &expected));
     assert(kernel_vm_test_translate_current(first, false, &physical));
@@ -1882,6 +1979,8 @@ int main(void)
     test_reserved_area_publishes_one_complete_page();
     test_pager_area_never_zero_fills_missing_file_data();
     test_pager_writeback_preserves_failed_and_newer_data();
+    test_pager_writable_views_redirty_after_snapshot(false);
+    test_pager_writable_views_redirty_after_snapshot(true);
     test_pager_dirty_lifetime_pressure_and_allocation_rollback();
     test_reserved_area_fault_requires_authority();
     test_reserved_area_kernel_access_commits_only_on_write();

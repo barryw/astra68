@@ -348,6 +348,10 @@ uint32_t astra_rt_area_decommit(void *address, uint32_t byte_size,
                              uint32_t *released_pages);
 /**
  * Map an area capability into the current process.
+ * Pager-backed writable views require WRITE as well as READ and MAP rights.
+ * Their pages start protected; first writes mark shared pages dirty, and
+ * writeback snapshots protect them again so later writes remain pending.
+ * The pager service remains responsible for backing I/O and completion.
  * @param handle Area capability.
  * @param permissions Requested ASTRA_AREA_* access permissions.
  * @param address Receives mapping base.

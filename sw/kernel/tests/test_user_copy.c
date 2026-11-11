@@ -12,6 +12,12 @@ static int low_level_status;
 static uint32_t low_level_address;
 static uint32_t low_level_size;
 
+bool kernel_process_prepare_user_copy(uint32_t address, uint32_t size, bool write)
+{
+    (void)address; (void)size; (void)write;
+    return false;
+}
+
 int kernel_user_copy_from_asm(void *destination, uint32_t source,
                               uint32_t size)
 {

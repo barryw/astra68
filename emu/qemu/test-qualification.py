@@ -62,10 +62,13 @@ MARKERS = [
     "K8 PAGE PUBLISH cycles=",
     "K8 PAGE COPY cycles=",
     "K8 PAGER WRITEBACK dirty=",
+    "K8 PAGER WRITE FAULT cycles=",
+    "K8 SPARSE RECLAIM cycles=",
     "K8 PAGER PRESSURE cycles=",
     "K8 SHARED PROTECT cycles=",
     "K8 PAGER GUEST PASS",
     "K8 PAGER OWNER IO PASS",
+    "K8 PAGER MAPPED WRITE PASS",
     "K2 PERFORMANCE PASS",
     "K2 MEDIA BUDGET PASS",
     "KERNEL MULTITASKING",
@@ -147,7 +150,8 @@ def main():
         if line.startswith(("K2 PERF ", "K8 PERF ", "K10 PERF ",
                            "K PERF RAW ", "K8 PAGE PUBLISH ", "K8 PAGE COPY ",
                            "K8 PAGER PRESSURE ", "K8 SHARED PROTECT ",
-                           "K8 PAGER WRITEBACK ")):
+                           "K8 PAGER WRITEBACK ", "K8 PAGER WRITE FAULT ",
+                           "K8 SPARSE RECLAIM ")):
             print(line)
 
     failures = []

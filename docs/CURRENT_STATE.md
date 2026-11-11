@@ -2,6 +2,52 @@
 
 Status: active continuation map, 2026-11-11
 
+Native writable pager views qualified, 2026-11-11. First-write faults reuse
+native dirty tracking and checked shared-page protection; pager pages start
+read-only and snapshot sealing traps later modifications. Permission checks
+precede both page requests and dirty transitions, including subrange offsets.
+Haiku vm/vm.cpp:4035-4118 and vm/vm_page_writer.cpp:176-282 are the reference.
+Kernel output now dirties protected writable resident pager views through the
+same process preparation path, without pager I/O. Host user-copy wrappers now
+exercise real process preparation instead of disabling it. Full kernel host,
+area/process/user-copy sanitizer and NDK distribution gates pass; eight
+authority, protection, offset, fault-dispatch and copy-path mutations fail.
+The final candidate passes 23 K1 markers on Beast and DE25 (write-fault step
+239/10,000 cycles, fault IRQ 22,027/125,000, zero overruns), including real CPU
+stores and syscall output into a clean protected pager view.
+Normal qualification exposed sparse reclaim walking every reserved page on
+invalidation. Both final and preceding kernels hit the short diagnostic
+deadline, with samples in that walk. Reviewed Haiku VMCache.cpp:1287-1335;
+the existing area path now skips absent page/dirty metadata leaves, stops
+when no frames remain and retains all-or-nothing pending-page preflight.
+Maximum-span populated/empty reclaim drops from 948,523 cycles (budget
+failure) to 19,633/125,000 on Beast and DE25. Host/sanitizer boundary tests
+and three additional pending/leaf-skip mutations are rejected. No iterator, worker,
+cache, protocol, ABI or assembly path is added. Beast now passes native
+page-writeback/basic/file-map/cache-pressure and provider fsck.
+The final normal DE25 600-second trial passes with no panic/degraded markers;
+startup heartbeat advances before stage 8. Native Terminal passes nine cases:
+page-writeback, basic, file-map, cache-pressure (512 files), shared-description,
+area-range, durable-save, exec-inherit and alias-identity. Observer, native
+gate and trial all return zero. Evidence:
+/home/barry/astra-evidence/pager-write-fault-20261111/.
+The private candidate was release
+e48667850b66b26994c2339d9e2213585fabfb0632fede76a67750cf6d1b8fe2,
+using a separate disposable image. Qualified ROM SHA-256 is
+c88b90e0c252215467dfaa6365f73d3bfb84ce382db70ac5a85307852c8023f2;
+normal ROM is daec33bcaa46c51b8af8b1360b38f778708764932f39f60e2c4a7d385dda723f.
+Board archive hashes match, including the migrated private settings and key;
+the archived image passes read-only fsck. Private trial files are removed,
+selected services are restored at stage 8 with zero Astra restarts, only
+loop0 remains and 8.5 GiB is free. No production image was opened by trial
+tooling. Final code patch differs from the deployed patch only in additional
+sparse boundary assertions; all native source sections match.
+Ordinary cached writes, public writable/private file maps, full EOF/truncate
+and remaining release gates stay open. The next boundary is canonical VFS
+mutation ownership, including provider cursor/append ordering and external
+conflict retention; post-write invalidation alone is not cached writeback.
+Native writable-area support does not complete those contracts.
+
 Positioned snapshot backing I/O, 2026-11-11: the service-private VFS backend
 helper now joins short writes, preserves EOF, rejects stale pre-I/O node
 identity/revision, validates returned byte counts/positions and syncs before

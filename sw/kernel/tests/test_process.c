@@ -8293,7 +8293,23 @@ static void test_pager_binding_retains_send_endpoint(void)
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_MAP,
                      area, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
                      0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    base = next->data[1];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_UNMAP,
+                     base, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_HANDLE_DUPLICATE,
+                     area, ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP,
+                     0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    uint32_t read_view = next->data[1];
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_MAP,
+                     read_view, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                     0u, 0u, 0u) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     read_view, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_MAP,
                      area, ASTRA_AREA_MAP_READ, 0u, 0u, 0u) ==
            KERNEL_PROCESS_OK);
@@ -8442,7 +8458,8 @@ static uint32_t pager_area_children(uint32_t creator)
     return children;
 }
 
-static void test_bound_area_fault_calls_pager(bool prefetch, bool timeout)
+static void test_bound_area_fault_calls_pager(bool prefetch, bool timeout,
+                                             bool writable)
 {
     static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
     const uint32_t stack = KERNEL_PROCESS_STACK_TOP - 2048u;
@@ -8494,7 +8511,8 @@ static void test_bound_area_fault_calls_pager(bool prefetch, bool timeout)
                      target, send, 0x1234u, 0u, 0u) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_MAP,
-                     target, ASTRA_AREA_MAP_READ, 0u, 0u, 0u) ==
+                     target, ASTRA_AREA_MAP_READ |
+                         (writable ? ASTRA_AREA_MAP_WRITE : 0u), 0u, 0u, 0u) ==
            KERNEL_PROCESS_OK);
     target_base = next->data[1];
     assert(test_trap(stack, frame, &next,
@@ -8537,6 +8555,7 @@ static void test_bound_area_fault_calls_pager(bool prefetch, bool timeout)
     make_frame(frame, prefetch ? 0u : 0x7u,
                prefetch ? ASTRA_SYSCALL_VECTOR : 2u, KERNEL_PROCESS_CODE_BASE,
                target_base);
+    if (!prefetch && !writable) put_be16(frame, 12u, 0x0100u);
     assert((prefetch ? test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_PREFETCH,
                                 target, 0u, 0u, 0u, 0u) :
             kernel_process_on_fault(registers, stack, frame, &next)) ==
@@ -8620,6 +8639,32 @@ static void test_bound_area_fault_calls_pager(bool prefetch, bool timeout)
            KERNEL_USER_COPY_OK);
     assert(memcmp(bytes, "fresh", 5u) == 0);
     assert(kernel_process_stats(&stats) && stats.user_faults == 0u);
+    if (writable) {
+        make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE, target_base);
+        assert(kernel_process_on_fault(registers, stack, frame, &next) == KERNEL_PROCESS_OK);
+        assert(kernel_thread_at(0u)->state == KERNEL_THREAD_RUNNING);
+        assert(kernel_user_copy_to_asm(target_base, "fresh", 5u) == KERNEL_USER_COPY_OK);
+        make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN,
+                         target, 0u, source_base, 0u, 0u) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        uint32_t token = next->data[1];
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_WRITEBACK_COMPLETE,
+                         target, 0u, token, 1u, 0u) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK && pager_area_children(process_id) == 0u);
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_READ_RESIDENT,
+                         target, 0u, target_base + 128u, 5u, 0u) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK && pager_area_children(process_id) == 1u);
+        assert(kernel_user_copy_from_asm(bytes, target_base + 128u, 5u) ==
+               KERNEL_USER_COPY_OK && memcmp(bytes, "fresh", 5u) == 0);
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN,
+                         target, 0u, source_base, 0u, 0u) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        token = next->data[1];
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_WRITEBACK_COMPLETE,
+                         target, 0u, token, 1u, 0u) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK && pager_area_children(process_id) == 0u);
+    }
     /* Owner writes share resident bytes; narrowed clients cannot dirty them. */
     const uint32_t narrowed_rights[] = {
         ASTRA_RIGHT_READ, ASTRA_RIGHT_WRITE, ASTRA_RIGHT_ADMINISTER,
@@ -8724,6 +8769,7 @@ static void test_bound_area_fault_calls_pager(bool prefetch, bool timeout)
     make_frame(frame, prefetch ? 0u : 0x7u,
                prefetch ? ASTRA_SYSCALL_VECTOR : 2u, KERNEL_PROCESS_CODE_BASE,
                target_base + KERNEL_PAGE_SIZE);
+    if (!prefetch && !writable) put_be16(frame, 12u, 0x0100u);
     assert((prefetch ? test_trap(stack, frame, &next, ASTRA_SYSCALL_AREA_PREFETCH,
                                 target, KERNEL_PAGE_SIZE, 0u, 0u, 0u) :
             kernel_process_on_fault(registers, stack, frame, &next)) ==
@@ -8872,11 +8918,13 @@ static void test_same_page_faults_wake_together(bool queue_full,
         assert(next->data[0] == ASTRA_SYSCALL_OK);
     }
     make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE, target_base);
+    put_be16(frame, 12u, 0x0100u);
     assert(kernel_process_on_fault(registers, main_stack, frame, &next) ==
            KERNEL_PROCESS_OK);
     assert(kernel_thread_at(0u)->state == KERNEL_THREAD_BLOCKED);
     make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE + 2u,
                target_base);
+    put_be16(frame, 12u, 0x0100u);
     assert(kernel_process_on_fault(registers, peer_stack, frame, &next) ==
            KERNEL_PROCESS_OK);
     assert(kernel_thread_at(1u)->state == KERNEL_THREAD_BLOCKED);
@@ -17856,9 +17904,10 @@ int main(void)
     test_area_publication_rolls_back_when_handle_table_full();
     test_pager_binding_retains_send_endpoint();
     test_pager_reply_publishes_before_wake();
-    test_bound_area_fault_calls_pager(false, false);
-    test_bound_area_fault_calls_pager(true, false);
-    test_bound_area_fault_calls_pager(true, true);
+    test_bound_area_fault_calls_pager(false, false, false);
+    test_bound_area_fault_calls_pager(true, false, false);
+    test_bound_area_fault_calls_pager(true, true, false);
+    test_bound_area_fault_calls_pager(false, false, true);
     test_same_page_faults_wake_together(false, PAGER_TEST_REPLY);
     test_same_page_faults_wake_together(true, PAGER_TEST_REPLY);
     test_same_page_faults_wake_together(true, PAGER_TEST_TIMEOUT);

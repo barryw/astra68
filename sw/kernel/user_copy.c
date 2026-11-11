@@ -78,28 +78,14 @@ static void end_copy(void)
 static bool grew_for_copy(int status, uint32_t user_address, uint32_t size,
                           bool write)
 {
-#if defined(KERNEL_USER_COPY_HOST_TEST)
-    (void)status;
-    (void)user_address;
-    (void)size;
-    (void)write;
-    return false;
-#else
     return status == KERNEL_USER_COPY_BAD_ADDRESS &&
            kernel_process_prepare_user_copy(user_address, size, write);
-#endif
 }
 
 static void prepare_growable_range(uint32_t user_address, uint32_t size,
                                    bool write)
 {
-#if defined(KERNEL_USER_COPY_HOST_TEST)
-    (void)user_address;
-    (void)size;
-    (void)write;
-#else
     (void)kernel_process_prepare_user_copy(user_address, size, write);
-#endif
 }
 
 int kernel_copy_from_user(void *kernel_destination, uint32_t user_source,

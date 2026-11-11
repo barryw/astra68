@@ -614,7 +614,7 @@ static KernelVmStatus ensure_span_tables(KernelArea *area)
         if (!any)
             continue;
         status = kernel_vm_shared_table_create(area->frame_owner, staged,
-                                               true, &tables[span]);
+                                               area->pager == NULL, &tables[span]);
         if (status != KERNEL_VM_OK) {
             tables[span] = 0u;
             if (!release_span_tables(area))
@@ -1090,8 +1090,6 @@ KernelAreaStatus kernel_area_map_range_at(KernelArea *area,
     *byte_size = 0u;
     if (area->state != KERNEL_AREA_LIVE)
         return KERNEL_AREA_PEER_DEAD;
-    if (area->pager != NULL && (permissions & KERNEL_VM_WRITE) != 0u)
-        return KERNEL_AREA_ACCESS_DENIED;
     {
         KernelAreaMappingCursor cursor = {mapping_blocks, 0u};
         KernelAreaMapping *mapping;
@@ -1396,7 +1394,7 @@ static bool open_span(KernelArea *area, uint32_t span)
     KernelAreaMapping *mapping;
 
     if (tables == NULL ||
-        kernel_vm_shared_table_create(area->frame_owner, staged, true,
+        kernel_vm_shared_table_create(area->frame_owner, staged, area->pager == NULL,
                                       &tables[span]) != KERNEL_VM_OK) {
         if (tables != NULL)
             tables[span] = 0u;
@@ -1554,7 +1552,7 @@ static bool commit_cluster(KernelArea *area, uint32_t page,
                     area->frame_owner,
                     tables[target / KERNEL_VM_SHARED_TABLE_PAGES],
                     target % KERNEL_VM_SHARED_TABLE_PAGES,
-                    frames[published], true) != KERNEL_VM_OK)
+                    frames[published], area->pager == NULL) != KERNEL_VM_OK)
                 break;
         }
         if (published != count) {
@@ -1587,38 +1585,42 @@ static bool commit_cluster(KernelArea *area, uint32_t page,
     return true;
 }
 
-static KernelAreaMapping *missing_reserved_mapping(
+static KernelAreaMapping *reserved_mapping(
     uint32_t process_id, KernelAddressSpace *space, uint32_t address,
-    uint32_t *page)
+    bool write, uint32_t *page)
 {
     KernelAreaMapping *mapping = authorised_mapping(process_id, space,
                                                      address);
 
-    if (mapping == NULL || mapping->area->reserved_form == 0u || page == NULL)
+    if (mapping == NULL || mapping->area->reserved_form == 0u || page == NULL ||
+        (write && (mapping->permissions & KERNEL_VM_WRITE) == 0u))
         return NULL;
     *page = (mapping->source_offset +
              address - mapping->virtual_base) / KERNEL_PAGE_SIZE;
-    if (*page >= mapping->area->page_count ||
-        page_committed(mapping->area, *page))
+    if (*page >= mapping->area->page_count)
         return NULL;
     return mapping;
 }
 
 bool kernel_area_fault(uint32_t process_id, KernelAddressSpace *space,
-                       uint32_t address)
+                       uint32_t address, bool write)
 {
     uint32_t page;
-    KernelAreaMapping *mapping = missing_reserved_mapping(
-        process_id, space, address, &page);
+    KernelAreaMapping *mapping = reserved_mapping(
+        process_id, space, address, write, &page);
 
-    if (mapping == NULL || mapping->area->pager != NULL)
+    if (mapping == NULL)
         return false;
-    return commit_cluster(mapping->area, page, NULL, 0u);
+    if (mapping->area->pager != NULL)
+        return write && page_committed(mapping->area, page) &&
+            kernel_area_mark_dirty(mapping->area, page * KERNEL_PAGE_SIZE) == KERNEL_AREA_OK;
+    return !page_committed(mapping->area, page) &&
+        commit_cluster(mapping->area, page, NULL, 0u);
 }
 
 KernelAreaStatus kernel_area_pager_request(uint32_t process_id,
                                             KernelAddressSpace *space,
-                                            uint32_t address,
+                                            uint32_t address, bool write,
                                             KernelAreaPagerRequest *request)
 {
     uint32_t page;
@@ -1631,8 +1633,8 @@ KernelAreaStatus kernel_area_pager_request(uint32_t process_id,
     request->cookie = 0u;
     request->offset = 0u;
     request->epoch = 0u;
-    mapping = missing_reserved_mapping(process_id, space, address, &page);
-    if (mapping == NULL)
+    mapping = reserved_mapping(process_id, space, address, write, &page);
+    if (mapping == NULL || page_committed(mapping->area, page))
         return KERNEL_AREA_NOT_MAPPED;
     return kernel_area_page_request(mapping->area, page * KERNEL_PAGE_SIZE,
                                      request);
@@ -1879,16 +1881,29 @@ static KernelAreaStatus decommit_range(KernelArea *area, uint32_t offset,
                                        uint32_t *released_pages)
 {
     uint32_t first, last, released = 0u;
+    KernelAreaDirty *dirty = dirty_state(area);
 
     if (byte_size == 0u || byte_size > area->byte_size ||
         offset > area->byte_size - byte_size)
         return KERNEL_AREA_INVALID_ARGUMENT;
     first = (offset + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
     last = (offset + byte_size) / KERNEL_PAGE_SIZE;
-    for (uint32_t page = first; page < last; ++page)
+    for (uint32_t page = first; dirty != NULL && dirty->pending_pages != 0u &&
+                              page < last; ++page) {
+        if (dirty->leaves[page / AREA_DIRTY_LEAF_ENTRIES] == NULL) {
+            page = ((page / AREA_DIRTY_LEAF_ENTRIES) + 1u) *
+                AREA_DIRTY_LEAF_ENTRIES - 1u;
+            continue;
+        }
         if (page_pending(area, page))
             return KERNEL_AREA_BUSY;
-    for (uint32_t page = first; page < last; ++page) {
+    }
+    for (uint32_t page = first; area->committed_pages != 0u && page < last; ++page) {
+        if (area->page_directory[page / AREA_PAGE_LEAF_ENTRIES] == NULL) {
+            page = ((page / AREA_PAGE_LEAF_ENTRIES) + 1u) *
+                AREA_PAGE_LEAF_ENTRIES - 1u;
+            continue;
+        }
         if (!page_committed(area, page))
             continue;
         if (!drop_page(area, page))
@@ -2509,9 +2524,6 @@ bool kernel_area_pool_valid(void)
         committed += area->committed_pages;
         while ((mapping = next_mapping(&cursor)) != NULL) {
             if (mapping->active != 0u && mapping->area == area) {
-                if (area->pager != NULL &&
-                    (mapping->permissions & KERNEL_VM_WRITE) != 0u)
-                    return false;
                 ++mapping_count;
             }
         }

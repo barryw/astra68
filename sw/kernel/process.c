@@ -15563,7 +15563,7 @@ bool kernel_process_prepare_user_copy(uint32_t address, uint32_t size,
     if (write) {
         uint32_t last;
         uint32_t page;
-        bool cow_resolved = false;
+        bool resolved = false;
 
         if (address > UINT32_MAX - (size - 1u))
             return false;
@@ -15572,14 +15572,18 @@ bool kernel_process_prepare_user_copy(uint32_t address, uint32_t size,
         for (;;) {
             vm_status = kernel_vm_cow_fault(&process->address_space, page);
             if (vm_status == KERNEL_VM_OK) {
-                cow_resolved = true;
-            } else if (!(vm_status == KERNEL_VM_NOT_OWNED &&
-                         kernel_vm_probe_current(page, false, NULL) ==
-                             KERNEL_VM_MAPPING_READ_WRITE)) {
+                resolved = true;
+            } else if (vm_status != KERNEL_VM_NOT_OWNED) {
                 return false;
+            } else if (kernel_vm_probe_current(page, false, NULL) !=
+                           KERNEL_VM_MAPPING_READ_WRITE) {
+                /* Resident pager writes share fault tracking; no pager I/O here. */
+                if (!kernel_area_fault(process->id, &process->address_space, page, true))
+                    return false;
+                resolved = true;
             }
             if (page == last)
-                return cow_resolved;
+                return resolved;
             page += KERNEL_PAGE_SIZE;
         }
     }
@@ -15714,7 +15718,7 @@ static KernelProcessStatus request_pager_page(
         thread->pager_failed = thread->context.data[0] != ASTRA_SYSCALL_OK;
     } else {
         area_status = kernel_area_pager_request(
-            process->id, &process->address_space, frame->fault_address,
+            process->id, &process->address_space, frame->fault_address, frame->access_write != 0u,
             &request);
     }
     if (area_status == KERNEL_AREA_NOT_MAPPED ||
@@ -15878,7 +15882,7 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
           kernel_vm_cow_fault(&current->address_space,
                               frame.fault_address) == KERNEL_VM_OK) ||
          kernel_area_fault(current->id, &current->address_space,
-                           frame.fault_address) ||
+                           frame.fault_address, frame.access_write != 0u) ||
          kernel_vm_private_fault(
              &current->address_space, frame.fault_address,
              frame.access_write != 0u) == KERNEL_VM_OK)) {

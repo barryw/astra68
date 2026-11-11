@@ -8,6 +8,56 @@ ordinary writes still bypass mapped resident frames. Dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Native writable pager views, 2026-11-11: area mapping now admits an authorized
+WRITE view. Pager pages start protected in both creation orders (publication
+before or after the first map). The existing fault path checks the mapping's
+write permission before requesting a missing page or marking a resident page
+dirty. It uses the mapping's source offset, existing dirty metadata and shared
+page protection; read-only peers stay protected. Snapshot sealing traps later
+CPU stores again. Resident kernel output uses the same process preparation
+path, so a syscall cannot bypass dirty tracking. That path does not perform
+nonresident pager I/O. Public HostFS file-area capabilities remain READ|MAP;
+ordinary cached writes and writable/private file maps are still incomplete.
+
+Haiku `src/system/kernel/vm/vm.cpp:4035-4118` checks access before fault work,
+and `vm/vm_page_writer.cpp:176-282` keeps later modifications separate from
+the snapshot being written. Astra retains those ordering rules through its
+existing area fault, user-copy, snapshot and completion mechanisms. Internal
+callers carry decoded write intent; no public protocol or ABI changes. Host
+user-copy wrappers now exercise process preparation rather than compiling it
+out. Area/process tests cover both creation orders, offset views, narrowed
+rights, allocation failure, snapshot redirty and protected kernel output.
+Eight independent authority/protection/offset/dispatch/copy mutations fail.
+
+Normal qualification exposed sparse reclaim walking every reserved page for
+each invalidation. The preceding candidate also hits the short diagnostic
+deadline; samples from both land in the same sparse-page walk. Haiku
+`src/system/kernel/vm/VMCache.cpp:1287-1335` iterates resident cache pages.
+Astra reuses its existing sparse page and dirty directories: absent leaves
+are skipped, empty areas stop immediately, and pending-page preflight still
+finishes before any frame is removed. The area lifetime test now puts its
+second page at the maximum-area boundary and checks whole-range refusal.
+The existing K1 fixture adds full-span populated and empty reclaim with an
+unchanged 125,000-cycle area-reclaim budget: measured baseline 948,523 cycles
+fails; retained implementation takes 19,633 cycles on Beast and DE25. No new
+iterator, cache, worker, accounting store or assembly path is introduced.
+Boundary tests also reject three mutations losing pending-page refusal or
+skipping the first resident/dirty page after an absent metadata leaf.
+
+Full kernel host/MC68040, area/process ASan/UBSan and NDK distribution gates
+pass. Beast and DE25 pass 23 K1 markers, including actual user stores and
+syscall output into protected pager memory, with zero overruns. Beast also
+passes native page-writeback/basic/file-map/cache-pressure and provider fsck.
+DE25 also passes nine native cases, including the 512-file pressure sequence,
+shared descriptions, area ranges, durable saves, exec inheritance and alias
+identity. Its 600-second private trial passes without panic/degraded markers.
+Archive hashes match the image and migrated private settings/key; read-only
+fsck passes. Selected services return to stage 8 with zero restarts, private
+trial files are removed and board free space returns to 8.5 GiB. Production
+data was not opened by trial tooling. This qualifies the native prerequisite,
+not canonical VFS mutation/writeback ownership. Evidence and failed diagnostics:
+`/home/barry/astra-evidence/pager-write-fault-20261111/`.
+
 Positioned snapshot backing I/O, 2026-11-11: the existing VFS backend seam
 now writes a sealed page snapshot without touching the open description's
 cursor or append state. It rejects stale identity/revision before mutation,

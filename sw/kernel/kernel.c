@@ -57,6 +57,8 @@
 #define KERNEL_AREA_DIRTY_BUDGET_CYCLES 5000u
 #define KERNEL_AREA_WRITEBACK_BUDGET_CYCLES 6000u
 #define KERNEL_AREA_COMPLETE_BUDGET_CYCLES 256u
+#define KERNEL_AREA_WRITE_FAULT_BUDGET_CYCLES 10000u
+#define KERNEL_AREA_SPARSE_RECLAIM_BUDGET_CYCLES 125000u
 #define PANIC_SCREEN_TRACE_RECORDS 6u
 #define PANIC_REPORT_TRACE_RECORDS 32u
 
@@ -115,6 +117,8 @@ typedef struct KernelAreaQualification {
     uint32_t dirty;
     uint32_t writeback;
     uint32_t complete;
+    uint32_t write_fault;
+    uint32_t sparse_reclaim;
 } KernelAreaQualification;
 
 static uint32_t qualification_survivor_process_id;
@@ -1871,6 +1875,20 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
         area_cycles.complete > KERNEL_AREA_COMPLETE_BUDGET_CYCLES)
         kernel_panic("K1 pager writeback budget exceeded");
     console_puts(" PASS\n");
+    console_puts("K8 PAGER WRITE FAULT cycles=");
+    console_dec32(area_cycles.write_fault);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_WRITE_FAULT_BUDGET_CYCLES);
+    if (area_cycles.write_fault > KERNEL_AREA_WRITE_FAULT_BUDGET_CYCLES)
+        kernel_panic("K1 pager write fault budget exceeded");
+    console_puts(" PASS\n");
+    console_puts("K8 SPARSE RECLAIM cycles=");
+    console_dec32(area_cycles.sparse_reclaim);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_SPARSE_RECLAIM_BUDGET_CYCLES);
+    if (area_cycles.sparse_reclaim > KERNEL_AREA_SPARSE_RECLAIM_BUDGET_CYCLES)
+        kernel_panic("K1 sparse reclaim budget exceeded");
+    console_puts(" PASS\n");
     uint32_t protect_cycles;
     if (!qualification_shared_protection(&protect_cycles))
         kernel_panic("K1 shared protection failed");
@@ -1883,6 +1901,7 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     console_puts(" PASS\n");
     console_puts("K8 PAGER GUEST PASS\n");
     console_puts("K8 PAGER OWNER IO PASS\n");
+    console_puts("K8 PAGER MAPPED WRITE PASS\n");
     if (performance_mask == KERNEL_PERFORMANCE_RELEASE_MASK)
         console_puts("K10 PERFORMANCE PASS\n");
     console_puts("K2 MEDIA BUDGET PASS\n");
@@ -2076,6 +2095,7 @@ static bool qualification_publish_page(KernelAreaQualification *cycles)
     uint32_t reclaimed = 0u;
     uint32_t token = 0u;
     uint32_t newer = 0u;
+    const uint32_t far = (KERNEL_AREA_PAGE_MAX - 1u) * KERNEL_PAGE_SIZE;
     bool mapped = false;
     bool passed = false;
     bool request_valid;
@@ -2088,7 +2108,8 @@ static bool qualification_publish_page(KernelAreaQualification *cycles)
     if (kernel_vm_create_address_space(KERNEL_SELFTEST_OWNER, &space) !=
         KERNEL_VM_OK)
         return false;
-    if (kernel_area_create(KERNEL_SELFTEST_OWNER, 2u * KERNEL_PAGE_SIZE,
+    if (kernel_area_create(KERNEL_SELFTEST_OWNER,
+                           KERNEL_AREA_PAGE_MAX * KERNEL_PAGE_SIZE,
                            KERNEL_AREA_CREATE_RESERVED, &area) !=
             KERNEL_AREA_OK ||
         kernel_port_create(KERNEL_SELFTEST_OWNER, 1u,
@@ -2104,22 +2125,21 @@ static bool qualification_publish_page(KernelAreaQualification *cycles)
             pager, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND);
         goto done;
     }
-    if (kernel_area_map(area, KERNEL_SELFTEST_OWNER, &space,
-                        KERNEL_VM_READ | KERNEL_VM_WRITE, &base,
-                        &size) != KERNEL_AREA_ACCESS_DENIED ||
-        kernel_area_map(area, KERNEL_SELFTEST_OWNER, &space, KERNEL_VM_READ,
-                        &base, &size) != KERNEL_AREA_OK)
+    if (kernel_area_map_range(area, KERNEL_SELFTEST_OWNER, &space,
+                        KERNEL_VM_READ | KERNEL_VM_WRITE, 0u,
+                        KERNEL_VM_SHARED_TABLE_SPAN, &base,
+                        &size) != KERNEL_AREA_OK)
         goto done;
     mapped = true;
     bytes[0] = 0x7eu;
-    if (kernel_area_pager_request(KERNEL_SELFTEST_OWNER, &space, base,
+    if (kernel_area_pager_request(KERNEL_SELFTEST_OWNER, &space, base, false,
                                   &request) != KERNEL_AREA_OK)
         goto done;
     request_valid = request.area == area && request.port == pager &&
                     request.cookie == 1u && request.offset == 0u;
     if (kernel_area_child_release(request.area) != KERNEL_AREA_OK ||
         !request_valid ||
-        kernel_area_fault(KERNEL_SELFTEST_OWNER, &space, base) ||
+        kernel_area_fault(KERNEL_SELFTEST_OWNER, &space, base, false) ||
         kernel_area_read(area, 0u, bytes, 1u) !=
             KERNEL_AREA_INVALID_STATE ||
         bytes[0] != 0x7eu)
@@ -2179,9 +2199,14 @@ static bool qualification_publish_page(KernelAreaQualification *cycles)
         if (elapsed > cycles->writeback) cycles->writeback = elapsed;
         if (!kernel_bytes_equal(source, snapshot, sizeof(source)) ||
             kernel_area_reclaim(area, 0u, 2u * KERNEL_PAGE_SIZE, &released) !=
-                KERNEL_AREA_BUSY || released != 0u ||
-            kernel_area_mark_dirty(area, 0u) != KERNEL_AREA_OK ||
-            !kernel_area_page_physical(area, 0u, &physical))
+                KERNEL_AREA_BUSY || released != 0u)
+            goto done;
+        started = kernel_platform_cpu_cycles_low();
+        if (!kernel_area_fault(KERNEL_SELFTEST_OWNER, &space, base, true))
+            goto done;
+        elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > cycles->write_fault) cycles->write_fault = elapsed;
+        if (!kernel_area_page_physical(area, 0u, &physical))
             goto done;
         page = kernel_memory_access(physical, KERNEL_PAGE_SIZE);
         if (page == NULL)
@@ -2234,7 +2259,7 @@ static bool qualification_publish_page(KernelAreaQualification *cycles)
     }
     if (reclaimed < 2u || kernel_area_page_resident(area, 0u) ||
         kernel_area_page_resident(area, KERNEL_PAGE_SIZE) ||
-        kernel_area_pager_request(KERNEL_SELFTEST_OWNER, &space, base,
+        kernel_area_pager_request(KERNEL_SELFTEST_OWNER, &space, base, false,
                                   &request) != KERNEL_AREA_OK)
         passed = false;
     else if (kernel_area_child_release(request.area) != KERNEL_AREA_OK ||
@@ -2245,6 +2270,22 @@ static bool qualification_publish_page(KernelAreaQualification *cycles)
     for (uint32_t index = 0u; index < sizeof(bytes); ++index)
         if (bytes[index] != source[index])
             passed = false;
+
+    if (kernel_area_publish_page(area, far, source, sizeof(source)) != KERNEL_AREA_OK ||
+        kernel_area_mark_dirty(area, far) != KERNEL_AREA_OK ||
+        kernel_area_reclaim(area, 0u, far + KERNEL_PAGE_SIZE, &released) != KERNEL_AREA_BUSY ||
+        released != 0u || !kernel_area_page_resident(area, 0u) ||
+        kernel_area_writeback_begin(area, far, snapshot, &token) != KERNEL_AREA_OK ||
+        kernel_area_writeback_complete(area, far, token, true) != KERNEL_AREA_OK)
+        passed = false;
+    for (uint32_t sample = 0u; passed && sample < 2u; ++sample) {
+        started = kernel_platform_cpu_cycles_low();
+        if (kernel_area_reclaim(area, 0u, far + KERNEL_PAGE_SIZE, &released) != KERNEL_AREA_OK ||
+            released != (sample == 0u ? 2u : 0u))
+            passed = false;
+        uint32_t elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > cycles->sparse_reclaim) cycles->sparse_reclaim = elapsed;
+    }
 
 done:
     if (mapped && kernel_area_unmap(KERNEL_SELFTEST_OWNER, &space, base) !=

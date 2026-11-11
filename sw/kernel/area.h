@@ -125,22 +125,22 @@ KernelAreaStatus kernel_area_bind_pager(KernelArea *area, KernelPort *port,
                                         void *release_context);
 KernelAreaStatus kernel_area_pager_request(uint32_t process_id,
                                             KernelAddressSpace *space,
-                                            uint32_t address,
+                                            uint32_t address, bool write,
                                             KernelAreaPagerRequest *request);
 /* Handle-authorized I/O uses the same retained request as a mapped fault. */
 KernelAreaStatus kernel_area_page_request(KernelArea *area, uint32_t offset,
                                           KernelAreaPagerRequest *request);
 /*
- * Answers a fault inside the area window: commits the cluster containing the
- * address and publishes it into every address space that already has the area
- * mapped. True means the access may be retried.
+ * Answers an authorized fault inside the area window. Anonymous areas commit
+ * their missing cluster; resident pager-page writes mark the shared page dirty
+ * before allowing the instruction to retry. Snapshot sealing traps later writes.
  *
  * The process must already hold a mapping. A fault from someone who does not
  * is not an area growing, it is a wild pointer that happened to land in the
  * window, and committing memory to it would be answering a bug with a frame.
  */
 bool kernel_area_fault(uint32_t process_id, KernelAddressSpace *space,
-                       uint32_t address);
+                       uint32_t address, bool write);
 /* Publish one complete file page after copying valid bytes into a zeroed
  * frame. No mapping sees the frame until the copy and zero tail are ready. */
 KernelAreaStatus kernel_area_publish_page(KernelArea *area, uint32_t offset,
