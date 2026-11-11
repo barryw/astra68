@@ -1364,6 +1364,73 @@ astra_vfs_service_read_page_retained(AstraVfsService *service,
 }
 
 uint32_t
+astra_vfs_backend_write_page(const AstraVfsBackend *backend, uintptr_t node,
+                             const AstraVfsNodeInfo *expected, uint64_t offset,
+                             const void *page, uint32_t *moved,
+                             AstraVfsNodeInfo *current)
+{
+    AstraVfsNodeInfo previous = expected != NULL ? *expected :
+                                                 (AstraVfsNodeInfo){0};
+    AstraVfsNodeInfo before = {0}, after = {0};
+    uint32_t status, checked, wanted;
+
+    if (moved != NULL) *moved = 0u;
+    if (current != NULL) node_info_clear(current);
+    if (backend == NULL || backend->ops == NULL ||
+        backend->ops->stat_node == NULL || backend->ops->write == NULL ||
+        backend->ops->sync == NULL || node == 0u || expected == NULL ||
+        page == NULL || moved == NULL || current == NULL ||
+        previous.kind != ASTRA_VFS_KIND_FILE || offset >= previous.size ||
+        (offset & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    status = backend->ops->stat_node(backend->context, node, &before);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (before.kind != ASTRA_VFS_KIND_FILE ||
+        (astra_vfs_node_identity_equal(&previous.meta, &previous.meta) &&
+         !astra_vfs_node_identity_equal(&previous.meta, &before.meta)))
+        return ASTRA_VFS_ERR_LOST;
+    if (!astra_vfs_node_revision_equal(&previous, &before))
+        return ASTRA_VFS_ERR_BUSY;
+    wanted = previous.size - offset < ASTRA_MEMORY_PAGE_SIZE ?
+        (uint32_t)(previous.size - offset) : ASTRA_MEMORY_PAGE_SIZE;
+    while (*moved < wanted) {
+        uint32_t accepted = 0u;
+        uint64_t position = offset + *moved;
+
+        status = backend->ops->write(backend->context, node, position, 0u,
+            previous.size, (const uint8_t *)page + *moved, wanted - *moved,
+            &accepted, &position);
+        if (accepted > wanted - *moved ||
+            position != offset + *moved + accepted) {
+            status = ASTRA_VFS_ERR_IO;
+            break;
+        }
+        *moved += accepted;
+        if (status != ASTRA_VFS_OK)
+            break;
+        if (accepted == 0u) {
+            status = ASTRA_VFS_ERR_IO;
+            break;
+        }
+    }
+    if (status == ASTRA_VFS_OK)
+        status = backend->ops->sync(backend->context, node);
+    /* A failed prefix may still change metadata; its owner needs that fact. */
+    checked = backend->ops->stat_node(backend->context, node, &after);
+    if (checked != ASTRA_VFS_OK)
+        return status != ASTRA_VFS_OK ? status : checked;
+    if (after.kind != ASTRA_VFS_KIND_FILE ||
+        (astra_vfs_node_identity_equal(&before.meta, &before.meta) &&
+         !astra_vfs_node_identity_equal(&before.meta, &after.meta)))
+        return ASTRA_VFS_ERR_LOST;
+    *current = after;
+    if (status != ASTRA_VFS_OK)
+        return status;
+    return after.size == previous.size ? ASTRA_VFS_OK : ASTRA_VFS_ERR_BUSY;
+}
+
+uint32_t
 astra_vfs_service_stat_retained(AstraVfsService *service,
                                 AstraVfsFile retained, AstraVfsNodeInfo *info)
 {

@@ -21,10 +21,13 @@
 #include <astra/address_space.h>
 #include <astra/limits.h>
 #include <astra/posix.h>
+#include <astra/pager_service.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/vfs_assign.h>
 #include <astra/vfs_backend.h>
+#include <astra/vfs_file_pager.h>
+#include <astra/vfs_service_core.h>
 #include <astra/vfs_process.h>
 #include <astra/vfs_service.h>
 #include <astra/volume.h>
@@ -2211,6 +2214,166 @@ static int file_map_cached_page(AstraVfsClient *client, uint32_t area,
     }
 }
 
+typedef struct PageWritebackProbe {
+    AstraVfsClient *client;
+    AstraVfsFilePageSource source;
+    AstraVfsFilePager pager;
+    uint32_t stop;
+} PageWritebackProbe;
+
+static const AstraVfsFilePageSource *writeback_source_acquire(void *context,
+    uint32_t cookie)
+{
+    PageWritebackProbe *probe = context;
+    if (cookie != probe->source.cookie ||
+        probe->client->direct_backend_enter(probe->client) != ASTRA_VFS_OK)
+        return NULL;
+    return &probe->source;
+}
+
+static void writeback_source_release(void *context,
+    const AstraVfsFilePageSource *source)
+{
+    PageWritebackProbe *probe = context;
+    (void)source;
+    probe->client->direct_backend_leave(probe->client);
+}
+
+static void writeback_pager_run(uint32_t argument)
+{
+    PageWritebackProbe *probe = (void *)(uintptr_t)argument;
+    while (!__atomic_load_n(&probe->stop, __ATOMIC_ACQUIRE)) {
+        uint32_t status = astra_wait_one(probe->pager.receive,
+            astra_clock_monotonic() + UINT64_C(1000000000), NULL);
+        if (__atomic_load_n(&probe->stop, __ATOMIC_ACQUIRE)) break;
+        if (status == ASTRA_SYSCALL_TIMED_OUT || status == ASTRA_SYSCALL_CANCELLED)
+            continue;
+        if (status != ASTRA_SYSCALL_OK) { probe->pager.stalled = status; break; }
+        (void)astra_vfs_file_pager_pump(&probe->pager, 1u);
+        if (probe->pager.stalled != 0u) break;
+    }
+}
+
+static int page_writeback_gate(const char *directory)
+{
+    AstraProcessFilesystem native = ASTRA_PROCESS_FILESYSTEM_INIT;
+    AstraFile file = ASTRA_FILE_INIT;
+    PageWritebackProbe probe = {0};
+    AstraVfsNodeInfo expected = {0}, current = {0};
+    AstraVfsBackend backend = {0};
+    uint8_t page[ASTRA_MEMORY_PAGE_SIZE];
+    char path[192];
+    uint32_t area = 0u, scratch = 0u, receive = 0u, send = 0u, thread = 0u;
+    uint32_t mapped = 0u, token = 0u, moved = 0u, status;
+    uint64_t position = 0u;
+    void *scratch_page = NULL;
+    int fd = -1, result = 2, entered = 0;
+    const char *stage = "create";
+
+    join(path, sizeof(path), directory, "page-writeback");
+    memset(page, 'A', sizeof(page));
+    fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    if (fd < 0 || write(fd, page, sizeof(page)) != (ssize_t)sizeof(page) ||
+        write(fd, page, 204u) != 204 || fsync(fd) != 0) goto done;
+    close(fd); fd = -1;
+    stage = "attach";
+    if (astra_process_filesystem_open(&native, astra_posix_startup()) != ASTRA_VFS_OK ||
+        astra_filesystem_open(&native.filesystem, path, ASTRA_VFS_OPEN_READ |
+            ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_APPEND, &file) != ASTRA_VFS_OK)
+        goto done;
+    probe.client = file._private_client;
+    if (probe.client == NULL || probe.client->direct_backend_enter == NULL ||
+        probe.client->direct_backend_leave == NULL ||
+        astra_filesystem_seek(&file, 123, 0u, &position) != ASTRA_VFS_OK ||
+        probe.client->direct_backend_enter(probe.client) != ASTRA_VFS_OK)
+        goto done;
+    entered = 1;
+    backend = (AstraVfsBackend){probe.client->direct_backend_ops,
+                                probe.client->direct_backend_context};
+    if (backend.ops == NULL || backend.ops->stat_node(backend.context,
+            file._private_file, &expected) != ASTRA_VFS_OK ||
+        expected.size != sizeof(page) + 204u ||
+        !astra_vfs_file_page_source_init(&probe.source, &backend,
+            file._private_file, &expected.meta, 0u, 2u * sizeof(page), 1u)) goto done;
+    probe.client->direct_backend_leave(probe.client); entered = 0;
+    stage = "pager setup";
+    if (astra_rt_port_create(4u, 4u * sizeof(AstraPagerPageRequest),
+            &receive, &send) != ASTRA_SYSCALL_OK ||
+        astra_rt_area_create(sizeof(page), ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+            ASTRA_RIGHT_MAP, &scratch) != ASTRA_SYSCALL_OK ||
+        astra_rt_area_map(scratch, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+            &scratch_page, &mapped) != ASTRA_SYSCALL_OK ||
+        !astra_vfs_file_pager_init(&probe.pager, receive, scratch, scratch_page,
+            mapped, writeback_source_acquire, writeback_source_release, &probe) ||
+        astra_rt_area_create_flagged(2u * sizeof(page), ASTRA_RIGHT_READ |
+            ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP | ASTRA_RIGHT_ADMINISTER,
+            ASTRA_AREA_CREATE_RESERVED, &area) != ASTRA_SYSCALL_OK ||
+        astra_rt_area_bind_pager(area, send, 1u) != ASTRA_SYSCALL_OK) goto done;
+    AstraThreadStart start = {writeback_pager_run, (uint32_t)(uintptr_t)&probe};
+    if (astra_rt_thread_create(&start, ASTRA_PROCESS_PRIORITY_NORMAL,
+            ASTRA_RIGHT_WAIT | ASTRA_RIGHT_ADMINISTER, &thread, NULL) !=
+        ASTRA_SYSCALL_OK) goto done;
+    stage = "page in";
+    if (astra_rt_area_prefetch(area, sizeof(page)) != ASTRA_SYSCALL_OK ||
+        astra_rt_area_read_resident(area, sizeof(page), page, sizeof(page)) !=
+            ASTRA_SYSCALL_OK || page[0] != 'A' || page[203] != 'A' ||
+        page[204] != 0u || page[sizeof(page) - 1u] != 0u) goto done;
+    stage = "dirty snapshot";
+    memset(page, 'R', 204u);
+    if (astra_rt_area_write_pager(area, sizeof(page), page, 204u) != ASTRA_SYSCALL_OK ||
+        astra_rt_area_writeback_begin(area, sizeof(page), page, &token) !=
+            ASTRA_SYSCALL_OK) goto done;
+    stage = "backing write";
+    if (probe.client->direct_backend_enter(probe.client) != ASTRA_VFS_OK) goto done;
+    entered = 1;
+    status = astra_vfs_backend_write_page(&backend, file._private_file,
+        &expected, sizeof(page), page, &moved, &current);
+    if (status != ASTRA_VFS_OK || moved != 204u || current.size != expected.size ||
+        backend.ops->seek(backend.context, file._private_file, 0, 1u,
+            &position) != ASTRA_VFS_OK || position != 123u)
+        goto done;
+    if (astra_rt_area_writeback_complete(area, sizeof(page), token, true) !=
+        ASTRA_SYSCALL_OK) goto done;
+    token = 0u;
+    stage = "backing read";
+    memset(page, 0, sizeof(page));
+    if (backend.ops->read(backend.context, file._private_file, sizeof(page),
+            page, sizeof(page), &moved) != ASTRA_VFS_OK || moved != 204u)
+        goto done;
+    for (uint32_t index = 0u; index < moved; ++index)
+        if (page[index] != 'R') goto done;
+    probe.client->direct_backend_leave(probe.client); entered = 0;
+    stage = "clean reclaim";
+    if (astra_rt_area_reclaim(area, sizeof(page), sizeof(page), &moved) !=
+            ASTRA_SYSCALL_OK || moved != 1u) goto done;
+    stage = "backing refault";
+    if (astra_rt_area_prefetch(area, sizeof(page)) != ASTRA_SYSCALL_OK ||
+        astra_rt_area_read_resident(area, sizeof(page), page, sizeof(page)) !=
+            ASTRA_SYSCALL_OK || page[0] != 'R' || page[203] != 'R' ||
+        page[204] != 0u || page[sizeof(page) - 1u] != 0u) goto done;
+    result = 0;
+done:
+    if (token != 0u)
+        (void)astra_rt_area_writeback_complete(area, sizeof(page), token, false);
+    if (entered) probe.client->direct_backend_leave(probe.client);
+    __atomic_store_n(&probe.stop, 1u, __ATOMIC_RELEASE);
+    if (thread != 0u) {
+        (void)astra_rt_cancel_wait(thread);
+        (void)astra_wait_one_restart(thread, ASTRA_DEADLINE_FOREVER, NULL);
+        (void)astra_close(thread);
+    }
+    if (scratch_page != NULL) (void)astra_rt_area_unmap(scratch_page);
+    if (area != 0u) (void)astra_close(area);
+    if (scratch != 0u) (void)astra_close(scratch);
+    if (send != 0u) (void)astra_close(send);
+    if (receive != 0u) (void)astra_close(receive);
+    if (file._private_client != NULL) (void)astra_filesystem_close(&file);
+    astra_process_filesystem_close(&native);
+    if (fd >= 0) close(fd);
+    (void)unlink(path);
+    return result == 0 ? 0 : fail("page-writeback %s", stage);
+}
+
 static int file_map_gate(const char *directory)
 {
     AstraProcessFilesystem native = ASTRA_PROCESS_FILESYSTEM_INIT;
@@ -2822,6 +2985,7 @@ static const struct {
     {"shared-description", case_shared_description},
     {"area-range", area_range_gate},
     {"file-map", file_map_gate},
+    {"page-writeback", page_writeback_gate},
     {"cache-pressure", case_cache_pressure},
     {"exec-inherit", case_exec_inherit},
     {"append-race", case_append_race},

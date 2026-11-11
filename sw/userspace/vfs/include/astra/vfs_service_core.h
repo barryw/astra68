@@ -254,6 +254,15 @@ uint32_t astra_vfs_service_read_page_retained(AstraVfsService *service,
 uint32_t astra_vfs_backend_read_page(const AstraVfsBackend *backend,
     uintptr_t node, const AstraVfsNodeMeta *expected_identity,
     uint64_t offset, void *page, uint32_t *valid_bytes);
+/* Write and sync one positioned snapshot, trimmed to expected EOF. Caller
+ * retains/serializes the node and reconciles external changes before cleaning
+ * its VM snapshot. Short writes are joined; cursor/append state is untouched.
+ * `moved` reports validated accepted bytes even on error. `current` is zero
+ * unless a checked post-I/O stat succeeded, including after partial failure.
+ * An error never authorizes cleaning the VM snapshot. */
+uint32_t astra_vfs_backend_write_page(const AstraVfsBackend *backend,
+    uintptr_t node, const AstraVfsNodeInfo *expected, uint64_t offset,
+    const void *page, uint32_t *moved, AstraVfsNodeInfo *current);
 uint32_t astra_vfs_service_stat_retained(AstraVfsService *service,
     AstraVfsFile retained, AstraVfsNodeInfo *info);
 uint32_t astra_vfs_service_write_retained(AstraVfsService *service,

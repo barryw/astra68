@@ -8,6 +8,41 @@ ordinary writes still bypass mapped resident frames. Dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Positioned snapshot backing I/O, 2026-11-11: the existing VFS backend seam
+now writes a sealed page snapshot without touching the open description's
+cursor or append state. It rejects stale identity/revision before mutation,
+joins short positioned writes, trims the final page to the captured EOF,
+syncs before success and returns checked post-I/O metadata even after a
+partial write or sync failure. Zero progress and malformed byte/position
+results fail. Only a successful, reconciled result permits the owner to
+complete its native VM token successfully; failures retain dirty state.
+The caller must retain and serialize the node and reconcile external changes.
+This helper is service-private and does not route ordinary writes through
+the cache or establish global append/cursor ownership.
+
+Haiku `src/system/kernel/cache/file_cache.cpp:760-850,1453-1502` provides
+the positioned cache-I/O and partial-progress reference; its
+`src/system/kernel/vm/vm_page_writer.cpp:176-282` separates writeback from
+later modifications. Astra reuses its backend operations, pager worker,
+native area lifecycle and existing direct-client lock. The native
+`fssem page-writeback` case drives a real 4,300-byte file through page-in,
+owner modification, snapshot, backing sync, completion, clean reclaim and
+refault. Its append-mode description stays at offset 123 and EOF stays 4,300.
+The integration command compiles the exact service-private implementation
+through its existing extra-source build seam; no new public Kit export,
+parallel byte store, cursor or worker is introduced.
+
+Full VFS host/MC68040 and ASan/UBSan gates pass, including full-page short
+writes, tail clipping, stale metadata, malformed results, partial failure,
+sync failure and post-I/O identity/size changes. Four private mutations
+removing EOF, sync, revision or error handling fail the existing core test.
+Beast passes native page-writeback, basic and file-map plus provider fsck.
+DE25 passes those cases plus shared-description, area-range and durable-save,
+then a 600-second private stability trial. The paired image/settings archive
+hashes match and read-only fsck passes. This is scoped correctness evidence;
+ordinary cached writes, writable mappings and performance qualification are
+not complete. Evidence: `/home/barry/astra-evidence/page-writeback-20261111/`.
+
 Pager-owner I/O, 2026-11-11: the native lifecycle now has owner-authorized
 resident modification, snapshot and completion syscalls and Runtime/NDK
 wrappers. ADMINISTER alone cannot read or write page bytes; those operations

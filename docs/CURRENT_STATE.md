@@ -2,6 +2,47 @@
 
 Status: active continuation map, 2026-11-11
 
+Positioned snapshot backing I/O, 2026-11-11: the service-private VFS backend
+helper now joins short writes, preserves EOF, rejects stale pre-I/O node
+identity/revision, validates returned byte counts/positions and syncs before
+success. It returns checked post-I/O metadata after partial writes or sync
+failure; errors never authorize cleaning a native VM snapshot. The caller
+retains/serializes the node and reconciles external changes. Haiku references
+and adopted ownership patterns are recorded in FILE_CACHE_DESIGN.md. No new
+public export, ABI, cursor, worker or byte store is added. Full VFS host,
+MC68040 and ASan/UBSan gates pass. Full-page and tail-page tests preserve
+neighbor bytes; four private mutations losing EOF, sync, revision or failure
+handling each fail the existing service-core seam.
+
+The new native `fssem page-writeback` case compiles that exact private helper
+through the existing extra-source test seam. A real 4,300-byte file completes
+page-in, owner modification, snapshot, backing write/sync, native completion,
+clean reclaim and refault. EOF stays 4,300 and its append-mode description's
+cursor stays 123. Beast passes this case plus basic and file-map, then provider
+fsck. DE25 passes the same native case plus basic, file-map, shared-description,
+area-range and durable-save with Runtime ABI 3 loaded dynamically. Candidate
+release is 1341500f2d6efb2206aacdf27147cc694690c44c2cd7d47a306b58e5987d45fd;
+ROM remains 7f6605be4d9041a93f344a7324a9954ab629f668eecbc7100a5faef356262560.
+The 600-second private DE25 trial passes without panic/degraded markers;
+startup heartbeat advances before stage 8. Archive hashes match, including
+the paired migrated private settings store, and the archived image passes
+read-only fsck. The selected release is restored at stage 8 with three active
+services and zero Astra restarts. Private trial files are removed, only loop0
+remains and board free space returns to 8.5 GiB. No live production image was
+opened by trial tooling. Evidence is under
+/home/barry/astra-evidence/page-writeback-20261111/ on Beast. This qualifies
+only the snapshot/backing boundary: ordinary writes still bypass resident
+cache pages; canonical mutation ownership, append/cursor ordering, external
+conflicts, writable/private mappings and remaining release gates stay open.
+
+Fixture correction: a post-boot image without its migrated private Config Kit
+store deliberately halted at HostFS NOT_FOUND on Beast, reproducing the
+previously documented trial setup failure. The corrected candidate starts
+from the verified immutable pre-migration image, retaining its configuration;
+no production data or startup failure policy is changed. The DE25 observer's
+first import also lacked a staged VFS header; the corrected native observer
+passes against the same running candidate. Both failed logs are retained.
+
 Pager-owner I/O prerequisite qualified, 2026-11-11: reviewed Haiku
 cache/file_cache.cpp:760-850,1453-1502 and the existing native area, user-copy,
 syscall, runtime/NDK export and pager fixture paths. Three additive native

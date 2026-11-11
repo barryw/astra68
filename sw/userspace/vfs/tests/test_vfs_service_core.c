@@ -41,7 +41,7 @@ uint32_t astra_vfs_port_read_cached_position(AstraVfsClient *client,
 }
 
 #define FAKE_NODE_MAX 8u
-#define FAKE_BYTES_MAX 512u
+#define FAKE_BYTES_MAX (2u * ASTRA_MEMORY_PAGE_SIZE + 1u)
 
 typedef struct FakeNode {
     char path[ASTRA_VFS_PATH_MAX];
@@ -73,6 +73,17 @@ typedef struct FakeFs {
     uint32_t write_status;
     uint32_t write_overreport;
     uint32_t sync_status;
+    uint32_t write_limit;
+    uint32_t write_calls;
+    uint32_t write_fail_call;
+    uint32_t write_zero;
+    uint32_t write_bad_position;
+    uint32_t sync_calls;
+    uint32_t sync_shrink;
+    uint32_t sync_drop_identity;
+    uint32_t write_bump_timestamps;
+    uint32_t stat_calls;
+    uint32_t stat_fail_call;
 } FakeFs;
 
 static FakeFs fake;
@@ -260,8 +271,14 @@ fake_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags, uint6
         offset = found->size;
     *moved = 0u;
     *position = offset;
+    ++fake.write_calls;
+    if (fake.write_fail_call != 0u && fake.write_calls == fake.write_fail_call)
+        return ASTRA_VFS_ERR_NO_SPACE;
     if (fake.write_status != ASTRA_VFS_OK)
         return fake.write_status;
+    if (fake.write_zero) return ASTRA_VFS_OK;
+    if (fake.write_limit != 0u && length > fake.write_limit)
+        length = fake.write_limit;
     if (length != 0u && offset >= max_end)
         return ASTRA_VFS_ERR_FILE_TOO_LARGE;
     if (offset < max_end && length > max_end - offset)
@@ -270,11 +287,13 @@ fake_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags, uint6
         return ASTRA_VFS_ERR_NO_SPACE;
     }
     memcpy(&found->bytes[offset], buffer, length);
+    if (fake.write_bump_timestamps) ++fake.mtime_nsec;
     if (offset + length > found->size) {
         found->size = (uint32_t)(offset + length);
     }
     *moved = length;
     *position = offset + length;
+    if (fake.write_bad_position) ++*position;
     if (fake.write_overreport)
         ++*moved;
     return ASTRA_VFS_OK;
@@ -283,6 +302,9 @@ fake_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags, uint6
 static uint32_t fake_sync(void *context, uintptr_t node)
 {
     (void)context;
+    ++fake.sync_calls;
+    if (fake.sync_shrink && node != 0u) --((FakeNode *)node)->size;
+    if (fake.sync_drop_identity) fake.exact_identity = 0u;
     return node == 0u ? ASTRA_VFS_ERR_BAD_HANDLE : fake.sync_status;
 }
 
@@ -329,6 +351,9 @@ fake_stat_node(void *context, uintptr_t node, AstraVfsNodeInfo *info)
     FakeNode *found = (FakeNode *)node;
 
     (void)context;
+    ++fake.stat_calls;
+    if (fake.stat_fail_call != 0u && fake.stat_calls == fake.stat_fail_call)
+        return ASTRA_VFS_ERR_IO;
     if (found == NULL)
         return ASTRA_VFS_ERR_BAD_HANDLE;
     info->size = found->size;
@@ -2982,6 +3007,105 @@ static void test_direct_truncate_waits_for_mutation_barrier(void)
     assert(mutation_calls == 6u);
 }
 
+static void test_page_writeback_preserves_eof_and_reports_partial_failure(void)
+{
+    uint8_t page[ASTRA_MEMORY_PAGE_SIZE];
+    AstraVfsNodeInfo expected = {0}, current;
+    uint32_t moved;
+    FakeNode *node;
+
+    reset();
+    node = fake_create("/write-page", ASTRA_VFS_KIND_FILE);
+    assert(node != NULL);
+    node->size = 300u;
+    memset(node->bytes, 0xa5, sizeof(node->bytes));
+    memset(page, 0x52, sizeof(page));
+    fake.exact_identity = 1u;
+    assert(fake_stat_node(&fake, (uintptr_t)node, &expected) == ASTRA_VFS_OK);
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &expected, 1u, page, &moved, &current) == ASTRA_VFS_ERR_INVALID);
+    assert(moved == 0u && current.kind == 0u && fake.write_calls == 0u);
+    AstraVfsNodeInfo stale = expected;
+    ++stale.meta.generation;
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &stale, 0u, page, &moved, &current) == ASTRA_VFS_ERR_LOST);
+    stale = expected;
+    ++stale.meta.mtime_nsec;
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &stale, 0u, page, &moved, &current) == ASTRA_VFS_ERR_BUSY);
+    assert(fake.write_calls == 0u);
+    fake.write_limit = 37u;
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &expected, 0u, page, &moved, &current) == ASTRA_VFS_OK);
+    assert(moved == 300u && node->size == 300u && current.size == 300u &&
+           fake.write_calls == 9u && fake.sync_calls == 1u);
+    assert(memcmp(node->bytes, page, 300u) == 0 && node->bytes[300] == 0xa5u);
+    fake.write_calls = fake.sync_calls = 0u;
+    fake.write_fail_call = 3u;
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &expected, 0u, page, &moved, &current) == ASTRA_VFS_ERR_NO_SPACE);
+    assert(moved == 74u && fake.sync_calls == 0u && current.size == 300u);
+    fake.write_fail_call = 0u;
+    fake.write_zero = 1u;
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &expected, 0u, page, &moved, &current) == ASTRA_VFS_ERR_IO && moved == 0u);
+    fake.write_zero = 0u;
+    fake.write_overreport = 1u;
+    fake.write_limit = 0u;
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &expected, 0u, page, &moved, &current) == ASTRA_VFS_ERR_IO && moved == 0u);
+    fake.write_overreport = 0u;
+    fake.write_bad_position = 1u;
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &expected, 0u, page, &moved, &current) == ASTRA_VFS_ERR_IO && moved == 0u);
+    fake.write_bad_position = 0u;
+    fake.sync_status = ASTRA_VFS_ERR_IO;
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &expected, 0u, page, &moved, &current) == ASTRA_VFS_ERR_IO);
+    assert(moved == 300u && current.size == 300u);
+    fake.sync_status = ASTRA_VFS_OK;
+    fake.sync_shrink = 1u;
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &expected, 0u, page, &moved, &current) == ASTRA_VFS_ERR_BUSY);
+    fake.sync_shrink = 0u;
+    node->size = 300u;
+    fake.sync_drop_identity = 1u;
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &expected, 0u, page, &moved, &current) == ASTRA_VFS_ERR_LOST);
+    assert(current.kind == 0u);
+    fake.sync_drop_identity = 0u;
+    fake.exact_identity = 1u;
+    fake.stat_fail_call = fake.stat_calls + 2u;
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &expected, 0u, page, &moved, &current) == ASTRA_VFS_ERR_IO);
+    assert(moved == 300u && current.kind == 0u);
+    fake.stat_fail_call = 0u;
+    fake.write_bump_timestamps = 1u;
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &expected, 0u, page, &moved, &expected) == ASTRA_VFS_OK);
+    assert(expected.kind == ASTRA_VFS_KIND_FILE && expected.size == 300u &&
+           expected.meta.mtime_nsec == fake.mtime_nsec && fake.mtime_nsec != 0u);
+
+    reset();
+    node = fake_create("/write-full-page", ASTRA_VFS_KIND_FILE);
+    assert(node != NULL);
+    node->size = 2u * ASTRA_MEMORY_PAGE_SIZE;
+    memset(node->bytes, 0xa5, sizeof(node->bytes));
+    fake.exact_identity = 1u;
+    fake.write_limit = 1023u;
+    assert(fake_stat_node(&fake, (uintptr_t)node, &expected) == ASTRA_VFS_OK);
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &expected, ASTRA_MEMORY_PAGE_SIZE, page, &moved, &current) == ASTRA_VFS_OK);
+    assert(moved == sizeof(page) && current.size == expected.size &&
+           fake.write_calls == 5u && fake.sync_calls == 1u);
+    assert(memcmp(node->bytes + ASTRA_MEMORY_PAGE_SIZE, page, sizeof(page)) == 0 &&
+           node->bytes[ASTRA_MEMORY_PAGE_SIZE - 1u] == 0xa5u &&
+           node->bytes[2u * ASTRA_MEMORY_PAGE_SIZE] == 0xa5u);
+    assert(astra_vfs_backend_write_page(&service.backend, (uintptr_t)node,
+        &expected, expected.size, page, &moved, &current) == ASTRA_VFS_ERR_INVALID);
+    assert(moved == 0u && current.kind == 0u && fake.write_calls == 5u);
+}
+
 int
 main(void)
 {
@@ -3013,6 +3137,7 @@ main(void)
     test_session_release_waits_for_pinned_file();
     test_retained_description_survives_client_close();
     test_retained_page_read_checks_complete_file();
+    test_page_writeback_preserves_eof_and_reports_partial_failure();
     test_forced_switch_model();
     puts("astra vfs service core: PASS");
     return 0;
