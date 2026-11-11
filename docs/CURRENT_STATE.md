@@ -2,6 +2,35 @@
 
 Status: active continuation map, 2026-11-11
 
+Service description controls qualified, 2026-11-11. The generic core now dispatches
+SEEK, FILE_FLAGS and POSITION_ADVANCE through the backend that already owns
+cursor and mutable status flags. The direct adapter shares that dispatch;
+conditional-advance result validation is shared by backend, dispatcher and
+cached-read client. Existing file acquisition/session checks pin each request.
+Haiku fs/fd.cpp:934-950 and fs/vfs.cpp:6417-6445 guide the handle pin and mutable
+flag mask; Astra keeps the provider-owned state instead of another copy.
+The focused test fails before the change; full VFS target/host and sanitizers
+pass, and four pin/input/result mutations are rejected. The native description-io fixture
+now exercises seek, conditional commit/mismatch and status-flag set/clear.
+Beast passes description-io, shared-description, append-race, page-writeback,
+file-map and basic, followed by provider fsck. DE25 passes those cases plus
+cache-pressure, area-range, durable-save, exec-inherit and alias-identity
+through native Terminal. Its 600-second trial, startup observer and native
+gate all return zero, with no panic/degraded markers. Candidate release:
+47978c243d66d43f1fd922b31b1d00eba173dcef39a231d6e59cd479f0fa4b26.
+Archive hashes match the image and paired migrated settings/key; read-only
+fsck passes. Final native/test patch exactly matches the candidate. Private
+trial state is removed; selected services are restored at stage 8 with zero
+restarts, loop0 only and 8.5 GiB free. Trial tooling never opened production
+image/user data. Initial fixture/staging errors are retained: the test helper's
+default write limit needed clearing for control operations, and Kit provider
+selection needed its existing (library, ABI) key rather than a single-record
+assumption. Neither failure changed product validation. Evidence:
+/home/barry/astra-evidence/vfs-description-controls-20261111/.
+No new public API, protocol, cursor, status store, lock, worker or kernel/ROM
+change. Cached mutation ownership/writeback and writable/private map gates
+remain open; share/adopt still need scoped owner authority before service use.
+
 Service-side description I/O qualified, 2026-11-11. The generic core previously
 refused sequential reads/writes even when its backend already owned shared
 description positions. It now reuses the existing backend read-position

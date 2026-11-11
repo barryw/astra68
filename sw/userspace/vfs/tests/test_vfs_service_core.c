@@ -87,6 +87,11 @@ typedef struct FakeFs {
     uint64_t position;
     uint32_t sequential_reads;
     uint64_t read_report_position;
+    uint64_t description_argument;
+    uint32_t description_mask;
+    uint32_t description_result;
+    uint32_t description_status;
+    uint32_t description_calls;
 } FakeFs;
 
 static FakeFs fake;
@@ -271,6 +276,44 @@ static uint32_t fake_read_sequential(void *context, uintptr_t node, void *buffer
     *position = fake.position;
     if (fake.read_report_position != 0u) *position = fake.read_report_position;
     return status;
+}
+
+static uint32_t fake_seek(void *context, uintptr_t node, int64_t delta,
+    uint32_t origin, uint64_t *position)
+{
+    (void)context;
+    assert(node == (uintptr_t)&fake.nodes[0]);
+    assert(service.files[0].active == 1u);
+    ++fake.description_calls;
+    fake.description_argument = (uint64_t)delta;
+    fake.description_mask = origin;
+    *position = fake.position;
+    return fake.description_status;
+}
+
+static uint32_t fake_file_flags(void *context, uintptr_t node, uint32_t mask,
+    uint32_t flags, uint32_t *result)
+{
+    (void)context;
+    assert(node == (uintptr_t)&fake.nodes[0]);
+    ++fake.description_calls;
+    fake.description_argument = flags;
+    fake.description_mask = mask;
+    *result = fake.description_result;
+    return fake.description_status;
+}
+
+static uint32_t fake_position_advance(void *context, uintptr_t node,
+    uint64_t expected, uint32_t length, uint64_t *position, uint32_t *advanced)
+{
+    (void)context;
+    assert(node == (uintptr_t)&fake.nodes[0]);
+    ++fake.description_calls;
+    fake.description_argument = expected;
+    fake.description_mask = length;
+    *position = fake.position;
+    *advanced = fake.description_result;
+    return fake.description_status;
 }
 
 static uint32_t
@@ -3124,6 +3167,119 @@ static void test_page_writeback_preserves_eof_and_reports_partial_failure(void)
     assert(moved == 0u && current.kind == 0u && fake.write_calls == 5u);
 }
 
+static void test_service_description_controls_use_backend_state(void)
+{
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    AstraVfsBackendOps descriptions = fake_ops;
+    reset();
+    descriptions.seek = fake_seek;
+    descriptions.file_flags = fake_file_flags;
+    descriptions.position_advance = fake_position_advance;
+    service.backend.ops = &descriptions;
+    assert(fake_create("/controls", ASTRA_VFS_KIND_FILE) != NULL);
+    uint32_t session = open_session();
+    begin_request(&request, session, "/controls");
+    request.flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE;
+    fixture_dispatch(&service, ASTRA_VFS_OP_OPEN, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    AstraVfsFile file = reply.file;
+    begin_request(&request, session, NULL);
+    request.file = file;
+    request.write_limit = 0u;
+    request.offset = (uint64_t)(int64_t)-3;
+    request.flags = 2u;
+    fake.position = 6u;
+    fixture_dispatch(&service, ASTRA_VFS_OP_SEEK, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && reply.position == 6u &&
+           fake.description_argument == (uint64_t)(int64_t)-3 && fake.description_mask == 2u);
+    fake.position = UINT64_MAX;
+    fixture_dispatch(&service, ASTRA_VFS_OP_SEEK, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_PROTOCOL && reply.position == 0u);
+    fake.description_status = ASTRA_VFS_ERR_IO;
+    fixture_dispatch(&service, ASTRA_VFS_OP_SEEK, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_IO && reply.position == 0u);
+    fake.description_status = ASTRA_VFS_OK;
+    request.flags = 3u;
+    uint32_t calls = fake.description_calls;
+    fixture_dispatch(&service, ASTRA_VFS_OP_SEEK, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_INVALID && fake.description_calls == calls);
+    request.flags = ASTRA_VFS_FILE_STATUS_MASK;
+    request.offset = ASTRA_VFS_OPEN_APPEND;
+    fake.description_result = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_APPEND;
+    fixture_dispatch(&service, ASTRA_VFS_OP_FILE_FLAGS, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && reply.open_flags == fake.description_result &&
+           fake.description_argument == ASTRA_VFS_OPEN_APPEND &&
+           fake.description_mask == ASTRA_VFS_FILE_STATUS_MASK);
+    const uint32_t bad_flags[] = {0u, UINT32_MAX, ASTRA_VFS_OPEN_READ};
+    for (uint32_t index = 0u; index < 3u; ++index) {
+        fake.description_result = bad_flags[index];
+        fixture_dispatch(&service, ASTRA_VFS_OP_FILE_FLAGS, &request, &reply);
+        assert(reply.status == ASTRA_VFS_ERR_PROTOCOL && reply.open_flags == 0u);
+    }
+    request.flags = ASTRA_VFS_OPEN_WRITE;
+    request.offset = 0u;
+    calls = fake.description_calls;
+    fixture_dispatch(&service, ASTRA_VFS_OP_FILE_FLAGS, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_INVALID && fake.description_calls == calls);
+    request.flags = ASTRA_VFS_OPEN_APPEND;
+    request.offset = UINT64_C(1) << 32;
+    fixture_dispatch(&service, ASTRA_VFS_OP_FILE_FLAGS, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_INVALID && fake.description_calls == calls);
+    request.flags = 0u;
+    request.offset = 9u;
+    request.length = 3u;
+    fake.position = 12u;
+    fake.description_result = 1u;
+    fixture_dispatch(&service, ASTRA_VFS_OP_POSITION_ADVANCE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && reply.position == 12u && reply.count == 1u &&
+           fake.description_argument == 9u && fake.description_mask == 3u);
+    fake.position = 15u;
+    fake.description_result = 0u;
+    fixture_dispatch(&service, ASTRA_VFS_OP_POSITION_ADVANCE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && reply.position == 15u && reply.count == 0u);
+    const struct { uint64_t position; uint32_t advanced; } bad_advances[] = {
+        {UINT64_MAX, 1u}, {12u, 2u}, {11u, 1u}, {9u, 0u}
+    };
+    for (uint32_t index = 0u; index < 4u; ++index) {
+        fake.position = bad_advances[index].position;
+        fake.description_result = bad_advances[index].advanced;
+        fixture_dispatch(&service, ASTRA_VFS_OP_POSITION_ADVANCE, &request, &reply);
+        assert(reply.status == ASTRA_VFS_ERR_PROTOCOL && reply.position == 0u && reply.count == 0u);
+    }
+    request.offset = INT64_MAX;
+    calls = fake.description_calls;
+    fixture_dispatch(&service, ASTRA_VFS_OP_POSITION_ADVANCE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_INVALID && fake.description_calls == calls);
+    request.offset = 9u;
+    request.write_limit = 1u;
+    fixture_dispatch(&service, ASTRA_VFS_OP_POSITION_ADVANCE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_INVALID && fake.description_calls == calls);
+    request.write_limit = 0u;
+    request.file ^= UINT32_C(1) << 16;
+    fixture_dispatch(&service, ASTRA_VFS_OP_POSITION_ADVANCE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_BAD_HANDLE && fake.description_calls == calls);
+    request.file = file;
+    request.session = open_session();
+    fixture_dispatch(&service, ASTRA_VFS_OP_POSITION_ADVANCE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_ACCESS && fake.description_calls == calls);
+    astra_vfs_service_release_session(&service, request.session);
+    request.session = session;
+    descriptions.seek = NULL;
+    descriptions.file_flags = NULL;
+    descriptions.position_advance = NULL;
+    fixture_dispatch(&service, ASTRA_VFS_OP_POSITION_ADVANCE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_UNSUPPORTED && fake.description_calls == calls);
+    request.length = 0u;
+    request.flags = 0u;
+    request.offset = 0u;
+    fixture_dispatch(&service, ASTRA_VFS_OP_SEEK, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_UNSUPPORTED && fake.description_calls == calls);
+    fixture_dispatch(&service, ASTRA_VFS_OP_FILE_FLAGS, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_UNSUPPORTED && fake.description_calls == calls);
+    astra_vfs_service_release_session(&service, session);
+}
+
 static void test_service_io_uses_backend_position(void)
 {
     AstraVfsRequest request;
@@ -3217,6 +3373,7 @@ static void test_service_io_uses_backend_position(void)
 int
 main(void)
 {
+    test_service_description_controls_use_backend_state();
     test_service_io_uses_backend_position();
     test_direct_truncate_waits_for_mutation_barrier();
     test_session_observer();

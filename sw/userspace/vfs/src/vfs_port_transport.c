@@ -1654,9 +1654,8 @@ astra_vfs_port_read_cached_position(AstraVfsClient *client, AstraVfsFile file,
                                            &request, NULL, &reply);
         if (status == ASTRA_VFS_OK) status = reply.status;
         if (status != ASTRA_VFS_OK) return status;
-        if (reply.position > INT64_MAX || reply.count > 1u ||
-            (reply.count ? reply.position != expected + copied :
-                           reply.position == expected))
+        if (!astra_vfs_position_advance_valid(expected, copied,
+                reply.position, reply.count))
             return ASTRA_VFS_ERR_PROTOCOL;
         *position = reply.position;
         if (reply.count != 0u) {

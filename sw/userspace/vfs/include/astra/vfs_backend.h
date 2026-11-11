@@ -232,6 +232,20 @@ struct AstraVfsBackend {
     void *context;
 };
 
+/* Conditional advance reports either its exact commit or a different cursor. */
+static inline int astra_vfs_position_advance_valid(uint64_t expected,
+    uint32_t length, uint64_t position, uint32_t advanced)
+{
+    return expected <= INT64_MAX && length <= INT64_MAX - expected &&
+        position <= INT64_MAX && advanced <= 1u &&
+        (advanced ? position == expected + length : position != expected);
+}
+
+/* Caller authenticates and pins node; the backend owns its cursor and flags. */
+uint32_t astra_vfs_backend_description_operation(const AstraVfsBackend *backend,
+    uintptr_t node, uint32_t operation, const AstraVfsRequest *request,
+    AstraVfsReply *reply);
+
 /* Both inline and area transfers obey the same description contract. */
 static inline uint32_t
 astra_vfs_backend_read_position(const AstraVfsBackend *backend,

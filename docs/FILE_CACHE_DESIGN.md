@@ -8,6 +8,46 @@ ordinary writes still bypass mapped resident frames. Dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Service description controls, 2026-11-11: SEEK, FILE_FLAGS and
+POSITION_ADVANCE now pass through the existing service handle/session
+checks and file acquisition before reaching the backend. The direct adapter
+uses the same dispatch. Cursor position and mutable status flags stay in
+the provider description; the service does not copy either state. Unknown
+flags, attempted access-mode changes, unused fields and offset overflow are
+refused before backend I/O. Successful replies publish only checked positions,
+status flags and conditional-advance outcomes. One shared predicate now
+validates conditional cursor advancement in the backend, dispatch and cached
+read client, replacing duplicate comparisons.
+
+Haiku `src/system/kernel/fs/fd.cpp:934-950` pins the descriptor while seeking;
+`src/system/kernel/fs/vfs.cpp:6417-6445` limits mutable flags to append and
+nonblocking state. Astra keeps its existing generation-checked acquisition
+and provider-owned cursor/status flags rather than another descriptor copy.
+No public API/export, ABI, protocol, lock, worker or kernel/ROM change is
+introduced. Share/adopt still need scoped requester/root authority before
+ordinary I/O can move behind the canonical cache owner.
+
+Full VFS target/host and ASan/UBSan gates pass. The service test covers pins,
+negative seek deltas, malformed results, mutable flag masks, conditional
+commit/mismatch, overflow, stale/cross-session handles and missing callbacks.
+Four private mutations losing pins, seek-result bounds, input masks or advance
+result checks are rejected. The existing native description-io case now also
+seeks and resets a real provider cursor, commits and loses conditional advances,
+and sets/clears append flags before the sequential I/O checks. Beast passes
+that case, shared-description, append-race, page-writeback, file-map and basic,
+then provider fsck. DE25 passes all six plus cache-pressure, area-range,
+durable-save, exec-inherit and alias-identity through native Terminal. Startup
+heartbeat advances before stage 8; observer, native gate and 600-second trial
+all exit zero without panic/degraded markers. Candidate release is
+`47978c243d66d43f1fd922b31b1d00eba173dcef39a231d6e59cd479f0fa4b26`.
+Archive hashes, paired private settings/key and read-only fsck pass. The final
+native/test patch exactly matches the deployed candidate. Private trial state
+is removed; selected services return to stage 8 with zero restarts, loop0 only
+and 8.5 GiB free. Production data was not opened by trial tooling. Fixture
+write-limit and Kit provider-selection mistakes are retained in evidence;
+product validation was not relaxed. Evidence:
+`/home/barry/astra-evidence/vfs-description-controls-20261111/`.
+
 Service description I/O, 2026-11-11: the generic VFS service now accepts the
 existing sequential read/write flags and returns the backend's resulting
 position for inline and shared-area reads. Positioned and retained reads
@@ -1263,6 +1303,17 @@ those pages and `src/system/kernel/vm/vm_page_writer.cpp` handles dirty-page
 writeback. Astra adapts that ownership to its native area, VFS service, and
 existing pressure worker.
 
+Moving ordinary I/O behind this owner must preserve the grant's rooted
+backend, not substitute the volume service's whole-volume backend. The current
+grant port deliberately refuses data operations for that reason. Session/file
+context must retain the scoped backend through client close and cache lifetime.
+Provider share tokens remain bound to their provider session; forwarding a
+volume-wide service token is not equivalent authority. Provider-side opens
+and retained cache references must still attribute actual native requesters
+for quotas, process cleanup, `lsof` and safe removal. The service's own PID
+cannot stand in for every application. These are migration requirements,
+not authorization to expose the existing raw data handlers on grant ports.
+
 The VFS service creates one reserved area per cache object and binds its own
 port's send endpoint and a nonzero, service-owned cache cookie to that area.
 VFS must generation-tag the cookie and avoid reuse while an old area or
@@ -1418,3 +1469,14 @@ once; the lookup alone sends no message and resumes no fault.
    DE25 release trial with concurrent readers/writers, external invalidation,
    pressure, and safe removal. Compare cycle budgets with the baseline and
    inspect generated MC68040 code before any assembly optimization.
+
+Current remaining integration gates (2026-11-11):
+
+| Gate | Current boundary and required proof |
+|---|---|
+| Scoped mutation ownership | `vfs_client.c` and bulk writes still call the direct provider, then send FILE_MUTATED. Grant ports still refuse data operations. Bind canonical I/O to the actual grant root/requester, preserve backend contexts through retained files, and prove cross-grant refusal and shared-description ordering. |
+| Cache writeback | Native dirty/snapshot/completion and one positioned page write/sync are qualified. Connect ordinary writes and mapped modifications to those same owner pages; bounded writeback, sync/unmap/close error handling and dirty retention must pass together. A helper test alone does not qualify this gate. |
+| Mapping completeness | `posix/src/file.c` permits only PROT_READ file mappings and complete unmap; there is no POSIX msync implementation. Shared writable, private COW, anonymous and partial-unmap behavior must adapt to native VM facilities, with isolation, lifetime and failure tests before removing guards. |
+| EOF and external conflicts | Truncate/extend, partial final pages and faults beyond EOF need complete mapping tests. External NODE/GAP changes must invalidate clean pages while retaining locally dirty data and reporting conflicts; post-write invalidation alone is insufficient. |
+| Mapped-user attribution | `hostfs_file_area` currently discards its requester argument and adopts a provider reference in HostFS. Verify exact client/mapping attribution after file close and fork, then safe-unmount/lsof/UI explanations; a reference count or HostFS-owned descriptor alone cannot prove who is using a file. |
+| Final release | Run concurrent native/POSIX I/O, provider loss, external changes, pressure, durability and mapped-user removal on one coherent DE25 candidate. Complete the still-unperformed literal USB cable replug gate when the user is available; preserve production data and clean trial storage. |

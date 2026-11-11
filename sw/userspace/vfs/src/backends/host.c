@@ -952,8 +952,7 @@ static uint32_t host_position_advance(void *context, uintptr_t node,
         uint64_t observed = ((uint64_t)request.command->value_hi << 32) |
                             request.command->value_lo;
         uint32_t committed = request.command->result_value;
-        if (observed > INT64_MAX || committed > 1u ||
-            (committed ? observed != expected + length : observed == expected))
+        if (!astra_vfs_position_advance_valid(expected, length, observed, committed))
             return ASTRA_VFS_ERR_PROTOCOL;
         *position = observed;
         *advanced = committed;

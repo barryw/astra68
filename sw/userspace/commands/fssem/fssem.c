@@ -2421,6 +2421,32 @@ static int case_description_io(const char *directory)
     astra_vfs_service_dispatch(&core, ASTRA_VFS_OP_OPEN, &request, &transfer, &reply);
     if (reply.status != ASTRA_VFS_OK) goto done;
     file = reply.file;
+    stage = "description controls";
+    request = (AstraVfsRequest){.size = ASTRA_VFS_REQUEST_SIZE, .version = ASTRA_VFS_VERSION,
+        .session = session, .file = file, .offset = (uint64_t)(int64_t)-2, .flags = 2u};
+    astra_vfs_service_dispatch(&core, ASTRA_VFS_OP_SEEK, &request, NULL, &reply);
+    if (reply.status != ASTRA_VFS_OK || reply.position != 4u) goto done;
+    request.offset = 4u;
+    request.flags = 0u;
+    request.length = 1u;
+    astra_vfs_service_dispatch(&core, ASTRA_VFS_OP_POSITION_ADVANCE, &request, NULL, &reply);
+    if (reply.status != ASTRA_VFS_OK || reply.count != 1u || reply.position != 5u) goto done;
+    astra_vfs_service_dispatch(&core, ASTRA_VFS_OP_POSITION_ADVANCE, &request, NULL, &reply);
+    if (reply.status != ASTRA_VFS_OK || reply.count != 0u || reply.position != 5u) goto done;
+    request.length = 0u;
+    request.flags = ASTRA_VFS_FILE_STATUS_MASK;
+    request.offset = ASTRA_VFS_OPEN_APPEND;
+    astra_vfs_service_dispatch(&core, ASTRA_VFS_OP_FILE_FLAGS, &request, NULL, &reply);
+    if (reply.status != ASTRA_VFS_OK ||
+        (reply.open_flags & (ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_FILE_STATUS_MASK)) !=
+        (ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_APPEND)) goto done;
+    request.offset = 0u;
+    astra_vfs_service_dispatch(&core, ASTRA_VFS_OP_FILE_FLAGS, &request, NULL, &reply);
+    if (reply.status != ASTRA_VFS_OK || (reply.open_flags & ASTRA_VFS_FILE_STATUS_MASK) != 0u)
+        goto done;
+    request.flags = 0u;
+    astra_vfs_service_dispatch(&core, ASTRA_VFS_OP_SEEK, &request, NULL, &reply);
+    if (reply.status != ASTRA_VFS_OK || reply.position != 0u) goto done;
     stage = "inline sequential read";
     request = (AstraVfsRequest){.size = ASTRA_VFS_REQUEST_SIZE, .version = ASTRA_VFS_VERSION,
         .session = session, .file = file, .offset = 99u, .length = 2u,

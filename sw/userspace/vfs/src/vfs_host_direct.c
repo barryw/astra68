@@ -534,20 +534,10 @@ uint32_t astra_vfs_host_direct_transport(
         break;
     }
     case ASTRA_VFS_OP_SEEK:
-        reply->status = ops->seek == NULL ? ASTRA_VFS_ERR_UNSUPPORTED :
-            request->flags > 2u ? ASTRA_VFS_ERR_INVALID :
-            ops->seek(backend.context, request->file,
-                      (int64_t)request->offset, request->flags,
-                      &reply->position);
-        break;
+    case ASTRA_VFS_OP_FILE_FLAGS:
     case ASTRA_VFS_OP_POSITION_ADVANCE:
-        reply->status = request->flags != 0u || request->offset > INT64_MAX ||
-            request->length > INT64_MAX - request->offset ||
-            request->write_limit != 0u ? ASTRA_VFS_ERR_INVALID :
-            ops->position_advance == NULL ? ASTRA_VFS_ERR_UNSUPPORTED :
-            ops->position_advance(backend.context, request->file,
-                request->offset, request->length, &reply->position,
-                &reply->count);
+        reply->status = astra_vfs_backend_description_operation(&backend,
+            request->file, operation, request, reply);
         break;
     case ASTRA_VFS_OP_SHARE:
         reply->status = ops->share == NULL ? ASTRA_VFS_ERR_UNSUPPORTED :
@@ -567,12 +557,6 @@ uint32_t astra_vfs_host_direct_transport(
             reply->file = (AstraVfsFile)node;
         break;
     }
-    case ASTRA_VFS_OP_FILE_FLAGS:
-        reply->status = ops->file_flags == NULL ? ASTRA_VFS_ERR_UNSUPPORTED :
-            request->offset > UINT32_MAX ? ASTRA_VFS_ERR_INVALID :
-            ops->file_flags(backend.context, request->file, request->flags,
-                            (uint32_t)request->offset, &reply->open_flags);
-        break;
     case ASTRA_VFS_OP_SYNC:
         reply->status = ops->sync(backend.context, request->file);
         break;
