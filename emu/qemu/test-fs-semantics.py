@@ -53,7 +53,7 @@ CASES = ["basic", "durable-save", "volume-catalog", "volume-root", "raw-lane", "
          "raw-onward", "raw-orphans", "raw-orphans-death",
          "symlink-in-volume", "symlink-cross-volume", "dotdot-at-root",
          "escape-relative", "link-edges", "alias-identity", "continuation-limit", "path-boundaries",
-         "shared-description", "file-map", "page-writeback", "cache-pressure", "area-range", "exec-inherit", "append-race", "file-size-limit", "cwd-identity",
+         "shared-description", "file-map", "page-writeback", "cache-pressure", "description-io", "area-range", "exec-inherit", "append-race", "file-size-limit", "cwd-identity",
          "many-lanes", "owner-sessions", "owner-files"]
 # Orchestrated checks: name -> function(machine, provider_mount). Later tasks
 # add entries; each prints "PASS <name>" or calls fail().

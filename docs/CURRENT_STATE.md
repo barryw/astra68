@@ -2,6 +2,41 @@
 
 Status: active continuation map, 2026-11-11
 
+Service-side description I/O qualified, 2026-11-11. The generic core previously
+refused sequential reads/writes even when its backend already owned shared
+description positions. It now reuses the existing backend read-position
+helper and forwards sequential write flags, keeping positioned/retained reads
+independent of that cursor. The private bulk-read entry point and its sole
+port caller are updated together; the superseded private API is deleted.
+Malformed bulk requests no longer make a redundant inline dispatch before
+returning INVALID. Owner checks already prevented that dispatch from reading;
+tests now check unchanged dispatch accounting as well as unchanged backend
+state. Haiku fs/fd.cpp:715-845 and cache/file_cache.cpp:760-920 guided cursor
+ownership and shared I/O dispatch; no second cursor, lock or public export is added.
+A focused test fails before the change. Full VFS target/host and sanitizer
+gates pass, including service/port sequence, append, EOF and malformed-result
+cases; four private mutations are rejected. The redundant-dispatch mutation
+first escaped byte-only assertions; the strengthened test rejects it and
+both logs are retained. Native fssem description-io compiles the exact private core
+and existing path/UTF-8 sources against real provider descriptions. Beast
+passes description-io, page-writeback, basic, shared-description, file-map and
+cache-pressure, then provider fsck. DE25 passes those cases plus area-range,
+durable-save, exec-inherit and alias-identity through native Terminal. Its
+600-second trial, startup observer and native gate all return zero with no
+panic/degraded markers. Only Filesystem Kit, HostFS, Events and fssem are
+replaced in a disposable pre-migration image; kernel/ROM are unchanged.
+Candidate release:
+439ad3e0ce8ae0c32eed609d94a680c8571741d30af0cf8284cad94806bfa752.
+Archive hashes match the image and paired private settings/key; read-only
+fsck passes. Private trial files are removed. Selected services are restored
+at stage 8 with zero restarts, only loop0 remains and 8.5 GiB is free.
+Production image/user data was not opened by trial tooling. Final code patch
+differs from the deployed patch only in added port-test accounting assertions;
+all native source sections match. Evidence:
+/home/barry/astra-evidence/vfs-description-io-20261111/.
+This repairs an owner-path prerequisite; ordinary cached mutation ownership,
+writeback/conflicts and writable/private file-map release gates remain open.
+
 Native writable pager views qualified, 2026-11-11. First-write faults reuse
 native dirty tracking and checked shared-page protection; pager pages start
 read-only and snapshot sealing traps later modifications. Permission checks

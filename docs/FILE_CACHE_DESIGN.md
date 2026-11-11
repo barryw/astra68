@@ -8,6 +8,51 @@ ordinary writes still bypass mapped resident frames. Dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Service description I/O, 2026-11-11: the generic VFS service now accepts the
+existing sequential read/write flags and returns the backend's resulting
+position for inline and shared-area reads. Positioned and retained reads
+still leave the shared cursor unchanged. It reuses
+`astra_vfs_backend_read_position`; the superseded private bulk-read API and
+its callers are replaced together. No public ABI, protocol, second cursor,
+worker or lock is added. The backend remains the sole description-position
+and append owner. This repairs an owner-path prerequisite, not canonical
+cache mutation ownership or writable file mapping support.
+
+Haiku `src/system/kernel/fs/fd.cpp:715-845` distinguishes sequential from
+positioned I/O, and `src/system/kernel/cache/file_cache.cpp:760-920` joins
+cache I/O at one shared boundary. Astra adopts those responsibilities while
+retaining its existing provider-owned cursor and atomic append implementation;
+it does not copy Haiku's separate descriptor-position bookkeeping. Malformed
+bulk requests now return INVALID without a redundant inline dispatch. Owner
+checks already prevented that dispatch from reading bytes; the regression
+checks both unchanged backend state and unchanged dispatch accounting.
+
+Full VFS host/MC68040 and ASan/UBSan gates pass. Focused service and port
+tests cover sequential position, positioned independence, bounded append,
+EOF, malformed results, unsupported backends and invalid bulk requests.
+Four private mutations restoring sequential read/write refusals, dropping
+bulk position or restoring redundant bulk dispatch are rejected. The fourth
+initially escaped byte-I/O-only assertions; explicit dispatch accounting now
+detects it, with both logs kept.
+The native `fssem description-io` fixture compiles the exact private core
+and existing path/UTF-8 sources through the existing extra-source seam, then
+uses real provider descriptions through client close and retained reads.
+Beast passes this case plus page-writeback, basic, shared-description,
+file-map and cache-pressure, followed by provider fsck. Only Filesystem Kit,
+HostFS, Events and fssem are replaced in the disposable image; kernel and
+ROM stay unchanged. DE25 passes all six cases plus area-range, durable-save,
+exec-inherit and alias-identity through native Terminal, then completes its
+600-second trial without panic/degraded markers. Observer, native gate and
+trial all exit zero. The archive includes paired private settings/key,
+passes hash verification and read-only fsck, and has matching native source
+sections; the final patch adds only port-test accounting assertions. Private
+trial state is removed; selected services are restored at stage 8 with zero
+restarts, loop0 only and 8.5 GiB free. No production image or user data was
+opened by trial tooling. Candidate release is
+`439ad3e0ce8ae0c32eed609d94a680c8571741d30af0cf8284cad94806bfa752`.
+Evidence:
+`/home/barry/astra-evidence/vfs-description-io-20261111/`.
+
 Native writable pager views, 2026-11-11: area mapping now admits an authorized
 WRITE view. Pager pages start protected in both creation orders (publication
 before or after the first map). The existing fault path checks the mapping's

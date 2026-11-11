@@ -896,6 +896,7 @@ astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
 static uint32_t backend_activity;
 static uintptr_t backend_readdir_directory;
 static uint32_t backend_read_calls;
+static uint64_t backend_position;
 
 static uint32_t
 backend_open(void *context, const char *path, uint32_t flags,
@@ -942,6 +943,15 @@ backend_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
     return ASTRA_VFS_OK;
 }
 
+static uint32_t backend_read_sequential(void *context, uintptr_t node, void *buffer,
+    uint32_t length, uint32_t *moved, uint64_t *position)
+{
+    uint32_t status = backend_read(context, node, backend_position, buffer, length, moved);
+    if (status == ASTRA_VFS_OK) backend_position += *moved;
+    *position = backend_position;
+    return status;
+}
+
 /*
  * The core refuses a backend with a hole in it, so the operations this test
  * does not exercise still have to be there. They refuse rather than pretend:
@@ -958,6 +968,7 @@ backend_write(void *context, uintptr_t node, uint64_t offset,
     (void)node;
     if (length > sizeof(backend_written))
         return ASTRA_VFS_ERR_LIMIT;
+    if ((flags & ASTRA_VFS_IO_SEQUENTIAL) != 0u) offset = backend_position;
     memcpy(backend_written, buffer, length);
     backend_write_offset = offset;
     backend_write_length = length;
@@ -965,6 +976,7 @@ backend_write(void *context, uintptr_t node, uint64_t offset,
     *moved = length;
     *position = (flags & ASTRA_VFS_WRITE_APPEND) != 0u ?
                     900u + length : offset + length;
+    if ((flags & ASTRA_VFS_IO_SEQUENTIAL) != 0u) backend_position = *position;
     return ASTRA_VFS_OK;
 }
 
@@ -1903,6 +1915,7 @@ static void
 test_bulk_read_crosses_once_through_a_shared_area(void)
 {
     AstraVfsPortService host;
+    AstraVfsBackendOps descriptions = backend_ops;
     AstraVfsClient remote;
     AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
     uint32_t service_handle;
@@ -1911,6 +1924,8 @@ test_bulk_read_crosses_once_through_a_shared_area(void)
 
     mock_reset();
     service_start();
+    descriptions.read_sequential = backend_read_sequential;
+    service.backend.ops = &descriptions;
     service_handle = mock_open(MOCK_QUEUE_MAX);
     assert(astra_vfs_port_service_init(&host, service_handle, &service));
     served = &host;
@@ -1923,6 +1938,28 @@ test_bulk_read_crosses_once_through_a_shared_area(void)
     for (uint32_t index = 0u; index < moved; ++index)
         assert(bytes[index] == (uint8_t)(5u + index));
     assert(host.area_addresses[0] == current_lane(&remote)->area_address);
+    AstraVfsRequest request = {.size = ASTRA_VFS_REQUEST_SIZE, .version = ASTRA_VFS_VERSION,
+        .session = remote.session, .file = file, .offset = 99u,
+        .flags = ASTRA_VFS_IO_SEQUENTIAL, .length = 4u};
+    AstraVfsReply reply;
+    backend_position = 11u;
+    assert(astra_vfs_port_transport(&remote, ASTRA_VFS_OP_READ_AREA,
+        &request, NULL, &reply) == ASTRA_VFS_OK);
+    assert(reply.status == ASTRA_VFS_OK && reply.count == 4u && reply.position == 15u &&
+           backend_position == 15u && ((const uint8_t *)current_lane(&remote)->area_address)[0] == 11u);
+    uint32_t reads = backend_read_calls;
+    uint32_t dispatched = service.stats.requests;
+    request.length = current_lane(&remote)->area_size + 1u;
+    assert(astra_vfs_port_transport(&remote, ASTRA_VFS_OP_READ_AREA,
+        &request, NULL, &reply) == ASTRA_VFS_OK);
+    assert(reply.status == ASTRA_VFS_ERR_INVALID && backend_read_calls == reads &&
+           backend_position == 15u && service.stats.requests == dispatched);
+    request.length = 4u;
+    request.flags = UINT32_MAX;
+    assert(astra_vfs_port_transport(&remote, ASTRA_VFS_OP_READ_AREA,
+        &request, NULL, &reply) == ASTRA_VFS_OK);
+    assert(reply.status == ASTRA_VFS_ERR_INVALID && backend_read_calls == reads &&
+           backend_position == 15u && service.stats.requests == dispatched);
     assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
     assert(lanes_have_no_areas(&remote));
     assert(mock_area_maps == 0u);

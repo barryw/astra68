@@ -3044,16 +3044,13 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
             }
         } else if (operation == ASTRA_VFS_OP_READ_AREA &&
                    slot >= 0) {
-            AstraVfsRequest piece = incoming->request;
             uint32_t total = 0u;
+            uint64_t position = incoming->request.offset;
 
             if (lease.area == NULL ||
                 incoming->request.length == 0u ||
                 incoming->request.length > lease.area_size ||
-                incoming->request.flags != 0u) {
-                astra_vfs_service_dispatch(host->service,
-                                           ASTRA_VFS_OP_READ,
-                                           &piece, NULL, &outgoing->reply);
+                (incoming->request.flags & ~ASTRA_VFS_IO_SEQUENTIAL) != 0u) {
                 outgoing->reply.status = ASTRA_VFS_ERR_INVALID;
                 outgoing->reply.count = 0u;
             } else {
@@ -3063,16 +3060,16 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
                  * 86 dispatches and 32 KiB of byte-at-a-time copying; the area
                  * saved the messages and none of the work underneath them.
                  */
-                outgoing->reply.status = astra_vfs_service_read_into(
+                outgoing->reply.status = astra_vfs_service_read_position_into(
                     host->service, incoming->request.session,
                     incoming->request.file, incoming->request.offset,
+                    incoming->request.flags,
                     lease.area,
-                    incoming->request.length, &total);
+                    incoming->request.length, &total, &position);
                 outgoing->reply.count =
                     outgoing->reply.status == ASTRA_VFS_OK ? total : 0u;
                 if (outgoing->reply.status == ASTRA_VFS_OK)
-                    outgoing->reply.position = incoming->request.offset + total;
-                (void)piece;
+                    outgoing->reply.position = position;
             }
         } else if (operation == ASTRA_VFS_OP_WRITE_AREA && slot >= 0) {
             uint32_t total = 0u;

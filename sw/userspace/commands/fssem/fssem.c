@@ -2374,6 +2374,101 @@ done:
     return result == 0 ? 0 : fail("page-writeback %s", stage);
 }
 
+static int case_description_io(const char *directory)
+{
+    AstraProcessFilesystem native = ASTRA_PROCESS_FILESYSTEM_INIT;
+    AstraFile original = ASTRA_FILE_INIT;
+    AstraVfsService core = {0};
+    AstraVfsSessionSlot sessions[1] = {0};
+    AstraVfsOpenFile files[1] = {0};
+    AstraVfsRequest request = {.size = ASTRA_VFS_REQUEST_SIZE,
+        .version = ASTRA_VFS_VERSION, .write_limit = UINT64_MAX};
+    AstraVfsReply reply;
+    AstraVfsTransfer transfer = {0};
+    AstraVfsClient *client = NULL;
+    AstraVfsFile file = 0u, retained = 0u;
+    uint32_t session = 0u, moved = 0u, used = 0u;
+    uint64_t position = 0u;
+    char path[192], wire[192], bytes[16];
+    uint8_t paths[sizeof(wire)];
+    int entered = 0, ready = 0, result = 2;
+    const char *stage = "create";
+
+    join(path, sizeof(path), directory, "description-io");
+    wire_path(wire, sizeof(wire), directory, "description-io");
+    if (write_text(path, "abcdef", O_WRONLY | O_CREAT | O_EXCL) != 0 ||
+        astra_process_filesystem_open(&native, astra_posix_startup()) != ASTRA_VFS_OK ||
+        astra_filesystem_open(&native.filesystem, path,
+            ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE, &original) != ASTRA_VFS_OK)
+        goto done;
+    client = original._private_client;
+    if (client == NULL || client->direct_backend_enter == NULL ||
+        client->direct_backend_leave == NULL ||
+        client->direct_backend_enter(client) != ASTRA_VFS_OK) goto done;
+    entered = 1;
+    stage = "service admission";
+    if (!astra_vfs_service_init(&core, client->direct_backend_ops,
+        client->direct_backend_context, sessions, 1u, files, 1u)) goto done;
+    ready = 1;
+    astra_vfs_service_dispatch(&core, ASTRA_VFS_OP_HELLO, &request, NULL, &reply);
+    if (reply.status != ASTRA_VFS_OK) goto done;
+    session = request.session = reply.session;
+    request.flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE;
+    if (astra_vfs_path_pack(wire, NULL, paths, sizeof(paths), &request.body.paths, &used) !=
+        ASTRA_VFS_OK) goto done;
+    transfer.input = paths;
+    transfer.input_size = used;
+    astra_vfs_service_dispatch(&core, ASTRA_VFS_OP_OPEN, &request, &transfer, &reply);
+    if (reply.status != ASTRA_VFS_OK) goto done;
+    file = reply.file;
+    stage = "inline sequential read";
+    request = (AstraVfsRequest){.size = ASTRA_VFS_REQUEST_SIZE, .version = ASTRA_VFS_VERSION,
+        .session = session, .file = file, .offset = 99u, .length = 2u,
+        .flags = ASTRA_VFS_IO_SEQUENTIAL, .write_limit = UINT64_MAX};
+    astra_vfs_service_dispatch(&core, ASTRA_VFS_OP_READ, &request, NULL, &reply);
+    if (reply.status != ASTRA_VFS_OK || reply.count != 2u || reply.position != 2u ||
+        memcmp(reply.payload, "ab", 2u) != 0) goto done;
+    stage = "inline sequential write";
+    request.length = 1u;
+    request.body.payload[0] = 'X';
+    astra_vfs_service_dispatch(&core, ASTRA_VFS_OP_WRITE, &request, NULL, &reply);
+    if (reply.status != ASTRA_VFS_OK || reply.count != 1u || reply.position != 3u) goto done;
+    stage = "positioned read";
+    if (astra_vfs_service_read_position_into(&core, session, file, 0u, 0u,
+        bytes, 2u, &moved, &position) != ASTRA_VFS_OK || moved != 2u ||
+        position != 2u || memcmp(bytes, "ab", 2u) != 0) goto done;
+    stage = "bulk sequential read";
+    if (astra_vfs_service_read_position_into(&core, session, file, 99u,
+        ASTRA_VFS_IO_SEQUENTIAL, bytes, 1u, &moved, &position) != ASTRA_VFS_OK ||
+        moved != 1u || position != 4u || bytes[0] != 'd') goto done;
+    stage = "bounded sequential append";
+    if (astra_vfs_service_write_position_from(&core, session, file, 99u,
+        ASTRA_VFS_IO_SEQUENTIAL | ASTRA_VFS_WRITE_APPEND, 8u, "LMN", 3u,
+        &moved, &position) != ASTRA_VFS_OK || moved != 2u || position != 8u) goto done;
+    stage = "sequential EOF";
+    if (astra_vfs_service_read_position_into(&core, session, file, 99u,
+        ASTRA_VFS_IO_SEQUENTIAL, bytes, sizeof(bytes), &moved, &position) != ASTRA_VFS_OK ||
+        moved != 0u || position != 8u) goto done;
+    stage = "retained positioned read";
+    if (astra_vfs_service_retain_file(&core, session, file, &retained) != ASTRA_VFS_OK)
+        goto done;
+    astra_vfs_service_release_session(&core, session);
+    session = 0u;
+    if (astra_vfs_service_read_retained(&core, retained, 0u, bytes, sizeof(bytes), &moved) !=
+        ASTRA_VFS_OK || moved != 8u || memcmp(bytes, "abXdefLM", 8u) != 0) goto done;
+    result = 0;
+done:
+    if (ready && session != 0u) astra_vfs_service_release_session(&core, session);
+    if (retained != 0u) (void)astra_vfs_service_release_retained(&core, retained);
+    if (entered) client->direct_backend_leave(client);
+    if (original._private_client != NULL) (void)astra_filesystem_close(&original);
+    astra_process_filesystem_close(&native);
+    if (result == 0 && (read_text(path, bytes, sizeof(bytes)) != 8 ||
+        memcmp(bytes, "abXdefLM", 8u) != 0)) { result = 2; stage = "backing bytes"; }
+    (void)unlink(path);
+    return result == 0 ? 0 : fail("description-io %s", stage);
+}
+
 static int file_map_gate(const char *directory)
 {
     AstraProcessFilesystem native = ASTRA_PROCESS_FILESYSTEM_INIT;
@@ -2987,6 +3082,7 @@ static const struct {
     {"file-map", file_map_gate},
     {"page-writeback", page_writeback_gate},
     {"cache-pressure", case_cache_pressure},
+    {"description-io", case_description_io},
     {"exec-inherit", case_exec_inherit},
     {"append-race", case_append_race},
     {"file-size-limit", case_file_size_limit},

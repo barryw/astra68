@@ -983,19 +983,20 @@ handle_open(AstraVfsService *service, uint32_t session,
 
 static uint32_t
 read_acquired_file(AstraVfsService *service, AstraVfsOpenFile *file,
-                   uint64_t offset, void *buffer, uint32_t length,
-                   uint32_t *moved)
+                   uint64_t offset, uint32_t flags, void *buffer, uint32_t length,
+                   uint32_t *moved, uint64_t *position)
 {
     uint32_t status;
 
     state_release(service);
-    status = service->backend.ops->read(service->backend.context, file->node,
-                                        offset, buffer, length, moved);
+    status = astra_vfs_backend_read_position(&service->backend, file->node,
+        offset, flags, buffer, length, moved, position);
     if (!state_acquire(service))
         return ASTRA_VFS_ERR_IO;
     file_release(service, file);
-    if (status == ASTRA_VFS_OK && *moved > length) {
+    if (status == ASTRA_VFS_ERR_PROTOCOL) {
         *moved = 0u;
+        *position = offset;
         return ASTRA_VFS_ERR_IO;
     }
     return status;
@@ -1003,16 +1004,18 @@ read_acquired_file(AstraVfsService *service, AstraVfsOpenFile *file,
 
 static uint32_t
 read_file(AstraVfsService *service, AstraVfsOpenFile *file, uint64_t offset,
-          void *buffer, uint32_t length, uint32_t *moved)
+          uint32_t flags, void *buffer, uint32_t length, uint32_t *moved,
+          uint64_t *position)
 {
     *moved = 0u;
+    *position = offset;
     if ((file->flags & ASTRA_VFS_OPEN_READ) == 0u)
         return ASTRA_VFS_ERR_ACCESS;
     if (file->kind == ASTRA_VFS_KIND_DIRECTORY)
         return ASTRA_VFS_ERR_IS_DIR;
     if (!file_acquire(service, file))
         return ASTRA_VFS_ERR_IO;
-    return read_acquired_file(service, file, offset, buffer, length, moved);
+    return read_acquired_file(service, file, offset, flags, buffer, length, moved, position);
 }
 
 static void
@@ -1022,14 +1025,14 @@ handle_read(AstraVfsService *service, AstraVfsOpenFile *file,
     uint32_t length = request->length > ASTRA_VFS_IO_MAX ?
         ASTRA_VFS_IO_MAX : request->length;
 
-    if (request->flags != 0u) {
-        reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-        return;
+    uint32_t moved = 0u;
+    uint64_t position = request->offset;
+    reply->status = read_file(service, file, request->offset, request->flags,
+                              reply->payload, length, &moved, &position);
+    if (reply->status == ASTRA_VFS_OK) {
+        reply->count = moved;
+        reply->position = position;
     }
-    reply->status = read_file(service, file, request->offset, reply->payload,
-                              length, &reply->count);
-    if (reply->status == ASTRA_VFS_OK)
-        reply->position = request->offset + reply->count;
 }
 
 uint32_t
@@ -1101,14 +1104,14 @@ astra_vfs_service_read_path(AstraVfsService *service, const char *path,
 
 static uint32_t
 read_into_unlocked(AstraVfsService *service, uint32_t session,
-                   AstraVfsFile handle, uint64_t offset, void *buffer,
-                   uint32_t length, uint32_t *moved)
+                   AstraVfsFile handle, uint64_t offset, uint32_t flags, void *buffer,
+                   uint32_t length, uint32_t *moved, uint64_t *position)
 {
     AstraVfsSessionSlot *slot;
     AstraVfsOpenFile *file;
     uint32_t status;
 
-    if (service == NULL || buffer == NULL || moved == NULL || length == 0u) {
+    if (service == NULL || buffer == NULL || moved == NULL || position == NULL || length == 0u) {
         return ASTRA_VFS_ERR_INVALID;
     }
     *moved = 0u;
@@ -1121,13 +1124,13 @@ read_into_unlocked(AstraVfsService *service, uint32_t session,
     if (file == NULL) {
         return status;
     }
-    return read_file(service, file, offset, buffer, length, moved);
+    return read_file(service, file, offset, flags, buffer, length, moved, position);
 }
 
 uint32_t
-astra_vfs_service_read_into(AstraVfsService *service, uint32_t session,
-                            AstraVfsFile handle, uint64_t offset,
-                            void *buffer, uint32_t length, uint32_t *moved)
+astra_vfs_service_read_position_into(AstraVfsService *service, uint32_t session,
+                            AstraVfsFile handle, uint64_t offset, uint32_t flags,
+                            void *buffer, uint32_t length, uint32_t *moved, uint64_t *position)
 {
     AstraVfsSessionSlot *slot;
     uint32_t status;
@@ -1139,8 +1142,8 @@ astra_vfs_service_read_into(AstraVfsService *service, uint32_t session,
         state_release(service);
         return status;
     }
-    status = read_into_unlocked(service, session, handle, offset, buffer,
-                                length, moved);
+    status = read_into_unlocked(service, session, handle, offset, flags, buffer,
+                                length, moved, position);
     finish_session_request(service, slot);
     state_release(service);
     return status;
@@ -1223,6 +1226,7 @@ astra_vfs_service_read_retained(AstraVfsService *service,
 {
     AstraVfsOpenFile *file;
     uint32_t status;
+    uint64_t position = offset;
 
     if (service == NULL || buffer == NULL || moved == NULL || length == 0u)
         return ASTRA_VFS_ERR_INVALID;
@@ -1234,7 +1238,7 @@ astra_vfs_service_read_retained(AstraVfsService *service,
         state_release(service);
         return status;
     }
-    status = read_acquired_file(service, file, offset, buffer, length, moved);
+    status = read_acquired_file(service, file, offset, 0u, buffer, length, moved, &position);
     state_release(service);
     return status;
 }
@@ -1508,7 +1512,7 @@ write_file(AstraVfsService *service, AstraVfsOpenFile *file, uint64_t offset,
 
     *moved = 0u;
     *position = offset;
-    if ((flags & ~ASTRA_VFS_WRITE_APPEND) != 0u)
+    if ((flags & ~(ASTRA_VFS_WRITE_APPEND | ASTRA_VFS_IO_SEQUENTIAL)) != 0u)
         return ASTRA_VFS_ERR_INVALID;
     if ((file->flags & ASTRA_VFS_OPEN_WRITE) == 0u)
         return ASTRA_VFS_ERR_ACCESS;

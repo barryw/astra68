@@ -228,11 +228,13 @@ uint32_t astra_vfs_service_read_path(AstraVfsService *service,
  * shared-area transfer was 86 backend calls and two byte-loop copies of every
  * byte per 16 KiB. This is the same read, with the same session, access and
  * kind checks, and without the clamp. `moved` is short at end of file.
+ * SEQUENTIAL uses the backend's shared description position; positioned reads
+ * leave that cursor unchanged. `position` reports the resulting byte offset.
  */
-uint32_t astra_vfs_service_read_into(AstraVfsService *service,
+uint32_t astra_vfs_service_read_position_into(AstraVfsService *service,
                                      uint32_t session, AstraVfsFile file,
-                                     uint64_t offset, void *buffer,
-                                     uint32_t length, uint32_t *moved);
+                                     uint64_t offset, uint32_t flags, void *buffer,
+                                     uint32_t length, uint32_t *moved, uint64_t *position);
 
 /* Cache owners can retain an open description across client close. Each
  * successful retain needs one release. Tokens stay internal to VFS. */

@@ -84,6 +84,9 @@ typedef struct FakeFs {
     uint32_t write_bump_timestamps;
     uint32_t stat_calls;
     uint32_t stat_fail_call;
+    uint64_t position;
+    uint32_t sequential_reads;
+    uint64_t read_report_position;
 } FakeFs;
 
 static FakeFs fake;
@@ -259,6 +262,17 @@ static uint32_t fake_change_snapshot(void *context, uint64_t *nodes,
     return ASTRA_VFS_OK;
 }
 
+static uint32_t fake_read_sequential(void *context, uintptr_t node, void *buffer,
+    uint32_t length, uint32_t *moved, uint64_t *position)
+{
+    ++fake.sequential_reads;
+    uint32_t status = fake_read(context, node, fake.position, buffer, length, moved);
+    if (status == ASTRA_VFS_OK) fake.position += *moved;
+    *position = fake.position;
+    if (fake.read_report_position != 0u) *position = fake.read_report_position;
+    return status;
+}
+
 static uint32_t
 fake_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags, uint64_t max_end,
            const void *buffer, uint32_t length, uint32_t *moved,
@@ -267,6 +281,8 @@ fake_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags, uint6
     FakeNode *found = (FakeNode *)node;
 
     (void)context;
+    if ((flags & ASTRA_VFS_IO_SEQUENTIAL) != 0u)
+        offset = fake.position;
     if ((flags & ASTRA_VFS_WRITE_APPEND) != 0u)
         offset = found->size;
     *moved = 0u;
@@ -293,6 +309,8 @@ fake_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags, uint6
     }
     *moved = length;
     *position = offset + length;
+    if ((flags & ASTRA_VFS_IO_SEQUENTIAL) != 0u)
+        fake.position = *position;
     if (fake.write_bad_position) ++*position;
     if (fake.write_overreport)
         ++*moved;
@@ -3106,9 +3124,100 @@ static void test_page_writeback_preserves_eof_and_reports_partial_failure(void)
     assert(moved == 0u && current.kind == 0u && fake.write_calls == 5u);
 }
 
+static void test_service_io_uses_backend_position(void)
+{
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    AstraVfsBackendOps descriptions = fake_ops;
+    reset();
+    descriptions.read_sequential = fake_read_sequential;
+    service.backend.ops = &descriptions;
+    FakeNode *node = fake_create("/description-io", ASTRA_VFS_KIND_FILE);
+    assert(node != NULL);
+    memcpy(node->bytes, "abcdef", 6u);
+    node->size = 6u;
+    uint32_t session = open_session();
+    begin_request(&request, session, "/description-io");
+    request.flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE;
+    fixture_dispatch(&service, ASTRA_VFS_OP_OPEN, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    AstraVfsFile file = reply.file;
+    fake.position = 1u;
+    begin_request(&request, session, NULL);
+    request.file = file;
+    request.flags = ASTRA_VFS_IO_SEQUENTIAL;
+    request.offset = 99u;
+    request.length = 2u;
+    fixture_dispatch(&service, ASTRA_VFS_OP_READ, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && reply.count == 2u && reply.position == 3u &&
+           memcmp(reply.payload, "bc", 2u) == 0 && fake.position == 3u && fake.sequential_reads == 1u);
+    request.length = 1u;
+    request.body.payload[0] = 'X';
+    fixture_dispatch(&service, ASTRA_VFS_OP_WRITE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && reply.count == 1u && reply.position == 4u &&
+           node->bytes[3] == 'X' && fake.position == 4u);
+    memset(&request.body, 0, sizeof(request.body));
+    request.flags = 0u;
+    request.offset = 0u;
+    request.length = 2u;
+    fixture_dispatch(&service, ASTRA_VFS_OP_READ, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && reply.position == 2u &&
+           memcmp(reply.payload, "ab", 2u) == 0 && fake.position == 4u);
+    request.flags = ASTRA_VFS_IO_SEQUENTIAL | ASTRA_VFS_WRITE_APPEND;
+    request.length = 3u;
+    request.write_limit = 8u;
+    memcpy(request.body.payload, "LMN", 3u);
+    fixture_dispatch(&service, ASTRA_VFS_OP_WRITE, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && reply.count == 2u && reply.position == 8u &&
+           node->size == 8u && memcmp(node->bytes + 6u, "LM", 2u) == 0 && fake.position == 8u);
+    uint8_t bytes[4];
+    uint32_t moved;
+    uint64_t position;
+    fake.position = 0u;
+    assert(astra_vfs_service_read_position_into(&service, session, file, 99u,
+        ASTRA_VFS_IO_SEQUENTIAL, bytes, sizeof(bytes), &moved, &position) == ASTRA_VFS_OK);
+    assert(moved == 4u && position == 4u && fake.position == 4u &&
+           memcmp(bytes, "abcX", 4u) == 0);
+    assert(astra_vfs_service_write_position_from(&service, session, file, 99u,
+        ASTRA_VFS_IO_SEQUENTIAL, UINT64_MAX, "YZ", 2u, &moved, &position) == ASTRA_VFS_OK);
+    assert(moved == 2u && position == 6u && fake.position == 6u &&
+           memcmp(node->bytes, "abcXYZLM", 8u) == 0);
+    assert(astra_vfs_service_read_position_into(&service, session, file, 0u,
+        0u, bytes, sizeof(bytes), &moved, &position) == ASTRA_VFS_OK);
+    assert(moved == 4u && position == 4u && fake.position == 6u);
+    const uint64_t bad_positions[] = {1u, UINT64_MAX};
+    for (uint32_t index = 0u; index < 2u; ++index) {
+        fake.position = 0u;
+        fake.read_report_position = bad_positions[index];
+        assert(astra_vfs_service_read_position_into(&service, session, file, 99u,
+            ASTRA_VFS_IO_SEQUENTIAL, bytes, sizeof(bytes), &moved, &position) == ASTRA_VFS_ERR_IO);
+        assert(moved == 0u && position == 99u);
+    }
+    fake.read_report_position = 0u;
+    fake.position = 0u;
+    fake.read_mode = 2u;
+    assert(astra_vfs_service_read_position_into(&service, session, file, 99u,
+        ASTRA_VFS_IO_SEQUENTIAL, bytes, sizeof(bytes), &moved, &position) == ASTRA_VFS_ERR_IO);
+    assert(moved == 0u);
+    fake.read_mode = 0u;
+    fake.position = node->size;
+    assert(astra_vfs_service_read_position_into(&service, session, file, 99u,
+        ASTRA_VFS_IO_SEQUENTIAL, bytes, sizeof(bytes), &moved, &position) == ASTRA_VFS_OK);
+    assert(moved == 0u && position == node->size && fake.position == node->size);
+    uint32_t reads = fake.sequential_reads;
+    assert(astra_vfs_service_read_position_into(&service, session, file, 99u,
+        UINT32_MAX, bytes, sizeof(bytes), &moved, &position) == ASTRA_VFS_ERR_INVALID);
+    assert(fake.sequential_reads == reads);
+    descriptions.read_sequential = NULL;
+    assert(astra_vfs_service_read_position_into(&service, session, file, 99u,
+        ASTRA_VFS_IO_SEQUENTIAL, bytes, sizeof(bytes), &moved, &position) == ASTRA_VFS_ERR_UNSUPPORTED);
+    astra_vfs_service_release_session(&service, session);
+}
+
 int
 main(void)
 {
+    test_service_io_uses_backend_position();
     test_direct_truncate_waits_for_mutation_barrier();
     test_session_observer();
     test_read_path_failures();
