@@ -1133,11 +1133,12 @@ uint32_t astra_host_scope_limit(uint32_t scope, uint32_t files);
 uint32_t astra_host_channel_kick(uint32_t channel_address,
                                  uint32_t producer_position);
 /**
- * Wait for host-channel consumer progress.
+ * Wait for host-channel consumer progress across signal delivery.
+ * The host owns the published command; this wait never resubmits it.
  * @param channel_address Address returned by astra_host_channel_open.
- * @param consumer_position Previously observed consumer position.
+ * @param consumer_position Required consumer position.
  * @param deadline_ns Absolute monotonic deadline.
- * @return ASTRA_SYSCALL_* status.
+ * @return Final ASTRA_SYSCALL_* status other than CANCELLED.
  */
 uint32_t astra_host_channel_wait(uint32_t channel_address,
                                  uint32_t consumer_position,

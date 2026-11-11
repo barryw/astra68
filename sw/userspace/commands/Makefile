@@ -134,7 +134,7 @@ fsbench_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 fssem_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 # Exercise the exact service-private I/O and pager code without public Kit exports.
 fssem_EXTRA_SOURCES := $(VFS)/src/vfs_service_core.c $(VFS)/src/vfs_file_pager.c \
-	$(VFS)/src/vfs_path.c ../../common/utf8.c
+	$(VFS)/src/vfs_path.c $(VFS)/src/vfs_local_transport.c ../../common/utf8.c
 fsprobe_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 mempressure_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 rpcpi_LIBRARIES := $(LIBC_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY)

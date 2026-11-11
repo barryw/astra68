@@ -92,6 +92,9 @@ typedef struct FakeFs {
     uint32_t description_result;
     uint32_t description_status;
     uint32_t description_calls;
+    void *expected_context;
+    uint32_t check_context;
+    uint32_t backend_calls;
 } FakeFs;
 
 static FakeFs fake;
@@ -161,6 +164,14 @@ fake_create(const char *path, uint16_t kind)
     return NULL;
 }
 
+static void check_backend_context(void *context)
+{
+    if (fake.check_context) {
+        assert(context == fake.expected_context);
+        ++fake.backend_calls;
+    }
+}
+
 static uint32_t
 fake_open(void *context, const char *path, uint32_t flags,
           uint16_t create_mode, uintptr_t *node, AstraVfsNodeInfo *info)
@@ -168,7 +179,7 @@ fake_open(void *context, const char *path, uint32_t flags,
     FakeNode *found = fake_find(path);
     int created = 0;
 
-    (void)context;
+    check_backend_context(context);
     if (found != NULL &&
         (flags & (ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_EXCLUSIVE)) ==
             (ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_EXCLUSIVE)) {
@@ -206,7 +217,7 @@ fake_close(void *context, uintptr_t node)
 {
     FakeNode *found = (FakeNode *)node;
 
-    (void)context;
+    check_backend_context(context);
     ++fake.closes;
     if (found != NULL && found->open_count > 0) {
         --found->open_count;
@@ -221,7 +232,7 @@ fake_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
     FakeNode *found = (FakeNode *)node;
     uint32_t available;
 
-    (void)context;
+    check_backend_context(context);
     if (found == fake_find("/slow"))
         hold_slow_backend();
     *moved = 0u;
@@ -258,7 +269,7 @@ fake_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
 static uint32_t fake_change_snapshot(void *context, uint64_t *nodes,
                                      uint64_t *entries)
 {
-    (void)context;
+    check_backend_context(context);
 
     if (fake.provider_status != ASTRA_VFS_OK)
         return fake.provider_status;
@@ -281,7 +292,7 @@ static uint32_t fake_read_sequential(void *context, uintptr_t node, void *buffer
 static uint32_t fake_seek(void *context, uintptr_t node, int64_t delta,
     uint32_t origin, uint64_t *position)
 {
-    (void)context;
+    check_backend_context(context);
     assert(node == (uintptr_t)&fake.nodes[0]);
     assert(service.files[0].active == 1u);
     ++fake.description_calls;
@@ -294,7 +305,7 @@ static uint32_t fake_seek(void *context, uintptr_t node, int64_t delta,
 static uint32_t fake_file_flags(void *context, uintptr_t node, uint32_t mask,
     uint32_t flags, uint32_t *result)
 {
-    (void)context;
+    check_backend_context(context);
     assert(node == (uintptr_t)&fake.nodes[0]);
     ++fake.description_calls;
     fake.description_argument = flags;
@@ -306,7 +317,7 @@ static uint32_t fake_file_flags(void *context, uintptr_t node, uint32_t mask,
 static uint32_t fake_position_advance(void *context, uintptr_t node,
     uint64_t expected, uint32_t length, uint64_t *position, uint32_t *advanced)
 {
-    (void)context;
+    check_backend_context(context);
     assert(node == (uintptr_t)&fake.nodes[0]);
     ++fake.description_calls;
     fake.description_argument = expected;
@@ -323,7 +334,7 @@ fake_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags, uint6
 {
     FakeNode *found = (FakeNode *)node;
 
-    (void)context;
+    check_backend_context(context);
     if ((flags & ASTRA_VFS_IO_SEQUENTIAL) != 0u)
         offset = fake.position;
     if ((flags & ASTRA_VFS_WRITE_APPEND) != 0u)
@@ -362,7 +373,7 @@ fake_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags, uint6
 
 static uint32_t fake_sync(void *context, uintptr_t node)
 {
-    (void)context;
+    check_backend_context(context);
     ++fake.sync_calls;
     if (fake.sync_shrink && node != 0u) --((FakeNode *)node)->size;
     if (fake.sync_drop_identity) fake.exact_identity = 0u;
@@ -373,7 +384,7 @@ static uint32_t fake_truncate(void *context, uintptr_t node, uint64_t size)
 {
     FakeNode *found = (FakeNode *)node;
 
-    (void)context;
+    check_backend_context(context);
     if (found == NULL || size > FAKE_BYTES_MAX)
         return ASTRA_VFS_ERR_INVALID;
     if (size > found->size)
@@ -387,7 +398,7 @@ fake_stat(void *context, const char *path, AstraVfsNodeInfo *info)
 {
     FakeNode *found = fake_find(path);
 
-    (void)context;
+    check_backend_context(context);
     if (strcmp(path, "/slow") == 0)
         hold_slow_backend();
     if (found == NULL) {
@@ -411,7 +422,7 @@ fake_stat_node(void *context, uintptr_t node, AstraVfsNodeInfo *info)
 {
     FakeNode *found = (FakeNode *)node;
 
-    (void)context;
+    check_backend_context(context);
     ++fake.stat_calls;
     if (fake.stat_fail_call != 0u && fake.stat_calls == fake.stat_fail_call)
         return ASTRA_VFS_ERR_IO;
@@ -457,7 +468,7 @@ terminal_readdir(void *context, uintptr_t directory, const char *path,
 {
     const char *entry;
 
-    (void)context;
+    check_backend_context(context);
     (void)directory;
     (void)path;
     ++terminal_readdir_calls;
@@ -521,7 +532,7 @@ fake_readdir(void *context, uintptr_t directory, const char *path,
 {
     uint32_t slot;
 
-    (void)context;
+    check_backend_context(context);
     (void)directory;
     (void)path;
     if (cookie > FAKE_NODE_MAX) {
@@ -556,7 +567,7 @@ fake_mkdir(void *context, const char *path, uint16_t create_mode)
 {
     FakeNode *created;
 
-    (void)context;
+    check_backend_context(context);
     if (fake_find(path) != NULL) {
         return ASTRA_VFS_ERR_EXISTS;
     }
@@ -573,7 +584,7 @@ fake_unlink(void *context, const char *path, uint32_t flags)
 {
     FakeNode *found = fake_find(path);
 
-    (void)context;
+    check_backend_context(context);
     if (found == NULL) {
         return ASTRA_VFS_ERR_NOT_FOUND;
     }
@@ -593,7 +604,7 @@ fake_rename(void *context, const char *from, const char *to)
     FakeNode *source = fake_find(from);
     FakeNode *target = fake_find(to);
 
-    (void)context;
+    check_backend_context(context);
     if (source == NULL)
         return ASTRA_VFS_ERR_NOT_FOUND;
     if (target != NULL && target != source)
@@ -614,7 +625,7 @@ fake_chmod(void *context, const char *path, uint16_t mode)
 {
     FakeNode *found = fake_find(path);
 
-    (void)context;
+    check_backend_context(context);
     if (found == NULL)
         return ASTRA_VFS_ERR_NOT_FOUND;
     found->mode = mode;
@@ -627,7 +638,7 @@ fake_readlink(void *context, const char *path, void *buffer,
 {
     FakeNode *found = fake_find(path);
 
-    (void)context;
+    check_backend_context(context);
     if (found == NULL)
         return ASTRA_VFS_ERR_NOT_FOUND;
     if (capacity < found->size)
@@ -642,7 +653,7 @@ fake_symlink(void *context, const char *target, const char *path)
 {
     FakeNode *created;
 
-    (void)context;
+    check_backend_context(context);
     if (fake_find(path) != NULL)
         return ASTRA_VFS_ERR_EXISTS;
     created = fake_create(path, ASTRA_VFS_KIND_SYMLINK);
@@ -659,7 +670,7 @@ static char linked_to[ASTRA_VFS_PATH_MAX];
 static uint32_t
 fake_link(void *context, const char *from, const char *to)
 {
-    (void)context;
+    check_backend_context(context);
     (void)snprintf(linked_from, sizeof(linked_from), "%s", from);
     (void)snprintf(linked_to, sizeof(linked_to), "%s", to);
     return ASTRA_VFS_OK;
@@ -721,7 +732,7 @@ fake_chmod_node(void *context, uintptr_t node, uint16_t mode)
 {
     FakeNode *found = (FakeNode *)node;
 
-    (void)context;
+    check_backend_context(context);
     if (found == NULL || !found->used)
         return ASTRA_VFS_ERR_BAD_HANDLE;
     found->mode = mode;
@@ -744,7 +755,7 @@ static uint32_t
 fake_filesystem_info(void *context, uintptr_t node, const char *path,
                      AstraVfsFilesystemInfo *info)
 {
-    (void)context;
+    check_backend_context(context);
     if (info == NULL || ((node == 0u) == (path == NULL)))
         return ASTRA_VFS_ERR_INVALID;
     if (node == 0u && fake_find(path) == NULL)
@@ -793,7 +804,7 @@ static uint32_t fake_directory_path(void *context, uintptr_t directory,
                                      void *buffer, uint32_t capacity, uint32_t *length)
 {
     const FakeNode *node = (const FakeNode *)directory;
-    (void)context;
+    check_backend_context(context);
     *length = (uint32_t)strlen(node->path);
     if (*length > capacity)
         return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
@@ -897,6 +908,161 @@ reset(void)
         &service, &fake_ops, NULL, service_sessions,
         ASTRA_VFS_SESSION_MAX, service_files,
         (uint32_t)(sizeof(service_files) / sizeof(service_files[0]))));
+}
+
+typedef struct BoundBackend {
+    uint32_t references;
+    uint32_t retain_status;
+} BoundBackend;
+
+typedef struct BackendBindings {
+    BoundBackend *selected;
+    uint32_t status;
+    uint32_t invalid_ops;
+    uint32_t acquired;
+    uint32_t owner;
+    uint32_t grant;
+} BackendBindings;
+
+static uint32_t binding_acquire(void *context, uint32_t owner, uint32_t grant,
+    AstraVfsBackend *backend)
+{
+    static const AstraVfsBackendOps invalid_ops = {0};
+    BackendBindings *bindings = context;
+    bindings->owner = owner;
+    bindings->grant = grant;
+    if (bindings->status != ASTRA_VFS_OK) return bindings->status;
+    ++bindings->acquired;
+    ++bindings->selected->references;
+    *backend = (AstraVfsBackend){bindings->invalid_ops == 2u ? NULL :
+        bindings->invalid_ops ? &invalid_ops : &fake_ops,
+        bindings->selected};
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t binding_retain(void *context, const AstraVfsBackend *backend)
+{
+    BoundBackend *binding = backend->context;
+    (void)context;
+    assert(binding->references != 0u);
+    if (binding->retain_status != ASTRA_VFS_OK) return binding->retain_status;
+    ++binding->references;
+    return ASTRA_VFS_OK;
+}
+
+static void binding_release(void *context, const AstraVfsBackend *backend)
+{
+    BoundBackend *binding = backend->context;
+    (void)context;
+    assert(binding->references != 0u);
+    --binding->references;
+}
+
+static const AstraVfsBackendBindingOps backend_bindings = {
+    binding_acquire, binding_retain, binding_release
+};
+
+static void test_scoped_backend_lifetime_and_rebind(void)
+{
+    AstraVfsClient client;
+    AstraVfsFile file, retained;
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    BoundBackend first = {0}, second = {0};
+    BackendBindings bindings = {.selected = &first};
+    uint8_t bytes[8];
+    uint32_t moved, used;
+    uint64_t size, next;
+
+    reset();
+    assert(astra_vfs_service_set_backend_bindings(&service, &backend_bindings, &bindings));
+    assert(!astra_vfs_service_set_backend_bindings(&service, &backend_bindings, &bindings));
+    service.backend.context = &bindings; /* An unscoped fallback must fail the context check. */
+    fake.check_context = 1u;
+    fake.expected_context = &first;
+    assert(astra_vfs_connect(&client, astra_vfs_local_transport, &service) == ASTRA_VFS_OK);
+    assert(first.references == 1u && bindings.acquired == 1u);
+    assert(astra_vfs_open(&client, "/bound", ASTRA_VFS_OPEN_CREATE |
+        ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE, &file, NULL, NULL) == ASTRA_VFS_OK);
+    assert(first.references == 2u);
+    assert(astra_vfs_write(&client, file, 0u, UINT64_MAX, "abc", 3u, &moved) == ASTRA_VFS_OK);
+    assert(astra_vfs_service_read_path(&service, client.session, "/bound",
+        bytes, sizeof(bytes), &moved, &size) == ASTRA_VFS_OK && moved == 3u && size == 3u);
+    assert(astra_vfs_service_readdir_into(&service, client.session, "/", 0u,
+        1u, fixture_output, sizeof(fixture_output), &used, &next) == ASTRA_VFS_OK && used != 0u);
+    bindings.selected = &second;
+    begin_request(&request, client.session, NULL);
+    service.sessions[0].inflight = 1u;
+    fixture_dispatch(&service, ASTRA_VFS_OP_HELLO, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_BUSY && first.references == 2u &&
+        second.references == 0u && bindings.acquired == 1u);
+    service.sessions[0].inflight = 0u;
+    bindings.status = ASTRA_VFS_ERR_LOST;
+    fixture_dispatch(&service, ASTRA_VFS_OP_HELLO, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_LOST && first.references == 2u && second.references == 0u);
+    bindings.status = ASTRA_VFS_OK;
+    fixture_dispatch(&service, ASTRA_VFS_OP_HELLO, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && first.references == 1u && second.references == 1u);
+    /* Old files keep their exact backend after control-plane recovery. */
+    assert(astra_vfs_read(&client, file, 0u, bytes, 3u, &moved) == ASTRA_VFS_OK && moved == 3u);
+    assert(astra_vfs_service_retain_file(&service, client.session, file, &retained) == ASTRA_VFS_OK);
+    assert(astra_vfs_close(&client, file) == ASTRA_VFS_OK && first.references == 1u);
+    fake.expected_context = &second;
+    second.retain_status = ASTRA_VFS_ERR_LIMIT;
+    uint32_t calls = fake.backend_calls;
+    assert(astra_vfs_open(&client, "/bound", ASTRA_VFS_OPEN_READ, &file, NULL, NULL) ==
+        ASTRA_VFS_ERR_LIMIT && fake.backend_calls == calls && second.references == 1u);
+    second.retain_status = ASTRA_VFS_OK;
+    assert(astra_vfs_open(&client, "/missing", ASTRA_VFS_OPEN_READ, &file, NULL, NULL) ==
+        ASTRA_VFS_ERR_NOT_FOUND && second.references == 1u);
+    assert(astra_vfs_disconnect(&client) == ASTRA_VFS_OK && second.references == 0u);
+    /* Session-slot reuse must not redirect the retained file's backend. */
+    assert(astra_vfs_connect(&client, astra_vfs_local_transport, &service) == ASTRA_VFS_OK);
+    assert(second.references == 1u);
+    fake.expected_context = &first;
+    assert(astra_vfs_service_read_retained(&service, retained, 0u, bytes, 3u, &moved) ==
+        ASTRA_VFS_OK && moved == 3u && memcmp(bytes, "abc", 3u) == 0);
+    AstraVfsNodeInfo info;
+    assert(astra_vfs_service_stat_retained(&service, retained, &info) == ASTRA_VFS_OK);
+    assert(astra_vfs_service_write_retained(&service, retained, 0u, UINT64_MAX,
+        "Z", 1u, &moved) == ASTRA_VFS_OK && moved == 1u);
+    assert(astra_vfs_service_sync_retained(&service, retained) == ASTRA_VFS_OK);
+    assert(astra_vfs_service_release_retained(&service, retained) == ASTRA_VFS_OK && first.references == 0u);
+    assert(astra_vfs_disconnect(&client) == ASTRA_VFS_OK && second.references == 0u);
+    bindings.invalid_ops = 1u;
+    assert(astra_vfs_connect(&client, astra_vfs_local_transport, &service) ==
+        ASTRA_VFS_ERR_PROTOCOL && second.references == 0u && service.open_sessions == 0u);
+    bindings.invalid_ops = 2u;
+    assert(astra_vfs_connect(&client, astra_vfs_local_transport, &service) ==
+        ASTRA_VFS_ERR_PROTOCOL && second.references == 0u && service.open_sessions == 0u);
+    bindings.invalid_ops = 0u;
+    begin_request(&request, 0u, NULL);
+    fixture_dispatch_grant(&service, 42u, 71u, 0u, ASTRA_VFS_OP_HELLO, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK && bindings.owner == 42u && bindings.grant == 71u);
+    astra_vfs_service_release_session(&service, reply.session);
+    assert(second.references == 0u);
+    bindings.selected = &first;
+    fake.expected_context = &first;
+    assert(fake_create("/dir", ASTRA_VFS_KIND_DIRECTORY) != NULL);
+    assert(astra_vfs_connect(&client, astra_vfs_local_transport, &service) == ASTRA_VFS_OK);
+    AstraVfsFile old_directory, new_directory;
+    assert(astra_vfs_open(&client, "/dir", ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY,
+        &old_directory, NULL, NULL) == ASTRA_VFS_OK);
+    bindings.selected = &second;
+    begin_request(&request, client.session, NULL);
+    fixture_dispatch(&service, ASTRA_VFS_OP_HELLO, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    fake.expected_context = &second;
+    assert(astra_vfs_open(&client, "/dir", ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY,
+        &new_directory, NULL, NULL) == ASTRA_VFS_OK);
+    calls = fake.backend_calls;
+    assert(astra_vfs_rename_at(&client, old_directory, "a", new_directory, "b") ==
+        ASTRA_VFS_ERR_CROSS_DEVICE && fake.backend_calls == calls);
+    assert(astra_vfs_close(&client, new_directory) == ASTRA_VFS_OK);
+    fake.expected_context = &first;
+    assert(astra_vfs_close(&client, old_directory) == ASTRA_VFS_OK && first.references == 0u);
+    assert(astra_vfs_disconnect(&client) == ASTRA_VFS_OK && second.references == 0u);
+    fake.check_context = 0u;
 }
 
 typedef struct SessionProbe {
@@ -2602,7 +2768,7 @@ static void test_lookup_reply_validation(void)
 }
 
 static void
-test_client_through_transport(void)
+test_client_through_transport(int scoped)
 {
     AstraVfsClient client;
     AstraVfsFile file;
@@ -2613,8 +2779,16 @@ test_client_through_transport(void)
     char name[ASTRA_VFS_NAME_MAX];
     uint8_t buffer[32];
     static const char text[] = "pluggable";
+    BoundBackend binding = {0};
+    BackendBindings bindings = {.selected = &binding};
 
     reset();
+    if (scoped) {
+        assert(astra_vfs_service_set_backend_bindings(&service, &backend_bindings, &bindings));
+        service.backend.context = &bindings;
+        fake.check_context = 1u;
+        fake.expected_context = &binding;
+    }
     assert(astra_vfs_connect(&client, astra_vfs_local_transport, &service) ==
            ASTRA_VFS_OK);
     assert(client.session != ASTRA_VFS_SESSION_INVALID);
@@ -2894,6 +3068,9 @@ test_client_through_transport(void)
 
     assert(astra_vfs_disconnect(&client) == ASTRA_VFS_OK);
     assert(client.session == ASTRA_VFS_SESSION_INVALID);
+    assert(binding.references == 0u);
+    if (scoped) assert(fake.backend_calls != 0u);
+    fake.check_context = 0u;
 }
 
 static void test_owner_sessions_are_limited(void)
@@ -3373,6 +3550,7 @@ static void test_service_io_uses_backend_position(void)
 int
 main(void)
 {
+    test_scoped_backend_lifetime_and_rebind();
     test_service_description_controls_use_backend_state();
     test_service_io_uses_backend_position();
     test_direct_truncate_waits_for_mutation_barrier();
@@ -3393,7 +3571,8 @@ main(void)
     test_full_width_binary_write();
     test_limits();
     test_file_storage_budget();
-    test_client_through_transport();
+    test_client_through_transport(0);
+    test_client_through_transport(1);
     test_lookup_reply_validation();
     test_uncontended_file_operation_does_not_wake();
     test_read_refuses_reused_waiting_slot();

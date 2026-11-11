@@ -844,9 +844,12 @@ uint32_t astra_host_channel_wait(uint32_t channel_address,
 {
     AstraSyscallResult result;
 
-    astra_syscall5(ASTRA_SYSCALL_HOST_CHANNEL_WAIT, channel_address,
-                   consumer_position, (uint32_t)(deadline_ns >> 32),
-                   (uint32_t)deadline_ns, 0u, &result);
+    /* Signal delivery cannot cancel a command already owned by the host. */
+    do {
+        astra_syscall5(ASTRA_SYSCALL_HOST_CHANNEL_WAIT, channel_address,
+                       consumer_position, (uint32_t)(deadline_ns >> 32),
+                       (uint32_t)deadline_ns, 0u, &result);
+    } while (result.status == ASTRA_SYSCALL_CANCELLED);
     return result.status;
 }
 

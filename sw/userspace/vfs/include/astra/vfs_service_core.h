@@ -35,6 +35,7 @@
 #define ASTRA_VFS_SESSION_MAX ASTRA_HANDLE_COUNT_MAX
 
 typedef struct AstraVfsOpenFile {
+    AstraVfsBackend backend;
     uintptr_t node;
     uint32_t session;       /* the owning session id, 0 when the slot is free */
     uint32_t flags;
@@ -56,6 +57,7 @@ enum {
 };
 
 typedef struct AstraVfsSessionSlot {
+    AstraVfsBackend backend;
     uint32_t id;            /* 0 when free */
     uint32_t owner;         /* authenticated transport owner, 0 for local */
     uint32_t grant;         /* the grant it said HELLO on, 0 for none */
@@ -105,6 +107,17 @@ typedef void (*AstraVfsStateWake)(void *context,
  * and actual retirement. It must not reenter this service. */
 typedef void (*AstraVfsSessionChanged)(void *context);
 
+/* Called under the service state lock, without reentry or backend I/O.
+ * Successful acquire/retain owns one reference; release consumes it.
+ * HELLO replacement acquires before releasing the previous session binding.
+ * Every file keeps its own binding through retained/cache references. */
+typedef struct AstraVfsBackendBindingOps {
+    uint32_t (*acquire)(void *context, uint32_t owner, uint32_t grant,
+                        AstraVfsBackend *backend);
+    uint32_t (*retain)(void *context, const AstraVfsBackend *backend);
+    void (*release)(void *context, const AstraVfsBackend *backend);
+} AstraVfsBackendBindingOps;
+
 #ifdef ASTRA_VFS_TEST_HOOKS
 enum {
     ASTRA_VFS_TEST_BEFORE_STATE_ACQUIRE = 0,
@@ -119,6 +132,8 @@ typedef void (*AstraVfsTestTransition)(void *context, uint32_t transition);
 
 typedef struct AstraVfsService {
     AstraVfsBackend backend;
+    const AstraVfsBackendBindingOps *backend_bindings;
+    void *backend_binding_context;
     AstraVfsSessionSlot *sessions;
     uint32_t session_capacity;
     AstraVfsOpenFile *files;
@@ -159,6 +174,10 @@ int astra_vfs_service_set_state_wait(AstraVfsService *service,
 /* Configure before the service admits sessions. */
 int astra_vfs_service_set_session_changed(AstraVfsService *service,
     AstraVfsSessionChanged changed, void *context);
+/* Configure before admitting sessions or files. Without bindings, the
+ * service's single backend remains the owner of every session and file. */
+int astra_vfs_service_set_backend_bindings(AstraVfsService *service,
+    const AstraVfsBackendBindingOps *bindings, void *context);
 /* Snapshots committed mutation generations under the service state lock. */
 int astra_vfs_service_change_snapshot(AstraVfsService *service,
     AstraVfsChangeSnapshot *snapshot);
@@ -215,7 +234,7 @@ int astra_vfs_service_session_capacity_reached(
  * to allocate without a second round trip.
  */
 uint32_t astra_vfs_service_read_path(AstraVfsService *service,
-                                     const char *path, void *buffer,
+                                     uint32_t session, const char *path, void *buffer,
                                      uint32_t capacity, uint32_t *moved,
                                      uint64_t *node_size);
 
@@ -287,7 +306,7 @@ uint32_t astra_vfs_service_write_position_from(
 
 /* Packs directory records into an arbitrary bounded buffer. */
 uint32_t astra_vfs_service_readdir_into(
-    AstraVfsService *service, const char *path, uint64_t cursor,
+    AstraVfsService *service, uint32_t session, const char *path, uint64_t cursor,
     uint32_t entry_limit, uint8_t *buffer, uint32_t capacity,
     uint32_t *used, uint64_t *next);
 uint32_t astra_vfs_service_readdir_file_into(

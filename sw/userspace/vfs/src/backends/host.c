@@ -50,6 +50,10 @@ static uint32_t command_begin(AstraVfsHostBackend *backend,
         data_capacity = ASTRA_VFS_IO_MAX;
     uint32_t status;
 
+    if (__atomic_load_n(&backend->lost, __ATOMIC_ACQUIRE) != 0u &&
+        operation != ASTRA_HOST_FS_CLOSE && operation != ASTRA_HOST_FS_SHARE &&
+        operation != ASTRA_HOST_FS_ADOPT)
+        return ASTRA_VFS_ERR_LOST;
     if (operands > (ASTRA_HOST_FS_PATH_MAX - 1u) * 2u ||
         data_capacity > UINT32_MAX - (uint32_t)operands)
         return ASTRA_VFS_ERR_INVALID;

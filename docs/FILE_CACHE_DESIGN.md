@@ -1306,7 +1306,14 @@ existing pressure worker.
 Moving ordinary I/O behind this owner must preserve the grant's rooted
 backend, not substitute the volume service's whole-volume backend. The current
 grant port deliberately refuses data operations for that reason. Session/file
-context must retain the scoped backend through client close and cache lifetime.
+context retains the scoped backend through client close and cache lifetime.
+The scoped backend prerequisite is qualified on DE25 (2026-11-11): session
+admission acquires a rooted binding, every open file retains its own binding,
+and recovery replaces only the session binding. Existing open/retained files
+keep their original provider incarnation; mixed-incarnation anchored operations
+fail before backend I/O. HostFS uses its existing backing-reference accounting
+to retain grants through both contexts and areas. This does not enable the
+grant data plane or establish requester attribution.
 Provider share tokens remain bound to their provider session; forwarding a
 volume-wide service token is not equivalent authority. Provider-side opens
 and retained cache references must still attribute actual native requesters
@@ -1474,7 +1481,8 @@ Current remaining integration gates (2026-11-11):
 
 | Gate | Current boundary and required proof |
 |---|---|
-| Scoped mutation ownership | `vfs_client.c` and bulk writes still call the direct provider, then send FILE_MUTATED. Grant ports still refuse data operations. Bind canonical I/O to the actual grant root/requester, preserve backend contexts through retained files, and prove cross-grant refusal and shared-description ordering. |
+| Scoped mutation ownership | Scoped session/file backend retention, recovery isolation and backend-owned shared-description I/O are qualified. `vfs_client.c` and bulk writes still call the direct provider, then send FILE_MUTATED; grant ports still refuse data operations. Bind canonical I/O and share/adopt to actual native requesters before enabling that plane. |
+| Grant admission/lifetime capacity | Additional raw-orphans coverage returns LIMIT at derive index 6 on both the candidate and unchanged preceding release. Readonly/delegation/onward and process-death cases pass. Diagnose the refusing budget and prove that retiring roots recover capacity; do not relax the fixture or increase a limit without identifying its owner. |
 | Cache writeback | Native dirty/snapshot/completion and one positioned page write/sync are qualified. Connect ordinary writes and mapped modifications to those same owner pages; bounded writeback, sync/unmap/close error handling and dirty retention must pass together. A helper test alone does not qualify this gate. |
 | Mapping completeness | `posix/src/file.c` permits only PROT_READ file mappings and complete unmap; there is no POSIX msync implementation. Shared writable, private COW, anonymous and partial-unmap behavior must adapt to native VM facilities, with isolation, lifetime and failure tests before removing guards. |
 | EOF and external conflicts | Truncate/extend, partial final pages and faults beyond EOF need complete mapping tests. External NODE/GAP changes must invalidate clean pages while retaining locally dirty data and reporting conflicts; post-write invalidation alone is insufficient. |

@@ -969,12 +969,27 @@ int main(void)
     host.expected_operation = ASTRA_HOST_FS_STAT;
     assert(ops->stat(&backend, "/file", &info) == ASTRA_VFS_ERR_LOST);
     assert(backend.lost == 1u);
+    {
+        uint32_t calls = host.calls;
+        uint64_t lost_token = 0u;
+        host.failure = 0u;
+        assert(ops->read(&backend, 0x1234u, 4u, bytes, 8u, &moved) == ASTRA_VFS_ERR_LOST);
+        assert(ops->stat(&backend, "/file", &info) == ASTRA_VFS_ERR_LOST && host.calls == calls);
+        host.expected_operation = ASTRA_HOST_FS_CLOSE;
+        assert(ops->close(&backend, 0x1234u) == ASTRA_VFS_OK);
+        host.expected_operation = ASTRA_HOST_FS_SHARE;
+        assert(ops->share(&backend, 0x1234u, &lost_token) == ASTRA_VFS_OK);
+        host.expected_operation = ASTRA_HOST_FS_ADOPT;
+        assert(ops->adopt(&backend, lost_token, ASTRA_VFS_ADOPT_DISCARD, NULL) == ASTRA_VFS_OK);
+        host.expected_operation = ASTRA_HOST_FS_STAT;
+    }
     assert(astra_vfs_host_init(&backend, (AstraVfsHostTransport *)&host, 9u, 7u));
     assert(backend.lost == 0u);
     host.begin_failure = ASTRA_VFS_ERR_PEER;
     assert(ops->stat(&backend, "/file", &info) == ASTRA_VFS_ERR_LOST);
     assert(backend.lost == 1u);
     host.begin_failure = host.failure = 0u;
+    assert(astra_vfs_host_init(&backend, (AstraVfsHostTransport *)&host, 9u, 7u));
     host.expected_operation = ASTRA_HOST_FS_CLAIM;
     uint32_t epoch = 0u;
     assert(astra_vfs_host_claim((AstraVfsHostTransport *)&host, 9u, 0, &epoch) == ASTRA_VFS_OK);

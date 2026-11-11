@@ -60,6 +60,7 @@ static MockPort ports[MOCK_PORT_MAX];
 static uint32_t next_port = 1u;
 static int cache_reads_active;
 static uint32_t cache_resident, cache_prefetches, cache_prefetch_status;
+static uint32_t cache_prefetch_cancellations;
 static int cache_prefetch_drops;
 static uint32_t cache_last_area;
 static uint32_t cache_closed_area;
@@ -792,6 +793,10 @@ uint32_t astra_rt_area_prefetch(uint32_t area, uint32_t offset)
     assert(cache_reads_active && area < MOCK_PORT_MAX && ports[area].open &&
            offset % ASTRA_MEMORY_PAGE_SIZE == 0u);
     ++cache_prefetches;
+    if (cache_prefetch_cancellations != 0u) {
+        --cache_prefetch_cancellations;
+        return ASTRA_SYSCALL_CANCELLED;
+    }
     if (cache_disconnect_client != NULL) {
         AstraVfsClient *client = cache_disconnect_client;
         cache_disconnect_client = NULL;
@@ -3104,6 +3109,26 @@ test_file_area_client_uses_grant_control(void)
         sequential, sizeof(sequential), &moved, &position) == ASTRA_VFS_OK);
     assert(moved == 1u && position == 4096u && cache_position == position);
     cache_prefetch_status = 0u;
+    cache_resident = 0u;
+    cache_position = 0u;
+    cache_prefetch_cancellations = 2u;
+    uint32_t prefetches_before = cache_prefetches;
+    advances_before = cache_advances;
+    assert(astra_vfs_read_position(&remote, file, 99u, ASTRA_VFS_IO_SEQUENTIAL,
+        sequential, sizeof(sequential), &moved, &position) == ASTRA_VFS_OK);
+    assert(moved == sizeof(sequential) && position == sizeof(sequential) &&
+        cache_position == position && cache_advances == advances_before + 1u &&
+        cache_prefetches == prefetches_before + 3u && cache_prefetch_cancellations == 0u);
+    cache_resident = 0u;
+    cache_position = 0u;
+    cache_prefetch_cancellations = 1u;
+    cache_prefetch_drops = 1;
+    advances_before = cache_advances;
+    assert(astra_vfs_read_position(&remote, file, 99u, ASTRA_VFS_IO_SEQUENTIAL,
+        sequential, sizeof(sequential), &moved, &position) == ASTRA_VFS_ERR_BUSY);
+    assert(moved == 0u && cache_position == 0u && cache_advances == advances_before);
+    cache_prefetch_cancellations = 0u;
+    cache_prefetch_drops = 0;
     cache_resident = UINT32_MAX;
     cache_position = 0u;
     cache_advance_corrupt = 1;

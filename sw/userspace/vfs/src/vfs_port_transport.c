@@ -1581,8 +1581,15 @@ astra_vfs_port_read_cached(AstraVfsClient *client, AstraVfsFile file,
             uint32_t result = astra_rt_area_read_resident(area, within,
                 (uint8_t *)buffer + copied, chunk);
             if (result == ASTRA_SYSCALL_OK) break;
-            if (result != ASTRA_SYSCALL_WOULD_BLOCK ||
-                astra_rt_area_prefetch(area, page) != ASTRA_SYSCALL_OK) {
+            if (result != ASTRA_SYSCALL_WOULD_BLOCK) {
+                (void)astra_log_failure("VFS cached page read", result);
+                status = ASTRA_VFS_ERR_IO;
+                goto done;
+            }
+            result = astra_rt_area_prefetch(area, page);
+            /* Signal delivery interrupts the wait, not the page request. */
+            if (result != ASTRA_SYSCALL_OK && result != ASTRA_SYSCALL_CANCELLED) {
+                (void)astra_log_failure("VFS cached page prefetch", result);
                 status = ASTRA_VFS_ERR_IO;
                 goto done;
             }
@@ -3009,7 +3016,7 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
                         incoming->request.offset, incoming->request.length,
                         lease.area, lease.area_size, &used, &next) :
                     astra_vfs_service_readdir_into(
-                        host->service,
+                        host->service, incoming->request.session,
                         paths.first,
                         incoming->request.offset, incoming->request.length,
                         lease.area, lease.area_size, &used, &next);
@@ -3035,7 +3042,7 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
                 outgoing->reply.count = 0u;
             } else {
                 outgoing->reply.status = astra_vfs_service_read_path(
-                    host->service, paths.first,
+                    host->service, incoming->request.session, paths.first,
                     target, capacity, &got, &node_size);
                 outgoing->reply.count =
                     outgoing->reply.status == ASTRA_VFS_OK ? got : 0u;

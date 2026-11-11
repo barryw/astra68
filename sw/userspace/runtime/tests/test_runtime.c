@@ -291,6 +291,7 @@ static uint32_t mock_argument3;
 static uint32_t mock_argument4;
 static uint32_t mock_calls;
 static uint32_t mock_status = ASTRA_SYSCALL_OK;
+static uint32_t mock_cancel_host_waits;
 static uint32_t mock_activity;
 static uint32_t mock_stream_begin_calls;
 static uint32_t mock_stream_write_calls;
@@ -471,6 +472,10 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         assert(argument4 == 0u);
     }
     result->status = mock_status;
+    if (number == ASTRA_SYSCALL_HOST_CHANNEL_WAIT && mock_cancel_host_waits != 0u) {
+        --mock_cancel_host_waits;
+        result->status = ASTRA_SYSCALL_CANCELLED;
+    }
     if (number == ASTRA_SYSCALL_WAIT_ONE && mock_cancel_wait_once != 0u) {
         --mock_cancel_wait_once;
         result->status = ASTRA_SYSCALL_CANCELLED;
@@ -1348,6 +1353,24 @@ test_syscall_wrappers(void)
     assert(mock_argument0 == 0x4ff00000u && mock_argument1 == 19u &&
            mock_argument2 == 0x12345678u &&
            mock_argument3 == 0x9abcdef0u);
+    calls = mock_calls;
+    mock_cancel_host_waits = 2u;
+    assert(astra_host_channel_wait(0x4ff00000u, UINT32_MAX,
+               UINT64_C(0x123456789abcdef0)) == ASTRA_SYSCALL_OK);
+    assert(mock_calls == calls + 3u && mock_cancel_host_waits == 0u &&
+        mock_argument0 == 0x4ff00000u && mock_argument1 == UINT32_MAX &&
+        mock_argument2 == 0x12345678u && mock_argument3 == 0x9abcdef0u);
+    const uint32_t terminal_statuses[] = {ASTRA_SYSCALL_TIMED_OUT,
+        ASTRA_SYSCALL_PEER_DEAD, ASTRA_SYSCALL_IO_ERROR};
+    for (unsigned index = 0u; index < sizeof(terminal_statuses) / sizeof(terminal_statuses[0]); ++index) {
+        calls = mock_calls;
+        mock_status = terminal_statuses[index];
+        mock_cancel_host_waits = 1u;
+        assert(astra_host_channel_wait(0x4ff00000u, 19u, UINT64_C(0x123456789abcdef0)) == mock_status);
+        assert(mock_calls == calls + 2u && mock_cancel_host_waits == 0u &&
+            mock_argument2 == 0x12345678u && mock_argument3 == 0x9abcdef0u);
+    }
+    mock_status = ASTRA_SYSCALL_OK;
     calls = mock_calls;
     assert(astra_host_lease_query(7u, NULL) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);

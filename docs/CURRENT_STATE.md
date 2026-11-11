@@ -2,6 +2,56 @@
 
 Status: active continuation map, 2026-11-11
 
+Scoped VFS backend ownership qualified on DE25, 2026-11-11. Sessions acquire rooted backend
+bindings; each open file retains its own binding through close/cache lifetime.
+All service path, file, bulk and retained I/O use that captured backend. Bulk
+path APIs now require a session; their sole transport callers are updated.
+HELLO replacement acquires before releasing the old session binding and
+refuses rebind while requests are in flight. Old files retain their original
+backend; mixed-incarnation directory operations fail before backend I/O.
+HostFS owns a separate rooted context per grant/provider incarnation and
+uses its existing backing-reference accounting for contexts and file areas.
+Haiku fs/fd.h:56-74 and fs/fd.cpp:284-312 guide backend/descriptor retention.
+The focused test first fails at missing admission pin. Core tests, including
+the existing full client suite in both single-backend and scoped modes, pass.
+HostFS lifecycle tests and sanitizers pass; nine binding/root/loss/cancellation mutations
+are rejected. A stale-backend host fixture now explicitly initializes a fresh
+backend after injected root loss; product loss guards stay strict. Native
+scoped-io passes with two real derived roots, rebind and retained write/sync
+after session reuse. Native shared-description contention exposed an existing
+signal cancellation bug: child exit cancels a submitted host-channel wait,
+which became EIO. The runtime wrapper now resumes the same wait with the same
+consumer target and absolute deadline, without resubmitting the command.
+Its new test fails before the fix and checks repeated cancellation followed
+by success, timeout, peer loss or I/O failure. Cached page prefetch also
+incorrectly converted signal cancellation to EIO; its existing loop now
+rechecks residency under its original deadline. A focused test first fails,
+then verifies retries, one cursor commit, deadline expiry and error retention.
+Haiku vfs.cpp:4734-4785, device_manager/IORequest.cpp:922-938 and
+cache/file_cache.cpp:861-878 guide completion ownership and rechecks.
+Full runtime, VFS and HostFS tests/sanitizers, Supervisor tests and NDK
+distribution checks pass, including a final check with the qualified provider.
+Supervisor and ROM are rebuilt coherently; kernel
+BIN/ELF hashes remain unchanged. Beast passes 67 native cases (20 repetitions
+of scoped-io/description-io/shared-description), provider reset, two fresh I/O
+cases and read-only fsck. DE25 passes 12 native cases plus provider reset and
+two fresh I/O cases. Its 600-second trial, startup observer and native gate
+all return zero, with no panic/degraded markers. Candidate release:
+03632a5e18ab4e46df35fb132cb2e245ef18cba42d6c6c5ed1ebff62dd994fbc.
+All 563 archived file hashes match, including the trial image and paired
+private settings/key; read-only fsck passes. Trial state is removed. Selected
+services are restored at stage 8, zero restarts, loop0 only and 8.5 GiB free.
+Selected image and production user data were never opened by trial tooling.
+Additional lifetime cases pass readonly/delegation/onward, process death,
+fork/exec, durability and alias identity, but raw-orphans hits LIMIT on derive
+index 6. The unchanged preceding release fails at the identical point. This
+existing resource/admission gate remains open; neither quota nor fixture was
+relaxed. Preserve both logs and diagnose the refusing budget before changing
+capacity or lifetime policy. Evidence:
+/home/barry/astra-evidence/vfs-scoped-backends-20261111/.
+Grant data admission remains guarded: requester attribution, canonical cached
+mutation/writeback and writable/private maps are not complete.
+
 Service description controls qualified, 2026-11-11. The generic core now dispatches
 SEEK, FILE_FLAGS and POSITION_ADVANCE through the backend that already owns
 cursor and mutable status flags. The direct adapter shares that dispatch;
