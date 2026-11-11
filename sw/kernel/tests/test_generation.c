@@ -9,6 +9,13 @@ int main(void)
     uint32_t index = UINT32_MAX;
     uint16_t generation = 0u;
     uint32_t handle = kernel_handle16_make(6u, 9u);
+    uint32_t sequence = 0u;
+
+    assert(!kernel_generation_advance(NULL));
+    assert(kernel_generation_advance(&sequence) && sequence == 1u);
+    sequence = UINT32_MAX - 1u;
+    assert(kernel_generation_advance(&sequence) && sequence == UINT32_MAX);
+    assert(!kernel_generation_advance(&sequence) && sequence == UINT32_MAX);
 
     assert(handle == UINT32_C(0x00090007));
     assert(kernel_handle16_decode(handle, 8u, &index, &generation));

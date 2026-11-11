@@ -27,6 +27,27 @@
     ((KERNEL_AREA_PAGE_MAX + AREA_PAGE_LEAF_ENTRIES - 1u) / \
      AREA_PAGE_LEAF_ENTRIES)
 
+typedef struct KernelAreaDirtyPage {
+    uint32_t modified;
+    uint32_t writeback;
+} KernelAreaDirtyPage;
+
+#define AREA_DIRTY_LEAF_ENTRIES (KERNEL_PAGE_SIZE / sizeof(KernelAreaDirtyPage))
+#define AREA_DIRTY_LEAF_COUNT \
+    ((KERNEL_AREA_PAGE_MAX + AREA_DIRTY_LEAF_ENTRIES - 1u) / \
+     AREA_DIRTY_LEAF_ENTRIES)
+
+/* Read-only areas allocate none of this metadata. */
+typedef struct KernelAreaDirty {
+    KernelAreaDirtyPage *leaves[AREA_DIRTY_LEAF_COUNT];
+    uint32_t physical[AREA_DIRTY_LEAF_COUNT];
+    uint32_t pending_pages;
+    uint32_t sequence;
+} KernelAreaDirty;
+
+_Static_assert(sizeof(KernelAreaDirty) <= KERNEL_PAGE_SIZE,
+               "area dirty directory must fit one metadata frame");
+
 /*
  * What an uncommitted page holds. Zero would have been the obvious marker and
  * it is the wrong one: the frame allocator's addresses are relative to a RAM
@@ -93,6 +114,7 @@ struct KernelArea {
     void *pager_release_context;
     /* Frame of shared-table addresses, one per span; 0 until first map. */
     uint32_t span_tables_physical;
+    uint32_t dirty_physical;
 };
 
 #define AREA_LEAF_FRAMES \
@@ -102,7 +124,7 @@ struct KernelArea {
 #if defined(__m68k__)
 _Static_assert(sizeof(KernelAreaMapping) == 36u,
                "area mapping size changed; update the memory budget");
-_Static_assert(sizeof(KernelArea) <= 320u,
+_Static_assert(sizeof(KernelArea) <= 324u,
                "area record memory budget changed");
 #endif
 
@@ -361,27 +383,42 @@ static uint32_t *page_entries(const KernelArea *area, uint32_t page)
              [page % AREA_PAGE_LEAF_ENTRIES] : NULL;
 }
 
+static KernelAreaStatus allocate_page_metadata(uint32_t *physical,
+                                                void **result)
+{
+    *physical = 0u;
+    *result = NULL;
+    if (kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_AREA_PAGE_METADATA, 1u, 1u,
+            KERNEL_FRAME_KERNEL, KERNEL_OWNER_CORE, physical) !=
+        KERNEL_MEMORY_OK)
+        return KERNEL_AREA_OUT_OF_MEMORY;
+    *result = kernel_memory_access(*physical, KERNEL_PAGE_SIZE);
+    if (*result == NULL) {
+        if (kernel_memory_release(*physical, 1u, KERNEL_OWNER_CORE) !=
+            KERNEL_MEMORY_OK)
+            pool_corrupt = 1u;
+        *physical = 0u;
+        return KERNEL_AREA_CORRUPT;
+    }
+    return KERNEL_AREA_OK;
+}
+
 static bool ensure_page_leaf(KernelArea *area, uint32_t page)
 {
     uint32_t leaf_index;
     uint32_t physical;
     uint32_t *leaf;
+    void *storage;
 
     if (area == NULL || page >= area->page_count)
         return false;
     leaf_index = page / AREA_PAGE_LEAF_ENTRIES;
     if (area->page_directory[leaf_index] != NULL)
         return true;
-    if (kernel_memory_alloc_zeroed_tagged(
-            KERNEL_ALLOCATION_SITE_AREA_PAGE_METADATA, 1u, 1u,
-            KERNEL_FRAME_KERNEL, KERNEL_OWNER_CORE, &physical) !=
-        KERNEL_MEMORY_OK)
+    if (allocate_page_metadata(&physical, &storage) != KERNEL_AREA_OK)
         return false;
-    leaf = kernel_memory_access(physical, KERNEL_PAGE_SIZE);
-    if (leaf == NULL) {
-        (void)kernel_memory_release(physical, 1u, KERNEL_OWNER_CORE);
-        return false;
-    }
+    leaf = storage;
     for (uint32_t index = 0u; index < AREA_PAGE_LEAF_ENTRIES; ++index)
         leaf[index] = AREA_PAGE_ABSENT;
     area->page_directory[leaf_index] = leaf;
@@ -411,6 +448,89 @@ static bool page_committed(const KernelArea *area, uint32_t page)
     uint32_t *entry = page_entries(area, page);
 
     return entry != NULL && *entry != AREA_PAGE_ABSENT;
+}
+
+static KernelAreaDirty *dirty_state(const KernelArea *area)
+{
+    return area->dirty_physical != 0u ?
+        kernel_memory_access(area->dirty_physical, KERNEL_PAGE_SIZE) : NULL;
+}
+
+static KernelAreaDirtyPage *dirty_page(const KernelArea *area, uint32_t page)
+{
+    KernelAreaDirty *dirty = dirty_state(area);
+    KernelAreaDirtyPage *leaf;
+
+    if (dirty == NULL || page >= area->page_count)
+        return NULL;
+    leaf = dirty->leaves[page / AREA_DIRTY_LEAF_ENTRIES];
+    return leaf != NULL ? &leaf[page % AREA_DIRTY_LEAF_ENTRIES] : NULL;
+}
+
+static bool page_pending(const KernelArea *area, uint32_t page)
+{
+    const KernelAreaDirtyPage *entry = dirty_page(area, page);
+
+    return entry != NULL && (entry->modified != 0u || entry->writeback != 0u);
+}
+
+static KernelAreaStatus ensure_dirty_page(KernelArea *area, uint32_t page)
+{
+    KernelAreaDirty *dirty = dirty_state(area);
+    uint32_t root_physical = area->dirty_physical;
+    uint32_t leaf_index = page / AREA_DIRTY_LEAF_ENTRIES;
+    uint32_t physical;
+    void *storage;
+    KernelAreaStatus status;
+
+    if (root_physical != 0u && dirty == NULL)
+        return KERNEL_AREA_CORRUPT;
+    if (dirty == NULL) {
+        status = allocate_page_metadata(&root_physical, &storage);
+        if (status != KERNEL_AREA_OK)
+            return status;
+        dirty = storage;
+    }
+    if (dirty->leaves[leaf_index] == NULL) {
+        status = allocate_page_metadata(&physical, &storage);
+        if (status != KERNEL_AREA_OK) {
+            if (area->dirty_physical == 0u &&
+                kernel_memory_release(root_physical, 1u, KERNEL_OWNER_CORE) !=
+                    KERNEL_MEMORY_OK) {
+                pool_corrupt = 1u;
+                return KERNEL_AREA_CORRUPT;
+            }
+            return status;
+        }
+        dirty->leaves[leaf_index] = storage;
+        dirty->physical[leaf_index] = physical;
+    }
+    area->dirty_physical = root_physical;
+    return KERNEL_AREA_OK;
+}
+
+static bool release_dirty_metadata(KernelArea *area)
+{
+    KernelAreaDirty *dirty = dirty_state(area);
+    bool released = true;
+
+    if (area->dirty_physical == 0u)
+        return true;
+    if (dirty == NULL || dirty->pending_pages != 0u)
+        return false;
+    for (uint32_t leaf = 0u; leaf < AREA_DIRTY_LEAF_COUNT; ++leaf) {
+        if (dirty->leaves[leaf] == NULL)
+            continue;
+        if (dirty->physical[leaf] == 0u ||
+            kernel_memory_release(dirty->physical[leaf], 1u,
+                                  KERNEL_OWNER_CORE) != KERNEL_MEMORY_OK)
+            released = false;
+    }
+    if (kernel_memory_release(area->dirty_physical, 1u, KERNEL_OWNER_CORE) !=
+        KERNEL_MEMORY_OK)
+        released = false;
+    area->dirty_physical = 0u;
+    return released;
 }
 
 /*
@@ -465,22 +585,19 @@ static KernelVmStatus ensure_span_tables(KernelArea *area)
     uint32_t staged[KERNEL_VM_SHARED_TABLE_PAGES];
     uint32_t *tables;
     uint32_t physical;
+    void *storage;
+    KernelAreaStatus allocation;
 
     if (area->span_tables_physical != 0u)
         return span_tables(area) != NULL ? KERNEL_VM_OK : KERNEL_VM_CORRUPT;
     if (span_count(area) > KERNEL_PAGE_SIZE / sizeof(uint32_t))
         return KERNEL_VM_CORRUPT;
-    if (kernel_memory_alloc_zeroed_tagged(
-            KERNEL_ALLOCATION_SITE_AREA_PAGE_METADATA, 1u, 1u,
-            KERNEL_FRAME_KERNEL, KERNEL_OWNER_CORE, &physical) !=
-        KERNEL_MEMORY_OK)
-        return KERNEL_VM_OUT_OF_MEMORY;
+    allocation = allocate_page_metadata(&physical, &storage);
+    if (allocation != KERNEL_AREA_OK)
+        return allocation == KERNEL_AREA_OUT_OF_MEMORY ?
+            KERNEL_VM_OUT_OF_MEMORY : KERNEL_VM_CORRUPT;
     area->span_tables_physical = physical;
-    tables = span_tables(area);
-    if (tables == NULL) {
-        (void)release_span_tables(area);
-        return KERNEL_VM_CORRUPT;
-    }
+    tables = storage;
     for (uint32_t span = 0u; span < span_count(area); ++span) {
         bool any = false;
         KernelVmStatus status;
@@ -643,7 +760,11 @@ static void maybe_free(KernelArea *area)
 
 static bool release_area_storage(KernelArea *area)
 {
-    bool released = release_span_tables(area);
+    bool released;
+
+    if (!release_dirty_metadata(area))
+        return false;
+    released = release_span_tables(area);
 
     for (uint32_t page = 0u; page < area->page_count; ++page) {
         uint32_t *entry;
@@ -1576,6 +1697,140 @@ uint32_t kernel_area_pager_epoch(const KernelArea *area)
            area->pager != NULL ? area->pager_epoch : 0u;
 }
 
+static KernelAreaStatus pager_page_status(const KernelArea *area,
+                                           uint32_t offset)
+{
+    if (!valid_area(area) || (offset & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
+        !range_valid(area, offset, KERNEL_PAGE_SIZE))
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    if (area->state != KERNEL_AREA_LIVE)
+        return KERNEL_AREA_PEER_DEAD;
+    if (area->pager == NULL || area->reserved_form == 0u ||
+        !page_committed(area, offset / KERNEL_PAGE_SIZE))
+        return KERNEL_AREA_INVALID_STATE;
+    return KERNEL_AREA_OK;
+}
+
+static KernelAreaStatus protect_pager_page(KernelArea *area, uint32_t page,
+                                           bool writable)
+{
+    uint32_t *tables;
+
+    if (area->span_tables_physical == 0u)
+        return KERNEL_AREA_OK;
+    tables = span_tables(area);
+    if (tables == NULL ||
+        kernel_vm_shared_table_protect(
+            area->frame_owner, tables[page / KERNEL_VM_SHARED_TABLE_PAGES],
+            page % KERNEL_VM_SHARED_TABLE_PAGES, *page_entries(area, page),
+            writable) != KERNEL_VM_OK)
+        return KERNEL_AREA_CORRUPT;
+    return KERNEL_AREA_OK;
+}
+
+KernelAreaStatus kernel_area_mark_dirty(KernelArea *area, uint32_t offset)
+{
+    KernelAreaStatus status = pager_page_status(area, offset);
+    KernelAreaDirty *dirty;
+    KernelAreaDirtyPage *entry;
+    uint32_t page = offset / KERNEL_PAGE_SIZE;
+
+    if (status != KERNEL_AREA_OK)
+        return status;
+    dirty = dirty_state(area);
+    if (dirty != NULL && dirty->sequence == UINT32_MAX)
+        return KERNEL_AREA_BUSY;
+    if ((dirty == NULL || dirty->pending_pages == 0u) &&
+        area->child_references == UINT16_MAX)
+        return KERNEL_AREA_BUSY;
+    status = ensure_dirty_page(area, page);
+    if (status != KERNEL_AREA_OK)
+        return status;
+    status = protect_pager_page(area, page, true);
+    if (status != KERNEL_AREA_OK)
+        return status;
+    dirty = dirty_state(area);
+    entry = dirty_page(area, page);
+    if (dirty == NULL || entry == NULL)
+        return KERNEL_AREA_CORRUPT;
+    if (!page_pending(area, page)) {
+        if (dirty->pending_pages == 0u &&
+            kernel_area_child_retain(area) != KERNEL_AREA_OK)
+            return KERNEL_AREA_CORRUPT;
+        ++dirty->pending_pages;
+    }
+    entry->modified = 1u;
+    return KERNEL_AREA_OK;
+}
+
+KernelAreaStatus kernel_area_writeback_begin(KernelArea *area, uint32_t offset,
+                                             void *destination,
+                                             uint32_t *token)
+{
+    KernelAreaStatus status;
+    KernelAreaDirty *dirty;
+    KernelAreaDirtyPage *entry;
+    uint32_t next;
+
+    if (token == NULL)
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    *token = 0u;
+    if (destination == NULL)
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    status = pager_page_status(area, offset);
+    if (status != KERNEL_AREA_OK)
+        return status;
+    dirty = dirty_state(area);
+    entry = dirty_page(area, offset / KERNEL_PAGE_SIZE);
+    if (entry == NULL)
+        return KERNEL_AREA_INVALID_STATE;
+    if (entry->writeback != 0u)
+        return KERNEL_AREA_BUSY;
+    if (entry->modified == 0u)
+        return KERNEL_AREA_INVALID_STATE;
+    next = dirty->sequence;
+    if (!kernel_generation_advance(&next))
+        return KERNEL_AREA_BUSY;
+    status = protect_pager_page(area, offset / KERNEL_PAGE_SIZE, false);
+    if (status != KERNEL_AREA_OK)
+        return status;
+    status = kernel_area_read(area, offset, destination, KERNEL_PAGE_SIZE);
+    if (status != KERNEL_AREA_OK)
+        return status;
+    dirty->sequence = next;
+    entry->writeback = next;
+    /* A later mark sets this again while this snapshot remains in flight. */
+    entry->modified = 0u;
+    *token = next;
+    return KERNEL_AREA_OK;
+}
+
+KernelAreaStatus kernel_area_writeback_complete(KernelArea *area,
+                                                uint32_t offset,
+                                                uint32_t token, bool success)
+{
+    KernelAreaStatus status = pager_page_status(area, offset);
+    KernelAreaDirty *dirty;
+    KernelAreaDirtyPage *entry;
+
+    if (token == 0u)
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    if (status != KERNEL_AREA_OK)
+        return status;
+    dirty = dirty_state(area);
+    entry = dirty_page(area, offset / KERNEL_PAGE_SIZE);
+    if (entry == NULL || entry->writeback != token)
+        return KERNEL_AREA_INVALID_STATE;
+    if (dirty->pending_pages == 0u || area->child_references == 0u)
+        return KERNEL_AREA_CORRUPT;
+    entry->writeback = 0u;
+    if (!success)
+        entry->modified = 1u;
+    if (entry->modified == 0u && --dirty->pending_pages == 0u)
+        return kernel_area_child_release(area);
+    return KERNEL_AREA_OK;
+}
+
 
 /*
  * Withdraws one page from every address space holding the area, then releases
@@ -1630,6 +1885,9 @@ static KernelAreaStatus decommit_range(KernelArea *area, uint32_t offset,
         return KERNEL_AREA_INVALID_ARGUMENT;
     first = (offset + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
     last = (offset + byte_size) / KERNEL_PAGE_SIZE;
+    for (uint32_t page = first; page < last; ++page)
+        if (page_pending(area, page))
+            return KERNEL_AREA_BUSY;
     for (uint32_t page = first; page < last; ++page) {
         if (!page_committed(area, page))
             continue;
@@ -1681,6 +1939,9 @@ KernelAreaStatus kernel_area_reclaim_pager_pages(
     }
     while (scan_budget != 0u && cursor->remaining_slots != 0u) {
         KernelArea *area = area_at(cursor->slot);
+        KernelAreaDirty *dirty = area != NULL ? dirty_state(area) : NULL;
+        uint32_t dirty_pin = dirty != NULL && dirty->pending_pages != 0u ?
+            1u : 0u;
 
         --scan_budget;
         if (area != NULL && area->state == KERNEL_AREA_LIVE &&
@@ -1688,7 +1949,7 @@ KernelAreaStatus kernel_area_reclaim_pager_pages(
             return KERNEL_AREA_CORRUPT;
         if (area == NULL || area->state != KERNEL_AREA_LIVE ||
             area->pager == NULL || area->reserved_form == 0u ||
-            area->child_references != 0u || area->committed_pages == 0u ||
+            area->child_references != dirty_pin || area->committed_pages == 0u ||
             cursor->page >= area->page_count) {
             ++cursor->slot;
             cursor->page = 0u;
@@ -1700,7 +1961,8 @@ KernelAreaStatus kernel_area_reclaim_pager_pages(
                 AREA_PAGE_LEAF_ENTRIES;
             continue;
         }
-        if (page_committed(area, cursor->page)) {
+        if (page_committed(area, cursor->page) &&
+            !page_pending(area, cursor->page)) {
             if (!drop_page(area, cursor->page))
                 return KERNEL_AREA_CORRUPT;
             if (*released_pages == 0u)
@@ -2134,6 +2396,7 @@ bool kernel_area_pool_valid(void)
                 area->pager_epoch != 0u ||
                 area->pager_release != NULL ||
                 area->pager_release_context != NULL ||
+                area->dirty_physical != 0u ||
                 area->frames_released == 0u)
                 return false;
             for (uint32_t leaf = 0u; leaf < AREA_PAGE_LEAF_COUNT; ++leaf) {
@@ -2176,6 +2439,41 @@ bool kernel_area_pool_valid(void)
             /* The span-table directory is page metadata too. */
             if (area->span_tables_physical != 0u)
                 ++page_leaves;
+            if (area->dirty_physical != 0u) {
+                KernelAreaDirty *dirty = dirty_state(area);
+                uint32_t pending = 0u;
+
+                if (dirty == NULL || area->pager == NULL ||
+                    area->frames_released != 0u)
+                    return false;
+                ++page_leaves;
+                for (uint32_t leaf = 0u; leaf < AREA_DIRTY_LEAF_COUNT; ++leaf) {
+                    if ((dirty->leaves[leaf] == NULL) !=
+                        (dirty->physical[leaf] == 0u))
+                        return false;
+                    if (dirty->leaves[leaf] == NULL)
+                        continue;
+                    ++page_leaves;
+                    for (uint32_t index = 0u; index < AREA_DIRTY_LEAF_ENTRIES;
+                         ++index) {
+                        KernelAreaDirtyPage *entry = &dirty->leaves[leaf][index];
+                        uint32_t page = leaf * AREA_DIRTY_LEAF_ENTRIES + index;
+
+                        if (entry->modified > 1u ||
+                            entry->writeback > dirty->sequence)
+                            return false;
+                        if (entry->modified == 0u && entry->writeback == 0u)
+                            continue;
+                        if (page >= area->page_count ||
+                            !page_committed(area, page))
+                            return false;
+                        ++pending;
+                    }
+                }
+                if (pending != dirty->pending_pages ||
+                    (pending != 0u && area->child_references == 0u))
+                    return false;
+            }
             for (uint32_t page = 0u; page < area->page_count; ++page) {
                 if (page_committed(area, page))
                     ++present;

@@ -53,6 +53,10 @@
 #define KERNEL_SOAK_REPORT_INTERVAL 1000u
 #define KERNEL_AREA_PUBLISH_BUDGET_CYCLES 20000u
 #define KERNEL_SHARED_PROTECT_BUDGET_CYCLES 128u
+#define KERNEL_AREA_COPY_BUDGET_CYCLES 5000u
+#define KERNEL_AREA_DIRTY_BUDGET_CYCLES 5000u
+#define KERNEL_AREA_WRITEBACK_BUDGET_CYCLES 6000u
+#define KERNEL_AREA_COMPLETE_BUDGET_CYCLES 256u
 #define PANIC_SCREEN_TRACE_RECORDS 6u
 #define PANIC_REPORT_TRACE_RECORDS 32u
 
@@ -104,9 +108,17 @@ static struct {
     uint8_t access_fault;
 } panic_exception;
 #if ASTRA_KERNEL_K1_QUALIFICATION
+typedef struct KernelAreaQualification {
+    uint32_t publish;
+    uint32_t reclaim;
+    uint32_t copy;
+    uint32_t dirty;
+    uint32_t writeback;
+    uint32_t complete;
+} KernelAreaQualification;
+
 static uint32_t qualification_survivor_process_id;
-static bool qualification_publish_page(uint32_t *cycles,
-                                       uint32_t *reclaim_cycles);
+static bool qualification_publish_page(KernelAreaQualification *cycles);
 static bool qualification_shared_protection(uint32_t *cycles);
 #endif
 static KernelAddressSpace user_copy_selftest_space;
@@ -1620,7 +1632,7 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     uint32_t performance_mask;
     uint32_t qualification_authorized;
     uint32_t qualification_completed;
-    uint32_t publish_cycles;
+    KernelAreaQualification area_cycles;
 
     kernel_performance_freeze();
     kernel_irqoff_latency_freeze();
@@ -1819,22 +1831,45 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
         console_putc('\n');
         kernel_panic("interrupt-disabled latency budget exceeded");
     }
-    uint32_t reclaim_cycles;
-    if (!qualification_publish_page(&publish_cycles, &reclaim_cycles))
+    if (!qualification_publish_page(&area_cycles))
         kernel_panic("K1 page publication failed");
     console_puts("K8 PAGE PUBLISH cycles=");
-    console_dec32(publish_cycles);
+    console_dec32(area_cycles.publish);
     console_putc('/');
     console_dec32(KERNEL_AREA_PUBLISH_BUDGET_CYCLES);
-    if (publish_cycles > KERNEL_AREA_PUBLISH_BUDGET_CYCLES)
+    if (area_cycles.publish > KERNEL_AREA_PUBLISH_BUDGET_CYCLES)
         kernel_panic("K1 page publication budget exceeded");
     console_puts(" PASS\n");
     console_puts("K8 PAGER PRESSURE cycles=");
-    console_dec32(reclaim_cycles);
+    console_dec32(area_cycles.reclaim);
     console_putc('/');
     console_dec32(KERNEL_PERFORMANCE_BUDGET_LIBRARY_CACHE);
-    if (reclaim_cycles > KERNEL_PERFORMANCE_BUDGET_LIBRARY_CACHE)
+    if (area_cycles.reclaim > KERNEL_PERFORMANCE_BUDGET_LIBRARY_CACHE)
         kernel_panic("K1 pager pressure budget exceeded");
+    console_puts(" PASS\n");
+    console_puts("K8 PAGE COPY cycles=");
+    console_dec32(area_cycles.copy);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_COPY_BUDGET_CYCLES);
+    if (area_cycles.copy > KERNEL_AREA_COPY_BUDGET_CYCLES)
+        kernel_panic("K1 page copy budget exceeded");
+    console_puts(" PASS\n");
+    console_puts("K8 PAGER WRITEBACK dirty=");
+    console_dec32(area_cycles.dirty);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_DIRTY_BUDGET_CYCLES);
+    console_puts(" snapshot=");
+    console_dec32(area_cycles.writeback);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_WRITEBACK_BUDGET_CYCLES);
+    console_puts(" complete=");
+    console_dec32(area_cycles.complete);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_COMPLETE_BUDGET_CYCLES);
+    if (area_cycles.dirty > KERNEL_AREA_DIRTY_BUDGET_CYCLES ||
+        area_cycles.writeback > KERNEL_AREA_WRITEBACK_BUDGET_CYCLES ||
+        area_cycles.complete > KERNEL_AREA_COMPLETE_BUDGET_CYCLES)
+        kernel_panic("K1 pager writeback budget exceeded");
     console_puts(" PASS\n");
     uint32_t protect_cycles;
     if (!qualification_shared_protection(&protect_cycles))
@@ -2022,8 +2057,7 @@ done:
     return passed;
 }
 
-static bool qualification_publish_page(uint32_t *cycles,
-                                       uint32_t *reclaim_cycles)
+static bool qualification_publish_page(KernelAreaQualification *cycles)
 {
     KernelAddressSpace space = {0};
     KernelArea *area = NULL;
@@ -2031,6 +2065,7 @@ static bool qualification_publish_page(uint32_t *cycles,
     KernelAreaReclaimCursor cursor = {0};
     KernelPort *pager = NULL;
     static uint8_t source[KERNEL_PAGE_SIZE];
+    static uint8_t snapshot[KERNEL_PAGE_SIZE];
     uint8_t bytes[16];
     uint8_t tail[16];
     uint32_t base = 0u;
@@ -2038,14 +2073,15 @@ static bool qualification_publish_page(uint32_t *cycles,
     uint32_t started;
     uint32_t released;
     uint32_t reclaimed = 0u;
+    uint32_t token = 0u;
+    uint32_t newer = 0u;
     bool mapped = false;
     bool passed = false;
     bool request_valid;
 
-    if (cycles == NULL || reclaim_cycles == NULL)
+    if (cycles == NULL)
         return false;
-    *cycles = 0u;
-    *reclaim_cycles = 0u;
+    *cycles = (KernelAreaQualification){0};
     for (uint32_t index = 0u; index < KERNEL_PAGE_SIZE; ++index)
         source[index] = (uint8_t)(index ^ 0x5au);
     if (kernel_vm_create_address_space(KERNEL_SELFTEST_OWNER, &space) !=
@@ -2091,7 +2127,17 @@ static bool qualification_publish_page(uint32_t *cycles,
     if (kernel_area_publish_page(area, 0u, source, sizeof(source)) !=
             KERNEL_AREA_OK)
         goto done;
-    *cycles = kernel_platform_cpu_cycles_low() - started;
+    cycles->publish = kernel_platform_cpu_cycles_low() - started;
+    for (uint32_t sample = 0u; sample < 32u; ++sample) {
+        started = kernel_platform_cpu_cycles_low();
+        if (kernel_area_read(area, 0u, snapshot, sizeof(snapshot)) !=
+                KERNEL_AREA_OK)
+            goto done;
+        uint32_t elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > cycles->copy) cycles->copy = elapsed;
+        if (!kernel_bytes_equal(source, snapshot, sizeof(source)))
+            goto done;
+    }
     if (kernel_vm_read(&space, base, bytes, sizeof(bytes)) != KERNEL_VM_OK ||
         kernel_vm_read(&space, base + KERNEL_PAGE_SIZE - sizeof(tail), tail,
                        sizeof(tail)) != KERNEL_VM_OK ||
@@ -2112,6 +2158,63 @@ static bool qualification_publish_page(uint32_t *cycles,
     for (uint32_t index = 0u; index < sizeof(bytes); ++index)
         if (bytes[index] != (index < 5u ? source[index] : 0u))
             passed = false;
+    if (!passed)
+        goto done;
+    passed = false;
+    for (uint32_t sample = 0u; sample < 32u; ++sample) {
+        uint32_t physical;
+        uint8_t *page;
+
+        started = kernel_platform_cpu_cycles_low();
+        if (kernel_area_mark_dirty(area, 0u) != KERNEL_AREA_OK)
+            goto done;
+        uint32_t elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > cycles->dirty) cycles->dirty = elapsed;
+        started = kernel_platform_cpu_cycles_low();
+        if (kernel_area_writeback_begin(area, 0u, snapshot, &token) !=
+                KERNEL_AREA_OK)
+            goto done;
+        elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > cycles->writeback) cycles->writeback = elapsed;
+        if (!kernel_bytes_equal(source, snapshot, sizeof(source)) ||
+            kernel_area_reclaim(area, 0u, 2u * KERNEL_PAGE_SIZE, &released) !=
+                KERNEL_AREA_BUSY || released != 0u ||
+            kernel_area_mark_dirty(area, 0u) != KERNEL_AREA_OK ||
+            !kernel_area_page_physical(area, 0u, &physical))
+            goto done;
+        page = kernel_memory_access(physical, KERNEL_PAGE_SIZE);
+        if (page == NULL)
+            goto done;
+        source[0] ^= 0x5au;
+        page[0] = source[0];
+        if (kernel_area_writeback_begin(area, 0u, snapshot, &newer) !=
+                KERNEL_AREA_BUSY || newer != 0u || snapshot[0] == source[0] ||
+            kernel_area_writeback_complete(area, 0u, token, true) !=
+                KERNEL_AREA_OK ||
+            kernel_area_reclaim(area, 0u, KERNEL_PAGE_SIZE, &released) !=
+                KERNEL_AREA_BUSY)
+            goto done;
+        for (uint32_t retry = 0u; retry < 2u; ++retry) {
+            started = kernel_platform_cpu_cycles_low();
+            if (kernel_area_writeback_begin(area, 0u, snapshot, &newer) !=
+                    KERNEL_AREA_OK || newer == token)
+                goto done;
+            elapsed = kernel_platform_cpu_cycles_low() - started;
+            if (elapsed > cycles->writeback) cycles->writeback = elapsed;
+            if (!kernel_bytes_equal(source, snapshot, sizeof(source)) ||
+                kernel_area_writeback_complete(area, 0u, token, true) !=
+                    KERNEL_AREA_INVALID_STATE)
+                goto done;
+            started = kernel_platform_cpu_cycles_low();
+            if (kernel_area_writeback_complete(area, 0u, newer, retry != 0u) !=
+                    KERNEL_AREA_OK)
+                goto done;
+            elapsed = kernel_platform_cpu_cycles_low() - started;
+            if (elapsed > cycles->complete) cycles->complete = elapsed;
+            token = newer;
+        }
+    }
+    passed = true;
     for (uint32_t pass = 0u; pass < 1024u; ++pass) {
         started = kernel_platform_cpu_cycles_low();
         if (kernel_area_reclaim_pager_pages(&cursor, 64u, &released) !=
@@ -2120,8 +2223,8 @@ static bool qualification_publish_page(uint32_t *cycles,
             break;
         }
         uint32_t elapsed = kernel_platform_cpu_cycles_low() - started;
-        if (elapsed > *reclaim_cycles)
-            *reclaim_cycles = elapsed;
+        if (elapsed > cycles->reclaim)
+            cycles->reclaim = elapsed;
         reclaimed += released;
         if (cursor.remaining_slots == 0u)
             break;

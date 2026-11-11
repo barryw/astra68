@@ -8,6 +8,41 @@ ordinary writes still bypass mapped resident frames. Dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Dirty-page prerequisite, 2026-11-10: reviewed Haiku
+`src/system/kernel/vm/vm_page_writer.cpp:176-282` and
+`src/system/kernel/vm/VMCache.cpp:1288-1344`. Modified and in-flight state
+must be separate: snapshotting clears only the modified flag, later edits
+set it again, and failed completion restores it. Astra permits one snapshot
+per page, consumes only its exact nonwrapping token, and keeps pending pages
+under one existing area child reference. Token exhaustion refuses further
+dirty marks or snapshots without wrapping or discarding data. Clean pages remain reclaimable;
+whole-range invalidation first refuses any dirty or in-flight page without
+partially discarding the range. Clean-page reclamation does not invalidate
+unrelated writeback tokens. Lazy directory/leaves use the existing tagged
+page-metadata allocator; the opaque area record grows four MC68040 bytes,
+with eight records still fitting one frame. No new queue or worker exists.
+The native area seam covers redirty, failure, duplicate/stale completion,
+allocation rollback, sparse metadata, lifetime and pressure. File writes and
+writable user mappings remain guarded until VFS coherence/writeback is joined.
+
+Before the new path, the existing K1 area fixture copied a complete resident
+page 32 times: Beast's pinned MC68040/icount baseline is 3,322 cycles, with
+all 18 markers passing. The copy budget is 5,000 cycles; new dirty-mark,
+snapshot and completion budgets are 5,000/6,000/256 cycles respectively,
+assigned before their target gate. Snapshot cost includes sealing and the
+same existing copy. This is a dependency regression gate, not filesystem
+performance qualification. Evidence lives in
+`/home/barry/astra-evidence/dirty-page-lifecycle-20261110/` on Beast.
+Full kernel host/MC68040 verification, area ASan/UBSan and six independent
+broken-behavior mutations pass. Beast and DE25 K1 both pass all 19 markers:
+dirty mark 577/5,000, snapshot 3,465/6,000 and completion 100/256 cycles,
+zero overruns. The 32-round fixture checks immutable snapshots, redirty,
+failure/retry, stale completion and pending-page invalidation before clean
+pressure reclaim. Hardware log/ROM hashes match their archive; private board
+state is removed, selected services/stage 8 and 8.5 GiB free are verified.
+Normal artifacts are restored. This is the native lifecycle prerequisite;
+backend writeback, VFS write coherence and writable mapping gates remain open.
+
 Checked shared-page protection prerequisite, 2026-11-10: VM can update a
 current owned page's write-protection bit without unmapping or replacing its
 frame. Expected-frame validation refuses stale transitions; other descriptor

@@ -2,6 +2,36 @@
 
 Status: active continuation map, 2026-11-10
 
+Dirty-page lifecycle prerequisite qualified, 2026-11-10: native area host
+tests pass for separate modified/in-flight state, one snapshot per page,
+exact nonwrapping completion tokens, failed/redirtied data retention,
+all-or-nothing invalidation, clean pressure and last-close retention through
+the existing child reference. Sparse dirty metadata shares the existing
+tagged allocator. Haiku vm_page_writer.cpp:176-282 and VMCache.cpp:1288-1344
+are the reference; no new queue/worker or public write path is introduced.
+The existing 4 KiB copy measured 3,322 cycles on pinned MC68040/icount before
+the change (18 markers pass). Assigned dependency budgets are copy 5,000,
+dirty mark 5,000, snapshot 6,000 and completion 256 cycles. Full kernel host
+and MC68040 verification pass, as does the area suite under ASan/UBSan.
+Six private mutations losing redirty/failure state, accepting stale or
+overlapping completions, partially invalidating a range, or reclaiming dirty
+pages each fail the native area seam. Metadata-allocation failure and lifetime
+pin exhaustion preserve state/accounting. Beast and DE25 both pass 19 K1
+markers, zero overruns: dirty mark 577/5,000, snapshot 3,465/6,000, completion
+100/256, copy 3,322/5,000, publication 6,546/20,000, pressure 495/2,500,000,
+shared protection 43/128. Qualified ROM SHA-256 is
+a2325354bd5fd61cc7bafa943dba7699d6a5ad6f40598c3c610e824a6e4e93d1.
+Hardware log/ROM archive hashes match; the private fixture is removed. All
+three selected services are active at stage 8, loop0 only, 8.5 GiB free.
+Production image/user data was not opened by the trial tooling. Normal
+artifacts are restored and verified; normal ROM SHA-256 is
+21a242f4fdee5d5f85bf6200e5c6edf03ddef7d029ad1c0aa897ffa9d38403c0.
+Evidence: /home/barry/astra-evidence/dirty-page-lifecycle-20261110/.
+This qualifies the internal lifecycle prerequisite, not backend writeback,
+writable mappings or filesystem performance. VFS coherence/writeback,
+private/COW mappings, full EOF/truncate, attribution and release gates remain
+open. Public write guards remain; no public ABI/export changed.
+
 Writable-cache protection prerequisite, 2026-11-10: reviewed existing
 shared-table set/clear, strict process-private read-only sealing, area pager
 guards and tests before extending VM. Process-private sealing deliberately

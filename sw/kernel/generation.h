@@ -12,6 +12,16 @@ uint32_t kernel_generation_next(uint32_t generation)
     return generation == 0u ? 1u : generation;
 }
 
+/* An outstanding operation must never alias an older completion token. */
+static inline __attribute__((always_inline))
+bool kernel_generation_advance(uint32_t *generation)
+{
+    if (generation == NULL || *generation == UINT32_MAX)
+        return false;
+    ++*generation;
+    return true;
+}
+
 static inline __attribute__((always_inline))
 uint32_t kernel_generation_next_masked(uint32_t generation, uint32_t mask)
 {

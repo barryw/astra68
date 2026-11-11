@@ -148,6 +148,19 @@ KernelAreaStatus kernel_area_publish_page(KernelArea *area, uint32_t offset,
                                           uint32_t valid_bytes);
 bool kernel_area_page_resident(const KernelArea *area, uint32_t offset);
 uint32_t kernel_area_pager_epoch(const KernelArea *area);
+/* Internal pager-page lifecycle, within one uninterrupted kernel section.
+ * Mark before modifying bytes. Begin seals and copies one complete page into
+ * a separate kernel buffer. Only one snapshot per page may be in flight.
+ * Complete consumes its exact nonzero token; failure or later modification
+ * keeps the page pending. Pending pages hold one existing area child pin.
+ * File I/O and writable user mappings remain separately authorized. */
+KernelAreaStatus kernel_area_mark_dirty(KernelArea *area, uint32_t offset);
+KernelAreaStatus kernel_area_writeback_begin(KernelArea *area, uint32_t offset,
+                                             void *destination,
+                                             uint32_t *token);
+KernelAreaStatus kernel_area_writeback_complete(KernelArea *area,
+                                                uint32_t offset,
+                                                uint32_t token, bool success);
 /*
  * Drops the committed pages of a reserved area that lie wholly inside the
  * range, and keeps the reservation. This is what makes freeing memory mean

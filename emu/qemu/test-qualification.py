@@ -60,6 +60,8 @@ MARKERS = [
     "K7 MESSAGE PORTS PASS",
     "K8 SHARED BULK IPC PASS",
     "K8 PAGE PUBLISH cycles=",
+    "K8 PAGE COPY cycles=",
+    "K8 PAGER WRITEBACK dirty=",
     "K8 PAGER PRESSURE cycles=",
     "K8 SHARED PROTECT cycles=",
     "K8 PAGER GUEST PASS",
@@ -142,8 +144,9 @@ def main():
     elapsed = time.monotonic() - started
     for line in lines:
         if line.startswith(("K2 PERF ", "K8 PERF ", "K10 PERF ",
-                           "K PERF RAW ", "K8 PAGE PUBLISH ",
-                           "K8 PAGER PRESSURE ", "K8 SHARED PROTECT ")):
+                           "K PERF RAW ", "K8 PAGE PUBLISH ", "K8 PAGE COPY ",
+                           "K8 PAGER PRESSURE ", "K8 SHARED PROTECT ",
+                           "K8 PAGER WRITEBACK ")):
             print(line)
 
     failures = []
