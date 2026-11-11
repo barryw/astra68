@@ -293,6 +293,11 @@ uint32_t astra_vfs_backend_read_page(const AstraVfsBackend *backend,
 uint32_t astra_vfs_backend_write_page(const AstraVfsBackend *backend,
     uintptr_t node, const AstraVfsNodeInfo *expected, uint64_t offset,
     const void *page, uint32_t *moved, AstraVfsNodeInfo *current);
+/* The retained-description form keeps one file acquisition across the full
+ * snapshot write, sync and final stat; accepted prefixes count as mutations. */
+uint32_t astra_vfs_service_write_page_retained(AstraVfsService *service,
+    AstraVfsFile retained, const AstraVfsNodeInfo *expected, uint64_t offset,
+    const void *page, uint32_t *moved, AstraVfsNodeInfo *current);
 uint32_t astra_vfs_service_stat_retained(AstraVfsService *service,
     AstraVfsFile retained, AstraVfsNodeInfo *info);
 uint32_t astra_vfs_service_write_retained(AstraVfsService *service,

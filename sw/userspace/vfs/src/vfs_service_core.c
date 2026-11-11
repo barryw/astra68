@@ -1742,6 +1742,44 @@ astra_vfs_backend_write_page(const AstraVfsBackend *backend, uintptr_t node,
 }
 
 uint32_t
+astra_vfs_service_write_page_retained(AstraVfsService *service,
+    AstraVfsFile retained, const AstraVfsNodeInfo *expected, uint64_t offset,
+    const void *page, uint32_t *moved, AstraVfsNodeInfo *current)
+{
+    AstraVfsOpenFile *file;
+    uint32_t status;
+
+    if (moved != NULL) *moved = 0u;
+    if (service == NULL || expected == NULL || page == NULL ||
+        moved == NULL || current == NULL) {
+        if (current != NULL) node_info_clear(current);
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    if (!state_acquire(service)) {
+        node_info_clear(current);
+        return ASTRA_VFS_ERR_IO;
+    }
+    status = acquire_retained(service, retained, &file);
+    if (status == ASTRA_VFS_OK && (file->flags & ASTRA_VFS_OPEN_WRITE) == 0u) {
+        file_release(service, file);
+        status = ASTRA_VFS_ERR_ACCESS;
+    }
+    if (status != ASTRA_VFS_OK) {
+        node_info_clear(current);
+        state_release(service);
+        return status;
+    }
+    state_release(service);
+    status = astra_vfs_backend_write_page(&file->backend, file->node,
+        expected, offset, page, moved, current);
+    if (!state_acquire(service)) return ASTRA_VFS_ERR_IO;
+    if (*moved != 0u) ++service->changes.nodes;
+    file_release(service, file);
+    state_release(service);
+    return status;
+}
+
+uint32_t
 astra_vfs_service_stat_retained(AstraVfsService *service,
                                 AstraVfsFile retained, AstraVfsNodeInfo *info)
 {

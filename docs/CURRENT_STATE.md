@@ -2,6 +2,45 @@
 
 Status: active continuation map, 2026-11-11
 
+Retained native snapshot writeback qualified on DE25, 2026-11-11. The existing backend page
+writer now has a service-private retained-description entry point. One file
+acquisition covers validation, positioned short writes, sync and final stat;
+backend I/O runs outside the service state lock. Read-only retained files are
+refused. Valid accepted prefixes advance the existing mutation sequence even
+when later write/sync fails; failures never authorize cleaning a VM snapshot.
+Aliased expected/current metadata remains supported. The cache owner still
+serializes node-wide mutations and reconciles external changes. No new cache, cursor,
+worker, public API or ABI is added. Haiku cache/file_cache.cpp:1453-1502 and
+fs/fd.cpp:188-240 guide backing I/O and retained open-description lifetime;
+Astra reuses its existing snapshot writer and file acquisition.
+Host/ASan/UBSan and ThreadSanitizer gates pass. Native scoped-io now exercises
+snapshot writeback after client close, backend rebind and session reuse,
+checking original root, four-byte EOF, append mode and cursor 123. Only fssem
+changes in candidate
+faf21cfd3e008ece227f41b4596090b79de7af3601ecdc41e79117974f324e03;
+kernel, ROM, libraries and services come from the qualified native-transfer
+release. Beast passes 10 native cases, provider reset, two fresh I/O cases
+and read-only fsck; all 10 pin, authority, backend, accounting and result
+mutations are rejected. DE25 passes the same 10 cases, provider reset and two
+fresh I/O cases. Startup observer, native gate and 600-second trial return zero
+without panic/degraded markers. All 561 archived hashes match, including the
+offline image and paired private settings/key; read-only fsck passes. Final
+source patch matches the candidate. Private trial state is removed; selected
+services are restored at stage 8 with zero restarts, loop0 only and 8.4 GiB
+free. Production image/data were not opened by trial tooling. Artifact sync
+kept root ownership and reused 2,628 immutable files through link-dest.
+Initial fixture field-name
+compile error, wrong-host-ABI launch refusal and deadlocking mutation are
+retained. The first native run passed eight unchanged cases but refused
+optional client calls on a local transport that advertises no features.
+The fixture now uses the existing native dispatch seam for flags/seek,
+retaining all append/cursor checks; the writeback implementation is unchanged.
+Evidence:
+/home/barry/astra-evidence/vfs-retained-writeback-20261111/.
+Grant DATA remains guarded; canonical cached mutation, mapped file-area
+ownership, dirty writeback/conflicts, writable/private maps and exact mapped
+users are still required. Network mounts remain outside this goal.
+
 Native VFS description transfer qualified on DE25, 2026-11-11. The service owns pending
 SHARE references in its existing generation-checked file table, charged to
 the authenticated session. ADOPT preserves the captured backend and provider

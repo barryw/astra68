@@ -2788,6 +2788,7 @@ static int case_scoped_io(const char *directory)
 {
     static const AstraVfsBackendBindingOps ops = {scoped_io_acquire, scoped_io_retain, scoped_io_release};
     AstraVfsClient *clients = calloc(3u, sizeof(*clients));
+    uint8_t *page = malloc(ASTRA_MEMORY_PAGE_SIZE);
     AstraVfsService core = {0};
     AstraVfsSessionSlot sessions[3] = {0};
     AstraVfsOpenFile files[4] = {0};
@@ -2796,8 +2797,8 @@ static int case_scoped_io(const char *directory)
     ScopedIoBindings bindings = {0};
     AstraVfsFile file = 0u, retained = 0u;
     AstraVfsClient *parent = NULL;
-    uint32_t grants[2] = {0}, entered[2] = {0}, ready = 0u, moved = 0u, used = 0u;
-    uint64_t size = 0u, next = 0u;
+    uint32_t grants[2] = {0}, entered[2] = {0}, ready = 0u, moved = 0u, used = 0u, flags = 0u;
+    uint64_t size = 0u, next = 0u, position = 0u;
     char roots[2][192], paths[2][192], bytes[128];
     const char *stage = "create roots";
     int result = 2;
@@ -2806,7 +2807,7 @@ static int case_scoped_io(const char *directory)
     join(roots[1], sizeof(roots[1]), directory, "right");
     join(paths[0], sizeof(paths[0]), roots[0], "same");
     join(paths[1], sizeof(paths[1]), roots[1], "same");
-    if (clients == NULL || mkdir(roots[0], 0755) != 0 || mkdir(roots[1], 0755) != 0 ||
+    if (clients == NULL || page == NULL || mkdir(roots[0], 0755) != 0 || mkdir(roots[1], 0755) != 0 ||
         write_text(paths[0], "left", O_WRONLY | O_CREAT | O_EXCL) != 0 ||
         write_text(paths[1], "right", O_WRONLY | O_CREAT | O_EXCL) != 0) goto done;
     parent = astra_process_vfs_client_handle_lookup(work_grant());
@@ -2860,8 +2861,19 @@ static int case_scoped_io(const char *directory)
             sizeof(bytes), &moved, &size) != ASTRA_VFS_OK || moved != 5u ||
         memcmp(bytes, "right", 5u) != 0 ||
         astra_vfs_read(&clients[2], file, 0u, bytes, sizeof(bytes), &moved) != ASTRA_VFS_OK ||
-        moved != 4u || memcmp(bytes, "left", 4u) != 0 ||
-        astra_vfs_service_retain_file(&core, clients[2].session, file, &retained) != ASTRA_VFS_OK ||
+        moved != 4u || memcmp(bytes, "left", 4u) != 0) goto done;
+    stage = "retained description flags and cursor";
+    request.file = file;
+    request.flags = ASTRA_VFS_OPEN_APPEND;
+    request.offset = ASTRA_VFS_OPEN_APPEND;
+    astra_vfs_service_dispatch(&core, ASTRA_VFS_OP_FILE_FLAGS, &request, NULL, &reply);
+    if (reply.status != ASTRA_VFS_OK || (reply.open_flags & ASTRA_VFS_OPEN_APPEND) == 0u) goto done;
+    request.flags = 0u;
+    request.offset = 123u;
+    astra_vfs_service_dispatch(&core, ASTRA_VFS_OP_SEEK, &request, NULL, &reply);
+    if (reply.status != ASTRA_VFS_OK || reply.position != 123u) goto done;
+    stage = "retain before client close";
+    if (astra_vfs_service_retain_file(&core, clients[2].session, file, &retained) != ASTRA_VFS_OK ||
         astra_vfs_close(&clients[2], file) != ASTRA_VFS_OK ||
         astra_vfs_disconnect(&clients[2]) != ASTRA_VFS_OK) goto done;
     stage = "retained backend after session reuse";
@@ -2871,6 +2883,19 @@ static int case_scoped_io(const char *directory)
         astra_vfs_service_sync_retained(&core, retained) != ASTRA_VFS_OK ||
         astra_vfs_service_read_retained(&core, retained, 0u, bytes, sizeof(bytes), &moved) !=
             ASTRA_VFS_OK || moved != 4u || memcmp(bytes, "Xeft", 4u) != 0) goto done;
+    stage = "retained snapshot writeback";
+    AstraVfsNodeInfo expected;
+    memset(page, 0x52, ASTRA_MEMORY_PAGE_SIZE);
+    memcpy(page, "Yeft", 4u);
+    if (astra_vfs_service_stat_retained(&core, retained, &expected) != ASTRA_VFS_OK ||
+        astra_vfs_service_write_page_retained(&core, retained, &expected,
+            0u, page, &moved, &expected) != ASTRA_VFS_OK || moved != 4u || expected.size != 4u ||
+        files[0].backend.ops->seek(files[0].backend.context, files[0].node,
+            0, 1u, &position) != ASTRA_VFS_OK || position != 123u ||
+        files[0].backend.ops->file_flags(files[0].backend.context, files[0].node,
+            0u, 0u, &flags) != ASTRA_VFS_OK || (flags & ASTRA_VFS_OPEN_APPEND) == 0u ||
+        astra_vfs_service_read_retained(&core, retained, 0u, bytes, sizeof(bytes), &moved) !=
+            ASTRA_VFS_OK || moved != 4u || memcmp(bytes, "Yeft", 4u) != 0) goto done;
     result = 0;
 done:
     if (ready && clients != NULL && clients[2].session != 0u)
@@ -2885,13 +2910,14 @@ done:
         if (grants[i] != 0u) (void)astra_close(grants[i]);
     }
     if (result == 0 && (bindings.failed || bindings.references[0] != 0u || bindings.references[1] != 0u ||
-        read_text(paths[0], bytes, sizeof(bytes)) != 4 || memcmp(bytes, "Xeft", 4u) != 0 ||
+        read_text(paths[0], bytes, sizeof(bytes)) != 4 || memcmp(bytes, "Yeft", 4u) != 0 ||
         read_text(paths[1], bytes, sizeof(bytes)) != 5 || memcmp(bytes, "right", 5u) != 0)) {
         result = 2; stage = "exact backing and lifetime";
     }
     (void)unlink(paths[0]); (void)unlink(paths[1]);
     (void)rmdir(roots[0]); (void)rmdir(roots[1]);
     free(clients);
+    free(page);
     (void)pthread_mutex_destroy(&core_mutex);
     return result == 0 ? 0 : fail("scoped-io %s", stage);
 }

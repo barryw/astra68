@@ -8,6 +8,41 @@ ordinary writes still bypass mapped resident frames. Dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Retained snapshot writeback qualified on DE25, 2026-11-11: the native service exposes
+its existing positioned snapshot writer through retained file ownership.
+One acquisition spans backing validation, all short writes, sync and final
+stat, with the service state lock released during I/O. Access checks precede
+backing I/O. Validated accepted bytes advance the native mutation sequence
+even when the rest fails; errors leave VM completion to the owner as failure.
+The expected/current metadata arguments may alias. The cache owner still
+serializes node-wide mutations and reconciles external changes. No new cache, cursor,
+lock, worker, public export or ABI is introduced.
+
+Haiku `src/system/kernel/cache/file_cache.cpp:1453-1502` routes backing writes
+through its cache owner, and `src/system/kernel/fs/fd.cpp:188-240` keeps open
+descriptions alive through use. Astra composes its existing retained file
+acquisition and snapshot writer rather than another byte-I/O path.
+Host tests, ASan/UBSan and ThreadSanitizer pass; 10 ownership/error mutations
+are rejected. Native scoped-io now writes a snapshot after client close,
+backend rebind and session reuse, preserving the original root, EOF four,
+append flag and cursor 123. Beast passes 10 cases, provider reset, two fresh
+I/O cases and fsck. Candidate
+`faf21cfd3e008ece227f41b4596090b79de7af3601ecdc41e79117974f324e03`
+changes only fssem; its private-core integration uses the existing extra-source
+seam. Kernel, ROM, runtime libraries and services are inherited unchanged.
+DE25 passes the same 10 cases, provider reset and two fresh I/O cases.
+Startup observer, native gate and 600-second trial all return zero without
+panic/degraded markers. All 561 archived hashes match, including the offline
+image and paired private settings/key; read-only fsck passes. Final source
+patch matches the candidate. Private trial state is removed; selected
+services are restored at stage 8 with zero restarts, loop0 only and 8.4 GiB
+free. Production image/data were not opened by trial tooling. Artifact
+transfer kept root ownership and reused 2,628 immutable files through link-dest.
+Initial fixture/build/launch/mutation failures
+are retained in `/home/barry/astra-evidence/vfs-retained-writeback-20261111/`.
+This does not enable grant DATA or writable maps: canonical file-area ownership,
+cached mutation, dirty conflict/writeback and exact mapped-user gates remain.
+
 Native description transfer, 2026-11-11: SHARE reserves an existing native
 file slot and pins its captured backend before provider I/O. Pending one-use
 tokens remain charged to the authenticated source session. ADOPT requires
