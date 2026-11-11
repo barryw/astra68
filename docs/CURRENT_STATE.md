@@ -2,6 +2,39 @@
 
 Status: active continuation map, 2026-11-11
 
+Grant admission pressure qualified on DE25, 2026-11-11. Native diagnostics pin the
+raw-orphans failure to grant-port creation returning RESOURCE_LIMIT: the
+preceding scope handle is 1278 (slot 254), leaving only one of 255 handles,
+while creating a port needs two. HostFS retained idle read-cache area handles
+but did not reclaim them on this admission path. Reusing its existing idle
+area reclaimer makes repeated eight-grant orphan/retirement gates pass without
+changing capacity or the eight-grant workload. One bounded reclaim policy now serves
+session open, scope/port creation, file adoption and area creation. Host tests
+drive real grant construction under RESOURCE_LIMIT, OUT_OF_MEMORY, hard I/O
+failure and pinned/mapped cache pressure; retries, rollback and ownership pass
+with sanitizers. Haiku port.cpp:977-1007 and cache/file_cache.cpp:reserve_pages
+guide admission/accounting and reclaimable-cache pressure; Astra retains its
+existing area-reference checks and no new kernel or ABI mechanism. Eight
+pressure, retry and ownership mutations are rejected. Beast qualification
+passes 22 cases, provider reset, two fresh I/O cases and fsck. DE25 passes 11
+cases, provider reset and two fresh I/O cases. Startup observer, native gate
+and 600-second trial all return zero without panic/degraded markers.
+The repeated run also exposed fixture cleanup defects: orphan clients now
+release transfer mappings/handles, and exact-area tests reserve their own free
+address instead of assuming a vacant slot. Strict retirement checks accept
+LOST or PEER_DEAD at the actual HELLO send/wait/receive boundary, never a
+timeout or unrelated error. Original failures are retained. Candidate:
+7a4921b337695e99a5979110449658a7d5d22b93a9f4a7429d11363ab6b97e50.
+Only HostFS and fssem are replaced; coherent libraries, kernel and ROM are
+unchanged. All 563 archived file hashes match, including the trial image and
+paired private settings/key; read-only fsck passes. Final native/test patch
+matches the candidate. Trial state is removed; selected services are restored
+at stage 8, zero restarts, loop0 only and 8.5 GiB free. Trial tooling never
+opened production image/data. Requester attribution, cached mutation/writeback
+and writable/private maps remain open; grant data admission stays guarded.
+Evidence:
+/home/barry/astra-evidence/vfs-grant-admission-20261111/.
+
 Scoped VFS backend ownership qualified on DE25, 2026-11-11. Sessions acquire rooted backend
 bindings; each open file retains its own binding through close/cache lifetime.
 All service path, file, bulk and retained I/O use that captured backend. Bulk
@@ -45,9 +78,9 @@ Selected image and production user data were never opened by trial tooling.
 Additional lifetime cases pass readonly/delegation/onward, process death,
 fork/exec, durability and alias identity, but raw-orphans hits LIMIT on derive
 index 6. The unchanged preceding release fails at the identical point. This
-existing resource/admission gate remains open; neither quota nor fixture was
-relaxed. Preserve both logs and diagnose the refusing budget before changing
-capacity or lifetime policy. Evidence:
+resource/admission gate remained open at that checkpoint; neither quota nor
+fixture was relaxed. The grant-admission qualification above identifies and
+closes this specific failure; both original logs are preserved. Evidence:
 /home/barry/astra-evidence/vfs-scoped-backends-20261111/.
 Grant data admission remains guarded: requester attribution, canonical cached
 mutation/writeback and writable/private maps are not complete.

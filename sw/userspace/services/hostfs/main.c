@@ -244,16 +244,23 @@ static void file_areas_maintain(int discard_idle);
 static int file_areas_observe_nodes(HostfsVolume *volume, uint64_t nodes);
 static void file_pager_stop_and_close(void);
 
+static int hostfs_reclaim_once(uint32_t attempt, int limited)
+{
+    if (attempt != 0u || !limited) return 0;
+    /* Idle cache areas hold handles as well as pages. */
+    file_areas_maintain(1);
+    return 1;
+}
+
 static uint32_t hostfs_session_open(uint32_t parent,
     const AstraVolumeReference *volume, const char *root, uint16_t flags,
     uint32_t requester, uint32_t *session)
 {
-    uint32_t status = astra_vfs_host_session_open(&transport, transport.generation,
-        parent, volume, root, flags, requester, session);
-    if (status == ASTRA_VFS_ERR_LIMIT) {
-        file_areas_maintain(1);
+    uint32_t status;
+    for (uint32_t attempt = 0u; attempt < 2u; ++attempt) {
         status = astra_vfs_host_session_open(&transport, transport.generation,
             parent, volume, root, flags, requester, session);
+        if (!hostfs_reclaim_once(attempt, status == ASTRA_VFS_ERR_LIMIT)) break;
     }
     return status;
 }
@@ -686,11 +693,15 @@ static uint32_t grant_add(HostfsVolume *owner, uint32_t session,
     if (root == NULL || root[0] != '/' || strlen(root) >= ASTRA_HOST_FS_PATH_MAX)
         return ASTRA_VFS_ERR_INVALID;
     if (grant_count == grant_capacity &&
-        (status = grow_grants()) != ASTRA_VFS_OK)
+        (status = grow_grants()) != ASTRA_VFS_OK) {
+        (void)astra_log_failure("hostfs grant table", status);
         return status;
+    }
     grant = astra_runtime_callocate(1u, sizeof(*grant));
-    if (grant == NULL)
+    if (grant == NULL) {
+        (void)astra_log_failure("hostfs grant allocation", ASTRA_VFS_ERR_LIMIT);
         return ASTRA_VFS_ERR_LIMIT;
+    }
     /* Adopt before creating any further resource. A partial construction uses
      * the same charged grant and retirement path as a published grant. */
     grant->owner = owner;
@@ -713,25 +724,36 @@ static uint32_t grant_add(HostfsVolume *owner, uint32_t session,
     }
     status = grant_backend_create(grant);
     if (status != ASTRA_VFS_OK) {
+        (void)astra_log_failure("hostfs grant backend", status);
         (void)grant_retire(at);
         return status;
     }
     AstraHostLeaseInfo lease = {0};
-    status = astra_host_scope_create(device_handle, session, flags, &grant->port.scope);
+    for (uint32_t attempt = 0u; attempt < 2u; ++attempt) {
+        status = astra_host_scope_create(device_handle, session, flags, &grant->port.scope);
+        if (!hostfs_reclaim_once(attempt,
+            status == ASTRA_SYSCALL_RESOURCE_LIMIT || status == ASTRA_SYSCALL_OUT_OF_MEMORY)) break;
+    }
     if (status == ASTRA_SYSCALL_OK)
         status = astra_host_scope_limit(grant->port.scope, owner_files);
     if (status == ASTRA_SYSCALL_OK)
         status = astra_host_lease_query(grant->port.scope, &lease);
     if (status != ASTRA_SYSCALL_OK) {
+        (void)astra_log_failure("hostfs grant scope setup", status);
         (void)grant_retire(at);
         return scope_status(status);
     }
-    status = astra_rt_port_create(
-        queue_messages,
-        queue_messages *
-            (uint32_t)sizeof(AstraVfsRequestMessage),
-        &grant->port.receive, send);
+    for (uint32_t attempt = 0u; attempt < 2u; ++attempt) {
+        status = astra_rt_port_create(
+            queue_messages,
+            queue_messages *
+                (uint32_t)sizeof(AstraVfsRequestMessage),
+            &grant->port.receive, send);
+        if (!hostfs_reclaim_once(attempt,
+            status == ASTRA_SYSCALL_RESOURCE_LIMIT || status == ASTRA_SYSCALL_OUT_OF_MEMORY)) break;
+    }
     if (status != ASTRA_SYSCALL_OK) {
+        (void)astra_log_failure("hostfs grant port", status);
         (void)grant_retire(at);
         if (*send != 0u) (void)astra_close(*send);
         *send = 0u;
@@ -793,6 +815,7 @@ static uint32_t hostfs_derive(void *context,
         (request->rights & ASTRA_VFS_GRANT_WRITE) == 0u ?
             ASTRA_HOST_FS_SESSION_READ_ONLY : 0u, request->deriver, &session);
     if (status != ASTRA_VFS_OK) {
+        (void)astra_log_failure("hostfs derive session", status);
         astra_runtime_deallocate(paths);
         return status;
     }
@@ -1016,10 +1039,9 @@ static uint32_t hostfs_file_area(void *context,
     if (!astra_vfs_host_init(&backend, &transport,
                              transport.generation, grant->session))
         return ASTRA_VFS_ERR_LOST;
-    status = ops->adopt(&backend, token, 0u, &node);
-    if (status == ASTRA_VFS_ERR_LIMIT) {
-        file_areas_maintain(1);
+    for (uint32_t attempt = 0u; attempt < 2u; ++attempt) {
         status = ops->adopt(&backend, token, 0u, &node);
+        if (!hostfs_reclaim_once(attempt, status == ASTRA_VFS_ERR_LIMIT)) break;
     }
     if (status != ASTRA_VFS_OK) return status;
     uint32_t open_flags = 0u;
@@ -1110,11 +1132,10 @@ static uint32_t hostfs_file_area(void *context,
             if (entry->area != 0u) (void)astra_close(entry->area);
             astra_runtime_deallocate(entry);
         }
-        if (status != ASTRA_VFS_ERR_LIMIT || attempt != 0u) {
+        if (!hostfs_reclaim_once(attempt, status == ASTRA_VFS_ERR_LIMIT)) {
             (void)ops->close(&backend, node);
             return status;
         }
-        file_areas_maintain(1);
     }
     ++file_pager_cookie;
     if (!astra_vfs_state_lock_acquire(&state_lock)) status = ASTRA_VFS_ERR_IO;

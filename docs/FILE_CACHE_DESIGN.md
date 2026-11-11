@@ -8,6 +8,38 @@ ordinary writes still bypass mapped resident frames. Dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Grant admission pressure, 2026-11-11: idle read-cache areas retained HostFS
+handles until scope creation occupied slot 254; creating the next grant port
+needed two slots and returned RESOURCE_LIMIT. Grant scope/port admission now
+uses the existing idle-area reclaimer, with one bounded retry only for
+resource pressure. Session open, file adoption and area creation share that
+retry policy. Handles, mappings, child references and pager pins still
+prevent eviction; cleanup failures remain owned and retryable. No quota,
+handle capacity, ABI or kernel change is introduced.
+
+Haiku `src/system/kernel/port.cpp:977-1007` accounts port admission, and
+`src/system/kernel/cache/file_cache.cpp:296-340` reclaims clean unmapped cache
+pages under pressure. Astra applies that pattern to its existing native area
+references rather than adding another resource budget or cache mechanism.
+Nine host pressure cases and ASan/UBSan pass; eight retry/admission/ownership
+mutations are rejected. Beast passes 22 native cases, provider reset, two
+fresh I/O cases and fsck. DE25 passes 11 cases, provider reset and two fresh
+I/O cases; observer, native gate and 600-second trial all return zero without
+panic/degraded markers. Orphan tests retain the eight-grant workload, now
+release their transfer mappings/handles and require precise loss/peer-death
+rejection. Exact-view tests obtain their own free address range. Original
+fixture failures and the HELLO peer-death diagnostic are retained.
+Candidate `7a4921b337695e99a5979110449658a7d5d22b93a9f4a7429d11363ab6b97e50`
+replaces only HostFS and fssem; libraries, kernel and ROM remain unchanged.
+All 563 archived hashes match, including the trial image and paired private
+settings/key; read-only fsck passes. Native/test patch matches the candidate.
+Trial state is removed. Selected services are restored at stage 8 with zero
+restarts, loop0 only and 8.5 GiB free. Production image/data were not opened
+by trial tooling. Grant data admission remains guarded; this closes the
+resource-pressure gate, not cached mutation or mapped-user attribution.
+Evidence:
+`/home/barry/astra-evidence/vfs-grant-admission-20261111/`.
+
 Service description controls, 2026-11-11: SEEK, FILE_FLAGS and
 POSITION_ADVANCE now pass through the existing service handle/session
 checks and file acquisition before reaching the backend. The direct adapter
@@ -1482,7 +1514,6 @@ Current remaining integration gates (2026-11-11):
 | Gate | Current boundary and required proof |
 |---|---|
 | Scoped mutation ownership | Scoped session/file backend retention, recovery isolation and backend-owned shared-description I/O are qualified. `vfs_client.c` and bulk writes still call the direct provider, then send FILE_MUTATED; grant ports still refuse data operations. Bind canonical I/O and share/adopt to actual native requesters before enabling that plane. |
-| Grant admission/lifetime capacity | Additional raw-orphans coverage returns LIMIT at derive index 6 on both the candidate and unchanged preceding release. Readonly/delegation/onward and process-death cases pass. Diagnose the refusing budget and prove that retiring roots recover capacity; do not relax the fixture or increase a limit without identifying its owner. |
 | Cache writeback | Native dirty/snapshot/completion and one positioned page write/sync are qualified. Connect ordinary writes and mapped modifications to those same owner pages; bounded writeback, sync/unmap/close error handling and dirty retention must pass together. A helper test alone does not qualify this gate. |
 | Mapping completeness | `posix/src/file.c` permits only PROT_READ file mappings and complete unmap; there is no POSIX msync implementation. Shared writable, private COW, anonymous and partial-unmap behavior must adapt to native VM facilities, with isolation, lifetime and failure tests before removing guards. |
 | EOF and external conflicts | Truncate/extend, partial final pages and faults beyond EOF need complete mapping tests. External NODE/GAP changes must invalidate clean pages while retaining locally dirty data and reporting conflicts; post-write invalidation alone is insufficient. |

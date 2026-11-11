@@ -1346,15 +1346,8 @@ static uint32_t raw_call(RawClient *raw, uint32_t service, uint32_t session,
     return status;
 }
 
-/* BYE, then drop the reply port and the scope: a raw client that leaves
- * tidily (review N4). */
-static void raw_close(RawClient *raw)
+static void raw_discard(RawClient *raw)
 {
-    AstraVfsReplyMessage reply;
-
-    if (raw->session != ASTRA_VFS_SESSION_INVALID)
-        (void)raw_call(raw, raw->service, raw->session, ASTRA_VFS_OP_BYE, 0u,
-                       "", &reply, NULL);
     if (raw->scope != 0u)
         (void)astra_close(raw->scope);
     if (raw->owns_reply && raw->reply_receive != 0u)
@@ -1362,6 +1355,27 @@ static void raw_close(RawClient *raw)
     if (raw->address != NULL) (void)astra_rt_area_unmap(raw->address);
     if (raw->area != 0u) (void)astra_close(raw->area);
     memset(raw, 0, sizeof(*raw));
+}
+
+/* A retired connection needs only raw_discard(); a live one first sends BYE. */
+static void raw_close(RawClient *raw)
+{
+    AstraVfsReplyMessage reply;
+
+    if (raw->session != ASTRA_VFS_SESSION_INVALID)
+        (void)raw_call(raw, raw->service, raw->session, ASTRA_VFS_OP_BYE, 0u,
+                       "", &reply, NULL);
+    raw_discard(raw);
+}
+
+static int raw_open_lost(const RawClient *raw, uint32_t status)
+{
+    return raw->session == 0u && raw->scope == 0u &&
+        ((status == ASTRA_STATUS_LOST && strcmp(raw->stage, "hello-status") == 0) ||
+         (status == ASTRA_SYSCALL_PEER_DEAD &&
+          (strcmp(raw->stage, "hello-send") == 0 ||
+           strcmp(raw->stage, "hello-wait") == 0 ||
+           strcmp(raw->stage, "hello-receive") == 0)));
 }
 
 /* The grant-relative path of `leaf` in a /work case directory. */
@@ -1745,14 +1759,20 @@ static int case_raw_orphans(const char *directory)
             &late, derived[index],
             astra_clock_monotonic() + UINT64_C(2000000000), 0u, 0u, 0);
 
-        CHECK(status != ASTRA_SYSCALL_OK,
-              "derived grant %d outlived its deriver", index);
-        if (late.reply_receive != 0u)
-            (void)astra_close(late.reply_receive);
+        CHECK(raw_open_lost(&late, status),
+              "derived grant %d status %u stage %s session %u scope %u", index,
+              (unsigned)status, late.stage, (unsigned)late.session, (unsigned)late.scope);
+        raw_discard(&late);
         (void)astra_close(derived[index]);
     }
-    (void)astra_close(held.scope);
-    (void)astra_close(held.reply_receive);
+    uint32_t held_area = held.area, handles = 0u, mappings = 0u, children = 0u;
+    void *held_address = held.address;
+    raw_discard(&held);
+    CHECK(held_area != 0u && held_address != NULL &&
+        astra_rt_area_references(held_area, &handles, &mappings, &children) ==
+            ASTRA_SYSCALL_INVALID_HANDLE &&
+        astra_rt_area_unmap(held_address) == ASTRA_SYSCALL_INVALID_ARGUMENT,
+        "orphan fixture kept transfer resources");
     return 0;
 }
 
@@ -1816,11 +1836,11 @@ static int case_raw_orphans_death(const char *directory)
             &late, got[index],
             astra_clock_monotonic() + UINT64_C(2000000000), 0u, 0u, 0);
 
-        CHECK(status != ASTRA_SYSCALL_OK,
-              "%s outlived its dead deriver",
-              index == 0 ? "a grant" : "a grandchild grant");
-        if (late.reply_receive != 0u)
-            (void)astra_close(late.reply_receive);
+        CHECK(raw_open_lost(&late, status),
+              "%s status %u stage %s session %u scope %u",
+              index == 0 ? "dead deriver's grant" : "dead deriver's grandchild grant",
+              (unsigned)status, late.stage, (unsigned)late.session, (unsigned)late.scope);
+        raw_discard(&late);
         (void)astra_close(got[index]);
     }
     (void)astra_close(send);
@@ -2878,7 +2898,7 @@ done:
 static int area_range_gate(const char *directory)
 {
     const uint32_t span = ASTRA_SHARED_AREA_TABLE_SPAN;
-    const uint32_t target = ASTRA_SHARED_AREA_ADDRESS_START + 16u * span;
+    uint32_t target = 0u;
     uint32_t area = 0u, size = 0u, released = 0u;
     void *tail = NULL, *head = NULL, *whole = NULL;
     void *at_head = NULL, *at_tail = NULL, *collision = NULL;
@@ -2910,6 +2930,10 @@ static int area_range_gate(const char *directory)
             &whole, &size) != ASTRA_SYSCALL_OK ||
         size != span + ASTRA_MEMORY_PAGE_SIZE)
         goto done;
+    stage = "release exact-view slot";
+    target = (uint32_t)(uintptr_t)whole;
+    if (astra_rt_area_unmap(whole) != ASTRA_SYSCALL_OK) goto done;
+    whole = NULL;
     stage = "map adjacent exact views";
     if (astra_rt_area_map_range_at(area,
             ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE, 0u, span,
@@ -2921,6 +2945,11 @@ static int area_range_gate(const char *directory)
             &size) != ASTRA_SYSCALL_OK ||
         (uintptr_t)at_tail != target + span ||
         size != ASTRA_MEMORY_PAGE_SIZE)
+        goto done;
+    stage = "remap whole view";
+    if (astra_rt_area_map(area, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+            &whole, &size) != ASTRA_SYSCALL_OK ||
+        size != span + ASTRA_MEMORY_PAGE_SIZE)
         goto done;
     stage = "reject occupied target";
     if (astra_rt_area_map_range_at(area,
@@ -3348,9 +3377,7 @@ static int loss_probe(const char *path, int seconds, int reopen)
             uint32_t rejected = raw_open(&wrong, replaced);
             /* A live lost grant replies LOST; canonical retirement instead
              * closes its native endpoint before HELLO can admit authority. */
-            int refused = wrong.session == 0u && wrong.scope == 0u &&
-                ((rejected == ASTRA_STATUS_LOST && strcmp(wrong.stage, "hello-status") == 0) ||
-                 (rejected == ASTRA_SYSCALL_PEER_DEAD && strcmp(wrong.stage, "hello-send") == 0));
+            int refused = raw_open_lost(&wrong, rejected);
             printf("FSSEM LOSS retained grant status=%lu stage=%s session=%lu scope=%lu replacement_inode=%llu\n",
                 (unsigned long)rejected, wrong.stage, (unsigned long)wrong.session,
                 (unsigned long)wrong.scope, (unsigned long long)replacement_inode);

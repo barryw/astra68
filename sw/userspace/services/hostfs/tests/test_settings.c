@@ -12,7 +12,7 @@ static uint32_t revoke_failure, session_close_failure, handle_close_failure, rel
 static uint64_t usage_sequence = 91u;
 static uint32_t usage_notification_failure, usage_notifications;
 static int usage_locked;
-static uint32_t area_handles = 2u, area_mappings = 1u, next_area = 40u;
+static uint32_t area_handles = 2u, area_mappings = 1u, area_children, next_area = 40u;
 static uint32_t open_file_size = ASTRA_MEMORY_PAGE_SIZE * 2u;
 static uint32_t open_file_identity_valid = 1u;
 static uint32_t open_file_generation = 11u;
@@ -21,6 +21,7 @@ static uint32_t file_closes, area_reclaims, area_binds, area_duplicates;
 static uint32_t area_reference_queries;
 static uint32_t adopt_limits, area_limits, area_close_status, file_close_status;
 static uint32_t session_open_limits, session_opens;
+static uint32_t scope_create_limits, scope_creates, port_creates, port_pressure_status;
 static uint32_t writes, truncates, opens;
 static uint32_t open_file_flags = ASTRA_VFS_OPEN_READ;
 static uint64_t node_sequence;
@@ -106,8 +107,28 @@ uint32_t astra_vfs_host_usage(AstraVfsHostTransport *host, uint32_t generation,
 }
 uint32_t astra_host_scope_revoke(uint32_t scope)
 { assert(scope == 31u); return revoke_failure; }
+uint32_t astra_host_scope_create(uint32_t device, uint32_t word,
+    uint32_t flags, uint32_t *scope)
+{
+    assert(device == 30u && word == 33u && flags == ASTRA_HOST_SCOPE_READ_ONLY);
+    ++scope_creates; *scope = 0u;
+    if (scope_create_limits != 0u) { --scope_create_limits; return ASTRA_SYSCALL_RESOURCE_LIMIT; }
+    *scope = 31u; return ASTRA_SYSCALL_OK;
+}
+uint32_t astra_host_scope_limit(uint32_t scope, uint32_t files)
+{ assert(scope == 31u && files == owner_files); return ASTRA_SYSCALL_OK; }
+uint32_t astra_host_lease_query(uint32_t device, AstraHostLeaseInfo *info)
+{ assert(device == 31u); *info = (AstraHostLeaseInfo){0}; return ASTRA_SYSCALL_OK; }
+uint32_t astra_rt_port_create(uint32_t messages, uint32_t bytes,
+    uint32_t *receive, uint32_t *send)
+{
+    assert(messages == queue_messages && bytes == messages * sizeof(AstraVfsRequestMessage));
+    ++port_creates; *receive = *send = 0u;
+    if (port_pressure_status != 0u && file_areas != NULL) return port_pressure_status;
+    *receive = 32u; *send = 35u; return ASTRA_SYSCALL_OK;
+}
 uint32_t astra_close(uint32_t handle)
-{ assert(handle == 31u || handle == 32u || (handle >= 40u && handle <= 48u &&
+{ assert(handle == 31u || handle == 32u || handle == 35u || (handle >= 40u && handle <= 48u &&
          (handle & 1u) == 0u));
   return handle >= 40u ? area_close_status : handle_close_failure; }
 uint32_t astra_vfs_host_session_close(AstraVfsHostTransport *host, uint32_t generation, uint32_t session)
@@ -131,6 +152,8 @@ uint32_t astra_log_failure(const char *name, uint32_t value)
 void *astra_runtime_allocate(size_t size) { return allocation_failed ? NULL : malloc(size); }
 void *astra_runtime_callocate(size_t count, size_t size)
 { return allocation_failed ? NULL : calloc(count, size); }
+void *astra_runtime_reallocate(void *pointer, size_t size)
+{ return allocation_failed ? NULL : realloc(pointer, size); }
 void astra_runtime_deallocate(void *pointer) { free(pointer); }
 int astra_vfs_host_init(AstraVfsHostBackend *backend, AstraVfsHostTransport *host,
     uint32_t generation, uint32_t session)
@@ -159,7 +182,7 @@ uint32_t astra_rt_area_references(uint32_t area, uint32_t *handles,
 { assert(area >= 40u && area <= 48u && (area & 1u) == 0u);
   ++area_reference_queries;
   *handles = area_handles; *mappings = area_mappings;
-  *children = 0u; return ASTRA_SYSCALL_OK; }
+  *children = area_children; return ASTRA_SYSCALL_OK; }
 uint32_t astra_rt_area_reclaim(uint32_t area, uint32_t offset,
     uint32_t size, uint32_t *released)
 { assert(area >= 40u && area <= 48u && (area & 1u) == 0u &&
@@ -297,9 +320,71 @@ static void test_backend_bindings(void)
     grants = NULL; grant_count = 0u;
     free(volume);
 }
+static void test_grant_admission_pressure(void)
+{
+    static const struct {
+        uint32_t scope_limits, port_status, handles, mappings, children, pins;
+        uint32_t status, expected_scopes, expected_ports;
+    } cases[] = {
+        {0u, ASTRA_SYSCALL_RESOURCE_LIMIT, 1u, 0u, 0u, 0u, ASTRA_VFS_OK, 1u, 2u},
+        {0u, ASTRA_SYSCALL_OUT_OF_MEMORY, 1u, 0u, 0u, 0u, ASTRA_VFS_OK, 1u, 2u},
+        {0u, ASTRA_SYSCALL_RESOURCE_LIMIT, 2u, 0u, 0u, 0u, ASTRA_VFS_ERR_LIMIT, 1u, 2u},
+        {0u, ASTRA_SYSCALL_RESOURCE_LIMIT, 1u, 1u, 0u, 0u, ASTRA_VFS_ERR_LIMIT, 1u, 2u},
+        {0u, ASTRA_SYSCALL_RESOURCE_LIMIT, 1u, 0u, 1u, 0u, ASTRA_VFS_ERR_LIMIT, 1u, 2u},
+        {0u, ASTRA_SYSCALL_RESOURCE_LIMIT, 1u, 0u, 0u, 1u, ASTRA_VFS_ERR_LIMIT, 1u, 2u},
+        {0u, ASTRA_SYSCALL_IO_ERROR, 1u, 0u, 0u, 0u, ASTRA_VFS_ERR_IO, 1u, 1u},
+        {1u, 0u, 1u, 0u, 0u, 0u, ASTRA_VFS_OK, 2u, 1u},
+        {2u, 0u, 1u, 1u, 0u, 0u, ASTRA_VFS_ERR_LIMIT, 2u, 0u},
+    };
+    HostfsVolume *volume = calloc(1u, sizeof(*volume));
+    assert(volume != NULL);
+    const uint32_t saved_next = next_grant_id;
+    device_handle = 30u; owner_files = 1024u; queue_messages = 16u;
+    transport.generation = 9u;
+    for (unsigned i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        HostfsGrant cached = {.owner = volume, .backing_references = 1u};
+        HostfsGrant *table[4] = {0};
+        grants = table; grant_capacity = 4u; grant_count = 0u; next_grant_id = 34u;
+        file_areas = calloc(1u, sizeof(*file_areas));
+        assert(file_areas != NULL);
+        file_areas->grant = &cached; file_areas->area = 40u;
+        file_areas->backend.session = 33u; file_areas->source.node = 55u;
+        file_areas->source.span = ASTRA_AREA_SIZE_MAX;
+        file_areas->pins = cases[i].pins;
+        scope_create_limits = cases[i].scope_limits;
+        port_pressure_status = cases[i].port_status;
+        area_handles = cases[i].handles; area_mappings = cases[i].mappings;
+        area_children = cases[i].children;
+        scope_creates = port_creates = area_reference_queries = 0u;
+        uint32_t send = 0u;
+        assert(grant_add(volume, 33u, ASTRA_VFS_GRANT_READ, &volume->reference,
+            "/", 7u, &send, NULL) == cases[i].status);
+        assert(scope_creates == cases[i].expected_scopes && port_creates == cases[i].expected_ports);
+        if (cases[i].status == ASTRA_VFS_OK) {
+            assert(send == 35u && grant_count == 1u && file_areas == NULL &&
+                cached.backing_references == 0u && grant_retire(0u));
+            assert(astra_close(send) == ASTRA_SYSCALL_OK);
+        } else {
+            assert(send == 0u && grant_count == 0u && file_areas != NULL &&
+                cached.backing_references == 1u && file_areas->source.node == 55u);
+            assert(cases[i].port_status == ASTRA_SYSCALL_IO_ERROR ?
+                area_reference_queries == 0u : area_reference_queries == 1u);
+            area_handles = 1u; area_mappings = area_children = file_areas->pins = 0u;
+            file_areas_maintain(1);
+        }
+        assert(file_areas == NULL && cached.backing_references == 0u && !usage_locked);
+    }
+    grants = NULL; grant_capacity = grant_count = 0u; next_grant_id = saved_next;
+    port_pressure_status = scope_create_limits = device_handle = owner_files = queue_messages = 0u;
+    file_closes = released_grants = usage_holders_changed = area_reference_queries = 0u;
+    area_handles = 2u; area_mappings = 1u;
+    free(volume);
+}
+
 int main(void)
 {
     test_backend_bindings();
+    test_grant_admission_pressure();
     HostfsVolume change_owner = {0};
     HostfsGrant change_grant = {.owner = &change_owner};
     HostfsFileArea other = {.grant = &change_grant,
