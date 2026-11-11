@@ -1,6 +1,43 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-11-10
+Status: active continuation map, 2026-11-11
+
+Pager-owner I/O prerequisite qualified, 2026-11-11: reviewed Haiku
+cache/file_cache.cpp:760-850,1453-1502 and the existing native area, user-copy,
+syscall, runtime/NDK export and pager fixture paths. Three additive native
+operations expose resident page modification (WRITE | ADMINISTER), sealed
+snapshot (READ | ADMINISTER) and exact completion (ADMINISTER). Ordinary
+kernel_area_write and writable user mappings keep their existing refusal.
+Resident reads/writes share existing bounded transfer validation and scratch
+buffer; both kinds of area writes share one byte-copy implementation. A failed
+snapshot copy consumes its token as failure before returning BAD_ADDRESS,
+preventing a stranded in-flight page. No backend bytes or cursor ownership
+move into the kernel. Runtime exports/NDK declarations, process tests and
+the existing user-mode K1 pager fixture are updated together; no ABI major or
+protocol layout changes. Host process/runtime and full kernel host/MC68040
+gates pass. The existing process suite also passes ASan/UBSan. Four private
+mutations removing write ADMINISTER or snapshot READ authority, stranding a
+failed output token, or mutating after a failed source copy are rejected by
+the process seam. The full-page K1 user-mode fixture passes all 20 markers
+on Beast and DE25: syscall maximum 4,602/50,000 cycles against the prior
+3,005 baseline; native dirty/snapshot/completion remain 577/3,465/100 cycles
+within their unchanged budgets. Zero cycle overruns. NDK dist-check passes;
+its initial missing-API-documentation rejection was repaired without relaxing
+the documentation gate. Runtime library remains ABI 3 with additive exports.
+Qualified ROM SHA-256:
+5bffa49bffd4b0d7f7d8ccf7b37b24445b8cda67965e04916d9878788117735b.
+Board log/ROM archive hashes match; private fixture removed, all three
+selected services active at stage 8, loop0 only, 8.5 GiB free. Trial tooling
+never opened the live production image. Normal artifacts are restored and
+MC68040 verification passes; normal ROM SHA-256:
+7f6605be4d9041a93f344a7324a9954ab629f668eecbc7100a5faef356262560.
+Runtime library artifact SHA-256:
+74826cbb0870b4da7757d4148ae175c4df382c370bbca7d7f48339f75210a159.
+Prior baseline, complete source/ROM/ELF/runtime and hardware evidence are under
+/home/barry/astra-evidence/pager-owner-io-20261111/. This qualifies native
+owner I/O, not VFS writeback or writable file mappings. Ordinary writes still
+need canonical cache ownership, provider cursor/append ordering, partial-write
+and EOF handling, external-conflict retention and durable flush integration.
 
 Dirty-page lifecycle prerequisite qualified, 2026-11-10: native area host
 tests pass for separate modified/in-flight state, one snapshot per page,

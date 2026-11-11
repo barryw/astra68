@@ -134,6 +134,9 @@ ASTRA_RUNTIME_3.0 {
         astra_rt_area_references;
         astra_rt_area_reclaim;
         astra_rt_area_unmap;
+        astra_rt_area_write_pager;
+        astra_rt_area_writeback_begin;
+        astra_rt_area_writeback_complete;
         astra_rt_cancel_wait;
         astra_rt_event_create;
         astra_rt_event_reset;

@@ -13015,14 +13015,17 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         kernel_performance_end(performance);
         break;
     }
-    case ASTRA_SYSCALL_AREA_READ_RESIDENT: {
+    case ASTRA_SYSCALL_AREA_READ_RESIDENT:
+    case ASTRA_SYSCALL_AREA_WRITE_PAGER: {
         KernelArea *area = NULL;
         uint32_t offset = thread->context.data[2];
-        uint32_t destination = thread->context.data[3];
+        uint32_t user_buffer = thread->context.data[3];
         uint32_t length = thread->context.data[4];
+        bool writing = syscall == ASTRA_SYSCALL_AREA_WRITE_PAGER;
         KernelHandleStatus handle_status = kernel_handle_lookup(
             current->handles, thread->context.data[1], KERNEL_OBJECT_AREA,
-            ASTRA_RIGHT_READ, (void **)&area);
+            writing ? ASTRA_RIGHT_WRITE | ASTRA_RIGHT_ADMINISTER :
+                      ASTRA_RIGHT_READ, (void **)&area);
 
         if (handle_status != KERNEL_HANDLE_OK) {
             if (!handle_status_to_syscall(handle_status, &result))
@@ -13035,7 +13038,11 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
         }
-        if (!kernel_user_copy_range_valid(destination, length)) {
+        if (writing && kernel_area_pager_epoch(area) == 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (!kernel_user_copy_range_valid(user_buffer, length)) {
             result = ASTRA_SYSCALL_BAD_ADDRESS;
             break;
         }
@@ -13044,20 +13051,80 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             result = ASTRA_SYSCALL_WOULD_BLOCK;
             break;
         }
-        KernelAreaStatus area_status = kernel_area_read(
-            area, offset, pager_reply_bytes, length);
-        if (area_status == KERNEL_AREA_CORRUPT)
-            return KERNEL_PROCESS_CORRUPT;
-        if (area_status != KERNEL_AREA_OK) {
-            result = ASTRA_SYSCALL_IO_ERROR;
-            break;
+        KernelAreaStatus area_status = KERNEL_AREA_OK;
+        int copy_status = KERNEL_USER_COPY_OK;
+        if (writing) {
+            copy_status = kernel_copy_from_user(pager_reply_bytes,
+                                                user_buffer, length);
+            if (copy_status == KERNEL_USER_COPY_OK)
+                area_status = kernel_area_write_pager(
+                    area, offset, pager_reply_bytes, length);
+        } else {
+            area_status = kernel_area_read(area, offset, pager_reply_bytes,
+                                           length);
+            if (area_status == KERNEL_AREA_OK)
+                copy_status = kernel_copy_to_user(user_buffer,
+                                                  pager_reply_bytes, length);
         }
-        int copy_status = kernel_copy_to_user(
-            destination, pager_reply_bytes, length);
+        if (area_status != KERNEL_AREA_OK &&
+            !area_status_to_syscall(area_status, &result))
+            return KERNEL_PROCESS_CORRUPT;
         if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
             copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT)
             result = ASTRA_SYSCALL_BAD_ADDRESS;
         else if (copy_status != KERNEL_USER_COPY_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
+    case ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN:
+    case ASTRA_SYSCALL_AREA_WRITEBACK_COMPLETE: {
+        KernelArea *area = NULL;
+        bool beginning = syscall == ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN;
+        uint32_t offset = thread->context.data[2];
+        uint32_t operand = thread->context.data[3];
+        uint32_t token = 0u;
+        KernelAreaStatus area_status;
+        KernelHandleStatus handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1], KERNEL_OBJECT_AREA,
+            ASTRA_RIGHT_ADMINISTER | (beginning ? ASTRA_RIGHT_READ : 0u),
+            (void **)&area);
+
+        if (handle_status != KERNEL_HANDLE_OK) {
+            if (!handle_status_to_syscall(handle_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        if (!beginning) {
+            if (thread->context.data[4] > 1u) {
+                result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+                break;
+            }
+            area_status = kernel_area_writeback_complete(
+                area, offset, operand, thread->context.data[4] != 0u);
+        } else {
+            if (!kernel_user_copy_range_valid(operand, KERNEL_PAGE_SIZE)) {
+                result = ASTRA_SYSCALL_BAD_ADDRESS;
+                break;
+            }
+            area_status = kernel_area_writeback_begin(
+                area, offset, pager_reply_bytes, &token);
+            if (area_status == KERNEL_AREA_OK) {
+                int copy_status = kernel_copy_to_user(
+                    operand, pager_reply_bytes, KERNEL_PAGE_SIZE);
+                if (copy_status != KERNEL_USER_COPY_OK) {
+                    if (kernel_area_writeback_complete(area, offset, token,
+                                                        false) != KERNEL_AREA_OK)
+                        return KERNEL_PROCESS_CORRUPT;
+                    if (copy_status != KERNEL_USER_COPY_BAD_ADDRESS &&
+                        copy_status != KERNEL_USER_COPY_INVALID_ARGUMENT)
+                        return KERNEL_PROCESS_CORRUPT;
+                    result = ASTRA_SYSCALL_BAD_ADDRESS;
+                    break;
+                }
+                thread->context.data[1] = token;
+            }
+        }
+        if (!area_status_to_syscall(area_status, &result))
             return KERNEL_PROCESS_CORRUPT;
         break;
     }

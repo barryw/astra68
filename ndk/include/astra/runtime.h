@@ -284,6 +284,41 @@ uint32_t astra_rt_area_references(uint32_t area, uint32_t *handles,
  */
 uint32_t astra_rt_area_read_resident(uint32_t area, uint32_t offset,
                                     void *destination, uint32_t length);
+/** Modify one resident pager page through WRITE | ADMINISTER authority.
+ * Nonzero range must fit one page; missing pages return WOULD_BLOCK.
+ * Copy errors leave the original bytes unchanged. Untouched bytes survive.
+ * @param area Pager-bound area with WRITE | ADMINISTER rights.
+ * @param offset Byte offset within one area page.
+ * @param source Readable buffer containing the replacement bytes.
+ * @param length Nonzero byte count contained in that page.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_area_write_pager(uint32_t area, uint32_t offset,
+                                  const void *source, uint32_t length);
+/** Snapshot a complete dirty page through READ | ADMINISTER authority.
+ * Offset must be page-aligned; destination must hold ASTRA_MEMORY_PAGE_SIZE
+ * bytes. On success token identifies this snapshot until completed exactly
+ * once. Another snapshot of this page returns WOULD_BLOCK while in flight.
+ * Failed output copying restores dirty state and leaves token zero.
+ * @param area Pager-bound area with READ | ADMINISTER rights.
+ * @param offset Page-aligned byte offset in the area.
+ * @param destination Writable buffer for one complete page.
+ * @param token Receives the nonzero snapshot token, or zero on failure.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_area_writeback_begin(uint32_t area, uint32_t offset,
+                                      void *destination, uint32_t *token);
+/** Complete the exact snapshot through ADMINISTER authority. Pass success
+ * only after writing its complete backing range; false preserves dirty data.
+ * Later writes survive either completion. No backing I/O occurs in kernel.
+ * @param area Pager-bound area with ADMINISTER rights.
+ * @param offset Page-aligned byte offset used for the snapshot.
+ * @param token Exact nonzero token returned by writeback_begin.
+ * @param success Whether the complete backing write succeeded.
+ * @return ASTRA_SYSCALL_* status; stale or consumed tokens are refused.
+ */
+uint32_t astra_rt_area_writeback_complete(uint32_t area, uint32_t offset,
+                                         uint32_t token, bool success);
 
 /**
  * Request one page through the area's pager, waiting for completion.

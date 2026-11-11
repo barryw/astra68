@@ -303,6 +303,41 @@ uint32_t astra_rt_area_prefetch(uint32_t area, uint32_t offset)
     return result.status;
 }
 
+uint32_t astra_rt_area_write_pager(uint32_t area, uint32_t offset,
+                                  const void *source, uint32_t length)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_AREA_WRITE_PAGER, area, offset,
+                   (uint32_t)(uintptr_t)source, length, 0u, &result);
+    return result.status;
+}
+
+uint32_t astra_rt_area_writeback_begin(uint32_t area, uint32_t offset,
+                                      void *destination, uint32_t *token)
+{
+    AstraSyscallResult result;
+
+    if (token == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *token = 0u;
+    astra_syscall5(ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN, area, offset,
+                   (uint32_t)(uintptr_t)destination, 0u, 0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK)
+        *token = result.value0;
+    return result.status;
+}
+
+uint32_t astra_rt_area_writeback_complete(uint32_t area, uint32_t offset,
+                                         uint32_t token, bool success)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_AREA_WRITEBACK_COMPLETE, area, offset,
+                   token, success ? 1u : 0u, 0u, &result);
+    return result.status;
+}
+
 uint32_t astra_rt_area_reclaim(uint32_t area, uint32_t offset,
                                uint32_t byte_size, uint32_t *released_pages)
 {

@@ -2087,15 +2087,11 @@ KernelAreaStatus kernel_area_unmap_process(uint32_t process_id,
     return KERNEL_AREA_OK;
 }
 
-KernelAreaStatus kernel_area_write(KernelArea *area, uint32_t offset,
-                                   const void *source, uint32_t size)
+static KernelAreaStatus write_area_bytes(KernelArea *area, uint32_t offset,
+                                          const void *source, uint32_t size)
 {
     const uint8_t *input = source;
 
-    if (source == NULL || size == 0u || !range_valid(area, offset, size))
-        return KERNEL_AREA_INVALID_ARGUMENT;
-    if (area->pager != NULL)
-        return KERNEL_AREA_ACCESS_DENIED;
     while (size != 0u) {
         uint32_t page = offset / KERNEL_PAGE_SIZE;
         uint32_t page_offset = offset & (KERNEL_PAGE_SIZE - 1u);
@@ -2125,6 +2121,32 @@ KernelAreaStatus kernel_area_write(KernelArea *area, uint32_t offset,
         size -= chunk;
     }
     return KERNEL_AREA_OK;
+}
+
+KernelAreaStatus kernel_area_write(KernelArea *area, uint32_t offset,
+                                   const void *source, uint32_t size)
+{
+    if (source == NULL || size == 0u || !range_valid(area, offset, size))
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    if (area->pager != NULL)
+        return KERNEL_AREA_ACCESS_DENIED;
+    return write_area_bytes(area, offset, source, size);
+}
+
+KernelAreaStatus kernel_area_write_pager(KernelArea *area, uint32_t offset,
+                                         const void *source, uint32_t size)
+{
+    uint32_t page_offset = offset & (KERNEL_PAGE_SIZE - 1u);
+    KernelAreaStatus status;
+
+    if (source == NULL || size == 0u || size > KERNEL_PAGE_SIZE - page_offset)
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    status = pager_page_status(area, offset - page_offset);
+    if (status != KERNEL_AREA_OK)
+        return status;
+    status = kernel_area_mark_dirty(area, offset - page_offset);
+    return status == KERNEL_AREA_OK ?
+        write_area_bytes(area, offset, source, size) : status;
 }
 
 /*

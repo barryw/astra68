@@ -1116,6 +1116,27 @@
  * to the caller instead of retiring its process when the backing read fails.
  */
 #define ASTRA_SYSCALL_AREA_PREFETCH 121
+/**
+ * Modify bytes of one resident pager page through WRITE | ADMINISTER.
+ * data[1] is the area, data[2] byte offset, data[3] source, data[4] length.
+ * The nonzero range must fit one page. An absent page returns WOULD_BLOCK.
+ * Source copying and validation precede mutation; untouched bytes survive.
+ */
+#define ASTRA_SYSCALL_AREA_WRITE_PAGER 122
+/**
+ * Snapshot one dirty pager page through READ | ADMINISTER. data[1] is the
+ * area, data[2] page-aligned offset, data[3] a writable 4 KiB buffer. Returns
+ * the nonzero completion token in D1. Failed output copying restores dirty
+ * state; no token remains outstanding. Concurrent snapshot returns WOULD_BLOCK.
+ */
+#define ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN 123
+/**
+ * Consume one exact snapshot token through ADMINISTER. data[1] is the area,
+ * data[2] page-aligned offset, data[3] token, data[4] success (0 or 1).
+ * The owner reports success only after its complete backing write succeeds.
+ * Failure or modification after the snapshot preserves pending data.
+ */
+#define ASTRA_SYSCALL_AREA_WRITEBACK_COMPLETE 124
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */

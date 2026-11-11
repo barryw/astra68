@@ -441,6 +441,9 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_AREA_BIND_PAGER &&
         number != ASTRA_SYSCALL_AREA_RECLAIM &&
         number != ASTRA_SYSCALL_AREA_READ_RESIDENT &&
+        number != ASTRA_SYSCALL_AREA_WRITE_PAGER &&
+        number != ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN &&
+        number != ASTRA_SYSCALL_AREA_WRITEBACK_COMPLETE &&
         number != ASTRA_SYSCALL_AREA_PREFETCH &&
         number != ASTRA_SYSCALL_AREA_MAP_RANGE &&
         number != ASTRA_SYSCALL_RING_CREATE &&
@@ -494,6 +497,8 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         result->value1 = 1u;
         result->value2 = 0u;
     }
+    if (number == ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN)
+        result->value0 = 0x1234u;
     if (number == ASTRA_SYSCALL_CLOCK_MONOTONIC) {
         ++mock_clock_calls;
         result->value0 = (uint32_t)(mock_time_ns >> 32);
@@ -964,6 +969,31 @@ test_syscall_wrappers(void)
         assert(astra_rt_area_prefetch(7u, 4096u) == ASTRA_SYSCALL_OK);
         assert(mock_number == ASTRA_SYSCALL_AREA_PREFETCH &&
                mock_argument0 == 7u && mock_argument1 == 4096u);
+        assert(astra_rt_area_write_pager(7u, 32u, ring_bytes, 4u) ==
+               ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_AREA_WRITE_PAGER &&
+               mock_argument0 == 7u && mock_argument1 == 32u &&
+               mock_argument2 == (uint32_t)(uintptr_t)ring_bytes &&
+               mock_argument3 == 4u);
+        uint32_t token = 99u;
+        assert(astra_rt_area_writeback_begin(7u, 4096u, ring_bytes, &token) ==
+               ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN &&
+               mock_argument0 == 7u && mock_argument1 == 4096u &&
+               mock_argument2 == (uint32_t)(uintptr_t)ring_bytes && token == 0x1234u);
+        assert(astra_rt_area_writeback_begin(7u, 0u, ring_bytes, NULL) ==
+               ASTRA_SYSCALL_INVALID_ARGUMENT);
+        mock_status = ASTRA_SYSCALL_WOULD_BLOCK;
+        assert(astra_rt_area_writeback_begin(7u, 4096u, ring_bytes, &token) ==
+               ASTRA_SYSCALL_WOULD_BLOCK && token == 0u);
+        mock_status = ASTRA_SYSCALL_OK;
+        assert(astra_rt_area_writeback_complete(7u, 4096u, 9u, false) ==
+               ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_AREA_WRITEBACK_COMPLETE &&
+               mock_argument0 == 7u && mock_argument1 == 4096u &&
+               mock_argument2 == 9u && mock_argument3 == 0u);
+        assert(astra_rt_area_writeback_complete(7u, 4096u, 9u, true) ==
+               ASTRA_SYSCALL_OK && mock_argument3 == 1u);
         assert(astra_rt_area_reclaim(7u, 0u, 4096u, &handles) ==
                ASTRA_SYSCALL_OK);
         assert(mock_number == ASTRA_SYSCALL_AREA_RECLAIM);

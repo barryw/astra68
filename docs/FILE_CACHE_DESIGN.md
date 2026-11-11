@@ -8,6 +8,31 @@ ordinary writes still bypass mapped resident frames. Dirty writeback,
 full EOF/truncate mapping semantics, and writable/anonymous POSIX `mmap`
 remain open.
 
+Pager-owner I/O, 2026-11-11: the native lifecycle now has owner-authorized
+resident modification, snapshot and completion syscalls and Runtime/NDK
+wrappers. ADMINISTER alone cannot read or write page bytes; those operations
+also require READ or WRITE respectively. Each transfer stays within one page
+and reuses the existing resident-read buffer, range checks and user-copy
+mechanism. Invalid source copying precedes mutation. Failed snapshot output
+is completed as failure before returning BAD_ADDRESS, so the owner can retry.
+The anonymous and pager write paths share their byte-copy implementation.
+The existing K1 user-mode pager fixture exercises this API, including full
+4 KiB modification/snapshot, mapped visibility, failed output rollback,
+redirty, failed completion and clean reclaim. The normal writable-mapping
+guard stays until the complete VFS write path owns coherence and backing I/O.
+New syscall cost uses the existing 50,000-cycle dispatch budget; native
+dirty/copy/snapshot budgets remain unchanged. This adds no second cursor,
+cache, lock, worker, provider or byte-storage backend.
+Host process/runtime and full kernel host/MC68040 suites pass. Process
+ASan/UBSan passes; four independent authority/source-copy/rollback mutations
+fail at the native process seam. The complete 4 KiB user-mode fixture passes
+all 20 K1 markers on Beast and DE25, syscall maximum 4,602/50,000 cycles
+(baseline 3,005), zero overruns. NDK dist-check passes with additive ABI-3
+Runtime exports. Board evidence hashes match, private files are removed and
+selected services return to stage 8. Normal artifacts are restored. VFS
+backing-write and cursor/append ordering remain the next integration boundary;
+this does not qualify writable file mappings or whole-filesystem performance.
+
 Dirty-page prerequisite, 2026-11-10: reviewed Haiku
 `src/system/kernel/vm/vm_page_writer.cpp:176-282` and
 `src/system/kernel/vm/VMCache.cpp:1288-1344`. Modified and in-flight state

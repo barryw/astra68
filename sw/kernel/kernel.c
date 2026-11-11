@@ -1882,6 +1882,7 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
         kernel_panic("K1 shared protection budget exceeded");
     console_puts(" PASS\n");
     console_puts("K8 PAGER GUEST PASS\n");
+    console_puts("K8 PAGER OWNER IO PASS\n");
     if (performance_mask == KERNEL_PERFORMANCE_RELEASE_MASK)
         console_puts("K10 PERFORMANCE PASS\n");
     console_puts("K2 MEDIA BUDGET PASS\n");

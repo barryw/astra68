@@ -155,6 +155,9 @@ uint32_t kernel_area_pager_epoch(const KernelArea *area);
  * keeps the page pending. Pending pages hold one existing area child pin.
  * File I/O and writable user mappings remain separately authorized. */
 KernelAreaStatus kernel_area_mark_dirty(KernelArea *area, uint32_t offset);
+/* Owner-authorized modification of one resident pager page; no implicit fill. */
+KernelAreaStatus kernel_area_write_pager(KernelArea *area, uint32_t offset,
+                                         const void *source, uint32_t size);
 KernelAreaStatus kernel_area_writeback_begin(KernelArea *area, uint32_t offset,
                                              void *destination,
                                              uint32_t *token);
