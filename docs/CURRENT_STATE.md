@@ -20,9 +20,10 @@ fails the three-monitor regression; launcher/privilege, watchdog and input tests
 pass after correction. A live diagnostic connection then survives 114 seconds.
 The preserved Terminal session responds to commands but lacks fixture banner
 and prompt markers; its hardware harness uses exact command completion tokens
-without changing user configuration. Live native/USB/menu/Atlas checks continue
-in Beast `cache-mapped-users-20261115/board-active80-v3.log`.
-Common shutdown consent/status UI and final physical-media/closeout gates remain.
+without changing user configuration. Live native/USB/menu/Atlas checks pass
+in Beast `cache-mapped-users-20261115/board-active80-v3.log` and
+`board-usb80.log`. Common shutdown consent/status UI and the final optical-media
+gate remain; the literal USB reattachment gate below now passes.
 
 Current DE25 evidence now passes all seven focused native cases on QEMU PID
 338996: volume roots, mapped ownership, saved unmap errors, file mappings,
@@ -38,7 +39,32 @@ after an assumed focus change. A separate explicit Terminal-title activation
 launches AstraZ and observes `AstraZ startup ready` in `astraz-active80.log`.
 No user configuration is changed to satisfy fixture banner/prompt assumptions.
 
-Mapped-file user attribution80 (in progress; not yet native/DE25 qualified):
+The user physically unplugs and reconnects SanDisk Cruzer. Linux records USB
+disconnect, a six-second absence and a new device number. Both partitions mount
+automatically and writable at the same `/usb0` and `/usb2` paths, both desktop
+icons return, and the existing Doom bundle remains. QEMU stays PID 338996 under
+UID/GID 999, with zero service restarts. `replug80.log` records the gate.
+FAT32 initially retains a dirty flag from the earlier false-watchdog restart.
+An offline read-only check finds only that flag and its boot-sector backup
+difference at byte 65. After offline repair, another native write/sync/read/remove
+and real unmount passes; `fsck.fat -n` then returns zero with no findings
+(`fat-cycle80-v2.log`, `fat-clean80-v2.log`). Repair emits an external block-change
+event and discovery remounts it; the retained first cycle attempt correctly
+refuses a duplicate mount. The final check leaves both USB volumes mounted
+writable with their icons and Doom intact (`closeout80.log`). No system image
+is read or hashed while its provider owns it.
+
+All accumulated source changes are committed and pushed on main at
+`7b0494071e8f14a98d7aa2b8262454f99e25bda0`. The merged filesystem work branch is
+removed locally and on origin; only the main worktree remains.
+Board evidence archive
+`ba8d0c6f36519122f1628381e2b25875d0d6dcacbb6ba3bd2cd296386d23d2e4`
+is copied to Beast and verified before removing this checkpoint's temporary
+gate tree, trace dump and six owned WORK directories. Older WORK fixtures and
+user data remain. Final health: Astra, HDMI audio and RFB active with zero
+restarts, only loop0, same unprivileged QEMU PID and 8.5 GiB free.
+
+Mapped-file user attribution80 (DE25 qualified and development-installed):
 an ADMINISTER-only native area query enumerates canonical holder PIDs under a
 mapping generation. HostFS merges them with existing description ownership in
 the shared volume-usage stream; paths, row kinds and wire layouts stay unchanged.
@@ -117,9 +143,9 @@ its server-owned menu origin. No caller IDs are reserved or remapped.
 All 46 native cases, publication/pressure repetition, external EOF, provider
 reset, HostFS replacement, clean shutdown 88 and offline fsck pass together.
 Evidence is `cache-mapped-users-20261115/{volume-ui80e,native80e}.log` on Beast.
-DE25 qualification and coherent development installation remain pending; the
-next installation must update actual stopped persistent state, preserving user
-data, rather than replacing only a private release seed.
+The subsequent coherent development installation updates actual stopped
+persistent state, preserving user data. Native DE25 and literal USB gates above
+qualify the running checkpoint rather than only a private release seed.
 
 The inactive selected seed and current candidate are compared only outside the
 live provider image. The coherent delta contains 89 guest files, including Kit
@@ -135,7 +161,7 @@ link validation and bundle checks pass. The eight previously qualified runtime
 products remain byte-identical. Input80f is
 `d9b8026a8b4a713737e117838101f2592f8f065d1a018cb53f94dcd5eee35c25`.
 The matching AArch64 QEMU notification fix is built on Beast. Integrated
-development installation and DE25 checks are next; shutdown UI remains open.
+development installation and DE25 checks pass above; shutdown UI remains open.
 
 Explicit-unmap saved errors79 (DE25 qualified; integrated deployment pending):
 native exact/range unmap checks existing retained pager ASYNC state before
@@ -185,9 +211,9 @@ Input79b: `bd2083f6e1e81bfc0c797cf5649bc7c5496074ea076b2028027ab395c35d32ac`.
 Product source79b: `64cb80a6bd46d22213555f6fc16a0b2b45bc015e5cd703732315ef0a170b4c7d`.
 Evidence: `/home/barry/astra-evidence/cache-unmap-errors-20261115/`.
 
-Remaining list is fixed: exact mapped-user PID/path attribution for shared
-volume usage, common shutdown consent/status UI, and final physical-media /
-integrated deployment gates. Literal USB reattachment remains unperformed.
+Remaining list after checkpoint80: common shutdown consent/status UI and final
+optical-media certification. Exact mapped-user PID/path attribution, integrated
+development deployment and literal USB reattachment are qualified above.
 Network mounts and broad performance qualification remain excluded.
 
 Mapped-file EOF and fault termination 78 (DE25 qualified, unreleased):
