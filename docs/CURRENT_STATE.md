@@ -2,6 +2,12 @@
 
 Status: active continuation map, 2026-11-16
 
+Checkpoint82 implementation, test harnesses and hardware evidence are merged
+and pushed to `main` at `4a78ce7cd28691baf221c9b8076e3f63d64dc51f`.
+The merged shutdown work branch is removed locally and on origin; only the
+main worktree remains. Subsequent closeout documentation does not change the
+qualified products below.
+
 DE25 now selects development shadow
 `37c0383b6c6c03ae5fedbc8722c92c328d47311300d5ce2615466cc3c76df28c`.
 The focused installer updates 16 guest files and one ROM, retires three old
