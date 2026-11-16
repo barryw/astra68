@@ -1,7 +1,7 @@
 # Atlas acceptance status
 
-Status: Atlas implementation complete, 2026-10-31; physical optical regression
-pending media. This records observed behavior. Current implementation is on
+Status: Atlas implementation complete, 2026-10-31; physical ISO9660 DVD-R
+regression passed 2026-11-16. This records observed behavior. Current implementation is on
 `main`; `docs/CURRENT_STATE.md` holds detailed source and hardware checkpoints.
 
 ## Shared implementation boundary
@@ -120,11 +120,24 @@ volumes recover their paths and desktop icons, with Doom preserved. Updated
 Atlas root browsing and both volumes' write/read/copy/rename pass in
 `shutdown-ui-20261115/board82-v2.log`. This does not qualify optical media.
 
+## DE25 current physical optical regression
+
+Evidence: `/home/barry/astra-evidence/optical-20261116/` on Beast, selected
+development shadow `37c0383b6c6c03ae5fedbc8722c92c328d47311300d5ce2615466cc3c76df28c`.
+The freshly burned `ASTRA_CD` DVD-R automounts at `/cd0` read-only; its desktop
+icon opens Atlas with three entries and one folder. Native copies of root,
+nested and multi-sector files match source hashes. Exact retained-file holders
+block CLI and Desktop Eject; the shared dialog matches the expected holder-text
+CRC. Closing the file permits real eject and removes the icon/namespace.
+Reinsertion creates a fresh mount ID (32 versus 27), restores the icon and
+Atlas contents, and passes fresh exact reads without restarting QEMU. A final
+native Eject releases the physical drive for removal. All three services remain
+active with zero restarts; verified archive precedes exact test-state cleanup.
+
 ## Still unproven or incomplete
 
-- Physical optical browsing/ejection still awaits an attached drive and readable
-  disc. Earlier DE25 gates passed a burned ISO9660 DVD-R; the image-backed
-  ISO9660 `/cd0` gate also passed on 2026-10-31 before the final query change.
+- Literal CD-R media remains unqualified; the current optical regression uses
+  ISO9660 on DVD-R.
 - Saved user queries persist a case-insensitive name substring scoped to one
   directory. Richer predicates and local time-zone policy remain future scope.
 

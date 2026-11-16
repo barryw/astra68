@@ -202,8 +202,8 @@ filesystem lifecycle gate also verifies acknowledged data after clean shutdown
 and offline fsck. Normal/fatal provider tests reread durable file and directory
 acknowledgements after retirement. These tests do not simulate physical power
 loss or loss of Linux's page cache.
-Malformed wire replies have host tests. Desktop consent/status UI remains
-pending hardware qualification. Checkpoint82's native replay passes initial
+Malformed wire replies have host tests. Desktop consent/status UI passes
+the hardware qualification below. Checkpoint82's native replay passes initial
 confirmation Cancel, live cancellation with the same edited Terminal line,
 a 66-second pending wait, menu restart 89 and shutdown 88. Its recovery gate
 also covers a service that consents then exits unsuccessfully: retire the
@@ -221,8 +221,10 @@ Linux stays up; the temporary guest-only power policy is removed and normal
 stage 8/audio/RFB return. See `shutdown-ui-20261115/{native82-v2,menu82-v4,
 power82-board,recovery82-board,restore82-restart-board}.log` on Beast.
 The board evidence archive is verified before exact owned test-state cleanup;
-normal services remain active with zero restarts and 8.5 GiB free. The remaining
-filesystem qualification gate needs a physical optical drive and readable disc.
+normal services remain active with zero restarts and 8.5 GiB free. Physical
+optical regression83 subsequently passes current native reads, exact busy eject,
+Desktop Eject, media reinsertion and fresh Atlas access. Current State records
+the remaining Linux-level controlled power-loss evidence gap separately.
 Checkpoint47 qualifies HostFS failure retention on DE25:
 busy checks follow request draining, failed retirement preserves public
 endpoints, repeated close errors retain ownership, and failed READY delivery

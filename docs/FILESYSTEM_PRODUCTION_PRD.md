@@ -11,8 +11,10 @@ migration, simultaneous USB FAT32/exFAT read/write and UDF read-only.
 Optical sibling-mount safety, retained-mount
 replacement fencing, physical UDF DVD media change and Desktop Eject passed.
 Physical ISO9660 data-disc access, eject and reinsertion passed on DVD-R.
-The current optical-drive/disc regression and complete performance
-qualification remain open; earlier DVD-R evidence does not replace that gate.
+Current optical regression83 repeats native exact reads, Atlas, busy Eject,
+safe Eject and fresh-ID reinsertion on physical DVD-R. Controlled Linux-side
+storage cuts and complete performance qualification remain open; the old
+guest-block runner does not prove loss of Linux's page cache.
 [Current state](CURRENT_STATE.md) records evidence.
 Network mounts are excluded from this completion task. Performance acceptance
 follows correctness.

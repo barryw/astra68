@@ -9,8 +9,10 @@ qualified ext4 path. Native owned/external EOF integration passes checkpoint72.
 Native/POSIX shared writable mappings and range sync pass host/DE25 gates.
 Exact mapped-user attribution and shared shutdown/cancellation/recovery UI now
 pass host, native and DE25 gates. Physical USB reattachment also passes. The
-current optical-drive/disc regression remains open; broad performance
-qualification and network mounts remain outside this correctness task.
+current optical-drive/disc regression now passes on physical DVD-R. Controlled
+Linux-side power-loss evidence remains open: the old guest-block cut runner
+does not exercise loss of Linux's page cache. Broad performance qualification
+and network mounts remain outside this correctness task.
 
 Explicit-unmap error delivery79 is DE25 qualified. Native exact
 and range unmap reuse retained pager ASYNC checks before removing shared views.

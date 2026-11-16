@@ -2,6 +2,16 @@
 
 Status: active continuation map, 2026-11-16
 
+Current remaining correctness gate: controlled loss of the Linux-owned storage
+boundary. Native file/parent-directory sync, provider termination, acknowledged
+readback and offline fsck pass, but `test-storage-power-cuts.py` still drives
+the retired guest-block transition properties. It cannot prove loss of Linux's
+page cache. The production PRD's durability family requires this distinct
+evidence; do not mark the full filesystem objective complete on optical proof
+alone. Use disposable storage on Beast, preserve production data, and retain
+resource caps. No further DVD hardware is needed. Network mounts and broad
+performance qualification remain excluded.
+
 Checkpoint82 implementation, test harnesses and hardware evidence are merged
 and pushed to `main` at `4a78ce7cd28691baf221c9b8076e3f63d64dc51f`.
 The merged shutdown work branch is removed locally and on origin; only the
@@ -43,8 +53,36 @@ Restart then exits 89 with Linux's boot identity unchanged. Read-only fsck of
 the stopped system, exFAT and FAT32 passes again. Normal host policy, stage 8,
 audio and RFB are restored (`recovery82-board.log`,
 `restore82-restart-board.log`); the temporary power guard is removed.
-Only the physical optical-media gate remains; Linux currently sees no optical
-device. Board evidence is copied to Beast, all 559 records and the archive
+Physical optical regression83 now passes on the unchanged selected shadow and
+Linux `6.12.11-astra-storage3-gd7d192a9ddd9`. Pioneer BDR-XD08 burns the verified
+410 KiB `ASTRA_CD` ISO to blank DVD-R and finalizes successfully in 7m52s.
+After reinsertion, all 205 image sectors match SHA-256
+`0a20bd5c15a66b2eafd2c18cd284a62e2c5a1a8c41486adf2b4d2ef935fed11c`.
+Native root, nested and multi-sector copies match their source hashes; `/cd0`
+automounts read-only, rejects writes, shows its desktop icon and opens Atlas
+with three entries and one folder. A retained README descriptor produces exact
+PID/name/handle/inode/path in `lsof`; both CLI Eject and Desktop Eject refuse.
+The shared busy dialog matches the exact holder-text CRC. Closing that descriptor
+permits real Desktop Eject, namespace withdrawal and icon removal. Reinsertion
+creates mount 32 instead of 27, restores icon/Atlas and passes fresh exact reads
+under the same QEMU PID 1601311, UID/GID 999. The first reread fixture assumed
+copy replacement and `rm -f`; native `cp` deliberately refuses existing targets
+and native `rm` accepts names. The corrected fixture verifies its own prior
+copies before native removal. No product code changes or relaxed assertions.
+Earlier failed fixture logs and source versions remain in the evidence.
+
+A final successful native Eject releases the drive for the user to disconnect.
+Beast `/home/barry/astra-evidence/optical-20261116/` holds all evidence; final
+archive `/home/barry/astra-evidence/optical83-closeout-final-20261116.tar.gz`
+verifies 106 records, SHA-256
+`12d857dc6a67a16e89a8833a143d0aac5849edd6ee5a64dc0d421985e2c6fd02`.
+The sealed 42-record board copy is verified before removing only its three
+owned WORK files, directory, observer stage and trace. Final health: three
+services active, zero restarts, normal power policy, only loop0 and 8.5 GiB free.
+HOME/private Config Kit/user files remain untouched. This qualifies DVD-R
+ISO9660 lifecycle; literal CD-R media is not claimed.
+
+Preceding checkpoint82 board evidence is copied to Beast, all 559 records and the archive
 contents are verified, and `board82-evidence.tar.gz` has SHA-256
 `884b00f4879f5b16963193c33dace2f99c69bc6db347a60459c0ff3a7954707e`.
 Cleanup verifies the sealed manifest and compares each live test tree with its
