@@ -2,10 +2,10 @@ astra-bundle 1
 kind kit
 id org.astra.interface
 name "Astra Interface Kit"
-version 10.2.0
-provides interface.library 12 12.13.0
+version 12.14.0
+provides interface.library 12 12.14.0
 requires compiler.library 2 2.0.0
 requires font.library 5 5.0.0
 requires graphics.library 3 3.0.0
-requires runtime.library 3 3.0.0
-requires system.library 4 4.0.0
+requires runtime.library 3 3.1.0
+requires system.library 4 4.8.0
