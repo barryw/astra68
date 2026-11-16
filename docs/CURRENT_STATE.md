@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-11-15
+Status: active continuation map, 2026-11-16
 
 Shutdown UI82 now integrates Desktop through a reusable Interface Kit power
 panel. Shared alert bodies compose existing wrapping TextView, ScrollView and
@@ -12,13 +12,24 @@ recovery defect: a service consents then exits 77, but its stale process record
 makes restoration skip it; subsequent inspection reports failed/PID zero.
 Supervisor now retires confirmed-dead participants before restoring saved
 services, with one publication-retirement path and shared crash diagnostics.
-That fix, final UI error-path refinements and menu/long-wait gates are still
-being qualified. New code remains on the shutdown work branch and is not on
-DE25. Current board remains the qualified filesystem80 checkpoint below.
+The corrected native replay passes all three recovery cases, restored fresh
+PID after exit 77, filesystem I/O, clean shutdown 88 and offline fsck in 92
+seconds (`native82-v2.log`). Pointer confirmation Cancel and live cancellation
+preserve the same edited Terminal line; menu Restart exits 89 and Shut Down
+exits 88 after a 66-second pending wait (`menu82-v4.log`, 119 seconds).
+Older menu coordinates selected the wrong item; the gate now uses common menu
+keyboard navigation and asserts the intended Desktop action. A retired image
+cannot be reused without its paired private Config Kit state; menu gates each
+start from the untouched coherent input. Retain the earlier failed harness logs.
+Final NDK refresh and hardware qualification remain. New code is committed and
+pushed on the shutdown work branch, not installed on DE25. Current board remains
+the qualified filesystem80 checkpoint below. Kit manifests and direct Runtime
+3.1 app requirements now match their checked library payloads; the packaging
+gate rejects the earlier stale manifests before any deployment.
 Evidence: Beast `/home/barry/astra-evidence/shutdown-ui-20261115/`.
 
-Shutdown UI81 development is now in progress on top of the qualified running
-checkpoint below. Shared caller-driven alerts use the existing alert controls
+Preceding shutdown81 groundwork (superseded by checkpoint82 above):
+shared caller-driven alerts use the existing alert controls
 and renderer; blocking alerts/confirmations call that same implementation.
 Interface host tests, ASan/UBSan and MC68040 library build pass. Native power
 status/cancellation uses one Supervisor snapshot and generic broker invalidations.
@@ -36,8 +47,8 @@ targets pass in 35 seconds (`native81d.log`). Terminal's ELF explicitly requires
 Runtime 3.1; unchanged managed entry points keep their Runtime 3.0 versions.
 NDK distribution, C/C++/SDL consumers and docs pass before the final opt-in
 readiness addition (`native81c.log`); repeat that gate after Desktop integration.
-Desktop integration, final NDK closure and hardware gates remain;
-none of these new shutdown changes is installed on DE25 yet. Evidence:
+At that checkpoint Desktop integration, final NDK closure and hardware gates
+remained; checkpoint82 above tracks current progress. Evidence:
 Beast `/home/barry/astra-evidence/shutdown-ui-20261115/`.
 
 Current running development checkpoint:

@@ -203,7 +203,16 @@ and offline fsck. Normal/fatal provider tests reread durable file and directory
 acknowledgements after retirement. These tests do not simulate physical power
 loss or loss of Linux's page cache.
 Malformed wire replies have host tests. Desktop consent/status UI remains
-open. Checkpoint47 qualifies HostFS failure retention on DE25:
+pending hardware qualification. Checkpoint82's native replay passes initial
+confirmation Cancel, live cancellation with the same edited Terminal line,
+a 66-second pending wait, menu restart 89 and shutdown 88. Its recovery gate
+also covers a service that consents then exits unsuccessfully: retire the
+confirmed-dead record before restoring its saved definition, while preserving
+the original failure and shared process-crash diagnostics. The old Supervisor
+leaves it failed at PID zero; the corrected replay restores a new running PID.
+All three recovery cases, native filesystem checks, clean exit and offline
+fsck pass together. See `shutdown-ui-20261115/{native82-v2,menu82-v4}.log`
+on Beast. Checkpoint47 qualifies HostFS failure retention on DE25:
 busy checks follow request draining, failed retirement preserves public
 endpoints, repeated close errors retain ownership, and failed READY delivery
 reclaims provider authority instead of exiting. Host and ASan/UBSan tests pass.
