@@ -2,12 +2,15 @@
 
 Status: design contract; VFS description retention, metadata, VM page
 publication, canonical HostFS reads/writes and bounded writeback pass host and
-DE25 gates. The selected image is unchanged pending the complete filesystem
-release. Logical timestamp persistence and saved-error precedence pass on the
+DE25 gates. Checkpoint82 is installed in the selected development shadow;
+[Current State](CURRENT_STATE.md) records its exact identity and evidence.
+Logical timestamp persistence and saved-error precedence pass on the
 qualified ext4 path. Native owned/external EOF integration passes checkpoint72.
 Native/POSIX shared writable mappings and range sync pass host/DE25 gates.
-Mapped-user attribution, shutdown UI
-and final media/release gates remain open.
+Exact mapped-user attribution and shared shutdown/cancellation/recovery UI now
+pass host, native and DE25 gates. Physical USB reattachment also passes. The
+current optical-drive/disc regression remains open; broad performance
+qualification and network mounts remain outside this correctness task.
 
 Explicit-unmap error delivery79 is DE25 qualified. Native exact
 and range unmap reuse retained pager ASYNC checks before removing shared views.

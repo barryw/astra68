@@ -113,13 +113,18 @@ Final exact-source Atlas install opened the query's `Desktop` row into
 Astra, audio host, and remote desktop stayed active with zero restarts and
 8.1 GiB free. Trial board files were removed.
 
+Cable-level USB hotplug is now qualified by
+`/home/barry/astra-evidence/cache-mapped-users-20261115/replug80.log` on Beast:
+Linux observes disconnect, six-second absence and reconnection; both writable
+volumes recover their paths and desktop icons, with Doom preserved. Updated
+Atlas root browsing and both volumes' write/read/copy/rename pass in
+`shutdown-ui-20261115/board82-v2.log`. This does not qualify optical media.
+
 ## Still unproven or incomplete
 
-- Physical optical browsing/ejection and cable-level USB hotplug were not
-  repeated with this Atlas build. Earlier DE25 gates passed both with a burned
-  ISO9660 DVD-R and literal USB cable replug on 2026-10-24; no optical drive is
-  attached now. Current Atlas also passed an image-backed ISO9660 `/cd0` gate
-  on 2026-10-31 before the final query change.
+- Physical optical browsing/ejection still awaits an attached drive and readable
+  disc. Earlier DE25 gates passed a burned ISO9660 DVD-R; the image-backed
+  ISO9660 `/cd0` gate also passed on 2026-10-31 before the final query change.
 - Saved user queries persist a case-insensitive name substring scoped to one
   directory. Richer predicates and local time-zone policy remain future scope.
 

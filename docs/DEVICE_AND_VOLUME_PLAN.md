@@ -61,8 +61,8 @@ reference launch from a physical volume's desktop context menu. It combines
 complete catalog and usage snapshots only when their catalog sequences agree,
 then reports mounted volumes and retained resources for the selected disk or
 partition. Disk Setup now sends typed exact-device MBR/GPT initialize,
-partition create and delete requests through native Volume protocol 4 and
-Filesystem Kit 15.2. Its size control uses MiB; Filesystem Kit finds the
+partition create and delete requests through the native Volume interface and
+Filesystem Kit. Its size control uses MiB; Filesystem Kit finds the
 first aligned free extent from coherent inventory, and the provider converts
 byte geometry using the observed disk's logical sector size. All edits
 require `ERASE` and refuse mounted siblings. The provider retains
@@ -147,8 +147,8 @@ medium and require new partition admission. Per-partition write-protection
 changes retire that source before it can mount again.
 Filesystem Kit now exposes exact snapshot record/ancestor lookup, so Disk Setup
 can group the native device, medium, partition source and mount records without
-duplicating graph traversal. Current Filesystem Kit ABI is 16, with one
-`ASTRA_FILESYSTEM_16.0` symbol namespace; Volume protocol 6 delivers changes
+duplicating graph traversal. Current Filesystem Kit ABI is 18, with one
+`ASTRA_FILESYSTEM_18.0` symbol namespace; Volume protocol 6 delivers changes
 through generic Messaging.
 Desktop retains the full volume graph while indexing visible icons; this keeps
 physical source ancestry available for mounted-volume actions. The provider

@@ -1,15 +1,18 @@
 # Astra filesystem production requirements
 
 Status: active implementation PRD. The architectural direction was agreed on
-2026-10-06. Current release uses Filesystem ABI 15 / Kit 15.2.0, STOR 38
-and the Linux-owned fixed/removable/optical/ISO/RAM provider. Native lifecycle,
+2026-10-06. Current source uses Filesystem ABI 18 / Kit 13.0.0, STOR 42
+and the Linux-owned fixed/removable/optical/ISO/RAM provider. The selected
+development shadow, source identities and current physical gates are recorded
+in [Current state](CURRENT_STATE.md). Native lifecycle,
 exact file/CWD busy removal, recovery, durability and Atlas overflow pass their
-current gates. Coherent release `c041b264` runs on DE25 after stopped-state
-migration; simultaneous USB FAT32/exFAT read/write and UDF read-only passed
-on the selected release. Optical sibling-mount safety, retained-mount
+current gates. Earlier coherent release `c041b264` passed stopped-state
+migration, simultaneous USB FAT32/exFAT read/write and UDF read-only.
+Optical sibling-mount safety, retained-mount
 replacement fencing, physical UDF DVD media change and Desktop Eject passed.
-Physical ISO9660 data-disc access, eject and reinsertion passed on DVD-R;
-CD-R medium and complete performance qualification remain open.
+Physical ISO9660 data-disc access, eject and reinsertion passed on DVD-R.
+The current optical-drive/disc regression and complete performance
+qualification remain open; earlier DVD-R evidence does not replace that gate.
 [Current state](CURRENT_STATE.md) records evidence.
 Network mounts are excluded from this completion task. Performance acceptance
 follows correctness.
@@ -73,7 +76,9 @@ versioned Astra protocols; applications gain no alternate Linux API.
 
 ## Current implementation and gaps
 
-The table describes the deployed DE25 release and remaining qualification.
+The table below is the earlier `c041b264` qualification snapshot, retained as
+history. Its version numbers and open items are not current status; consult
+[Current state](CURRENT_STATE.md) before implementation or deployment.
 
 | Area | Existing implementation | Production gap |
 |---|---|---|

@@ -1,6 +1,6 @@
 # Filesystem Kit
 
-Status: `filesystem.library` ABI 17.0 is the shared, backend-neutral client layer
+Status: `filesystem.library` ABI 18.0 is the shared, backend-neutral client layer
 over Astra's VFS protocol, assign namespaces, and union policy. It does not
 create a second filesystem stack.
 
@@ -40,17 +40,18 @@ sources. `astra_volume_source_issue` gives clients the shared NDOS, unsupported,
 ambiguous and probe-error classification. These are inventory metadata, not
 permission to edit a disk.
 `DISK_ADMIN` grants separate asynchronous format and partition-map operations.
-ABI 16.0 retains exact device references and byte geometry for MBR/GPT
+The current ABI retains exact device references and byte geometry for MBR/GPT
 initialize, partition create and delete. `astra_volume_partition_find_free`
 plans a MiB-aligned extent from one coherent snapshot. Poll the original
 device generation until worker completion, source retirement and kernel reread
 publish the new map. Disk Setup composes these operations from shared controls;
-physical DE25 edit acceptance remains open.
+native GPT and MBR edit/format/access/rediscovery gates pass on disposable
+physical DE25 media; Current State records the qualified checkpoints.
 Combine `volumes --all --references` to include source identities, exact parent
 incarnations and flags. `ASTRA_VOLUME_CONFIGURED_RAM` identifies the configured
 RAM source independently of whether it currently has a mounted child.
 Earlier root broker/lifetime changes pass the complete Beast filesystem gate.
-The current suite has 30 native/POSIX cases, resource recovery, stress, fsck
+The native/POSIX suite covers resource recovery, stress, fsck
 and hostbench; final-source acceptance is recorded in Current State.
 Desktop subscribes to the same
 catalog and launches Atlas with an exact incarnation. Atlas obtains a readonly
