@@ -12,6 +12,7 @@
 #include <astra/graphics_library.h>
 #include <astra/interface_kit.h>
 #include <astra/interface_library.h>
+#include <astra/system_panels.h>
 #include <astra/input.h>
 #include <astra/icon_tile.h>
 #include <astra/inline_edit.h>
@@ -783,21 +784,6 @@ static AstraResult show_about(uint32_t gui)
     return astra_interface_show_alert(gui, &info);
 }
 
-static void power_error(uint32_t gui, int restart)
-{
-    AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
-
-    info.kind = ASTRA_ALERT_ERROR;
-    info.title = restart ? "Restart" : "Shut Down";
-    info.title_length = (uint16_t)strlen(info.title);
-    info.message = restart ? "Restart could not be started." :
-                             "Shutdown could not be started.";
-    info.message_length = (uint16_t)strlen(info.message);
-    info.button = "OK";
-    info.button_length = 2u;
-    (void)astra_interface_show_alert(gui, &info);
-}
-
 /* One indexed icon source of the desktop window: uploaded once, palette
    expanded and blended by Astraea on every repaint. */
 static AstraResult load_icon(AstraDisplay *display, const char *path,
@@ -1060,6 +1046,7 @@ int astra_main(const AstraStartupInfo *startup)
     uint32_t menu_cell = UINT32_MAX;
     uint32_t clicked_cell = UINT32_MAX;
     AstraVolumeUsageDialog *busy_dialog = NULL;
+    AstraPowerPanel power_panel = ASTRA_POWER_PANEL_INIT;
     AstraCommandArguments menu_arguments = {1u, 1u, &menu_cell, sizeof(menu_cell)};
     AstraContextMenuItem menu_items[5] = {{"desktop.open", 12u, &menu_arguments}};
     uint16_t menu_parents[5] = {0u};
@@ -1177,20 +1164,33 @@ int astra_main(const AstraStartupInfo *startup)
     (void)astra_service_ready(bootstrap->handle, status, NULL, 0u);
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_STATUS_OK) return (int)status;
+    if (astra_interface_power_panel_open(&power_panel, gui->handle,
+            manager->handle, messaging->handle) != ASTRA_OK)
+        return DESKTOP_FAIL_INTERFACE;
     ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_DISPLAY, ASTRA_EVENT_LEVEL_INFO,
                  "desktop ready");
     for (;;) {
         AstraWindowEvent event = {0};
-        uint32_t waits[3] = {astra_window_event_wait_handle(&window), volume_watch.receive, 0u};
+        uint32_t waits[5] = {astra_window_event_wait_handle(&window), volume_watch.receive, 0u};
         uint32_t wait_count = volume_watch.receive != ASTRA_INVALID_HANDLE ? 2u : 1u;
         uint32_t busy_index = UINT32_MAX;
         AstraHandle busy_wait = astra_window_event_wait_handle(&busy_dialog->window);
         if (busy_wait != ASTRA_INVALID_HANDLE) { busy_index = wait_count; waits[wait_count++] = busy_wait; }
+        uint32_t power_index = wait_count;
+        wait_count += astra_interface_power_panel_wait_handles(&power_panel, &waits[wait_count]);
         uint32_t selected = 0u;
         uint64_t deadline = volume_refresh ? volume_retry : ASTRA_DEADLINE_FOREVER;
         if (removals != NULL && removal_retry < deadline) deadline = removal_retry;
         uint32_t waited = astra_wait_multiple(waits, wait_count, deadline, &selected, NULL);
         AstraResult result;
+        if (waited != ASTRA_SYSCALL_TIMED_OUT && selected >= power_index && selected < wait_count) {
+            result = astra_interface_power_panel_poll(&power_panel);
+            if (result != ASTRA_OK) {
+                (void)astra_log_failure("desktop power panel", (uint32_t)(-result));
+                return DESKTOP_FAIL_INTERFACE;
+            }
+            continue;
+        }
         if (waited == ASTRA_SYSCALL_OK && selected == 1u && volume_watch.receive != ASTRA_INVALID_HANDLE) {
             AstraVolumeChange change;
             result = astra_volume_watch_receive(&volume_watch, &change);
@@ -1398,14 +1398,12 @@ int astra_main(const AstraStartupInfo *startup)
 
             (void)astra_log(restart ? "desktop restart requested" :
                                       "desktop shutdown requested");
-            AstraResult result = restart ?
-                astra_system_restart_request(manager->handle) :
-                astra_system_shutdown_request(manager->handle);
+            AstraResult result = astra_interface_power_panel_request(&power_panel,
+                restart ? ASTRA_SERVICE_MANAGER_SYSTEM_RESTART : ASTRA_SERVICE_MANAGER_SHUTDOWN);
 
             if (result != ASTRA_OK) {
                 (void)astra_log_failure("desktop power request",
                                         (uint32_t)(-result));
-                power_error(gui->handle, restart);
             }
             continue;
         }

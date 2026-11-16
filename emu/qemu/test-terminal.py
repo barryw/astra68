@@ -1656,13 +1656,52 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
             if restart_menu_only or shutdown_menu_only:
                 action = "Restart" if restart_menu_only else "Shut Down"
                 expected = 89 if restart_menu_only else 88
-                machine.qmp.point(40, 15)
-                machine.qmp.button(True)
-                machine.qmp.button(False)
-                time.sleep(0.2)
-                machine.qmp.point(56, 106 if restart_menu_only else 150)
-                machine.qmp.button(True)
-                machine.qmp.button(False)
+
+                def click(x, y):
+                    machine.qmp.point(x, y)
+                    machine.qmp.button(True)
+                    machine.qmp.button(False)
+
+                def power_menu():
+                    click(40, 15)
+                    time.sleep(.2)
+                    click(56, 106 if restart_menu_only else 150)
+                    time.sleep(.4)
+
+                # Initial consent must be cancellable without touching Terminal.
+                power_menu()
+                machine.qmp.key('esc')
+                click(400, 106)  # Existing Terminal title; no second launch.
+                before = machine.sequence()
+                machine.qmp.type_line('print POWER-CONFIRM-CANCELLED')
+                if wait_for_command(machine, 'POWER-CONFIRM-CANCELLED',
+                                    command_deadline, before, exact=True) is None:
+                    raise RuntimeError('initial power cancellation lost the live Terminal')
+                machine.settle()
+                # Edited input vetoes exit. Modeless progress must permit an
+                # explicit ABORT, retaining that exact shell and unfinished line.
+                before = machine.sequence()
+                machine.qmp.type_text('print POWER-PENDING-KEPT')
+                power_menu()
+                click(1102, 617)  # Shared centered confirmation's primary button.
+                hold = 3.0 if restart_menu_only else 66.0
+                end = time.monotonic() + hold
+                while time.monotonic() < end:
+                    if machine.process.poll() is not None:
+                        raise RuntimeError('power request killed an edited Terminal')
+                    time.sleep(.25)
+                click(1102, 617)  # Same shared alert now offers live Cancel.
+                time.sleep(.5)
+                click(400, 106)
+                machine.qmp.key('ret')
+                if wait_for_command(machine, 'POWER-PENDING-KEPT', command_deadline,
+                                    before, exact=True) is None:
+                    raise RuntimeError('live power cancellation lost pending shell input')
+                machine.settle()
+                if machine.process.poll() is not None:
+                    raise RuntimeError('cancelled transaction still powered off')
+                power_menu()
+                click(1102, 617)
                 try:
                     code = machine.process.wait(timeout=command_deadline)
                 except subprocess.TimeoutExpired:
@@ -1676,7 +1715,9 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                     print("FAIL: ASTRA menu %s QEMU exit %d, expected %d" %
                           (action, code, expected))
                     return 1
-                print("ASTRA MENU %s PASS" % action.upper())
+                print("ASTRA MENU %s PASS initial cancel, edited-line %us wait, live cancel, "
+                      "same shell input retained, clean exit %u" %
+                      (action.upper(), hold, expected))
                 return 0
             if shutdown_only or restart_only:
                 action = "restart" if restart_only else "shutdown"

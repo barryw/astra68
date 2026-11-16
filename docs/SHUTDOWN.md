@@ -66,8 +66,21 @@ methods share preparation. Haiku's shutdown status window in
 from lifecycle work. Its `_QuitApps` implementation at lines 1486-1548 drains
 abort events before entering the system-application phase and disables that
 phase's cancel button. Astra retains its explicit consent protocol and can
-restore completed synchronous services after cancellation. Desktop
-integration and hardware qualification of these additions remain pending.
+restore completed synchronous services after cancellation. Desktop uses the
+shared `AstraPowerPanel` for initial confirmation, modeless progress, exact
+transaction cancellation and retained failure details. It adds the panel's
+handles to its existing wait set; no Desktop shutdown worker or renderer exists.
+Recovery disables cancellation while ordinary applications remain available to
+save before consenting. Hardware qualification of these additions remains pending.
+
+Haiku `src/kits/interface/Alert.cpp:497-517` composes a read-only, wrapping
+TextView; Astra uses its existing TextModel, TextView, ScrollView and Scrollbar
+for complete alert bodies, retaining the existing dialog geometry. Names use
+Runtime's bounded `astra_string_append_display`, shared with volume-use
+diagnostics, rather than a second escape loop. Haiku
+`src/kits/support/String.cpp:2575-2625` copies unescaped runs between special
+characters; Astra adapts that pattern to its caller-owned builder and UTF-8
+scalar-boundary truncation contract. Truncated diagnostics are rejected.
 
 For each request, the participant must do exactly one of these:
 

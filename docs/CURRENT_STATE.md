@@ -2,6 +2,21 @@
 
 Status: active continuation map, 2026-11-15
 
+Shutdown UI82 now integrates Desktop through a reusable Interface Kit power
+panel. Shared alert bodies compose existing wrapping TextView, ScrollView and
+Scrollbar; old blocking alerts use the same path. Host suites, ASan/UBSan and
+MC68040 Interface/Desktop builds pass (`panel82-v2.log`, `target82.log`).
+Runtime display escaping replaces the former volume-use private byte loop and
+preserves UTF-8 scalar boundaries. A native RED control reproduces a remaining
+recovery defect: a service consents then exits 77, but its stale process record
+makes restoration skip it; subsequent inspection reports failed/PID zero.
+Supervisor now retires confirmed-dead participants before restoring saved
+services, with one publication-retirement path and shared crash diagnostics.
+That fix, final UI error-path refinements and menu/long-wait gates are still
+being qualified. New code remains on the shutdown work branch and is not on
+DE25. Current board remains the qualified filesystem80 checkpoint below.
+Evidence: Beast `/home/barry/astra-evidence/shutdown-ui-20261115/`.
+
 Shutdown UI81 development is now in progress on top of the qualified running
 checkpoint below. Shared caller-driven alerts use the existing alert controls
 and renderer; blocking alerts/confirmations call that same implementation.

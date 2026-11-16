@@ -246,6 +246,10 @@ static uint32_t alert_font_refreshes;
 static uint32_t alert_click_phase;
 static uint32_t alert_event_calls, alert_last_flags, alert_title_calls;
 static int alert_try_empty;
+static int alert_has_event;
+static AstraWindowEvent alert_event;
+static char drawn_text[8192];
+static uint32_t drawn_length;
 static AstraResult alert_close_result = ASTRA_OK;
 static int32_t alert_click_x, alert_click_y;
 static AstraWindowEvent pointer_event(uint16_t type, uint32_t flags,
@@ -365,6 +369,11 @@ AstraResult astra_window_event_wait(AstraWindow *window,
     assert(window != NULL && event != NULL &&
            deadline == ASTRA_DEADLINE_INFINITE);
     ++alert_event_calls;
+    if (alert_has_event) {
+        *event = alert_event;
+        alert_has_event = 0;
+        return ASTRA_OK;
+    }
     if (alert_font_events != 0u) {
         --alert_font_events;
         *event = (AstraWindowEvent){.size = sizeof(*event),
@@ -680,9 +689,11 @@ void astra_surface_ui_text(AstraSurfaceView *surface, int32_t x, int32_t y,
     (void)surface;
     (void)x;
     (void)y;
-    (void)text;
-    (void)length;
     (void)height;
+    uint32_t copy = length < sizeof(drawn_text) - drawn_length - 1u ?
+        length : (uint32_t)sizeof(drawn_text) - drawn_length - 1u;
+    if (copy != 0u) memcpy(drawn_text + drawn_length, text, copy);
+    drawn_length += copy; drawn_text[drawn_length] = '\0';
     if (text_calls++ == 0u) first_text_color = color;
     last_text_color = color;
     text_clip_top = surface->clip_top;
@@ -824,6 +835,7 @@ static void reset_render_calls(void)
     memset(mono_colors, 0, sizeof(mono_colors));
     copy_calls = 0u;
     line_calls = 0u;
+    drawn_length = 0u; drawn_text[0] = '\0';
 }
 
 static AstraWindowEvent text_event(uint32_t codepoint)
@@ -6650,6 +6662,10 @@ int main(void)
         changed.message_length = (uint16_t)strlen(changed.message);
         changed.button = "Cancel shutdown";
         changed.button_length = (uint16_t)strlen(changed.button);
+        alert_allocation_failure = 1;
+        assert(astra_interface_alert_update(&alert, &changed) == ASTRA_ERROR_OUT_OF_MEMORY);
+        assert(alert_title_calls == titles);
+        alert_allocation_failure = 0;
         assert(astra_interface_alert_update(&alert, &changed) == ASTRA_OK);
         assert(alert_title_calls == titles + 1u);
         alert_try_empty = 1;
@@ -6657,6 +6673,13 @@ int main(void)
         assert(choice == ASTRA_ALERT_PENDING);
         alert_try_empty = 0;
         assert(astra_interface_test_confirm_layout(&changed, &alert_click_x, &alert_click_y));
+        assert(astra_interface_alert_set_enabled(&alert, 2u) == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_interface_alert_set_enabled(&alert, 0u) == ASTRA_OK);
+        assert(astra_interface_alert_update(&alert, &changed) == ASTRA_OK);
+        alert_click_phase = 1u;
+        assert(astra_interface_alert_poll(&alert, &choice) == ASTRA_OK && choice == ASTRA_ALERT_PENDING);
+        assert(astra_interface_alert_poll(&alert, &choice) == ASTRA_OK && choice == ASTRA_ALERT_PENDING);
+        assert(astra_interface_alert_set_enabled(&alert, 1u) == ASTRA_OK);
         alert_click_phase = 1u;
         assert(astra_interface_alert_poll(&alert, &choice) == ASTRA_OK && choice == ASTRA_ALERT_PENDING);
         assert(astra_interface_alert_poll(&alert, &choice) == ASTRA_OK && choice == ASTRA_ALERT_ACCEPTED);
@@ -6666,6 +6689,25 @@ int main(void)
         assert(astra_interface_alert_wait_handle(&alert) == 55u);
         alert_close_result = ASTRA_OK;
         assert(astra_interface_alert_close(&alert) == ASTRA_OK && alert._private_state == NULL);
+        assert(astra_interface_alert_close(&alert) == ASTRA_OK);
+    }
+    {
+        AstraAlert alert = ASTRA_ALERT_INIT;
+        char message[2048];
+        uint32_t bytes = 0u, choice;
+        for (uint32_t row = 0u; row < 80u; ++row)
+            bytes += (uint32_t)snprintf(message + bytes, sizeof(message) - bytes, "Diagnostic row %u\n", row);
+        bytes += (uint32_t)snprintf(message + bytes, sizeof(message) - bytes, "END-MARKER");
+        assert(bytes < sizeof(message));
+        AstraAlertInfo long_info = info;
+        long_info.message = message; long_info.message_length = (uint16_t)bytes;
+        reset_render_calls();
+        assert(astra_interface_alert_open(1u, &long_info, NULL, 0u, 0u, &alert) == ASTRA_OK);
+        assert(strstr(drawn_text, "END-MARKER") == NULL);
+        reset_render_calls();
+        alert_event = wheel_event(30, 30, 0, -1000, 0u); alert_has_event = 1;
+        assert(astra_interface_alert_poll(&alert, &choice) == ASTRA_OK && choice == ASTRA_ALERT_PENDING);
+        assert(strstr(drawn_text, "END-MARKER") != NULL);
         assert(astra_interface_alert_close(&alert) == ASTRA_OK);
     }
     text_calls = 0u;

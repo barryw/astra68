@@ -283,8 +283,14 @@ ASTRA_INTERFACE_12.13 {
 
 ASTRA_INTERFACE_12.14 {
     global:
+        astra_interface_power_panel_open;
+        astra_interface_power_panel_request;
+        astra_interface_power_panel_wait_handles;
+        astra_interface_power_panel_poll;
+        astra_interface_power_panel_close;
         astra_interface_alert_open;
         astra_interface_alert_update;
+        astra_interface_alert_set_enabled;
         astra_interface_alert_wait_handle;
         astra_interface_alert_poll;
         astra_interface_alert_close;

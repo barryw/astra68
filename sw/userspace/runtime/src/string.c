@@ -75,6 +75,25 @@ int astra_string_append_char(AstraString *string, char value)
     return astra_string_append_bytes(string, &value, 1u);
 }
 
+int astra_string_append_display(AstraString *string, const char *bytes,
+                                uint32_t length)
+{
+    uint32_t run = 0u;
+    if (string == NULL || (bytes == NULL && length != 0u)) return 0;
+    for (uint32_t at = 0u; at < length; ++at) {
+        uint8_t byte = (uint8_t)bytes[at];
+        if (byte >= 32u && byte != 127u && byte != '\\') continue;
+        if (!astra_string_append_bytes(string, bytes + run, at - run)) return 0;
+        if (byte == '\\') {
+            if (!astra_string_append(string, "\\\\")) return 0;
+        } else if (!astra_string_append(string, "\\x") ||
+                   !astra_string_append_hex(string, byte, 2u)) return 0;
+        run = at + 1u;
+    }
+    return astra_string_append_bytes(string, bytes == NULL ? NULL : bytes + run,
+                                      length - run);
+}
+
 int astra_string_append_u64(AstraString *string, uint64_t value)
 {
     char digits[20];

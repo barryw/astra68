@@ -2413,8 +2413,25 @@ static void unpublish_owner(const char *owner)
     }
 }
 
+static void report_process_crash(uint32_t handle)
+{
+    AstraProcessCrash crash;
+    if (astra_process_crash(handle, &crash) != ASTRA_SYSCALL_OK) return;
+    ASTRA_EVENT4(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR, ASTRA_EVENT_LEVEL_ERROR,
+        "user fault process %u thread %u pc %x address %x",
+        crash.process_id, crash.thread_id, crash.fault_pc, crash.fault_address);
+    ASTRA_EVENT4(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR, ASTRA_EVENT_LEVEL_ERROR,
+        "user fault vector %u sr %x status %x maps %u",
+        (uint32_t)crash.vector, (uint32_t)crash.status_register,
+        (uint32_t)crash.fault_status, (uint32_t)crash.pc_mapping |
+            ((uint32_t)crash.fault_mapping << 8) |
+            ((uint32_t)crash.stack_mapping << 16));
+}
+
 static void remove_process_slot(uint32_t slot)
 {
+    if (process_table.records[slot].service_name[0] != '\0')
+        unpublish_owner(process_table.records[slot].service_name);
     supervisor_messaging_remove(process_table.records[slot].id);
     volume_lease_close(&process_table.records[slot].volume);
     astra_runtime_deallocate(process_table.records[slot].dependencies);
@@ -3388,10 +3405,18 @@ static uint32_t shutdown_system(const AstraStartupInfo *startup, uint32_t operat
             strcpy(power_status.name, shutdown_name(record));
             supervisor_messaging_changed(ASTRA_SYSTEM_POWER_TOPIC);
             status = shutdown_process(slot);
-            if (status != ASTRA_STATUS_OK)
+            if (status != ASTRA_STATUS_OK) {
+                uint32_t exit_status = 0u;
+                uint32_t waited = astra_process_wait(process_table.records[slot].handle,
+                    0u, &exit_status);
+                /* A failed exit is not consent, but cannot remain a live
+                   record that suppresses restoration of its saved service. */
+                if (waited == ASTRA_SYSCALL_OK || waited == ASTRA_SYSCALL_PEER_DEAD) {
+                    report_process_crash(process_table.records[slot].handle);
+                    remove_process_slot(slot);
+                }
                 goto done;
-            if (process_table.records[slot].service_name[0] != '\0')
-                unpublish_owner(process_table.records[slot].service_name);
+            }
             remove_process_slot(slot);
         }
     }
@@ -4359,7 +4384,6 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
 
             if (wait_status != ASTRA_SYSCALL_TIMED_OUT) {
                 char service_name[ASTRA_SERVICE_NAME_MAX];
-                AstraProcessCrash crash;
                 uint32_t restart =
                     process_table.records[slot].restart_policy;
                 uint32_t action = process_table.records[slot].action;
@@ -4376,23 +4400,7 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
                 (void)memcpy(service_name,
                              process_table.records[slot].service_name,
                              sizeof(service_name));
-                if (astra_process_crash(process_table.records[slot].handle,
-                                        &crash) == ASTRA_SYSCALL_OK) {
-                    ASTRA_EVENT4(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
-                        ASTRA_EVENT_LEVEL_ERROR,
-                        "user fault process %u thread %u pc %x address %x",
-                        crash.process_id, crash.thread_id,
-                        crash.fault_pc, crash.fault_address);
-                    ASTRA_EVENT4(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
-                        ASTRA_EVENT_LEVEL_ERROR,
-                        "user fault vector %u sr %x status %x maps %u",
-                        (uint32_t)crash.vector,
-                        (uint32_t)crash.status_register,
-                        (uint32_t)crash.fault_status,
-                        (uint32_t)crash.pc_mapping |
-                            ((uint32_t)crash.fault_mapping << 8) |
-                            ((uint32_t)crash.stack_mapping << 16));
-                }
+                report_process_crash(process_table.records[slot].handle);
                 if (process_table.records[slot].critical != 0u &&
                     action == SUPERVISOR_PROCESS_ACTION_NONE)
                     system_fail(service_name, "exited",
@@ -4404,8 +4412,6 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
                         "resident process exited",
                         exit_status != 0u ? exit_status :
                                             ASTRA_STATUS_PEER_DEAD);
-                if (service_name[0] != '\0')
-                    unpublish_owner(service_name);
                 remove_process_slot(slot);
                 if (service_name[0] != '\0') {
                     /*

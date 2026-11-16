@@ -9,6 +9,7 @@
  * so a gate can check failure reporting and recovery without crashing a peer.
  * --stay-ready remains alive until stopped, without managing shutdown.
  * --cancel-shutdown declines each managed shutdown request and remains usable.
+ * --fail-shutdown consents, then exits unsuccessfully to test service recovery.
  * It is installed only by the test image profiles that name it.
  */
 #include <astra/program.h>
@@ -46,7 +47,8 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_IO;
     }
     if (mode != NULL && (strcmp(mode, "--lose-shutdown-port") == 0 ||
-                         strcmp(mode, "--cancel-shutdown") == 0)) {
+                         strcmp(mode, "--cancel-shutdown") == 0 ||
+                         strcmp(mode, "--fail-shutdown") == 0)) {
         uint32_t send = 0u;
         if (astra_rt_port_create(1u, sizeof(AstraShutdownRequest),
                 &receive, &send) != ASTRA_SYSCALL_OK)
@@ -65,7 +67,8 @@ int astra_main(const AstraStartupInfo *startup)
             return ASTRA_STATUS_PEER_DEAD;
         (void)astra_close(bootstrap->handle);
     }
-    if (mode != NULL && strcmp(mode, "--cancel-shutdown") == 0) {
+    if (mode != NULL && (strcmp(mode, "--cancel-shutdown") == 0 ||
+                         strcmp(mode, "--fail-shutdown") == 0)) {
         for (;;) {
             AstraShutdownRequest request;
             uint32_t reply = 0u;
@@ -77,8 +80,10 @@ int astra_main(const AstraStartupInfo *startup)
             }
             if (status != ASTRA_SYSCALL_OK ||
                 astra_shutdown_respond(reply, request.header.transaction_id,
-                    ASTRA_SHUTDOWN_CANCEL, 0u) != ASTRA_SYSCALL_OK)
+                    strcmp(mode, "--fail-shutdown") == 0 ?
+                        ASTRA_SHUTDOWN_READY : ASTRA_SHUTDOWN_CANCEL, 0u) != ASTRA_SYSCALL_OK)
                 return ASTRA_STATUS_PROTOCOL;
+            if (strcmp(mode, "--fail-shutdown") == 0) return FAULT_PROBE_STATUS;
         }
     }
     if (mode != NULL && (strcmp(mode, "--lose-shutdown-port") == 0 ||

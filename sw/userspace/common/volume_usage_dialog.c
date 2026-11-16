@@ -36,18 +36,6 @@ void astra_volume_usage_dialog_close(AstraVolumeUsageDialog *usage)
     memset(usage, 0, sizeof(*usage));
 }
 
-static void usage_escape(AstraString *out, const char *bytes, uint32_t length)
-{
-    for (uint32_t at = 0u; at < length; ++at) {
-        unsigned char byte = (unsigned char)bytes[at];
-        if (byte < 32u || byte == 127u) {
-            (void)astra_string_append(out, "\\x");
-            (void)astra_string_append_hex(out, byte, 2u);
-        } else if (byte == '\\') (void)astra_string_append(out, "\\\\");
-        else (void)astra_string_append_char(out, (char)byte);
-    }
-}
-
 static AstraResult usage_layout_rows(AstraVolumeUsageDialog *usage)
 {
     uint64_t y = 0u;
@@ -98,7 +86,7 @@ static AstraResult usage_rows(AstraVolumeUsageDialog *usage, const AstraVolumeUs
             if (processes[process].process.size == sizeof(AstraProcessInfo) && processes[process].process.id == row->process &&
                 memchr(processes[process].name, '\0', sizeof(processes[process].name)) != NULL &&
                 astra_utf8_validate(processes[process].name, (uint32_t)strlen(processes[process].name), 0u)) name = processes[process].name;
-        (void)astra_string_append(&out, " ("); usage_escape(&out, name, (uint32_t)strlen(name));
+        (void)astra_string_append(&out, " ("); (void)astra_string_append_display(&out, name, (uint32_t)strlen(name));
         (void)astra_string_append(&out, ") — "); (void)astra_string_append(&out, kinds[row->kind]);
         (void)astra_string_append(&out, " #"); (void)astra_string_append_u64(&out, row->handle);
         (void)astra_string_append(&out, " — ");
@@ -112,7 +100,7 @@ static AstraResult usage_rows(AstraVolumeUsageDialog *usage, const AstraVolumeUs
         (void)astra_string_append_char(&out, '\n');
         if (row->flags & ASTRA_VOLUME_USAGE_UNNAMED) (void)astra_string_append(&out,
             (row->flags & ASTRA_VOLUME_USAGE_INVALID_NAME) != 0u ? "[Retained object: name cannot be represented]" : "[Unnamed retained object]");
-        else usage_escape(&out, row->path, row->path_length);
+        else (void)astra_string_append_display(&out, row->path, row->path_length);
         if (out.truncated) return ASTRA_ERROR_IO;
         text->length = out.length;
         crc = astra_crc32_update(crc, text->text, text->length + 1u);

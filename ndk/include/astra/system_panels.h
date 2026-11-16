@@ -10,6 +10,45 @@
 
 ASTRA_EXTERN_C_BEGIN
 
+/** Shared shutdown/restart consent and live status, composed from Alert.
+ * The Supervisor owns transaction state; this object only observes it.
+ * Do not copy while open. */
+typedef struct AstraPowerPanel {
+    void *_private_state; /**< Interface Kit-owned state. */
+} AstraPowerPanel;
+/** Empty power panel. */
+#define ASTRA_POWER_PANEL_INIT { 0 }
+/** Subscribe before reading retained power status. No window opens when idle.
+ * @param panel Empty owned panel.
+ * @param gui GUI capability, borrowed until close.
+ * @param manager Service-manager capability, borrowed until close.
+ * @param broker Messaging capability, borrowed until close.
+ * @return Astra result. Failed cleanup retains ownership for close retry. */
+AstraResult astra_interface_power_panel_open(AstraPowerPanel *panel,
+    AstraHandle gui, AstraHandle manager, AstraHandle broker);
+/** Confirm, then request normal cooperative shutdown or restart. Initial
+ * cancellation sends no request. Failure is shown with its exact result.
+ * @param panel Open panel.
+ * @param operation ASTRA_SERVICE_MANAGER_SHUTDOWN or SYSTEM_RESTART.
+ * @return Astra result. */
+AstraResult astra_interface_power_panel_request(AstraPowerPanel *panel,
+    uint32_t operation);
+/** Add these handles to the caller's ordinary wait set.
+ * @param panel Open panel.
+ * @param handles Receives up to two borrowed wait handles.
+ * @return Number of handles, or zero for an invalid panel/output. */
+uint32_t astra_interface_power_panel_wait_handles(const AstraPowerPanel *panel,
+    AstraHandle handles[2]);
+/** Dispatch pending broker/window events. Window close during teardown requests
+ * cancellation; recovery cannot be canceled. Final diagnostics can be dismissed.
+ * @param panel Open panel.
+ * @return Astra result; empty queues succeed. */
+AstraResult astra_interface_power_panel_poll(AstraPowerPanel *panel);
+/** Release subscription, alert and port. Failed cleanup retains ownership.
+ * @param panel Owned panel, including partially opened state.
+ * @return Astra result. Closing an empty panel succeeds. */
+AstraResult astra_interface_power_panel_close(AstraPowerPanel *panel);
+
 enum {
     ASTRA_COLOUR_PANEL_RGB565 = 1u,
     ASTRA_COLOUR_PANEL_XRGB8888 = 2u,

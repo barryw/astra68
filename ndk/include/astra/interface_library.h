@@ -29,7 +29,7 @@
 AstraResult astra_interface_show_alert(AstraHandle gui,
                                        const AstraAlertInfo *info);
 
-/** Show a two-button modal confirmation using shared Label, Container and
+/** Show a two-button modal confirmation using shared Text View, Container and
  * Button controls. Closing the window or choosing cancel leaves confirmed
  * zero. Only activation of info->button sets it to one.
  * @param gui GUI capability.
@@ -66,6 +66,12 @@ AstraResult astra_interface_alert_open(AstraHandle gui,
  * @return Astra result. @since Interface Kit 12.14. */
 AstraResult astra_interface_alert_update(AstraAlert *alert,
     const AstraAlertInfo *info);
+/** Enable or disable an alert's affirmative button; cancel/close stay separate.
+ * Updates preserve this semantic state.
+ * @param alert Open alert.
+ * @param enabled Zero to disable, one to enable.
+ * @return Astra result. @since Interface Kit 12.14. */
+AstraResult astra_interface_alert_set_enabled(AstraAlert *alert, uint32_t enabled);
 /** Waitable event endpoint, or INVALID_HANDLE when closed.
  * @param alert Owned alert.
  * @return Borrowed receive handle. @since Interface Kit 12.14. */

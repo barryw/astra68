@@ -22,6 +22,7 @@ INTERFACE_TARGET := build/m68k/libraries/interface.library.12
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
 	build/m68k/field_family.o \
 	build/m68k/system_panels.o \
+	build/m68k/power_panel.o \
 	build/m68k/file_panel.o \
 	build/m68k/font_panel.o \
 	build/m68k/display_widgets.o \
@@ -50,6 +51,7 @@ COMMAND_HOST_TEST := build/host/test_command
 MENU_HOST_TEST := build/host/test_menu
 ICON_TILE_HOST_TEST := build/host/test_icon_tile
 IMAGE_VIEW_HOST_TEST := build/host/test_image_view
+POWER_PANEL_HOST_TEST := build/host/test_power_panel
 GRAPHICS_HOST_SURFACE := $(GRAPHICS)/build/host/surface.o $(GRAPHICS)/build/host/font_data.o
 GRAPHICS_HOST_SURFACE_SANITIZE := $(GRAPHICS)/build/host/surface_sanitize.o $(GRAPHICS)/build/host/font_data_sanitize.o
 FONT_HOST_INPUTS := $(RUNTIME)/tests/uncontended_mutex.c \
@@ -112,6 +114,10 @@ build/m68k/text_surface.o: src/text_surface.c src/text_surface_internal.h
 		$(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 build/m68k/system_panels.o: src/system_panels.c src/panel_internal.h $(NDK)/include/astra/system_panels.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+build/m68k/power_panel.o: src/power_panel.c $(NDK)/include/astra/system_panels.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
@@ -298,10 +304,14 @@ $(IMAGE_VIEW_HOST_TEST): src/image_view.c tests/test_image_view.c
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$^ -o $@
 
+$(POWER_PANEL_HOST_TEST): src/power_panel.c tests/test_power_panel.c $(RUNTIME_HOST_STRING)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
+
 test: $(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
 		$(UNDO_HOST_TEST) $(TEXT_MODEL_HOST_TEST) $(SCROLL_HOST_TEST) \
 		$(COMMAND_HOST_TEST) $(MENU_HOST_TEST) $(ICON_TILE_HOST_TEST) \
-		$(IMAGE_VIEW_HOST_TEST)
+		$(IMAGE_VIEW_HOST_TEST) $(POWER_PANEL_HOST_TEST)
 	./$(INTERFACE_HOST_TEST)
 	./$(TEXT_SURFACE_HOST_TEST)
 	./$(UNDO_HOST_TEST)
@@ -311,9 +321,13 @@ test: $(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
 	./$(MENU_HOST_TEST)
 	./$(ICON_TILE_HOST_TEST)
 	./$(IMAGE_VIEW_HOST_TEST)
+	./$(POWER_PANEL_HOST_TEST)
 
 sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANITIZE) $(RUNTIME_HOST_STRING_SANITIZE)
 	@mkdir -p build/host
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
+		src/power_panel.c tests/test_power_panel.c $(RUNTIME_HOST_STRING_SANITIZE) -o build/host/test_power_panel_sanitize
+	./build/host/test_power_panel_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_SYSTEM_TEST \
 		-ffunction-sections -Wl,--gc-sections src/interface_library.c \

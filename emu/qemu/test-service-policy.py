@@ -180,7 +180,9 @@ def check_shutdown_cancellation(machine, shell, deadline, mode='--lose-shutdown-
              "--restart=never --grant=LIBS:r -- --stay-ready")
     before = machine.trace_cursor()
     machine.qmp.type_line('shutdown')
-    expected = ('shutdown declined shutdown-probe pid=%u status=0 reason=0'
+    expected = ('shutdown exit shutdown-probe pid=%u status=0 reason=77'
+                if mode == '--fail-shutdown' else
+                'shutdown declined shutdown-probe pid=%u status=0 reason=0'
                 if mode == '--cancel-shutdown' else
                 'shutdown request shutdown-probe pid=%u status=8 reason=0') % process
     if not machine.wait_for_trace_text(expected, deadline, before):
@@ -188,6 +190,13 @@ def check_shutdown_cancellation(machine, shell, deadline, mode='--lose-shutdown-
                            '\n'.join(machine.trace_with_syslog()[-80:]))
     if not terminal.open_terminal_window(machine, deadline):
         raise RuntimeError('no fresh Terminal after declined shutdown')
+    if mode == '--fail-shutdown':
+        recovered = shell.ok('service inspect shutdown-probe', 'state: running',
+                             'boot: no', 'restart: never')
+        recovered_process = next(int(line.split(':', 1)[1]) for line in recovered
+                                 if line.startswith('pid: '))
+        if recovered_process <= 0 or recovered_process == process:
+            raise RuntimeError('unsuccessfully exited service was not restored')
     survivor = shell.ok('service inspect shutdown-survivor',
                         'state: running', 'boot: no', 'restart: never')
     restored_process = next(int(line.split(':', 1)[1]) for line in survivor if line.startswith('pid: '))
@@ -245,6 +254,8 @@ def run_policy(arguments, root):
         check_shutdown_cancellation(machine, shell, arguments.command_deadline)
         check_shutdown_cancellation(machine, shell, arguments.command_deadline,
                                     '--cancel-shutdown')
+        check_shutdown_cancellation(machine, shell, arguments.command_deadline,
+                                    '--fail-shutdown')
         check_policy_before_restart(shell)
         clean_shutdown(machine, arguments.command_deadline)
     finally:

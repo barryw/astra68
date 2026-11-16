@@ -206,11 +206,25 @@ call `astra_interface_alert_poll` when it wakes. Poll reports `PENDING`,
 window flag allows other windows to remain usable. `ASTRA_WINDOW_MODAL` gives
 the same modality as `astra_interface_show_alert` and `astra_interface_confirm`.
 `astra_interface_alert_update` replaces the title, message, affirmative button
-text and severity without opening a second window. Text remains caller-owned
-until replacement or close. Failed closes retain ownership for retry.
+text and severity without opening a second window. Title/button labels remain
+caller-owned until replacement or close. Failed closes retain ownership for retry.
 The blocking convenience functions use this same implementation, composed from
-ordinary Label, Container and Button controls; there is no separate progress
-dialog renderer or event loop in applications.
+ordinary TextView, ScrollView, Scrollbar, Container and Button controls. Long
+diagnostics wrap and scroll without losing their final lines. Message content
+is copied; title/button labels remain borrowed. `astra_interface_alert_set_enabled`
+changes the affirmative button through the same shared control state path.
+
+`AstraPowerPanel` in `astra/system_panels.h` composes these alerts with System
+Kit's authoritative power transaction and generic broker invalidations. Open it
+with borrowed GUI, service-manager and messaging capabilities, add the handles
+returned by `astra_interface_power_panel_wait_handles` to the existing wait set,
+and call `astra_interface_power_panel_poll` when one wakes. Requesting shutdown
+or restart presents initial confirmation; cancelling it sends no power request.
+Live status remains modeless so applications can finish saving. Cancel and window
+close request a safe stop of the exact transaction; recovery disables Cancel.
+Retained refusals show complete escaped names, PIDs, steps, status/reason and
+recovery failures, including after Desktop replacement. Closing the panel releases
+its subscription and window; failed cleanup retains ownership for retry.
 
 Interface Kit 12.13 adds `astra_interface_settings_sidebar_init`. It reserves
 four consecutive IDs for a Container, Search Field, Scroll View, and List.

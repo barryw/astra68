@@ -48,6 +48,16 @@ int astra_string_append(AstraString *string, const char *text);
  */
 int astra_string_append_bytes(AstraString *string, const char *bytes,
                               uint32_t length);
+/** Append UTF-8 for diagnostic display, escaping C0/DEL as \\xhh and
+ * backslash as \\\\. This is not shell or JSON quoting. Counted NUL is escaped.
+ * @param string Builder from astra_string_init().
+ * @param bytes Valid UTF-8 bytes, or NULL only when length is zero.
+ * @param length Number of input bytes.
+ * @return 1 if all escaped text fit, else 0; see astra_string_append().
+ * @since ASTRA_RUNTIME_3.1
+ */
+int astra_string_append_display(AstraString *string, const char *bytes,
+                                uint32_t length);
 /** Append one byte; see ::astra_string_append.
  * @param string Builder from astra_string_init().
  * @param value Byte to append.

@@ -130,11 +130,30 @@ static void helpers(void)
     assert(astra_string_compare_ascii_nocase("\xc3\xa9", "e") > 0);
 }
 
+static void display(void)
+{
+    char storage[64];
+    AstraString text;
+    static const char input[] = "a\n\0\177\\\xc3\xa9";
+    astra_string_init(&text, storage, sizeof(storage));
+    assert(astra_string_append_display(&text, input, sizeof(input) - 1u));
+    assert(strcmp(storage, "a\\x0a\\x00\\x7f\\\\\xc3\xa9") == 0);
+    assert(astra_string_append_display(&text, NULL, 0u));
+    assert(!astra_string_append_display(&text, NULL, 1u));
+    assert(!astra_string_append_display(NULL, input, sizeof(input)));
+    astra_string_init(&text, storage, 3u);
+    assert(!astra_string_append_display(&text, "a\xc3\xa9", 3u));
+    assert(text.truncated && strcmp(storage, "a") == 0);
+    astra_string_init(&text, storage, 0u);
+    assert(!astra_string_append_display(&text, NULL, 0u));
+}
+
 int main(void)
 {
     builder();
     utf8();
     helpers();
+    display();
     puts("string tests passed");
     return 0;
 }

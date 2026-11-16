@@ -16,6 +16,23 @@
 
 #define ALERT_WIDTH 420u
 #define ALERT_HEIGHT 150u
+#define ALERT_LEFT 22u
+#define ALERT_TOP 22u
+#define ALERT_RIGHT 20u
+#define ALERT_BOTTOM 20u
+#define ALERT_GAP 12u
+#define ALERT_BUTTON_HEIGHT 32u
+#define ALERT_SCROLLBAR_WIDTH 12u
+#define ALERT_BODY_GAP 4u
+#define ALERT_BODY_HEIGHT (ALERT_HEIGHT - ALERT_TOP - ALERT_BOTTOM - ALERT_GAP - ALERT_BUTTON_HEIGHT)
+#define ALERT_TEXT_WIDTH (ALERT_WIDTH - ALERT_LEFT - ALERT_RIGHT - ALERT_SCROLLBAR_WIDTH - ALERT_BODY_GAP)
+#define ALERT_CONTROL_COUNT 7u
+
+typedef struct AlertMessage {
+    AstraTextModel model;
+    AstraScrollModel scroll;
+    void *storage;
+} AlertMessage;
 
 ASTRA_DYNAMIC_LIBRARY("interface.library.12", 12, 14, 0,
               ASTRA_INTERFACE_LIBRARY_ABI_MAJOR,
@@ -50,108 +67,107 @@ static uint16_t color(AstraColorRGBA8 value)
     return astra_surface_rgb565(value.red, value.green, value.blue);
 }
 
-static AstraResult alert_controls(const AstraAlertInfo *info,
-                                  AstraControl controls[2],
-                                  AstraUIContext *context)
+static AstraResult alert_message(const AstraAlertInfo *info, AlertMessage *message)
 {
-    AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
-    AstraButtonInfo button = ASTRA_BUTTON_INFO_INIT;
-    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
-    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
-    AstraResult result;
-
-    label.id = 1u;
-    label.text = info->message;
-    label.text_length = info->message_length;
-    label.text_role = ASTRA_TEXT_CLIENT_PRIMARY;
-    result = astra_interface_label_init(&controls[0], &label);
+    uint32_t initial_line = 0u;
+    AstraTextModel empty = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo model = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraTextModelRequirements needed = ASTRA_TEXT_MODEL_REQUIREMENTS_INIT;
+    model.metadata_arena = &initial_line;
+    model.metadata_arena_bytes = sizeof(initial_line);
+    AstraResult result = astra_text_model_init(&empty, &model);
     if (result != ASTRA_OK) return result;
-    button.id = 2u;
-    button.text = info->button;
-    button.text_length = info->button_length;
-    button.variant = info->kind == ASTRA_ALERT_WARNING ?
-        ASTRA_BUTTON_WARNING :
-        (info->kind == ASTRA_ALERT_ERROR ? ASTRA_BUTTON_DESTRUCTIVE :
-                                          ASTRA_BUTTON_PRIMARY);
-    result = astra_interface_button_init(&controls[1], &button);
+    result = astra_text_model_replace_requirements(&empty, 0u, 0u,
+        info->message, info->message_length, &needed);
     if (result != ASTRA_OK) return result;
-    item.minimum_width = 96u;
-    item.minimum_height = 32u;
-    item.align_self = ASTRA_FLEX_ALIGN_END;
-    result = astra_interface_control_set_flex(&controls[1], &item);
-    if (result != ASTRA_OK) return result;
-    result = astra_interface_ui_init(context, controls, 2u,
-                                     ALERT_WIDTH, ALERT_HEIGHT);
-    if (result != ASTRA_OK) return result;
-    layout.direction = ASTRA_FLEX_COLUMN;
-    layout.justify = ASTRA_FLEX_JUSTIFY_SPACE_BETWEEN;
-    layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
-    layout.padding_left = 22u;
-    layout.padding_top = 22u;
-    layout.padding_right = 20u;
-    layout.padding_bottom = 20u;
-    return astra_interface_ui_layout(context, &layout);
+    uint32_t content = (needed.content_arena_bytes + 3u) & ~UINT32_C(3);
+    if (content < needed.content_arena_bytes || content > UINT32_MAX - needed.metadata_arena_bytes)
+        return ASTRA_ERROR_OUT_OF_MEMORY;
+    void *storage = astra_runtime_allocate(content + needed.metadata_arena_bytes);
+    if (storage == NULL) return ASTRA_ERROR_OUT_OF_MEMORY;
+    *message = (AlertMessage){.model = ASTRA_TEXT_MODEL_INIT,
+        .scroll = ASTRA_SCROLL_MODEL_INIT, .storage = storage};
+    model.text = info->message; model.text_bytes = info->message_length;
+    model.content_arena = storage; model.content_arena_bytes = content;
+    model.metadata_arena = (uint8_t *)storage + content;
+    model.metadata_arena_bytes = needed.metadata_arena_bytes;
+    result = astra_text_model_init(&message->model, &model);
+    AstraScrollModelInfo scrolling = ASTRA_SCROLL_MODEL_INFO_INIT;
+    scrolling.line_height = ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT + 4u;
+    if (result == ASTRA_OK) result = astra_scroll_init(&message->scroll, &scrolling);
+    if (result != ASTRA_OK) {
+        astra_runtime_deallocate(storage);
+        message->storage = NULL;
+    }
+    return result;
 }
 
-static AstraResult confirm_controls(const AstraAlertInfo *info,
-    const char *cancel, uint16_t cancel_length,
-    AstraControl controls[4], AstraUIContext *context)
+static AstraResult alert_controls(const AstraAlertInfo *info,
+    const char *cancel, uint16_t cancel_length, AlertMessage *message,
+    AstraControl controls[ALERT_CONTROL_COUNT], AstraUIContext *context)
 {
-    AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
     AstraContainerInfo row = ASTRA_CONTAINER_INFO_INIT;
+    AstraScrollViewInfo view = ASTRA_SCROLL_VIEW_INFO_INIT;
+    AstraTextViewInfo text = ASTRA_TEXT_VIEW_INFO_INIT;
+    AstraScrollbarInfo bar = ASTRA_SCROLLBAR_INFO_INIT;
     AstraButtonInfo button = ASTRA_BUTTON_INFO_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
-    AstraResult result;
-
-    label.id = 1u;
-    label.text = info->message;
-    label.text_length = info->message_length;
-    label.text_role = ASTRA_TEXT_CLIENT_PRIMARY;
-    result = astra_interface_label_init(&controls[0], &label);
-    if (result != ASTRA_OK) return result;
-    row.id = 4u;
-    row.layout.justify = ASTRA_FLEX_JUSTIFY_END;
-    row.layout.align_items = ASTRA_FLEX_ALIGN_CENTER;
-    row.layout.main_gap = 10u;
-    result = astra_interface_container_init(&controls[1], &row);
-    if (result != ASTRA_OK) return result;
-    item.minimum_height = 32u;
-    result = astra_interface_control_set_flex(&controls[1], &item);
-    if (result != ASTRA_OK) return result;
-    button.id = 3u;
-    button.text = cancel;
-    button.text_length = cancel_length;
-    button.variant = ASTRA_BUTTON_STANDARD;
-    result = astra_interface_button_init(&controls[2], &button);
-    if (result != ASTRA_OK) return result;
-    button.id = 2u;
-    button.text = info->button;
-    button.text_length = info->button_length;
-    button.variant = info->kind == ASTRA_ALERT_ERROR ?
-        ASTRA_BUTTON_DESTRUCTIVE :
-        (info->kind == ASTRA_ALERT_WARNING ? ASTRA_BUTTON_WARNING :
-            ASTRA_BUTTON_PRIMARY);
-    result = astra_interface_button_init(&controls[3], &button);
-    if (result != ASTRA_OK) return result;
+    row.id = 1u; row.layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
+    row.layout.main_gap = ALERT_BODY_GAP;
+    AstraResult result = astra_interface_container_init(&controls[0], &row);
+    item.minimum_height = item.maximum_height = ALERT_BODY_HEIGHT;
+    if (result == ASTRA_OK) result = astra_interface_control_set_flex(&controls[0], &item);
+    view.id = 5u; view.model = &message->scroll;
+    view.preferred_width = ALERT_TEXT_WIDTH; view.preferred_height = ALERT_BODY_HEIGHT;
+    if (result == ASTRA_OK) result = astra_interface_scroll_view_init(&controls[1], &view);
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
-    item.parent_id = 4u;
-    item.minimum_width = 96u;
-    item.minimum_height = 32u;
-    result = astra_interface_control_set_flex(&controls[2], &item);
-    if (result != ASTRA_OK) return result;
-    result = astra_interface_control_set_flex(&controls[3], &item);
-    if (result != ASTRA_OK) return result;
-    result = astra_interface_ui_init(context, controls, 4u,
+    item.parent_id = 1u; item.grow = 1u;
+    if (result == ASTRA_OK) result = astra_interface_control_set_flex(&controls[1], &item);
+    text.id = 6u; text.model = &message->model;
+    if (result == ASTRA_OK) result = astra_interface_text_view_init(&controls[2], &text);
+    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = 5u;
+    item.minimum_width = item.maximum_width = ALERT_TEXT_WIDTH;
+    if (result == ASTRA_OK) result = astra_interface_control_set_flex(&controls[2], &item);
+    bar.id = 7u; bar.model = &message->scroll;
+    if (result == ASTRA_OK) result = astra_interface_scrollbar_init(&controls[3], &bar);
+    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = 1u; item.minimum_width = item.maximum_width = ALERT_SCROLLBAR_WIDTH;
+    item.maximum_height = ALERT_BODY_HEIGHT;
+    if (result == ASTRA_OK) result = astra_interface_control_set_flex(&controls[3], &item);
+    row = (AstraContainerInfo)ASTRA_CONTAINER_INFO_INIT;
+    row.id = 4u; row.layout.justify = ASTRA_FLEX_JUSTIFY_END;
+    row.layout.align_items = ASTRA_FLEX_ALIGN_CENTER; row.layout.main_gap = 10u;
+    if (result == ASTRA_OK) result = astra_interface_container_init(&controls[4], &row);
+    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.minimum_height = item.maximum_height = ALERT_BUTTON_HEIGHT;
+    if (result == ASTRA_OK) result = astra_interface_control_set_flex(&controls[4], &item);
+    uint32_t affirmative = cancel != NULL ? 6u : 5u;
+    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = 4u; item.minimum_width = 96u; item.minimum_height = ALERT_BUTTON_HEIGHT;
+    if (cancel != NULL) {
+        button.id = 3u; button.text = cancel; button.text_length = cancel_length;
+        if (result == ASTRA_OK) result = astra_interface_button_init(&controls[5], &button);
+        if (result == ASTRA_OK) result = astra_interface_control_set_flex(&controls[5], &item);
+    }
+    button.id = 2u; button.text = info->button; button.text_length = info->button_length;
+    button.variant = info->kind == ASTRA_ALERT_ERROR ? ASTRA_BUTTON_DESTRUCTIVE :
+        info->kind == ASTRA_ALERT_WARNING ? ASTRA_BUTTON_WARNING : ASTRA_BUTTON_PRIMARY;
+    if (result == ASTRA_OK) result = astra_interface_button_init(&controls[affirmative], &button);
+    if (result == ASTRA_OK) result = astra_interface_control_set_flex(&controls[affirmative], &item);
+    if (result == ASTRA_OK) result = astra_interface_ui_init(context, controls, affirmative + 1u,
         ALERT_WIDTH, ALERT_HEIGHT);
+    if (result == ASTRA_OK) result = astra_interface_text_view_set_mode(context, &controls[2], ASTRA_TEXT_SURFACE_FLOW);
+    if (result == ASTRA_OK) result = astra_interface_text_view_set_wrap_width(context, &controls[2], ALERT_TEXT_WIDTH);
     if (result != ASTRA_OK) return result;
     layout.direction = ASTRA_FLEX_COLUMN;
-    layout.justify = ASTRA_FLEX_JUSTIFY_SPACE_BETWEEN;
+    layout.main_gap = ALERT_GAP;
     layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
-    layout.padding_left = 22u;
-    layout.padding_top = 22u;
-    layout.padding_right = 20u;
-    layout.padding_bottom = 20u;
+    layout.padding_left = ALERT_LEFT;
+    layout.padding_top = ALERT_TOP;
+    layout.padding_right = ALERT_RIGHT;
+    layout.padding_bottom = ALERT_BOTTOM;
     return astra_interface_ui_layout(context, &layout);
 }
 
@@ -159,23 +175,23 @@ static AstraResult confirm_controls(const AstraAlertInfo *info,
 int astra_interface_test_confirm_layout(const AstraAlertInfo *info,
     int32_t *button_x, int32_t *button_y)
 {
-    AstraControl controls[4] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT,
-        ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
+    AstraControl controls[ALERT_CONTROL_COUNT] = {0};
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
-    if (!valid(info) || confirm_controls(info, "Cancel", 6u,
-            controls, &context) != ASTRA_OK) return 0;
+    AlertMessage message = {0};
+    if (!valid(info) || alert_message(info, &message) != ASTRA_OK) return 0;
+    AstraResult result = alert_controls(info, "Cancel", 6u, &message, controls, &context);
+    astra_runtime_deallocate(message.storage);
+    if (result != ASTRA_OK) return 0;
     if (button_x != NULL)
-        *button_x = controls[3]._private_frame.x +
-            (int32_t)(controls[3]._private_frame.width / 2u);
+        *button_x = controls[6]._private_frame.x +
+            (int32_t)(controls[6]._private_frame.width / 2u);
     if (button_y != NULL)
-        *button_y = controls[3]._private_frame.y +
-            (int32_t)(controls[3]._private_frame.height / 2u);
-    return controls[2]._private_frame.y == controls[3]._private_frame.y &&
-        (int64_t)controls[2]._private_frame.x +
-            controls[2]._private_frame.width <=
-            (int64_t)controls[3]._private_frame.x &&
-        (int64_t)controls[3]._private_frame.x +
-            controls[3]._private_frame.width <= ALERT_WIDTH;
+        *button_y = controls[6]._private_frame.y +
+            (int32_t)(controls[6]._private_frame.height / 2u);
+    return controls[5]._private_frame.y == controls[6]._private_frame.y &&
+        (int64_t)controls[6]._private_frame.y + controls[6]._private_frame.height <= ALERT_HEIGHT &&
+        (int64_t)controls[5]._private_frame.x + controls[5]._private_frame.width <= controls[6]._private_frame.x &&
+        (int64_t)controls[6]._private_frame.x + controls[6]._private_frame.width <= ALERT_WIDTH;
 }
 #endif
 
@@ -195,11 +211,13 @@ static AstraResult paint(AstraSurfaceView *surface, const AstraAlertInfo *info,
 void astra_interface_test_paint(AstraSurfaceView *surface,
                                 const AstraAlertInfo *info)
 {
-    AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
+    AstraControl controls[ALERT_CONTROL_COUNT] = {0};
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
-
-    if (alert_controls(info, controls, &context) == ASTRA_OK)
+    AlertMessage message = {0};
+    if (alert_message(info, &message) != ASTRA_OK) return;
+    if (alert_controls(info, NULL, 0u, &message, controls, &context) == ASTRA_OK)
         (void)paint(surface, info, &context);
+    astra_runtime_deallocate(message.storage);
 }
 #endif
 
@@ -212,7 +230,8 @@ typedef struct AlertState {
     uint32_t applied_pointer_shape;
     AstraSharedSurface surface;
     AstraWindow window;
-    AstraControl controls[4];
+    AlertMessage message;
+    AstraControl controls[ALERT_CONTROL_COUNT];
     AstraUIContext context;
 } AlertState;
 
@@ -242,6 +261,7 @@ AstraResult astra_interface_alert_close(AstraAlert *alert)
         uint32_t status = astra_shared_surface_close(&state->surface);
         if (status != ASTRA_SYSCALL_OK) return astra_result_from_syscall(status);
     }
+    astra_runtime_deallocate(state->message.storage);
     astra_runtime_deallocate(state);
     alert->_private_state = NULL;
     return ASTRA_OK;
@@ -259,15 +279,33 @@ AstraResult astra_interface_alert_update(AstraAlert *alert,
 {
     AlertState *state = alert == NULL ? NULL : alert->_private_state;
     if (state == NULL || !valid(info)) return ASTRA_ERROR_INVALID_ARGUMENT;
-    AstraResult result = state->cancel != NULL ?
-        confirm_controls(info, state->cancel, state->cancel_length,
-            state->controls, &state->context) :
-        alert_controls(info, state->controls, &state->context);
+    AlertMessage replacement = {0};
+    AstraResult result = alert_message(info, &replacement);
     if (result != ASTRA_OK) return result;
     if (state->created) {
         result = astra_window_set_title(&state->window, info->title, info->title_length);
-        if (result != ASTRA_OK) return result;
+        if (result != ASTRA_OK) { astra_runtime_deallocate(replacement.storage); return result; }
     }
+    AlertMessage previous_message = state->message;
+    AstraControl previous_controls[ALERT_CONTROL_COUNT];
+    memcpy(previous_controls, state->controls, sizeof(previous_controls));
+    AstraUIContext previous_context = state->context;
+    uint32_t affirmative = state->cancel != NULL ? 6u : 5u;
+    uint32_t disabled = state->controls[affirmative]._private_state & ASTRA_CONTROL_DISABLED;
+    state->message = replacement;
+    result = alert_controls(info, state->cancel, state->cancel_length,
+        &state->message, state->controls, &state->context);
+    if (result == ASTRA_OK && disabled != 0u)
+        result = astra_interface_ui_set_state(&state->context,
+            &state->controls[affirmative], disabled);
+    if (result != ASTRA_OK) {
+        state->message = previous_message;
+        memcpy(state->controls, previous_controls, sizeof(previous_controls));
+        state->context = previous_context;
+        astra_runtime_deallocate(replacement.storage);
+        return result;
+    }
+    astra_runtime_deallocate(previous_message.storage);
     state->info = *info;
     const AstraWindowFrame region = {0u, 0u, ALERT_WIDTH, ALERT_HEIGHT};
     return alert_render(state, &region);
@@ -310,6 +348,7 @@ AstraResult astra_interface_alert_open(AstraHandle gui,
     create.event_mask = ASTRA_WINDOW_SUBSCRIBE_CLOSE_REQUEST |
                         ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION |
                         ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON |
+                        ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL |
                         ASTRA_WINDOW_SUBSCRIBE_STATE |
                         ASTRA_WINDOW_SUBSCRIBE_KEY;
     if (result == ASTRA_OK) {
@@ -324,6 +363,15 @@ AstraResult astra_interface_alert_open(AstraHandle gui,
         if (closed != ASTRA_OK) return closed;
     }
     return result;
+}
+
+static AstraResult alert_repaint_damage(AlertState *state)
+{
+    AstraControlFrame damage;
+    if (astra_interface_ui_damage(&state->context, &damage) != ASTRA_OK) return ASTRA_OK;
+    const AstraWindowFrame region = {(uint16_t)damage.x, (uint16_t)damage.y,
+        (uint16_t)damage.width, (uint16_t)damage.height};
+    return alert_render(state, &region);
 }
 
 static AstraResult alert_dispatch(AlertState *state,
@@ -347,13 +395,19 @@ static AstraResult alert_dispatch(AlertState *state,
         *choice = action.control_id == 2u ? ASTRA_ALERT_ACCEPTED : ASTRA_ALERT_CANCELLED;
         return ASTRA_OK;
     }
-    AstraControlFrame damage;
-    if (astra_interface_ui_damage(&state->context, &damage) == ASTRA_OK) {
-        const AstraWindowFrame region = {(uint16_t)damage.x, (uint16_t)damage.y,
-            (uint16_t)damage.width, (uint16_t)damage.height};
-        result = alert_render(state, &region);
-    }
-    return result;
+    return alert_repaint_damage(state);
+}
+
+AstraResult astra_interface_alert_set_enabled(AstraAlert *alert, uint32_t enabled)
+{
+    AlertState *state = alert == NULL ? NULL : alert->_private_state;
+    if (state == NULL || !state->created || enabled > 1u) return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraControl *button = &state->controls[state->cancel != NULL ? 6u : 5u];
+    uint32_t flags = (button->_private_state & ~ASTRA_CONTROL_DISABLED) |
+        (enabled ? 0u : ASTRA_CONTROL_DISABLED);
+    AstraResult result = astra_interface_ui_set_state(&state->context, button, flags);
+    if (result != ASTRA_OK) return result;
+    return alert_repaint_damage(state);
 }
 
 AstraResult astra_interface_alert_poll(AstraAlert *alert, uint32_t *choice)
