@@ -5,18 +5,16 @@
 
 static uint32_t service_ready(uint32_t bootstrap, uint32_t status,
                               const uint32_t *handles, uint32_t handle_count,
-                              uint32_t shutdown_send)
+                              uint32_t shutdown_send, uint32_t flags)
 {
     AstraServiceReady message = {0};
     uint32_t published[ASTRA_MESSAGE_HANDLES_MAX];
-    uint32_t flags = shutdown_send != 0u ?
-        ASTRA_SERVICE_READY_SHUTDOWN_MANAGED : 0u;
-
     if (status != ASTRA_STATUS_OK) {
         handles = NULL;
         handle_count = 0u;
         flags = 0u;
-    } else if (handle_count > ASTRA_MESSAGE_HANDLES_MAX - (flags != 0u) ||
+    } else if ((flags != 0u && shutdown_send == 0u) ||
+               handle_count > ASTRA_MESSAGE_HANDLES_MAX - (flags != 0u) ||
                (handle_count != 0u && handles == NULL)) {
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     }
@@ -37,7 +35,7 @@ static uint32_t service_ready(uint32_t bootstrap, uint32_t status,
 uint32_t astra_service_ready(uint32_t bootstrap, uint32_t status,
                              const uint32_t *handles, uint32_t handle_count)
 {
-    return service_ready(bootstrap, status, handles, handle_count, 0u);
+    return service_ready(bootstrap, status, handles, handle_count, 0u, 0u);
 }
 
 uint32_t astra_service_ready_managed(uint32_t bootstrap, uint32_t status,
@@ -45,8 +43,13 @@ uint32_t astra_service_ready_managed(uint32_t bootstrap, uint32_t status,
                                      uint32_t handle_count,
                                      uint32_t shutdown_send)
 {
-    if (status == ASTRA_STATUS_OK && shutdown_send == 0u)
-        return ASTRA_SYSCALL_INVALID_ARGUMENT;
     return service_ready(bootstrap, status, handles, handle_count,
-                         shutdown_send);
+                         shutdown_send, ASTRA_SERVICE_READY_SHUTDOWN_MANAGED);
+}
+
+uint32_t astra_service_ready_cancellable(uint32_t bootstrap, uint32_t status,
+    const uint32_t *handles, uint32_t handle_count, uint32_t shutdown_send)
+{
+    return service_ready(bootstrap, status, handles, handle_count,
+        shutdown_send, ASTRA_SERVICE_READY_SHUTDOWN_MASK);
 }

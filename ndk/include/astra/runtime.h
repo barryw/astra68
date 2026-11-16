@@ -106,6 +106,20 @@ uint32_t astra_service_ready_managed(uint32_t bootstrap, uint32_t status,
                                      uint32_t handle_count,
                                      uint32_t shutdown_send);
 
+/** Announce a managed participant that also receives matching ABORT messages.
+ * Before committing, ABORT answers the original request with CANCEL and keeps
+ * the process usable. After committing, complete READY and clean exit. Managed
+ * synchronous services use astra_service_ready_managed and finish their original
+ * decision before system cancellation can proceed.
+ * @param bootstrap Startup ready endpoint.
+ * @param status Startup result.
+ * @param handles Published capabilities.
+ * @param handle_count Number of published capabilities.
+ * @param shutdown_send Participant lifecycle send capability.
+ * @return ASTRA_SYSCALL_* status. @since runtime.library 3.1. */
+uint32_t astra_service_ready_cancellable(uint32_t bootstrap, uint32_t status,
+    const uint32_t *handles, uint32_t handle_count, uint32_t shutdown_send);
+
 /**
  * Invoke a raw five-argument syscall.
  * Prefer the typed wrappers below; this is the shared ABI primitive.
@@ -1804,10 +1818,17 @@ uint32_t astra_rt_port_create(uint32_t message_max, uint32_t byte_max,
 uint32_t astra_shutdown_request(uint32_t lifecycle_send,
                                 uint32_t transaction,
                                 uint32_t *reply_receive);
-/** Receive one shutdown request and its one-use reply capability.
+/** Try to withdraw a matching request before participant consent. Keep its
+ * reply port open: CANCEL acknowledges withdrawal, READY commits to clean exit.
+ * Retry WOULD_BLOCK when the lifecycle send endpoint becomes writable.
+ * @param lifecycle_send Participant lifecycle endpoint.
+ * @param transaction Matching nonzero transaction.
+ * @return ASTRA_SYSCALL_* status. @since runtime.library 3.1. */
+uint32_t astra_shutdown_cancel(uint32_t lifecycle_send, uint32_t transaction);
+/** Receive one shutdown REQUEST or ABORT control message.
  * @param lifecycle_receive This process's shutdown receive capability.
  * @param request Receives the validated request.
- * @param reply_send Receives the reply capability on success.
+ * @param reply_send Receives the reply capability for REQUEST, zero for ABORT.
  * @return ASTRA_SYSCALL_* status; malformed messages fail closed.
  */
 uint32_t astra_shutdown_receive(uint32_t lifecycle_receive,

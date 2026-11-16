@@ -478,6 +478,18 @@ uint32_t supervisor_messaging_start(uint32_t *receive, uint32_t *send)
         ASTRA_STATUS_LIMIT;
 }
 
+void supervisor_messaging_changed(const char *topic)
+{
+    size_t length = strlen(topic);
+    if (length == 0u || length >= ASTRA_MESSAGING_TOPIC_MAX) return;
+    AstraMessagingRequest request = {0};
+    AstraMessagingReply reply = {0};
+    request.header.transaction_id = 1u;
+    memcpy(request.topic, topic, length + 1u);
+    (void)publish_best_effort(1u, ASTRA_MESSAGING_SERVICE, "supervisor",
+        &request, 0u, &reply);
+}
+
 void supervisor_messaging_pump(uint32_t receive,
     const SupervisorProcessTable *processes)
 {

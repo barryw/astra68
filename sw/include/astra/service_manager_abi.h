@@ -63,8 +63,70 @@ enum {
     /** Change a named service's restart policy; AstraServiceManagerRequest.value = AstraServiceRestartPolicy. */
     ASTRA_SERVICE_MANAGER_SET_RESTART,
     /** Operation carried by every ::AstraServiceManagerReply. */
-    ASTRA_SERVICE_MANAGER_REPLY
+    ASTRA_SERVICE_MANAGER_REPLY,
+    /** Read the authoritative current or last system power transaction. */
+    ASTRA_SERVICE_MANAGER_POWER_STATUS,
+    /** Cancel the transaction named by request.value; never forces a process. */
+    ASTRA_SERVICE_MANAGER_POWER_CANCEL
 };
+
+/** Supervisor publishes best-effort invalidations through the generic broker.
+ * Subscribe to service `supervisor`, exact PID 1, then read POWER_STATUS.
+ * A full event port already contains a wakeup; read the snapshot after draining. */
+#define ASTRA_SYSTEM_POWER_TOPIC "system.power"
+
+/** Phases of the one native shutdown/restart transaction. */
+enum {
+    ASTRA_SYSTEM_POWER_IDLE = 0u,
+    ASTRA_SYSTEM_POWER_APPLICATIONS,
+    ASTRA_SYSTEM_POWER_SERVICES,
+    ASTRA_SYSTEM_POWER_RECOVERING,
+    ASTRA_SYSTEM_POWER_CANCELLED
+};
+
+/** Current wait or first failed teardown step. */
+enum {
+    ASTRA_SYSTEM_POWER_STEP_NONE = 0u,
+    ASTRA_SYSTEM_POWER_STEP_PREPARE,
+    ASTRA_SYSTEM_POWER_STEP_REQUEST,
+    ASTRA_SYSTEM_POWER_STEP_REPLY,
+    ASTRA_SYSTEM_POWER_STEP_DECLINED,
+    ASTRA_SYSTEM_POWER_STEP_EXIT,
+    ASTRA_SYSTEM_POWER_STEP_TERMINATE,
+    ASTRA_SYSTEM_POWER_STEP_WAIT,
+    ASTRA_SYSTEM_POWER_STEP_DEPENDENCY,
+    ASTRA_SYSTEM_POWER_STEP_RESTORE,
+    ASTRA_SYSTEM_POWER_STEP_SYSTEM,
+    ASTRA_SYSTEM_POWER_STEP_ABORT,
+    ASTRA_SYSTEM_POWER_STEP_USER_CANCEL
+};
+
+/** Cancellation was admitted; an already consenting process must finish. */
+#define ASTRA_SYSTEM_POWER_CANCEL_REQUESTED 1u
+
+/** Last native power transaction; persists across Desktop service recovery. */
+typedef struct AstraSystemPowerStatus {
+    uint32_t transaction; /**< Nonzero transaction identity, or zero when idle. */
+    uint32_t operation; /**< SHUTDOWN or SYSTEM_RESTART, or zero when idle. */
+    uint32_t phase; /**< ASTRA_SYSTEM_POWER_* phase. */
+    uint32_t process_id; /**< Current or refusing process, zero before selection. */
+    uint32_t step; /**< ASTRA_SYSTEM_POWER_STEP_* value. */
+    uint32_t status; /**< Exact native status for the failed step; zero otherwise. */
+    uint32_t reason; /**< Participant refusal or process exit code. */
+    uint32_t recovery_failures; /**< Services that could not be restored. */
+    uint32_t flags; /**< ASTRA_SYSTEM_POWER_CANCEL_REQUESTED or zero. */
+    char name[256]; /**< Complete UTF-8 service/application name, NUL-terminated. */
+} AstraSystemPowerStatus;
+
+/** Empty native power snapshot. */
+#define ASTRA_SYSTEM_POWER_STATUS_INIT \
+    { 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, { 0 } }
+
+/** POWER_STATUS has a fixed inline snapshot and no transferred handles. */
+typedef struct AstraSystemPowerReply {
+    AstraMessageHeader header; /**< POWER_STATUS reply with matching transaction. */
+    AstraSystemPowerStatus power; /**< Authoritative snapshot. */
+} AstraSystemPowerReply;
 
 /** Lifecycle state of a configured service, reported in ::AstraServiceInfo.state. */
 typedef enum AstraServiceState {
@@ -298,7 +360,7 @@ typedef struct AstraServiceManagerRequest {
     AstraMessageHeader header;
     /** Pagination cursor; meaningful only for ::ASTRA_SERVICE_MANAGER_LIST. */
     AstraServiceListCursor cursor;
-    /** Target service name; empty for ::ASTRA_SERVICE_MANAGER_LIST, SHUTDOWN and SYSTEM_RESTART. */
+    /** Target service name; empty for LIST and system power operations. */
     char name[ASTRA_SERVICE_NAME_MAX];
     /** The operation's argument; zero for every operation that takes none, such as an ::AstraServiceRestartPolicy for SET_RESTART. */
     uint32_t value;
@@ -335,6 +397,8 @@ _Static_assert(sizeof(AstraServiceManagerReply) <= ASTRA_MESSAGE_SIZE_MAX,
                "service manager reply exceeds port ABI");
 _Static_assert(sizeof(AstraServiceManagerRequest) == 120u, "service manager request ABI");
 _Static_assert(sizeof(AstraServiceManagerReply) == 152u, "service manager reply ABI");
+_Static_assert(sizeof(AstraSystemPowerReply) <= ASTRA_MESSAGE_SIZE_MAX, "power snapshot fits port");
+_Static_assert(ASTRA_SERVICE_MANAGER_REPLY == 15u, "existing manager reply opcode stays stable");
 /** @endcond */
 
 #endif

@@ -287,8 +287,7 @@ int console_session_request_close(void)
 
 static int pump_shutdown(void)
 {
-    if (session.backend.shutdown_receive != 0u &&
-        session.shutdown_reply == 0u) {
+    if (session.backend.shutdown_receive != 0u) {
         AstraShutdownRequest request = {0};
         uint32_t reply = 0u;
         uint32_t status = astra_shutdown_receive(
@@ -298,8 +297,20 @@ static int pump_shutdown(void)
             status != ASTRA_SYSCALL_OK)
             return 0;
         if (status == ASTRA_SYSCALL_OK) {
-            session.shutdown_reply = reply;
-            session.shutdown_transaction = request.header.transaction_id;
+            if (request.header.operation == ASTRA_SHUTDOWN_ABORT) {
+                if (session.shutdown_reply != 0u && session.shutdown_stage == 0u &&
+                    request.header.transaction_id == session.shutdown_transaction) {
+                    (void)astra_shutdown_respond(session.shutdown_reply,
+                        session.shutdown_transaction, ASTRA_SHUTDOWN_CANCEL, 0u);
+                    session.shutdown_reply = session.shutdown_transaction = 0u;
+                }
+            } else if (session.shutdown_reply != 0u) {
+                (void)astra_shutdown_respond(reply, request.header.transaction_id,
+                    ASTRA_SHUTDOWN_CANCEL, ASTRA_STATUS_BUSY);
+            } else {
+                session.shutdown_reply = reply;
+                session.shutdown_transaction = request.header.transaction_id;
+            }
         }
     }
     if (session.shutdown_reply != 0u && session.shutdown_stage == 0u)
@@ -376,8 +387,7 @@ static int pump_once(void)
         }
         if (session.backend.wait_handle != 0u)
             waits[wait_count++] = session.backend.wait_handle;
-        if (session.backend.shutdown_receive != 0u &&
-            session.shutdown_reply == 0u)
+        if (session.backend.shutdown_receive != 0u)
             waits[wait_count++] = session.backend.shutdown_receive;
         if (wait_count != 0u) {
             uint64_t deadline = session.backend.idle_poll_ns != 0u ?

@@ -36,6 +36,15 @@ uint32_t astra_shutdown_request(uint32_t lifecycle_send,
     return ASTRA_SYSCALL_OK;
 }
 
+uint32_t astra_shutdown_cancel(uint32_t lifecycle_send, uint32_t transaction)
+{
+    if (lifecycle_send == 0u || transaction == 0u) return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    AstraShutdownRequest request = {0};
+    astra_message_header_set(&request.header, sizeof(request), ASTRA_SHUTDOWN_PROTOCOL,
+        ASTRA_SHUTDOWN_VERSION, ASTRA_SHUTDOWN_ABORT, transaction);
+    return astra_port_send(lifecycle_send, &request, sizeof(request), NULL, 0u);
+}
+
 uint32_t astra_shutdown_receive(uint32_t lifecycle_receive,
                                 AstraShutdownRequest *request,
                                 uint32_t *reply_send)
@@ -53,7 +62,9 @@ uint32_t astra_shutdown_receive(uint32_t lifecycle_receive,
                                 &carried, 1u, &size, &handles);
     if (status != ASTRA_SYSCALL_OK)
         return status;
-    if (size != sizeof(*request) || carried == 0u ||
+    if (size != sizeof(*request) ||
+        (request->header.operation == ASTRA_SHUTDOWN_REQUEST && carried == 0u) ||
+        (request->header.operation == ASTRA_SHUTDOWN_ABORT && carried != 0u) ||
         !astra_shutdown_request_valid(request,
                                       request->header.transaction_id,
                                       handles)) {

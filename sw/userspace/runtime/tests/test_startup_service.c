@@ -90,6 +90,9 @@ main(void)
     assert(astra_service_ready_managed(7u, ASTRA_STATUS_OK, NULL, 0u, 55u) ==
            ASTRA_SYSCALL_OK);
     assert(sent_message.flags == ASTRA_SERVICE_READY_SHUTDOWN_MANAGED);
+    assert(astra_service_ready_cancellable(7u, ASTRA_STATUS_OK, NULL, 0u, 55u) == ASTRA_SYSCALL_OK);
+    assert(sent_message.flags == ASTRA_SERVICE_READY_SHUTDOWN_MASK);
+    assert(astra_service_ready_cancellable(7u, ASTRA_STATUS_OK, NULL, 0u, 0u) == ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(sent_handle_count == 1u && sent_handles[0] == 55u);
     assert(astra_service_ready_managed(7u, ASTRA_STATUS_OK, NULL, 0u, 0u) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);

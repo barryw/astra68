@@ -174,7 +174,7 @@ runtime-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 		--allow strcmp --allow strcpy --allow strlen \
 		--allow strncmp --allow strncpy
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^runtime.library.3 3.0.0 ABI 3.0$$'
+		grep -q '^runtime.library.3 3.1.0 ABI 3.1$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
 	@$(READELF) -dW $< | grep -F 'Library soname: [runtime.library.3]' >/dev/null
 	@$(READELF) -dW $< | grep 'BIND_NOW' >/dev/null

@@ -75,6 +75,7 @@ static uint32_t service_is_vfs[ASTRA_HANDLE_COUNT_MAX];
 static char service_owner_names[ASTRA_HANDLE_COUNT_MAX][ASTRA_SERVICE_NAME_MAX];
 static uint32_t supervisor_process_handle;
 static uint32_t service_count;
+static AstraSystemPowerStatus power_status;
 static void unpublish_owner(const char *owner);
 static uint32_t event_target_receive;
 static uint32_t event_target_send;
@@ -102,6 +103,32 @@ static uint32_t proc_control_receive;
 static uint32_t proc_control_send;
 static uint32_t launch_send;
 static uint32_t manager_receive;
+static uint64_t heartbeat_at;
+static uint64_t messaging_retry_at;
+static void pump_power_control(void);
+
+/* One maintenance schedule for normal operation and cooperative lifecycle waits. */
+static uint32_t supervisor_wait_deadline(uint64_t *deadline)
+{
+    uint64_t now = astra_clock_monotonic();
+    if (heartbeat_at != 0u) {
+        if (now >= heartbeat_at) {
+            uint32_t status = astra_progress(ASTRA_PROGRESS_BOOT_HEARTBEAT);
+            if (status != ASTRA_SYSCALL_OK) return status;
+            heartbeat_at = now + UINT64_C(1000000000);
+        }
+        if (heartbeat_at < *deadline) *deadline = heartbeat_at;
+    }
+    if (supervisor_messaging_needs_retry()) {
+        if (messaging_retry_at == 0u || now >= messaging_retry_at) {
+            supervisor_messaging_retry();
+            messaging_retry_at = now + UINT64_C(100000000);
+        }
+        if (supervisor_messaging_needs_retry() && messaging_retry_at < *deadline)
+            *deadline = messaging_retry_at;
+    } else messaging_retry_at = 0u;
+    return ASTRA_SYSCALL_OK;
+}
 static uint32_t manager_send;
 static uint32_t messaging_receive;
 static uint32_t messaging_send;
@@ -1761,10 +1788,18 @@ static uint32_t receive_ready(uint32_t receive, uint32_t child,
          * the child exits, so waiting forever does not hide a crashed service;
          * receive_ready() reports that child's actual status below.
          */
-        const uint32_t waits[] = {receive, messaging_receive, child};
+        const uint32_t waits[] = {receive, messaging_receive, child, manager_receive};
         uint32_t selected = ASTRA_WAIT_INDEX_NONE;
-        status = astra_wait_multiple(waits, 3u, ASTRA_DEADLINE_FOREVER,
+        uint64_t deadline = ASTRA_DEADLINE_FOREVER;
+        status = supervisor_wait_deadline(&deadline);
+        if (status != ASTRA_SYSCALL_OK) return ASTRA_STATUS_ACCESS;
+        status = astra_wait_multiple(waits, manager_receive != 0u ? 4u : 3u, deadline,
             &selected, NULL);
+        if (status == ASTRA_SYSCALL_TIMED_OUT) continue;
+        if (status == ASTRA_SYSCALL_OK && selected == 3u) {
+            pump_power_control();
+            continue;
+        }
         if (selected == 1u && status == ASTRA_SYSCALL_OK) {
             SupervisorProcessTable visible = process_table;
             process_table.records[process_count] = *pending;
@@ -1799,7 +1834,9 @@ static uint32_t receive_ready(uint32_t receive, uint32_t child,
         message.header.protocol != ASTRA_SERVICE_PROTOCOL ||
         message.header.protocol_version != ASTRA_SERVICE_VERSION ||
         message.header.operation != ASTRA_SERVICE_READY ||
-        (message.flags & ~ASTRA_SERVICE_READY_SHUTDOWN_MANAGED) != 0u) {
+        (message.flags & ~ASTRA_SERVICE_READY_SHUTDOWN_MASK) != 0u ||
+        ((message.flags & ASTRA_SERVICE_READY_SHUTDOWN_CANCELLABLE) != 0u &&
+         (message.flags & ASTRA_SERVICE_READY_SHUTDOWN_MANAGED) == 0u)) {
         for (uint32_t index = 0u; index < handle_count; ++index)
             (void)astra_close(handles[index]);
         return ASTRA_STATUS_PROTOCOL;
@@ -2235,8 +2272,7 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
     process_table.records[process_count].namespace_lost = 0u;
     process_table.records[process_count].resident = entry->resident;
     process_table.records[process_count].shutdown_send = shutdown_send;
-    process_table.records[process_count].shutdown_managed =
-        (ready_flags & ASTRA_SERVICE_READY_SHUTDOWN_MANAGED) != 0u;
+    process_table.records[process_count].shutdown_flags = ready_flags;
     process_table.records[process_count].id = child_id;
     process_table.records[process_count].paused = 0u;
     process_table.records[process_count].service_flags =
@@ -2854,6 +2890,22 @@ static uint32_t list_service(const AstraStartupInfo *startup,
     }
 }
 
+static void manager_reply_send(uint32_t reply_send, uint32_t transaction,
+    AstraServiceManagerReply *reply, uint32_t area)
+{
+    astra_message_header_set(&reply->header, sizeof(*reply), ASTRA_SERVICE_MANAGER_PROTOCOL,
+        ASTRA_SERVICE_MANAGER_VERSION, ASTRA_SERVICE_MANAGER_REPLY, transaction);
+    (void)astra_port_send(reply_send, reply, sizeof(*reply), area != 0u ? &area : NULL, area != 0u ? 1u : 0u);
+    if (area != 0u) (void)astra_close(area);
+    (void)astra_close(reply_send);
+}
+
+static void manager_reply_plain(uint32_t send, uint32_t transaction, uint32_t status)
+{
+    AstraServiceManagerReply reply = {.status = status};
+    manager_reply_send(send, transaction, &reply, 0u);
+}
+
 static void manager_reply(uint32_t reply_send, uint32_t transaction,
     uint32_t status, const AstraServiceInfo *info, const AstraServiceListCursor *next_cursor,
     const AstraServiceDefinition *definition)
@@ -2875,28 +2927,198 @@ static void manager_reply(uint32_t reply_send, uint32_t transaction,
         }
         if (status == ASTRA_STATUS_OK) astra_service_info_record(info, &reply.info);
     }
-    astra_message_header_set(&reply.header, sizeof(reply), ASTRA_SERVICE_MANAGER_PROTOCOL,
-        ASTRA_SERVICE_MANAGER_VERSION, ASTRA_SERVICE_MANAGER_REPLY, transaction);
     reply.status = status;
     if (status == ASTRA_STATUS_OK && next_cursor != NULL) reply.next_cursor = *next_cursor;
-    (void)astra_port_send(reply_send, &reply, sizeof(reply), area != 0u ? &area : NULL, area != 0u ? 1u : 0u);
-    if (area != 0u) (void)astra_close(area);
-    (void)astra_close(reply_send);
+    manager_reply_send(reply_send, transaction, &reply, area);
+}
+
+static int power_operation(uint32_t operation)
+{
+    return operation == ASTRA_SERVICE_MANAGER_SHUTDOWN ||
+        operation == ASTRA_SERVICE_MANAGER_SYSTEM_RESTART ||
+        operation == ASTRA_SERVICE_MANAGER_POWER_STATUS ||
+        operation == ASTRA_SERVICE_MANAGER_POWER_CANCEL;
+}
+
+/* Both ordinary service management and shutdown observation validate here. */
+static int manager_request_receive(AstraServiceManagerRequest *request,
+    uint32_t handles[ASTRA_MESSAGE_HANDLES_MAX])
+{
+    _Alignas(4) uint8_t control[ASTRA_MESSAGE_SIZE_MAX] = {0};
+    uint32_t size = 0u, count = 0u;
+    uint32_t status = astra_port_receive(manager_receive, control, sizeof(control),
+        handles, ASTRA_MESSAGE_HANDLES_MAX, &size, &count);
+    if (status != ASTRA_SYSCALL_OK) return 0;
+    if (size >= sizeof(request->header))
+        memcpy(request, control, size < sizeof(*request) ? size : sizeof(*request));
+    uint32_t operation = request->header.operation;
+    if (size != sizeof(*request) || count < 1u || count > 2u || handles[0] == 0u ||
+        request->header.total_size != sizeof(*request) ||
+        request->header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
+        request->header.flags != 0u || request->header.reserved != 0u ||
+        request->header.protocol != ASTRA_SERVICE_MANAGER_PROTOCOL ||
+        request->header.protocol_version != ASTRA_SERVICE_MANAGER_VERSION ||
+        request->header.transaction_id == 0u || operation < ASTRA_SERVICE_MANAGER_LIST ||
+        operation > ASTRA_SERVICE_MANAGER_POWER_CANCEL || operation == ASTRA_SERVICE_MANAGER_REPLY ||
+        request->reserved != 0u || request->reserved_payload != 0u ||
+        (operation == ASTRA_SERVICE_MANAGER_ADD ?
+            request->payload_size < sizeof(AstraServiceDefinitionRecord) || request->payload_size > ASTRA_SERVICE_DEFINITION_PAYLOAD_MAX :
+            request->payload_size != 0u) ||
+        (operation != ASTRA_SERVICE_MANAGER_SET_RESTART &&
+         operation != ASTRA_SERVICE_MANAGER_POWER_CANCEL && request->value != 0u) ||
+        (operation == ASTRA_SERVICE_MANAGER_LIST &&
+         (request->cursor.source > ASTRA_SERVICE_LIST_SOURCE_DONE ||
+          request->cursor.reserved != 0u || request->name[0] != '\0')) ||
+        (operation != ASTRA_SERVICE_MANAGER_LIST &&
+         (request->cursor.position != 0u || request->cursor.source != 0u || request->cursor.reserved != 0u)) ||
+        ((operation == ASTRA_SERVICE_MANAGER_ADD) != (count == 2u)) ||
+        (power_operation(operation) ? request->name[0] != '\0' :
+            operation != ASTRA_SERVICE_MANAGER_LIST && !astra_service_name_valid(request->name))) {
+        if (count >= 1u && handles[0] != 0u)
+            manager_reply_plain(handles[0], request->header.transaction_id, ASTRA_STATUS_PROTOCOL);
+        for (uint32_t at = 1u; at < count; ++at)
+            if (handles[at] != 0u) (void)astra_close(handles[at]);
+        return 0;
+    }
+    return 1;
+}
+
+static int manager_power_request(const AstraServiceManagerRequest *request, uint32_t send)
+{
+    if (request->header.operation == ASTRA_SERVICE_MANAGER_POWER_STATUS) {
+        AstraSystemPowerReply reply = {.power = power_status};
+        astra_message_header_set(&reply.header, sizeof(reply), ASTRA_SERVICE_MANAGER_PROTOCOL,
+            ASTRA_SERVICE_MANAGER_VERSION, ASTRA_SERVICE_MANAGER_POWER_STATUS, request->header.transaction_id);
+        (void)astra_port_send(send, &reply, sizeof(reply), NULL, 0u);
+        (void)astra_close(send);
+    } else if (request->header.operation == ASTRA_SERVICE_MANAGER_POWER_CANCEL) {
+        uint32_t status = request->value == 0u ? ASTRA_STATUS_INVALID :
+            request->value != power_status.transaction ? ASTRA_STATUS_NOT_FOUND :
+            power_status.phase != ASTRA_SYSTEM_POWER_APPLICATIONS &&
+            power_status.phase != ASTRA_SYSTEM_POWER_SERVICES ? ASTRA_STATUS_BUSY : ASTRA_STATUS_OK;
+        if (status == ASTRA_STATUS_OK) {
+            power_status.flags |= ASTRA_SYSTEM_POWER_CANCEL_REQUESTED;
+            supervisor_messaging_changed(ASTRA_SYSTEM_POWER_TOPIC);
+        }
+        manager_reply_plain(send, request->header.transaction_id, status);
+    } else return 0;
+    return 1;
+}
+
+static void pump_power_control(void)
+{
+    AstraServiceManagerRequest request = {0};
+    uint32_t handles[ASTRA_MESSAGE_HANDLES_MAX] = {0};
+    if (!manager_request_receive(&request, handles)) return;
+    if (!manager_power_request(&request, handles[0])) {
+        manager_reply_plain(handles[0], request.header.transaction_id, ASTRA_STATUS_BUSY);
+        if (request.header.operation == ASTRA_SERVICE_MANAGER_ADD) (void)astra_close(handles[1]);
+    }
+}
+
+static void launch_reply(uint32_t reply_send, uint32_t transaction,
+    uint32_t status, uint32_t process_id, uint32_t process_wait_handle);
+
+/* Admission is closed before decoding a launch's argument area. */
+static void refuse_power_launch(void)
+{
+    _Alignas(4) uint8_t bytes[ASTRA_MESSAGE_SIZE_MAX] = {0};
+    uint32_t handles[ASTRA_MESSAGE_HANDLES_MAX] = {0};
+    uint32_t size = 0u, count = 0u;
+    if (astra_port_receive(launch_receive, bytes, sizeof(bytes), handles,
+            ASTRA_MESSAGE_HANDLES_MAX, &size, &count) != ASTRA_SYSCALL_OK) return;
+    if (size >= sizeof(AstraMessageHeader) && count >= 2u && handles[1] != 0u) {
+        AstraMessageHeader header;
+        memcpy(&header, bytes, sizeof(header));
+        launch_reply(handles[1], header.transaction_id, ASTRA_STATUS_BUSY, 0u, 0u);
+        handles[1] = 0u;
+    }
+    for (uint32_t at = 0u; at < count; ++at)
+        if (handles[at] != 0u) (void)astra_close(handles[at]);
+}
+
+/* Keep lifecycle control and the existing broker usable while a client saves. */
+static uint32_t shutdown_wait(uint32_t process, uint32_t reply, uint32_t cancel_send)
+{
+    for (;;) {
+        uint32_t waits[8] = {process, manager_receive, messaging_receive, launch_receive};
+        uint32_t count = 4u, proc_index = ASTRA_WAIT_INDEX_NONE, event_index = ASTRA_WAIT_INDEX_NONE;
+        if (reply != 0u) waits[count++] = reply;
+        if (cancel_send != 0u) waits[count++] = cancel_send;
+        if (proc_receive != 0u) { proc_index = count; waits[count++] = proc_receive; }
+        if (event_target_receive != 0u) { event_index = count; waits[count++] = event_target_receive; }
+        uint32_t selected = ASTRA_WAIT_INDEX_NONE;
+        uint64_t deadline = ASTRA_DEADLINE_FOREVER;
+        uint32_t status = supervisor_wait_deadline(&deadline);
+        if (status != ASTRA_SYSCALL_OK) return status;
+        status = astra_wait_multiple(waits, count, deadline, &selected, NULL);
+        if (status == ASTRA_SYSCALL_TIMED_OUT) continue;
+        if (status == ASTRA_SYSCALL_OK && selected == 1u) {
+            pump_power_control();
+            if (reply != 0u) return ASTRA_SYSCALL_OK;
+        }
+        else if (status == ASTRA_SYSCALL_OK && selected == 2u)
+            supervisor_messaging_pump(messaging_receive, &process_table);
+        else if (status == ASTRA_SYSCALL_OK && selected == 3u) refuse_power_launch();
+        else if (status == ASTRA_SYSCALL_OK && selected == proc_index) supervisor_loader_pump_proc();
+        else if (status == ASTRA_SYSCALL_OK && selected == event_index) supervisor_loader_pump_event_control();
+        else return status == ASTRA_SYSCALL_PEER_DEAD &&
+            (selected == 0u || (reply != 0u && selected == 4u) ||
+             (cancel_send != 0u && selected == 5u)) ? ASTRA_SYSCALL_OK : status;
+    }
+}
+
+static uint32_t shutdown_wait_exit(uint32_t process, uint32_t *exit_status)
+{
+    for (;;) {
+        uint32_t status = astra_process_wait(process, 0u, exit_status);
+        if (status != ASTRA_SYSCALL_TIMED_OUT) return status;
+        status = shutdown_wait(process, 0u, 0u);
+        if (status != ASTRA_SYSCALL_OK) return status;
+    }
 }
 
 /* Shutdown diagnostics must survive allocation failure. */
 static void shutdown_failure(const char *name, uint32_t process,
-    const char *stage, uint32_t status, uint32_t reason)
+    uint32_t step, uint32_t status, uint32_t reason)
 {
-    char line[ASTRA_SERVICE_NAME_MAX + 128u];
+    static const char *const stages[] = {"", "shutdown prepare ",
+        "shutdown request ", "shutdown reply ", "shutdown declined ",
+        "shutdown exit ", "shutdown terminate ", "shutdown wait ",
+        "shutdown dependency ", "shutdown restore ", "shutdown system ", "shutdown abort ",
+        "shutdown user cancel "};
+    char line[sizeof(power_status.name) + 128u];
     const SupervisorLaunchReportField fields[] = {
         {" pid=", process}, {" status=", status}, {" reason=", reason}};
     uint32_t length = supervisor_launch_report_format(line, sizeof(line),
-        stage, name, fields, 3u);
+        stages[step], name, fields, 3u);
+
+    if (power_status.phase != ASTRA_SYSTEM_POWER_IDLE &&
+        power_status.phase != ASTRA_SYSTEM_POWER_CANCELLED) {
+        if (step == ASTRA_SYSTEM_POWER_STEP_RESTORE) ++power_status.recovery_failures;
+        if (power_status.status == 0u && power_status.reason == 0u &&
+            power_status.step != ASTRA_SYSTEM_POWER_STEP_DECLINED) {
+            power_status.step = step;
+            power_status.status = status;
+            power_status.reason = reason;
+            power_status.process_id = process;
+            strcpy(power_status.name, name);
+        }
+        supervisor_messaging_changed(ASTRA_SYSTEM_POWER_TOPIC);
+    }
 
     if (length != 0u)
         (void)astra_log_line(ASTRA_EVENT_LEVEL_ERROR, ASTRA_LOG_STREAM_LOG,
                              line, length);
+}
+
+static const char *shutdown_name(const SupervisorProcessRecord *record)
+{
+    if (record->service_name[0] != '\0') return record->service_name;
+    const char *name = record->bundle;
+    for (const char *at = name; *at != '\0'; ++at)
+        if (*at == '/') name = at + 1u;
+    return *name == '\0' ? "Process" : strlen(name) < sizeof(power_status.name) ? name : "Application";
 }
 
 static uint32_t shutdown_process(uint32_t slot)
@@ -2905,35 +3127,34 @@ static uint32_t shutdown_process(uint32_t slot)
     uint32_t exit_status = 0u;
     uint32_t wait_status = astra_process_wait(record->handle, 0u,
                                                &exit_status);
-
+    const char *name = shutdown_name(record);
 
     if (wait_status != ASTRA_SYSCALL_TIMED_OUT) {
-        uint32_t result = (record->shutdown_managed == 0u &&
+        uint32_t result = ((record->shutdown_flags & ASTRA_SERVICE_READY_SHUTDOWN_MANAGED) == 0u &&
                 (wait_status == ASTRA_SYSCALL_OK ||
                  wait_status == ASTRA_SYSCALL_PEER_DEAD)) ||
                (wait_status == ASTRA_SYSCALL_OK &&
                 exit_status == ASTRA_STATUS_OK) ?
             ASTRA_STATUS_OK : ASTRA_STATUS_PEER_DEAD;
         if (result != ASTRA_STATUS_OK)
-            shutdown_failure(record->service_name, record->id,
-                "shutdown exit ", wait_status, exit_status);
+            shutdown_failure(name, record->id,
+                ASTRA_SYSTEM_POWER_STEP_EXIT, wait_status, exit_status);
         return result;
     }
-    if (record->shutdown_managed == 0u) {
+    if ((record->shutdown_flags & ASTRA_SERVICE_READY_SHUTDOWN_MANAGED) == 0u) {
         uint32_t status = astra_process_terminate(record->handle,
                                                    ASTRA_SIGNAL_KILL);
 
         if (status != ASTRA_SYSCALL_OK) {
-            shutdown_failure(record->service_name, record->id,
-                "shutdown terminate ", status, 0u);
+            shutdown_failure(name, record->id,
+                ASTRA_SYSTEM_POWER_STEP_TERMINATE, status, 0u);
             return ASTRA_STATUS_IO;
         }
-        status = astra_process_wait(record->handle, ASTRA_DEADLINE_FOREVER,
-                                     &exit_status);
+        status = shutdown_wait_exit(record->handle, &exit_status);
         if (status == ASTRA_SYSCALL_OK || status == ASTRA_SYSCALL_PEER_DEAD)
             return ASTRA_STATUS_OK;
-        shutdown_failure(record->service_name, record->id,
-            "shutdown wait ", status, exit_status);
+        shutdown_failure(name, record->id,
+            ASTRA_SYSTEM_POWER_STEP_WAIT, status, exit_status);
         return ASTRA_STATUS_IO;
     }
     {
@@ -2941,49 +3162,64 @@ static uint32_t shutdown_process(uint32_t slot)
         AstraShutdownReply reply = {0};
         uint32_t transaction = ++shutdown_transaction;
         uint32_t status;
+        uint32_t cancellation_sent = 0u;
 
         if (transaction == 0u)
             transaction = ++shutdown_transaction;
         status = astra_shutdown_request(record->shutdown_send, transaction,
                                          &reply_receive);
         if (status != ASTRA_SYSCALL_OK) {
-            shutdown_failure(record->service_name, record->id,
-                "shutdown request ", status, 0u);
+            shutdown_failure(name, record->id,
+                ASTRA_SYSTEM_POWER_STEP_REQUEST, status, 0u);
             return ASTRA_STATUS_PEER_DEAD;
         }
         for (;;) {
-            uint32_t waits[] = {reply_receive, record->handle};
-            uint32_t ready = ASTRA_WAIT_INDEX_NONE;
-
             status = astra_shutdown_receive_reply(reply_receive, transaction,
                                                    &reply);
             if (status != ASTRA_SYSCALL_WOULD_BLOCK)
                 break;
             if (astra_process_wait(record->handle, 0u, &exit_status) !=
                 ASTRA_SYSCALL_TIMED_OUT) {
-                status = ASTRA_SYSCALL_PEER_DEAD;
+                status = astra_shutdown_receive_reply(reply_receive, transaction, &reply);
+                if (status == ASTRA_SYSCALL_WOULD_BLOCK) status = ASTRA_SYSCALL_PEER_DEAD;
                 break;
             }
-            status = astra_wait_multiple(waits, 2u, ASTRA_DEADLINE_FOREVER,
-                                         &ready, NULL);
-            if (status != ASTRA_SYSCALL_OK &&
-                (status != ASTRA_SYSCALL_PEER_DEAD || ready == 0u))
+            uint32_t cancel_send = 0u;
+            if ((record->shutdown_flags & ASTRA_SERVICE_READY_SHUTDOWN_CANCELLABLE) == 0u)
+                cancellation_sent = 1u;
+            if (!cancellation_sent && (power_status.flags & ASTRA_SYSTEM_POWER_CANCEL_REQUESTED) != 0u) {
+                uint32_t canceled = astra_shutdown_cancel(record->shutdown_send, transaction);
+                if (canceled == ASTRA_SYSCALL_WOULD_BLOCK) cancel_send = record->shutdown_send;
+                else {
+                    cancellation_sent = 1u;
+                    if (canceled != ASTRA_SYSCALL_OK)
+                        shutdown_failure(name, record->id, ASTRA_SYSTEM_POWER_STEP_ABORT, canceled, 0u);
+                }
+            }
+            status = shutdown_wait(record->handle, reply_receive, cancel_send);
+            if (status != ASTRA_SYSCALL_OK)
                 break;
         }
         (void)astra_close(reply_receive);
+        if (status == ASTRA_SYSCALL_OK && reply.decision == ASTRA_SHUTDOWN_CANCEL &&
+            (power_status.flags & ASTRA_SYSTEM_POWER_CANCEL_REQUESTED) != 0u)
+            return ASTRA_STATUS_BUSY;
         if (status != ASTRA_SYSCALL_OK ||
             reply.decision != ASTRA_SHUTDOWN_READY) {
-            shutdown_failure(record->service_name, record->id,
+            shutdown_failure(name, record->id,
                 status == ASTRA_SYSCALL_OK ?
-                "shutdown declined " : "shutdown reply ", status, reply.reason);
+                ASTRA_SYSTEM_POWER_STEP_DECLINED : ASTRA_SYSTEM_POWER_STEP_REPLY, status, reply.reason);
             return ASTRA_STATUS_BUSY;
         }
-        status = astra_process_wait(record->handle, ASTRA_DEADLINE_FOREVER,
-                                     &exit_status);
+        if (power_status.phase != ASTRA_SYSTEM_POWER_IDLE) {
+            power_status.step = ASTRA_SYSTEM_POWER_STEP_EXIT;
+            supervisor_messaging_changed(ASTRA_SYSTEM_POWER_TOPIC);
+        }
+        status = shutdown_wait_exit(record->handle, &exit_status);
         if (status == ASTRA_SYSCALL_OK && exit_status == ASTRA_STATUS_OK)
             return ASTRA_STATUS_OK;
-        shutdown_failure(record->service_name, record->id,
-            "shutdown exit ", status, exit_status);
+        shutdown_failure(name, record->id,
+            ASTRA_SYSTEM_POWER_STEP_EXIT, status, exit_status);
         return ASTRA_STATUS_PEER_DEAD;
     }
 }
@@ -3028,7 +3264,7 @@ static uint32_t shutdown_next(uint32_t phase)
     if (blocked != UINT32_MAX)
         shutdown_failure(process_table.records[blocked].service_name,
             process_table.records[blocked].id,
-            "shutdown dependency ", ASTRA_STATUS_BUSY, 0u);
+            ASTRA_SYSTEM_POWER_STEP_DEPENDENCY, ASTRA_STATUS_BUSY, 0u);
     return UINT32_MAX;
 }
 
@@ -3075,7 +3311,7 @@ static uint32_t shutdown_definitions_capture(const AstraStartupInfo *startup,
         }
         if (status != ASTRA_STATUS_OK) {
             shutdown_failure(record->service_name, record->id,
-                "shutdown prepare ", status, 0u);
+                ASTRA_SYSTEM_POWER_STEP_PREPARE, status, 0u);
             shutdown_definitions_release(saved, *count + 1u);
             *count = 0u;
             return status;
@@ -3099,7 +3335,7 @@ static void shutdown_restore_services(const AstraStartupInfo *startup,
 
             if (status == ASTRA_STATUS_NOT_FOUND) { ++at; continue; }
             if (status != ASTRA_STATUS_OK)
-                shutdown_failure(definition->name, 0u, "shutdown restore ", status, 0u);
+                shutdown_failure(definition->name, 0u, ASTRA_SYSTEM_POWER_STEP_RESTORE, status, 0u);
             astra_service_definition_destroy(definition);
             definitions[at] = definitions[--count];
             definitions[count] = (AstraServiceDefinition)ASTRA_SERVICE_DEFINITION_INIT;
@@ -3107,7 +3343,7 @@ static void shutdown_restore_services(const AstraStartupInfo *startup,
         if (count == before) {
             for (uint32_t at = 0u; at < count; ++at)
                 shutdown_failure(definitions[at].name, 0u,
-                    "shutdown restore ", ASTRA_STATUS_NOT_FOUND, 0u);
+                    ASTRA_SYSTEM_POWER_STEP_RESTORE, ASTRA_STATUS_NOT_FOUND, 0u);
             return;
         }
     }
@@ -3118,12 +3354,24 @@ static uint32_t shutdown_system(const AstraStartupInfo *startup, uint32_t operat
     AstraSyscallResult result = {0};
     AstraServiceDefinition *definitions = NULL;
     uint32_t count = 0u;
+    uint32_t transaction = ++shutdown_transaction;
+    if (transaction == 0u) transaction = ++shutdown_transaction;
+    power_status = (AstraSystemPowerStatus){.transaction = transaction,
+        .operation = operation, .phase = ASTRA_SYSTEM_POWER_APPLICATIONS,
+        .step = ASTRA_SYSTEM_POWER_STEP_PREPARE};
+    supervisor_messaging_changed(ASTRA_SYSTEM_POWER_TOPIC);
     uint32_t status = shutdown_definitions_capture(startup, &definitions, &count);
 
-    if (status != ASTRA_STATUS_OK) return status;
+    if (status != ASTRA_STATUS_OK) goto done;
     /* Stop clients before their namespace publishers, including after restart. */
     for (uint32_t phase = 0u; phase < 2u; ++phase) {
+        power_status.phase = phase == 0u ? ASTRA_SYSTEM_POWER_APPLICATIONS : ASTRA_SYSTEM_POWER_SERVICES;
         for (;;) {
+            pump_power_control();
+            if ((power_status.flags & ASTRA_SYSTEM_POWER_CANCEL_REQUESTED) != 0u) {
+                status = ASTRA_STATUS_BUSY;
+                goto done;
+            }
             uint32_t slot = shutdown_next(phase);
             if (slot == UINT32_MAX) {
                 for (uint32_t at = 0u; at < process_count; ++at)
@@ -3133,6 +3381,12 @@ static uint32_t shutdown_system(const AstraStartupInfo *startup, uint32_t operat
                     }
                 break;
             }
+            const SupervisorProcessRecord *record = &process_table.records[slot];
+            power_status.process_id = record->id;
+            power_status.step = (record->shutdown_flags & ASTRA_SERVICE_READY_SHUTDOWN_MANAGED) != 0u ?
+                ASTRA_SYSTEM_POWER_STEP_REQUEST : ASTRA_SYSTEM_POWER_STEP_TERMINATE;
+            strcpy(power_status.name, shutdown_name(record));
+            supervisor_messaging_changed(ASTRA_SYSTEM_POWER_TOPIC);
             status = shutdown_process(slot);
             if (status != ASTRA_STATUS_OK)
                 goto done;
@@ -3141,6 +3395,11 @@ static uint32_t shutdown_system(const AstraStartupInfo *startup, uint32_t operat
             remove_process_slot(slot);
         }
     }
+    pump_power_control();
+    if ((power_status.flags & ASTRA_SYSTEM_POWER_CANCEL_REQUESTED) != 0u) {
+        status = ASTRA_STATUS_BUSY;
+        goto done;
+    }
     astra_syscall5(operation == ASTRA_SERVICE_MANAGER_SYSTEM_RESTART ?
                        ASTRA_SYSCALL_SYSTEM_RESTART :
                        ASTRA_SYSCALL_SYSTEM_SHUTDOWN,
@@ -3148,10 +3407,19 @@ static uint32_t shutdown_system(const AstraStartupInfo *startup, uint32_t operat
                     0u, &result);
     status = result.status == ASTRA_SYSCALL_OK ? ASTRA_STATUS_OK : ASTRA_STATUS_BUSY;
     if (status != ASTRA_STATUS_OK)
-        (void)astra_log_failure("shutdown system", result.status);
+        shutdown_failure("Supervisor", 1u, ASTRA_SYSTEM_POWER_STEP_SYSTEM, result.status, 0u);
 done:
-    if (status != ASTRA_STATUS_OK)
+    if (status != ASTRA_STATUS_OK) {
+        if ((power_status.flags & ASTRA_SYSTEM_POWER_CANCEL_REQUESTED) != 0u &&
+            power_status.status == 0u && power_status.reason == 0u &&
+            power_status.step != ASTRA_SYSTEM_POWER_STEP_DECLINED)
+            power_status.step = ASTRA_SYSTEM_POWER_STEP_USER_CANCEL;
+        power_status.phase = ASTRA_SYSTEM_POWER_RECOVERING;
+        supervisor_messaging_changed(ASTRA_SYSTEM_POWER_TOPIC);
         shutdown_restore_services(startup, definitions, count);
+        power_status.phase = ASTRA_SYSTEM_POWER_CANCELLED;
+        supervisor_messaging_changed(ASTRA_SYSTEM_POWER_TOPIC);
+    }
     shutdown_definitions_release(definitions, count);
     return status;
 }
@@ -3162,53 +3430,12 @@ static void pump_manager(const AstraStartupInfo *startup)
     AstraServiceDefinition *definition = &definition_scratch[0];
     AstraServiceInfo info = {0};
     uint32_t handles[ASTRA_MESSAGE_HANDLES_MAX] = {0};
-    _Alignas(4) uint8_t control[ASTRA_MESSAGE_SIZE_MAX] = {0};
-    uint32_t handle_count = 0u;
-    uint32_t size = 0u;
-    uint32_t status = astra_port_receive(
-        manager_receive, control, sizeof(control), handles, ASTRA_MESSAGE_HANDLES_MAX,
-        &size, &handle_count);
+    uint32_t status;
     AstraServiceListCursor next = ASTRA_SERVICE_LIST_CURSOR_INIT;
     int send_definition = 0;
 
-    if (status != ASTRA_SYSCALL_OK)
-        return;
-    if (size >= sizeof(request.header)) memcpy(&request, control, size < sizeof(request) ? size : sizeof(request));
-    if (size != sizeof(request) || handle_count < 1u ||
-        handle_count > 2u || handles[0] == 0u ||
-        request.header.total_size != sizeof(request) ||
-        request.header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
-        request.header.flags != 0u || request.header.reserved != 0u ||
-        request.header.protocol != ASTRA_SERVICE_MANAGER_PROTOCOL ||
-        request.header.protocol_version != ASTRA_SERVICE_MANAGER_VERSION ||
-        request.header.transaction_id == 0u ||
-        request.header.operation < ASTRA_SERVICE_MANAGER_LIST ||
-        request.header.operation > ASTRA_SERVICE_MANAGER_SET_RESTART ||
-        request.reserved != 0u || request.reserved_payload != 0u ||
-        (request.header.operation == ASTRA_SERVICE_MANAGER_ADD ?
-            request.payload_size < sizeof(AstraServiceDefinitionRecord) || request.payload_size > ASTRA_SERVICE_DEFINITION_PAYLOAD_MAX :
-            request.payload_size != 0u) ||
-        (request.header.operation != ASTRA_SERVICE_MANAGER_SET_RESTART &&
-         request.value != 0u) ||
-        (request.header.operation == ASTRA_SERVICE_MANAGER_LIST &&
-         (request.cursor.source > ASTRA_SERVICE_LIST_SOURCE_DONE ||
-          request.cursor.reserved != 0u || request.name[0] != '\0')) ||
-        (request.header.operation != ASTRA_SERVICE_MANAGER_LIST &&
-         (request.cursor.position != 0u || request.cursor.source != 0u ||
-          request.cursor.reserved != 0u)) ||
-        ((request.header.operation == ASTRA_SERVICE_MANAGER_ADD) !=
-         (handle_count == 2u)) ||
-         (request.header.operation != ASTRA_SERVICE_MANAGER_LIST &&
-          request.header.operation != ASTRA_SERVICE_MANAGER_SHUTDOWN &&
-          request.header.operation != ASTRA_SERVICE_MANAGER_SYSTEM_RESTART &&
-         !astra_service_name_valid(request.name))) {
-        if (handle_count >= 1u && handles[0] != 0u)
-            manager_reply(handles[0], request.header.transaction_id,
-                          ASTRA_STATUS_PROTOCOL, NULL, NULL, NULL);
-        for (uint32_t at = 1u; at < handle_count; ++at)
-            if (handles[at] != 0u) (void)astra_close(handles[at]);
-        return;
-    }
+    if (!manager_request_receive(&request, handles)) return;
+    if (manager_power_request(&request, handles[0])) return;
     if (request.header.operation == ASTRA_SERVICE_MANAGER_LIST) {
         status = list_service(startup, &request.cursor, definition, &next);
         if (status == ASTRA_STATUS_OK)
@@ -4062,20 +4289,12 @@ void supervisor_loader_pump_event_control(void)
 uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
 {
     uint32_t waits[ASTRA_WAIT_MULTIPLE_MAX];
-    uint64_t messaging_retry_at = 0u;
-    uint64_t heartbeat_at = 0u;
+    heartbeat_at = 1u;
 
     for (;;) {
         restart_namespace_holders();
         uint32_t index = ASTRA_WAIT_INDEX_NONE;
         uint32_t status;
-        uint64_t now = astra_clock_monotonic();
-
-        if (heartbeat_at == 0u || now >= heartbeat_at) {
-            if (astra_progress(ASTRA_PROGRESS_BOOT_HEARTBEAT) != ASTRA_SYSCALL_OK)
-                return ASTRA_STATUS_ACCESS;
-            heartbeat_at = now + UINT64_C(1000000000);
-        }
 
         waits[0] = event_target_receive;
         waits[1] = launch_receive;
@@ -4090,18 +4309,8 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
             waits[at + 5u] = process_table.records[at].handle;
         waits[process_count + 5u] = messaging_receive;
         uint64_t deadline = next_service_retry();
-        if (heartbeat_at < deadline)
-            deadline = heartbeat_at;
-        if (supervisor_messaging_needs_retry()) {
-            uint64_t now = astra_clock_monotonic();
-            if (messaging_retry_at == 0u || now >= messaging_retry_at) {
-                supervisor_messaging_retry();
-                messaging_retry_at = now + UINT64_C(100000000);
-            }
-            if (supervisor_messaging_needs_retry() &&
-                messaging_retry_at < deadline)
-                deadline = messaging_retry_at;
-        } else messaging_retry_at = 0u;
+        if (supervisor_wait_deadline(&deadline) != ASTRA_SYSCALL_OK)
+            return ASTRA_STATUS_ACCESS;
         status = astra_wait_multiple(waits, process_count + 6u,
                                      deadline, &index, NULL);
         if (status == ASTRA_SYSCALL_TIMED_OUT) {

@@ -168,6 +168,25 @@ ASTRA_NODISCARD AstraResult astra_system_shutdown_request(
 ASTRA_NODISCARD AstraResult astra_system_restart_request(
     AstraHandle manager);
 
+/** Read current or last shutdown/restart state, including a participant's exact
+ * refusal and failed service recovery. Subscribe to ASTRA_SYSTEM_POWER_TOPIC
+ * from broker service `supervisor`, exact PID 1, before the first read to avoid
+ * missing a change. Events are invalidations; this snapshot is authoritative.
+ * @param manager Service-manager capability.
+ * @param power Receives a validated snapshot; unchanged on failure.
+ * @return Astra result. @since system.library 4.8. */
+ASTRA_NODISCARD AstraResult astra_system_power_status(AstraHandle manager,
+    AstraSystemPowerStatus *power);
+
+/** Request cancellation of one active power transaction. An already consenting
+ * process must finish safely; this never authorizes termination or poweroff.
+ * Stale identities are refused, and service recovery cannot itself be canceled.
+ * @param manager Service-manager capability.
+ * @param transaction Nonzero identity from astra_system_power_status.
+ * @return Astra result for cancellation admission. @since system.library 4.8. */
+ASTRA_NODISCARD AstraResult astra_system_power_cancel(AstraHandle manager,
+    uint32_t transaction);
+
 ASTRA_EXTERN_C_END
 
 #endif

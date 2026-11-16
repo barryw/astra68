@@ -23,6 +23,8 @@
 #define ASTRA_SHUTDOWN_REQUEST 1u
 /** Reply operation: here is my decision. */
 #define ASTRA_SHUTDOWN_REPLY 2u
+/** Withdraw the matching request before consent; carries no handles. */
+#define ASTRA_SHUTDOWN_ABORT 3u
 /** Reply decision: the process will exit; the requester may wait for it. */
 #define ASTRA_SHUTDOWN_READY 1u
 /** Reply decision: the process declines to shut down right now. */
@@ -33,7 +35,7 @@
 
 /** Request sent to one process, asking it to shut down. */
 typedef struct AstraShutdownRequest {
-    /** Common message header; operation is ::ASTRA_SHUTDOWN_REQUEST. */
+    /** Common header; REQUEST carries one reply, ABORT carries none. */
     AstraMessageHeader header;
 } AstraShutdownRequest;
 
@@ -80,20 +82,22 @@ static inline int astra_shutdown_header_valid(const AstraMessageHeader *header,
 }
 
 /**
- * Check that a received buffer is a well-formed ::AstraShutdownRequest carrying exactly one handle.
+ * Validate REQUEST with one reply handle, or ABORT without handles.
  *
  * @param request Request to check.
  * @param transaction Expected nonzero transaction id.
  * @param handle_count Number of handles received alongside @p request.
- * @return Nonzero if @p request is well-formed and @p handle_count is 1 (the single-use reply port).
+ * @return Nonzero for a matching request/control message and handle count.
  */
 static inline int astra_shutdown_request_valid(const AstraShutdownRequest *request,
                                                 uint32_t transaction,
                                                 uint32_t handle_count)
 {
-    return request != 0 && handle_count == 1u &&
+    return request != 0 &&
+           ((request->header.operation == ASTRA_SHUTDOWN_REQUEST && handle_count == 1u) ||
+            (request->header.operation == ASTRA_SHUTDOWN_ABORT && handle_count == 0u)) &&
            astra_shutdown_header_valid(&request->header, sizeof(*request),
-                                       ASTRA_SHUTDOWN_REQUEST, transaction);
+                                       request->header.operation, transaction);
 }
 
 /**

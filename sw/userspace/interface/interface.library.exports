@@ -280,3 +280,12 @@ ASTRA_INTERFACE_12.13 {
     global:
         astra_interface_settings_sidebar_init;
 } ASTRA_INTERFACE_12.12;
+
+ASTRA_INTERFACE_12.14 {
+    global:
+        astra_interface_alert_open;
+        astra_interface_alert_update;
+        astra_interface_alert_wait_handle;
+        astra_interface_alert_poll;
+        astra_interface_alert_close;
+} ASTRA_INTERFACE_12.13;

@@ -994,7 +994,7 @@ int astra_main(const AstraStartupInfo *startup)
                              &shutdown_receive, &shutdown_send) !=
             ASTRA_SYSCALL_OK)
         status = TERMINAL_FAIL_SHUTDOWN;
-    (void)astra_service_ready_managed(bootstrap->handle, status, NULL, 0u,
+    (void)astra_service_ready_cancellable(bootstrap->handle, status, NULL, 0u,
                                        shutdown_send);
     if (shutdown_send != 0u)
         (void)astra_close(shutdown_send);

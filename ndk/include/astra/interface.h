@@ -52,6 +52,21 @@ typedef struct AstraAlertInfo {
     0, 0, 0, { 0, 0, 0, 0 } \
 }
 
+/** Owned alert window; do not copy while open. Text remains caller-owned. */
+typedef struct AstraAlert {
+    void *_private_state; /**< Interface Kit-owned state. */
+} AstraAlert;
+
+/** Empty alert window. */
+#define ASTRA_ALERT_INIT { 0 }
+
+/** Result of dispatching an alert event. */
+enum {
+    ASTRA_ALERT_PENDING = 0u,
+    ASTRA_ALERT_ACCEPTED,
+    ASTRA_ALERT_CANCELLED
+};
+
 ASTRA_EXTERN_C_END
 
 #endif

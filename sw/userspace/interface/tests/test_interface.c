@@ -16,7 +16,8 @@
 
 #include "../src/control_internal.h"
 
-void *astra_runtime_allocate(size_t bytes) { return malloc(bytes); }
+static int alert_allocation_failure;
+void *astra_runtime_allocate(size_t bytes) { return alert_allocation_failure ? NULL : malloc(bytes); }
 void astra_runtime_deallocate(void *pointer) { free(pointer); }
 
 int astra_interface_test_valid(const AstraAlertInfo *info);
@@ -243,6 +244,9 @@ static uint32_t alert_close_calls;
 static uint32_t alert_font_events;
 static uint32_t alert_font_refreshes;
 static uint32_t alert_click_phase;
+static uint32_t alert_event_calls, alert_last_flags, alert_title_calls;
+static int alert_try_empty;
+static AstraResult alert_close_result = ASTRA_OK;
 static int32_t alert_click_x, alert_click_y;
 static AstraWindowEvent pointer_event(uint16_t type, uint32_t flags,
     int32_t x, int32_t y);
@@ -320,6 +324,21 @@ AstraResult astra_window_create(uint32_t gui, uint32_t area,
            info->x == (ASTRA_DISPLAY_WIDTH - 420u) / 2u &&
            info->y == (ASTRA_DISPLAY_HEIGHT - 150u) / 2u);
     ++alert_create_calls;
+    alert_last_flags = info->flags;
+    return ASTRA_OK;
+}
+
+AstraHandle astra_window_event_wait_handle(const AstraWindow *window)
+{
+    assert(window != NULL);
+    return 55u;
+}
+
+AstraResult astra_window_set_title(AstraWindow *window,
+    const char *title, uint16_t length)
+{
+    assert(window != NULL && title != NULL && length != 0u);
+    ++alert_title_calls;
     return ASTRA_OK;
 }
 
@@ -345,6 +364,7 @@ AstraResult astra_window_event_wait(AstraWindow *window,
 {
     assert(window != NULL && event != NULL &&
            deadline == ASTRA_DEADLINE_INFINITE);
+    ++alert_event_calls;
     if (alert_font_events != 0u) {
         --alert_font_events;
         *event = (AstraWindowEvent){.size = sizeof(*event),
@@ -364,6 +384,12 @@ AstraResult astra_window_event_wait(AstraWindow *window,
     return ASTRA_OK;
 }
 
+AstraResult astra_window_event_try(AstraWindow *window, AstraWindowEvent *event)
+{
+    return alert_try_empty ? ASTRA_ERROR_WOULD_BLOCK :
+        astra_window_event_wait(window, event, ASTRA_DEADLINE_INFINITE);
+}
+
 AstraResult astra_window_present_region(AstraWindow *window,
                                          const AstraWindowFrame *region)
 {
@@ -376,7 +402,7 @@ AstraResult astra_window_close(AstraWindow *window)
 {
     assert(window != NULL);
     ++alert_close_calls;
-    return ASTRA_OK;
+    return alert_close_result;
 }
 
 AstraResult astra_window_set_pointer_shape(AstraWindow *window,
@@ -6594,6 +6620,54 @@ int main(void)
     alert_click_phase = 1u;
     assert(astra_interface_confirm(1u, &info, "Cancel", 6u,
         &confirmed) == ASTRA_OK && confirmed == 1u);
+    assert(alert_last_flags == ASTRA_WINDOW_MODAL);
+    assert(astra_interface_confirm(1u, &info, NULL, 0u,
+        &confirmed) == ASTRA_ERROR_INVALID_ARGUMENT);
+    {
+        AstraAlert alert = ASTRA_ALERT_INIT;
+        uint32_t choice = 99u, events = alert_event_calls;
+        assert(astra_interface_alert_wait_handle(&alert) == ASTRA_INVALID_HANDLE);
+        assert(astra_interface_alert_close(&alert) == ASTRA_OK);
+        assert(astra_interface_alert_poll(&alert, &choice) == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(choice == ASTRA_ALERT_PENDING);
+        alert_allocation_failure = 1;
+        assert(astra_interface_alert_open(1u, &info, NULL, 0u, 0u, &alert) ==
+            ASTRA_ERROR_OUT_OF_MEMORY && alert._private_state == NULL);
+        alert_allocation_failure = 0;
+        assert(astra_interface_alert_open(1u, &info, NULL, 1u, 0u, &alert) == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_interface_alert_open(1u, &info, NULL, 0u, ASTRA_WINDOW_ACTIVE, &alert) == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_interface_alert_open(1u, &info, "Cancel", 6u, 0u, &alert) == ASTRA_OK);
+        assert(alert_last_flags == 0u && alert_event_calls == events);
+        assert(astra_interface_alert_wait_handle(&alert) == 55u);
+        assert(astra_interface_alert_open(1u, &info, NULL, 0u, 0u, &alert) == ASTRA_ERROR_INVALID_ARGUMENT);
+        uint32_t titles = alert_title_calls;
+        AstraAlertInfo changed = info;
+        changed.reserved[0] = 1u;
+        assert(astra_interface_alert_update(&alert, &changed) == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(alert_title_calls == titles);
+        changed = info;
+        changed.message = "Waiting for Terminal (PID 42)";
+        changed.message_length = (uint16_t)strlen(changed.message);
+        changed.button = "Cancel shutdown";
+        changed.button_length = (uint16_t)strlen(changed.button);
+        assert(astra_interface_alert_update(&alert, &changed) == ASTRA_OK);
+        assert(alert_title_calls == titles + 1u);
+        alert_try_empty = 1;
+        assert(astra_interface_alert_poll(&alert, &choice) == ASTRA_ERROR_WOULD_BLOCK);
+        assert(choice == ASTRA_ALERT_PENDING);
+        alert_try_empty = 0;
+        assert(astra_interface_test_confirm_layout(&changed, &alert_click_x, &alert_click_y));
+        alert_click_phase = 1u;
+        assert(astra_interface_alert_poll(&alert, &choice) == ASTRA_OK && choice == ASTRA_ALERT_PENDING);
+        assert(astra_interface_alert_poll(&alert, &choice) == ASTRA_OK && choice == ASTRA_ALERT_ACCEPTED);
+        assert(astra_interface_alert_poll(&alert, &choice) == ASTRA_OK && choice == ASTRA_ALERT_CANCELLED);
+        alert_close_result = ASTRA_ERROR_IO;
+        assert(astra_interface_alert_close(&alert) == ASTRA_ERROR_IO && alert._private_state != NULL);
+        assert(astra_interface_alert_wait_handle(&alert) == 55u);
+        alert_close_result = ASTRA_OK;
+        assert(astra_interface_alert_close(&alert) == ASTRA_OK && alert._private_state == NULL);
+        assert(astra_interface_alert_close(&alert) == ASTRA_OK);
+    }
     text_calls = 0u;
     {
         AstraSurfaceView surface = render_view(420u, 150u);

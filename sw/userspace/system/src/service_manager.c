@@ -3,6 +3,7 @@
 #include <astra/service_payload.h>
 #include <astra/port.h>
 #include <astra/runtime.h>
+#include <astra/utf8.h>
 #include "internal/status.h"
 #include <string.h>
 
@@ -50,7 +51,8 @@ static AstraResult exchange(AstraHandle manager, uint32_t operation,
     }
     uint32_t wanted = operation == ASTRA_SERVICE_MANAGER_INSPECT ? 2u :
         operation == ASTRA_SERVICE_MANAGER_REMOVE || operation == ASTRA_SERVICE_MANAGER_SHUTDOWN ||
-        operation == ASTRA_SERVICE_MANAGER_SYSTEM_RESTART ? 0u : 1u;
+        operation == ASTRA_SERVICE_MANAGER_SYSTEM_RESTART ||
+        operation == ASTRA_SERVICE_MANAGER_POWER_CANCEL ? 0u : 1u;
     if (reply.payload_kind != wanted || call.reply_handle_count != (wanted != 0u ? 1u : 0u) ||
         (wanted == 0u && reply.payload_size != 0u) ||
         (wanted != 0u && (received == ASTRA_INVALID_HANDLE || reply.payload_size == 0u ||
@@ -160,4 +162,50 @@ AstraResult astra_system_restart_request(AstraHandle manager)
 {
     return exchange(manager, ASTRA_SERVICE_MANAGER_SYSTEM_RESTART, NULL, 0u, NULL,
         NULL, 0u, NULL, NULL, NULL);
+}
+
+AstraResult astra_system_power_status(AstraHandle manager, AstraSystemPowerStatus *power)
+{
+    if (manager == ASTRA_INVALID_HANDLE || power == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraServiceManagerRequest request = {0};
+    AstraSystemPowerReply reply = {0};
+    AstraCall call = {0};
+    AstraResult result = astra_message_header_init(&request.header, sizeof(request),
+        ASTRA_SERVICE_MANAGER_PROTOCOL, ASTRA_SERVICE_MANAGER_VERSION,
+        ASTRA_SERVICE_MANAGER_POWER_STATUS, 1u);
+    if (result != ASTRA_OK) return result;
+    call.request = &request; call.request_size = sizeof(request);
+    call.reply = &reply; call.reply_capacity = sizeof(reply);
+    result = astra_port_call(manager, &call, ASTRA_DEADLINE_INFINITE);
+    if (result != ASTRA_OK) return result;
+    const AstraMessageHeader *header = &reply.header;
+    const AstraSystemPowerStatus *state = &reply.power;
+    const char *end = memchr(state->name, '\0', sizeof(state->name));
+    if (call.reply_size != sizeof(reply) || call.reply_handle_count != 0u ||
+        header->total_size != sizeof(reply) || header->header_size != ASTRA_MESSAGE_HEADER_SIZE ||
+        header->protocol != ASTRA_SERVICE_MANAGER_PROTOCOL ||
+        header->protocol_version != ASTRA_SERVICE_MANAGER_VERSION ||
+        header->operation != ASTRA_SERVICE_MANAGER_POWER_STATUS ||
+        header->transaction_id != request.header.transaction_id ||
+        header->flags != 0u || header->reserved != 0u ||
+        state->phase > ASTRA_SYSTEM_POWER_CANCELLED ||
+        state->step > ASTRA_SYSTEM_POWER_STEP_USER_CANCEL ||
+        (state->flags & ~ASTRA_SYSTEM_POWER_CANCEL_REQUESTED) != 0u ||
+        (state->phase == ASTRA_SYSTEM_POWER_IDLE ?
+            state->transaction != 0u || state->operation != 0u || state->process_id != 0u ||
+            state->step != 0u || state->status != 0u || state->reason != 0u ||
+            state->recovery_failures != 0u || state->flags != 0u || state->name[0] != '\0' :
+            state->transaction == 0u || (state->operation != ASTRA_SERVICE_MANAGER_SHUTDOWN &&
+                state->operation != ASTRA_SERVICE_MANAGER_SYSTEM_RESTART)) ||
+        end == NULL || !astra_utf8_validate(state->name, (uint32_t)(end - state->name), 0u))
+        return ASTRA_ERROR_IO;
+    *power = *state;
+    return ASTRA_OK;
+}
+
+AstraResult astra_system_power_cancel(AstraHandle manager, uint32_t transaction)
+{
+    if (transaction == 0u) return ASTRA_ERROR_INVALID_ARGUMENT;
+    return exchange(manager, ASTRA_SERVICE_MANAGER_POWER_CANCEL, NULL,
+        transaction, NULL, NULL, 0u, NULL, NULL, NULL);
 }

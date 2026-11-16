@@ -198,6 +198,20 @@ See `examples/settings_pane.c` for another composition. Settings policy stays
 with its owner: system panes call a typed service API; applications use their
 private Config Kit grant. The shell owns no settings, converter or renderer.
 
+Interface Kit 12.14 adds caller-driven alerts. Initialize `AstraAlert` with
+`ASTRA_ALERT_INIT`, call `astra_interface_alert_open`, include
+`astra_interface_alert_wait_handle` in the application's existing wait set, and
+call `astra_interface_alert_poll` when it wakes. Poll reports `PENDING`,
+`ACCEPTED` or `CANCELLED`; the caller decides when to close the alert. A zero
+window flag allows other windows to remain usable. `ASTRA_WINDOW_MODAL` gives
+the same modality as `astra_interface_show_alert` and `astra_interface_confirm`.
+`astra_interface_alert_update` replaces the title, message, affirmative button
+text and severity without opening a second window. Text remains caller-owned
+until replacement or close. Failed closes retain ownership for retry.
+The blocking convenience functions use this same implementation, composed from
+ordinary Label, Container and Button controls; there is no separate progress
+dialog renderer or event loop in applications.
+
 Interface Kit 12.13 adds `astra_interface_settings_sidebar_init`. It reserves
 four consecutive IDs for a Container, Search Field, Scroll View, and List.
 Supply caller-owned text, scroll, and collection models in

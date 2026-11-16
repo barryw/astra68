@@ -298,6 +298,23 @@ int main(void)
     pump();
     assert(closed[200u] == 1u && closed[202u] == 1u &&
         closed[203u] == 1u && closed[204u] == 3u);
+    request(20u, ASTRA_MESSAGING_SUBSCRIBE, 201u);
+    incoming.kind = ASTRA_MESSAGING_SERVICE;
+    incoming.process_id = 1u;
+    strcpy(incoming.name, "supervisor");
+    strcpy(incoming.topic, "system.power");
+    pump();
+    assert(reply.status == ASTRA_STATUS_OK);
+    before = event_count;
+    supervisor_messaging_changed("system.power");
+    assert(event_count == before + 1u && event.process_id == 1u &&
+        event.kind == ASTRA_MESSAGING_SERVICE && event.payload_size == 0u &&
+        strcmp(event.name, "supervisor") == 0 && strcmp(event.topic, "system.power") == 0);
+    blocked_send = 201u;
+    supervisor_messaging_changed("system.power");
+    assert(event_count == before + 1u);
+    blocked_send = 0u;
+    supervisor_messaging_remove(20u);
     puts("Messaging directory and fanout: PASS");
     return 0;
 }

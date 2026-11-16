@@ -186,3 +186,9 @@ ASTRA_SYSTEM_4.7 {
         astra_dock_pin_move;
         astra_dock_pin_remove;
 } ASTRA_SYSTEM_4.5;
+
+ASTRA_SYSTEM_4.8 {
+    global:
+        astra_system_power_status;
+        astra_system_power_cancel;
+} ASTRA_SYSTEM_4.7;

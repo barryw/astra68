@@ -2,6 +2,29 @@
 
 Status: active continuation map, 2026-11-15
 
+Shutdown UI81 development is now in progress on top of the qualified running
+checkpoint below. Shared caller-driven alerts use the existing alert controls
+and renderer; blocking alerts/confirmations call that same implementation.
+Interface host tests, ASan/UBSan and MC68040 library build pass. Native power
+status/cancellation uses one Supervisor snapshot and generic broker invalidations.
+Cooperative waits keep status queries, broker delivery/retries and the existing
+heartbeat alive. Cancellation retains the original private reply port until
+CANCEL or READY plus clean exit, avoiding a consent/port-close race. Cancellation
+is explicitly advertised by interactive participants; synchronous managed
+services keep their existing decision contract. Runtime 3.1 adds the versioned
+cancellable-readiness entry point, while the single shutdown wire format stays
+at protocol 1. Updating Runtime alone does not make older clients abortable.
+Runtime shutdown/readiness contracts, System client and Supervisor/recovery/
+broker host tests pass, including base managed participants receiving no ABORT.
+Supervisor sanitizers and Runtime/System/Supervisor/Terminal/HostFS/fault-probe
+targets pass in 35 seconds (`native81d.log`). Terminal's ELF explicitly requires
+Runtime 3.1; unchanged managed entry points keep their Runtime 3.0 versions.
+NDK distribution, C/C++/SDL consumers and docs pass before the final opt-in
+readiness addition (`native81c.log`); repeat that gate after Desktop integration.
+Desktop integration, final NDK closure and hardware gates remain;
+none of these new shutdown changes is installed on DE25 yet. Evidence:
+Beast `/home/barry/astra-evidence/shutdown-ui-20261115/`.
+
 Current running development checkpoint:
 `/var/lib/astra/dev/current` selects
 `3b22ae6485b2f57f4f4d2191ce19407df4588e23fddc3ed7e6caf5ec1cac3286`.

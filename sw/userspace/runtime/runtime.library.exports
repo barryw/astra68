@@ -232,3 +232,9 @@ ASTRA_RUNTIME_3.0 {
     local:
         *;
 };
+
+ASTRA_RUNTIME_3.1 {
+    global:
+        astra_shutdown_cancel;
+        astra_service_ready_cancellable;
+} ASTRA_RUNTIME_3.0;

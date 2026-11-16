@@ -9,5 +9,7 @@ void supervisor_messaging_pump(uint32_t receive, const SupervisorProcessTable *p
 void supervisor_messaging_remove(uint32_t process_id);
 int supervisor_messaging_needs_retry(void);
 void supervisor_messaging_retry(void);
+/* Best-effort invalidation from PID 1; subscribers read authoritative state. */
+void supervisor_messaging_changed(const char *topic);
 
 #endif

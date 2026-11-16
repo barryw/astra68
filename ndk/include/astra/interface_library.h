@@ -23,7 +23,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.12. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 12u
 /** Current Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 13u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 14u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -43,6 +43,43 @@ AstraResult astra_interface_show_alert(AstraHandle gui,
 AstraResult astra_interface_confirm(AstraHandle gui,
     const AstraAlertInfo *info, const char *cancel,
     uint16_t cancel_length, uint32_t *confirmed);
+
+/** Open an alert without running a nested event loop. Uses the same controls
+ * as show_alert/confirm. Zero flags allows other windows to remain usable;
+ * ASTRA_WINDOW_MODAL makes it modal. Optional cancel adds a second button.
+ * Referenced text must remain valid until update or close. On failure, close
+ * any retained alert state before reusing it.
+ * @param gui GUI capability.
+ * @param info Borrowed alert text and affirmative button.
+ * @param cancel Optional borrowed cancellation button text.
+ * @param cancel_length Bytes in cancel, or zero without a second button.
+ * @param flags Zero or ASTRA_WINDOW_MODAL.
+ * @param alert Empty owned alert.
+ * @return Astra result. @since Interface Kit 12.14.
+ */
+AstraResult astra_interface_alert_open(AstraHandle gui,
+    const AstraAlertInfo *info, const char *cancel, uint16_t cancel_length,
+    uint32_t flags, AstraAlert *alert);
+/** Replace an open alert's text and severity; preserve its button count.
+ * @param alert Open alert.
+ * @param info Borrowed replacement text.
+ * @return Astra result. @since Interface Kit 12.14. */
+AstraResult astra_interface_alert_update(AstraAlert *alert,
+    const AstraAlertInfo *info);
+/** Waitable event endpoint, or INVALID_HANDLE when closed.
+ * @param alert Owned alert.
+ * @return Borrowed receive handle. @since Interface Kit 12.14. */
+AstraHandle astra_interface_alert_wait_handle(const AstraAlert *alert);
+/** Dispatch one queued event, leaving window ownership with the caller.
+ * @param alert Open alert.
+ * @param choice Receives PENDING, ACCEPTED or CANCELLED. Window close cancels.
+ * @return Astra result; WOULD_BLOCK means no event. @since Interface Kit 12.14. */
+AstraResult astra_interface_alert_poll(AstraAlert *alert, uint32_t *choice);
+/** Close the window and release its surface. Failed closes retain ownership
+ * for retry; closing an empty alert succeeds.
+ * @param alert Owned alert, emptied on success.
+ * @return Astra result. @since Interface Kit 12.14. */
+AstraResult astra_interface_alert_close(AstraAlert *alert);
 
 /** Initialize a retained label.
  * @param control Caller-owned control to initialize.

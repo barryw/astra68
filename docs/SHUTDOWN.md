@@ -24,6 +24,51 @@ message. A managed process that forks owns its descendants
 and must not report READY until they safely exit. Terminal supervises its zsh
 session instead of patching upstream zsh or Vim.
 
+Participants that call `astra_service_ready_cancellable` also advertise
+`ASTRA_SERVICE_READY_SHUTDOWN_CANCELLABLE`. Only these participants receive
+`ABORT`, carrying the matching transaction and no handles, in the same protocol
+1 format. Managed synchronous services keep the original request/decision
+contract and finish that decision before system cancellation can proceed.
+The new readiness entry point is versioned in Runtime 3.1, so an interactive
+client cannot load against a runtime without cancellation support. Updating
+Runtime alone does not change existing managed participants' declaration.
+Cancellation keeps the original reply port open. A participant that has not
+committed to exit answers the original request with `CANCEL` and remains usable;
+one already committed answers `READY` and completes its clean exit. The
+supervisor waits for that decision and, for READY, for exit before restoring
+services. Closing a reply port is not cancellation: it could discard READY
+after the participant committed. A full lifecycle queue waits for send credit
+while status, cancellation and the generic message broker remain responsive.
+Terminal receives ABORT even while an edited shell line prevents exit. Stale
+ABORTs are ignored; synchronous storage retirement may finish before cancellation
+and is then restored through the existing recovery path. There is no forced
+termination deadline.
+
+System Kit exposes the authoritative `AstraSystemPowerStatus` through
+`astra_system_power_status`, including transaction, phase, exact PID/name,
+failed step/status/reason and recovery-failure count. It survives Desktop
+replacement. `astra_system_power_cancel` accepts only the current active
+transaction and cannot interrupt service recovery. Subscribe first to the
+generic broker's `system.power` topic from service `supervisor`, exact PID 1,
+then read the snapshot. Events are best-effort invalidations: a full receiver
+already contains a wakeup, so reading current state covers coalesced changes.
+The native teardown wait serves these requests and broker messages while
+refusing new launches and service edits. One shared maintenance schedule keeps
+the existing one-second heartbeat and reliable-message retries running during
+ordinary operation, participant waits and service recovery. Observation does
+not authorize or change teardown.
+
+Interface Kit's caller-driven alerts share the same implementation as its
+blocking alerts and confirmations. This adapts Haiku
+`src/kits/interface/Alert.cpp:271-324`, whose synchronous and asynchronous Go
+methods share preparation. Haiku's shutdown status window in
+`src/servers/registrar/ShutdownProcess.cpp:235-315` similarly separates its UI
+from lifecycle work. Its `_QuitApps` implementation at lines 1486-1548 drains
+abort events before entering the system-application phase and disables that
+phase's cancel button. Astra retains its explicit consent protocol and can
+restore completed synchronous services after cancellation. Desktop
+integration and hardware qualification of these additions remain pending.
+
 For each request, the participant must do exactly one of these:
 
 - **Ready:** stop accepting new work, finish or safely discard in-flight work,

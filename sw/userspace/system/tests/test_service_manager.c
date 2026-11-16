@@ -72,12 +72,33 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         AstraServiceManagerReply *reply = call->reply;
         assert(((const AstraPortCall *)d1)->port == 9u);
         assert(call->request_size == sizeof(*request) && call->reply_index == 0u);
-        assert(call->reply_capacity == sizeof(*reply) && call->reply_handle_capacity == 1u);
+        assert(call->reply_capacity == (expected_operation == ASTRA_SERVICE_MANAGER_POWER_STATUS ?
+            sizeof(AstraSystemPowerReply) : sizeof(*reply)));
+        assert(call->reply_handle_capacity == (expected_operation == ASTRA_SERVICE_MANAGER_POWER_STATUS ? 0u : 1u));
         assert(request->header.protocol == ASTRA_SERVICE_MANAGER_PROTOCOL && request->header.protocol_version == 7u);
         assert(request->header.operation == expected_operation && strcmp(request->name, expected_name) == 0);
         assert(memcmp(&request->cursor, &expected_cursor, sizeof(request->cursor)) == 0);
         assert(request->value == expected_value && request->reserved == 0u && request->reserved_payload == 0u);
         assert(call->handle_count == (expected_operation == ASTRA_SERVICE_MANAGER_ADD ? 1u : 0u));
+        if (expected_operation == ASTRA_SERVICE_MANAGER_POWER_STATUS) {
+            AstraSystemPowerReply *power = call->reply;
+            astra_message_header_set(&power->header, sizeof(*power), ASTRA_SERVICE_MANAGER_PROTOCOL,
+                ASTRA_SERVICE_MANAGER_VERSION, ASTRA_SERVICE_MANAGER_POWER_STATUS, request->header.transaction_id);
+            power->power = (AstraSystemPowerStatus){.transaction = 42u,
+                .operation = ASTRA_SERVICE_MANAGER_SHUTDOWN, .phase = ASTRA_SYSTEM_POWER_APPLICATIONS,
+                .process_id = 20u, .step = ASTRA_SYSTEM_POWER_STEP_REQUEST};
+            strcpy(power->power.name, "Terminal.app");
+            if (fault == 1) power->power.phase = ASTRA_SYSTEM_POWER_CANCELLED + 1u;
+            if (fault == 2) power->power.transaction = 0u;
+            if (fault == 3) power->power.flags = 2u;
+            if (fault == 4) memset(power->power.name, 'x', sizeof(power->power.name));
+            if (fault == 5) power->header.transaction_id++;
+            if (fault == 6) power->power.name[0] = (char)0xff;
+            if (fault == 7) power->power = (AstraSystemPowerStatus)ASTRA_SYSTEM_POWER_STATUS_INIT;
+            if (fault == 8) power->power.phase = ASTRA_SYSTEM_POWER_IDLE;
+            *out_d1 = sizeof(*power);
+            return ASTRA_SYSCALL_OK;
+        }
         if (expected_operation == ASTRA_SERVICE_MANAGER_ADD) {
             assert(call->handles[0] == 0x101u && request->payload_size == shared_size && area_closes != 0u);
             AstraServiceDefinition sent = ASTRA_SERVICE_DEFINITION_INIT;
@@ -93,6 +114,7 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         reply->next_cursor.position = expected_operation == ASTRA_SERVICE_MANAGER_LIST ? UINT64_MAX : 0u;
         reply->next_cursor.source = expected_operation == ASTRA_SERVICE_MANAGER_LIST ? ASTRA_SERVICE_LIST_SOURCE_DYNAMIC : 0u;
         if (expected_operation != ASTRA_SERVICE_MANAGER_SHUTDOWN && expected_operation != ASTRA_SERVICE_MANAGER_SYSTEM_RESTART &&
+            expected_operation != ASTRA_SERVICE_MANAGER_POWER_CANCEL &&
             expected_operation != ASTRA_SERVICE_MANAGER_REMOVE) {
             strcpy(reply->info.name, "remote-desktop"); reply->info.flags = ASTRA_SERVICE_RUNS_PAIRED | ASTRA_SERVICE_ENABLED;
             reply->info.start_policy = ASTRA_SERVICE_START_MANUAL; reply->info.restart_policy = ASTRA_SERVICE_RESTART_ON_FAULT;
@@ -253,6 +275,28 @@ int main(void)
     assert(astra_system_restart_request(9u) == ASTRA_OK);
     assert(astra_system_restart_request(ASTRA_INVALID_HANDLE) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
+    expected_operation = ASTRA_SERVICE_MANAGER_POWER_STATUS;
+    AstraSystemPowerStatus power = ASTRA_SYSTEM_POWER_STATUS_INIT;
+    assert(astra_system_power_status(ASTRA_INVALID_HANDLE, &power) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_system_power_status(9u, NULL) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_system_power_status(9u, &power) == ASTRA_OK && power.transaction == 42u &&
+        power.process_id == 20u && strcmp(power.name, "Terminal.app") == 0);
+    AstraSystemPowerStatus saved = power;
+    for (fault = 1; fault <= 8; ++fault) {
+        if (fault == 7) {
+            assert(astra_system_power_status(9u, &power) == ASTRA_OK && power.phase == ASTRA_SYSTEM_POWER_IDLE);
+            power = saved;
+        } else {
+            assert(astra_system_power_status(9u, &power) == ASTRA_ERROR_IO);
+            assert(memcmp(&power, &saved, sizeof(power)) == 0);
+        }
+    }
+    fault = 0;
+    expected_operation = ASTRA_SERVICE_MANAGER_POWER_CANCEL;
+    expected_value = 42u;
+    assert(astra_system_power_cancel(9u, 42u) == ASTRA_OK);
+    assert(astra_system_power_cancel(9u, 0u) == ASTRA_ERROR_INVALID_ARGUMENT);
+    expected_value = 0u;
     expected_operation = ASTRA_SERVICE_MANAGER_INSPECT; expected_name = "remote-desktop";
     assert(astra_service_inspect(9u, expected_name, &info, &definition) == ASTRA_OK);
     assert(strcmp(info.executable, executable) == 0 && strcmp(definition.executable, executable) == 0);

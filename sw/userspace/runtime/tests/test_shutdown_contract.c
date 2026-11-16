@@ -12,8 +12,9 @@ static uint32_t sent_size;
 static uint32_t sent_handle;
 static uint32_t sent_handles;
 static uint32_t send_status;
-static uint32_t closed[5];
+static uint32_t closed[8];
 static uint32_t close_count;
+static AstraMessageHeader sent_header;
 
 uint32_t astra_rt_port_create(uint32_t messages, uint32_t bytes,
                               uint32_t *receive, uint32_t *send)
@@ -33,6 +34,7 @@ uint32_t astra_port_send(uint32_t endpoint, const void *message,
     sent_size = size;
     sent_handles = handle_count;
     sent_handle = handle_count != 0u ? handles[0] : 0u;
+    memcpy(&sent_header, message, sizeof(sent_header));
     return send_status;
 }
 
@@ -54,7 +56,7 @@ uint32_t astra_port_receive(uint32_t endpoint, void *message,
 
 uint32_t astra_close(uint32_t handle)
 {
-    assert(close_count < 5u);
+    assert(close_count < sizeof(closed) / sizeof(closed[0]));
     closed[close_count++] = handle;
     return ASTRA_SYSCALL_OK;
 }
@@ -95,6 +97,7 @@ int main(void)
         assert(astra_shutdown_request(20u, 42u, &reply_receive) ==
                ASTRA_SYSCALL_OK);
         assert(reply_receive == 10u && sent_size == sizeof(request));
+        assert(sent_header.protocol_version == 1u && sent_header.operation == ASTRA_SHUTDOWN_REQUEST);
         assert(sent_handles == 1u && sent_handle == 11u);
         assert(close_count == 1u && closed[0] == 11u);
         send_status = ASTRA_SYSCALL_WOULD_BLOCK;
@@ -148,6 +151,31 @@ int main(void)
     assert(astra_shutdown_receive_reply(41u, 42u, &reply) ==
            ASTRA_SYSCALL_OK);
     assert(reply.decision == ASTRA_SHUTDOWN_CANCEL);
+    close_count = 0u;
+    assert(astra_shutdown_cancel(0u, 42u) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_shutdown_cancel(20u, 0u) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_shutdown_cancel(20u, 42u) == ASTRA_SYSCALL_OK);
+    assert(sent_header.operation == ASTRA_SHUTDOWN_ABORT && sent_header.transaction_id == 42u &&
+        sent_header.protocol_version == 1u && sent_handles == 0u && close_count == 0u);
+    send_status = ASTRA_SYSCALL_WOULD_BLOCK;
+    assert(astra_shutdown_cancel(20u, 42u) == ASTRA_SYSCALL_WOULD_BLOCK && close_count == 0u);
+    send_status = ASTRA_SYSCALL_OK;
+    astra_message_header_set(&request.header, sizeof(request), ASTRA_SHUTDOWN_PROTOCOL,
+        ASTRA_SHUTDOWN_VERSION, ASTRA_SHUTDOWN_ABORT, 42u);
+    memcpy(queued, &request, sizeof(request));
+    queued_size = sizeof(request);
+    queued_handles = 0u;
+    uint32_t reply_send = 99u;
+    assert(astra_shutdown_receive(30u, &request, &reply_send) == ASTRA_SYSCALL_OK &&
+        reply_send == 0u && request.header.operation == ASTRA_SHUTDOWN_ABORT);
+    queued_handles = 1u; queued_handle = 51u;
+    assert(astra_shutdown_receive(30u, &request, &reply_send) == ASTRA_SYSCALL_INVALID_ARGUMENT &&
+        reply_send == 0u && closed[0] == 51u);
+    request.header.operation = ASTRA_SHUTDOWN_REQUEST;
+    request.header.protocol_version = 2u;
+    memcpy(queued, &request, sizeof(request));
+    assert(astra_shutdown_receive(30u, &request, &reply_send) == ASTRA_SYSCALL_INVALID_ARGUMENT &&
+        reply_send == 0u && closed[1] == 51u);
     puts("shutdown contract: PASS");
     return 0;
 }
