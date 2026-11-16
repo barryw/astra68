@@ -22,7 +22,8 @@ enum {
     ASTRA_VOLUME_PARTITION_STATUS,
     ASTRA_VOLUME_NETWORK_SOURCE,
     ASTRA_VOLUME_MOUNT_AUTH,
-    ASTRA_VOLUME_MANAGED_NETWORK_LOOKUP
+    ASTRA_VOLUME_MANAGED_NETWORK_LOOKUP,
+    ASTRA_VOLUME_USAGE_SNAPSHOT
 };
 typedef struct AstraVolumeAuthRequest {
     AstraMessageHeader header;
@@ -52,6 +53,17 @@ typedef struct AstraVolumeUsageRequest {
     AstraMessageHeader header;
     AstraVolumeUsageQuery query;
 } AstraVolumeUsageRequest;
+typedef struct AstraVolumeUsageSnapshotRequest {
+    AstraMessageHeader header;
+    AstraVolumeReference volume;
+} AstraVolumeUsageSnapshotRequest;
+typedef struct AstraVolumeUsageSnapshotInfo {
+    AstraVolumeReference volume;
+    uint64_t sequence;
+    uint64_t catalog_sequence;
+    uint32_t count;
+    uint32_t reserved;
+} AstraVolumeUsageSnapshotInfo;
 typedef struct AstraVolumeControlRequest {
     AstraMessageHeader header;
     AstraVolumeControl control;
@@ -89,12 +101,19 @@ typedef struct AstraVolumeBrokerInfoReply {
     AstraVolumeReply reply;
     AstraVolumeBrokerInfo info;
 } AstraVolumeBrokerInfoReply;
+typedef struct AstraVolumeUsageSnapshotReply {
+    AstraVolumeReply reply;
+    AstraVolumeUsageSnapshotInfo info;
+} AstraVolumeUsageSnapshotReply;
 _Static_assert(sizeof(AstraVolumeRequest) == 56u, "volume request ABI");
 _Static_assert(sizeof(AstraVolumeRootRequest) == 56u, "volume root request ABI");
 _Static_assert(sizeof(AstraVolumeReply) == 32u, "volume reply ABI");
 _Static_assert(sizeof(AstraVolumeControlRequest) == 80u, "volume control request ABI");
 _Static_assert(sizeof(AstraVolumeControlReply) == 56u, "volume control reply ABI");
 _Static_assert(sizeof(AstraVolumeUsageRequest) == 88u, "volume usage request ABI");
+_Static_assert(sizeof(AstraVolumeUsageSnapshotRequest) == 48u, "volume usage snapshot request ABI");
+_Static_assert(sizeof(AstraVolumeUsageSnapshotInfo) == 48u, "volume usage snapshot info ABI");
+_Static_assert(sizeof(AstraVolumeUsageSnapshotReply) == 80u, "volume usage snapshot reply ABI");
 _Static_assert(sizeof(AstraVolumeBrokerInfo) == 32u, "volume broker info ABI");
 _Static_assert(sizeof(AstraVolumeBrokerInfoReply) == 64u, "volume broker reply ABI");
 _Static_assert(sizeof(AstraVolumeFormatRequest) == 72u, "volume format request ABI");

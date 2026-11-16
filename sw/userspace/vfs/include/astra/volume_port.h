@@ -11,6 +11,10 @@ int astra_volume_format_valid(const AstraVolumeFormatRequest *request);
 int astra_volume_partition_valid(const AstraVolumePartitionRequest *request);
 int astra_volume_usage_query_valid(const AstraVolumeUsageQuery *query);
 int astra_volume_usage_page_valid(const AstraVolumeUsageQuery *query, const AstraVolumeUsagePage *page);
+int astra_volume_usage_snapshot_info_valid(const AstraVolumeReference *volume,
+    const AstraVolumeUsageSnapshotInfo *info);
+int astra_volume_usage_records_valid(const AstraVolumeUsageQuery *query,
+    const AstraVolumeReference *volume, const AstraVolumeUsageRecord *records, uint32_t count);
 int astra_volume_page_valid(const AstraVolumeCatalogQuery *query,
                             const AstraVolumeCatalogPage *page);
 typedef uint32_t (*AstraVolumeReadCatalog)(void *context,
@@ -31,6 +35,9 @@ typedef uint32_t (*AstraVolumeApplyPartition)(void *context, uint32_t owner,
     const AstraVolumePartitionRequest *request, uint32_t *outcome);
 typedef uint32_t (*AstraVolumeReadUsage)(void *context,
     const AstraVolumeUsageQuery *query, AstraVolumeUsagePage *page);
+typedef uint32_t (*AstraVolumeReadUsageSnapshot)(void *context,
+    const AstraVolumeReference *volume, AstraVolumeUsageRecord *records,
+    uint32_t capacity, AstraVolumeUsageSnapshotInfo *info);
 typedef struct AstraVolumePort {
     uint32_t receive;
     AstraVolumeReadCatalog read;
@@ -41,6 +48,8 @@ typedef struct AstraVolumePort {
     AstraVolumeApplyFormat format;
     AstraVolumeApplyPartition partition;
     AstraVolumeReadUsage usage;
+    AstraVolumeReadUsageSnapshot usage_snapshot;
+    void (*reclaim)(void *context);
     void *context;
     AstraVolumeCatalogPage page;
     AstraVolumeUsagePage usage_page;

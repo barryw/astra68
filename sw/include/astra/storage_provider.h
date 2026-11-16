@@ -35,7 +35,7 @@ typedef struct AstraStorageRecord {
 
 /* Private Linux protocol. Only the launched QEMU peer receives its socket;
  * application authority remains in the native rooted scopes. */
-#define ASTRA_STORAGE_PROVIDER_VERSION 15u
+#define ASTRA_STORAGE_PROVIDER_VERSION 16u
 #define ASTRA_STORAGE_PROVIDER_PATH_MAX 4096u
 #define ASTRA_STORAGE_PROVIDER_FDS 3u
 #define ASTRA_STORAGE_PROVIDER_PAGE 16u
@@ -126,7 +126,8 @@ enum AstraStoragePathOperation {
     ASTRA_STORAGE_PATH_LINK,
     ASTRA_STORAGE_PATH_CHMOD,
     ASTRA_STORAGE_PATH_READLINK,
-    ASTRA_STORAGE_PATH_SYMLINK
+    ASTRA_STORAGE_PATH_SYMLINK,
+    ASTRA_STORAGE_PATH_SET_FILE_TIMES
 };
 
 /* FDs are root, optional base, optional second base. Their positions are
@@ -145,6 +146,7 @@ typedef struct AstraStoragePathRequest {
     uint32_t links;
     uint32_t capacity;
     uint32_t reserved[2];
+    AstraHostTime times[2];
     char path[ASTRA_STORAGE_PROVIDER_PATH_MAX];
     char path2[ASTRA_STORAGE_PROVIDER_PATH_MAX];
 } AstraStoragePathRequest;

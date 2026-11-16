@@ -906,6 +906,27 @@ _k1_survivor_image_entry:
 	bne     .Lmain_fail
 	tst.b   4095(%a1)
 	bne     .Lmain_fail
+
+	| Resident pages must still call their native owner for sync and async.
+	| Distinct backing errors prove an owner reply, not a residency shortcut.
+	move.l  KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0), %d1
+	move.l  #4096, %d2
+	moveq   #0, %d3
+	move.l  #ASTRA_SYSCALL_AREA_SYNC_RANGE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	cmpi.l  #ASTRA_SYSCALL_IO_ERROR, %d0
+	bne     .Lmain_fail
+	cmpi.l  #ASTRA_STATUS_NO_SPACE, %d3
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0), %d1
+	move.l  #4096, %d2
+	moveq   #ASTRA_AREA_SYNC_ASYNC, %d3
+	move.l  #ASTRA_SYSCALL_AREA_SYNC_RANGE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	cmpi.l  #ASTRA_SYSCALL_IO_ERROR, %d0
+	bne     .Lmain_fail
+	cmpi.l  #ASTRA_STATUS_IO, %d3
+	bne     .Lmain_fail
 	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
 	moveq   #0, %d2
 	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d3
@@ -947,6 +968,16 @@ _k1_survivor_image_entry:
 	| A failed user copy must not strand an inaccessible snapshot token.
 	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
 	moveq   #0, %d2
+	moveq   #ASTRA_SYSCALL_AREA_DIRTY_SCAN, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	tst.l   %d1
+	bne     .Lmain_fail
+	cmpi.l  #ASTRA_AREA_DIRTY_MODIFIED, %d2
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
 	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d3
 	addi.l  #4094, %d3
 	moveq   #ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN, %d0
@@ -961,6 +992,16 @@ _k1_survivor_image_entry:
 	tst.l   %d0
 	bne     .Lmain_fail
 	move.l  %d1, %d6
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	moveq   #ASTRA_SYSCALL_AREA_DIRTY_SCAN, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	tst.l   %d1
+	bne     .Lmain_fail
+	cmpi.l  #ASTRA_AREA_DIRTY_WRITEBACK, %d2
+	bne     .Lmain_fail
 	movea.l KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %a1
 	cmpi.l  #0x50414745, 8(%a1)
 	bne     .Lmain_fail
@@ -1043,6 +1084,127 @@ _k1_survivor_image_entry:
 	cmpi.b  #0x21, 4(%a1)
 	bne     .Lmain_fail
 	tst.b   4095(%a1)
+	bne     .Lmain_fail
+
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	move.l  #4096, %d3
+	moveq   #ASTRA_SYSCALL_AREA_RECLAIM, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #1, %d1
+	bne     .Lmain_fail
+	| The owner can fill cold pages without waiting on its own pager.
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0x41, %d2	| READ | ADMINISTER, no WRITE
+	moveq   #ASTRA_SYSCALL_HANDLE_DUPLICATE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, %d6
+	moveq   #0, %d2
+	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d3
+	move.l  #4096, %d4
+	moveq   #ASTRA_SYSCALL_AREA_PUBLISH_CLEAN_PAGE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d6, %d1
+	moveq   #0, %d2
+	move.l  #4096, %d3
+	moveq   #ASTRA_SYSCALL_AREA_RECLAIM, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #1, %d1
+	bne     .Lmain_fail
+	move.l  %d6, %d1
+	moveq   #0, %d2
+	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d3
+	moveq   #5, %d4
+	moveq   #ASTRA_SYSCALL_AREA_PUBLISH_CLEAN_PAGE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	movea.l KERNEL_QUALIFICATION_PAGER_BASE_OFFSET(%a0), %a1
+	cmpi.l  #0x50414745, (%a1)
+	bne     .Lmain_fail
+	cmpi.b  #0x21, 4(%a1)
+	bne     .Lmain_fail
+	tst.l   8(%a1)
+	bne     .Lmain_fail
+	tst.b   4095(%a1)
+	bne     .Lmain_fail
+	move.l  %d6, %d1
+	moveq   #0, %d2
+	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d3
+	move.l  #4096, %d4
+	moveq   #ASTRA_SYSCALL_AREA_PUBLISH_CLEAN_PAGE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	cmpi.l  #ASTRA_SYSCALL_WOULD_BLOCK, %d0
+	bne     .Lmain_fail
+	move.l  %d6, %d1
+	moveq   #0, %d2
+	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d3
+	move.l  #4096, %d4
+	moveq   #ASTRA_SYSCALL_AREA_PUBLISH_DIRTY_PAGE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	cmpi.l  #ASTRA_SYSCALL_ACCESS_DENIED, %d0
+	bne     .Lmain_fail
+	move.l  %d6, %d1
+	moveq   #0, %d2
+	moveq   #ASTRA_SYSCALL_AREA_DIRTY_SCAN, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	tst.l   %d2
+	bne     .Lmain_fail
+	move.l  %d6, %d1
+	moveq   #ASTRA_SYSCALL_CLOSE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	move.l  #4096, %d3
+	moveq   #ASTRA_SYSCALL_AREA_RECLAIM, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #1, %d1
+	bne     .Lmain_fail
+	| A full ordinary write can publish an absent page without backing read.
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d3
+	move.l  #4096, %d4
+	moveq   #ASTRA_SYSCALL_AREA_PUBLISH_DIRTY_PAGE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d3
+	move.l  #4096, %d4
+	moveq   #ASTRA_SYSCALL_AREA_PUBLISH_DIRTY_PAGE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	cmpi.l  #ASTRA_SYSCALL_WOULD_BLOCK, %d0
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	move.l  KERNEL_QUALIFICATION_PAGER_SOURCE_BASE_OFFSET(%a0), %d3
+	moveq   #ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, %d3
+	move.l  KERNEL_QUALIFICATION_PAGER_AREA_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	moveq   #1, %d4
+	moveq   #ASTRA_SYSCALL_AREA_WRITEBACK_COMPLETE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
 	bne     .Lmain_fail
 
 	| Kernel output into a clean writable pager view must dirty it too.
@@ -1443,14 +1605,16 @@ _k1_survivor_image_entry:
 	bne     .Lpager_fail
 	cmpi.l  #0x00010000, 12(%sp)
 	bne     .Lpager_fail
-	cmpi.l  #ASTRA_PAGER_OPERATION_PAGE, 16(%sp)
-	bne     .Lpager_fail
 	move.l  20(%sp), %d6
 	tst.l   %d6
 	beq     .Lpager_fail
 	cmpi.l  #KERNEL_QUALIFICATION_PAGER_COOKIE, 24(%sp)
 	bne     .Lpager_fail
 	tst.l   28(%sp)
+	bne     .Lpager_fail
+	cmpi.l  #ASTRA_PAGER_OPERATION_SYNC, 16(%sp)
+	beq     .Lpager_sync_request
+	cmpi.l  #ASTRA_PAGER_OPERATION_PAGE, 16(%sp)
 	bne     .Lpager_fail
 	tst.l   32(%sp)
 	bne     .Lpager_fail
@@ -1478,7 +1642,7 @@ _k1_survivor_image_entry:
 .Lpager_reply_ready:
 	move.l  %d7, %d1
 	move.l  %sp, %d2
-	moveq   #52, %d3
+	move.l  0(%sp), %d3
 	moveq   #0, %d4
 	moveq   #0, %d5
 	moveq   #ASTRA_SYSCALL_PORT_SEND_TRY, %d0
@@ -1490,12 +1654,32 @@ _k1_survivor_image_entry:
 	trap    #ASTRA_SYSCALL_TRAP
 	tst.l   %d0
 	bne     .Lpager_fail
+	cmpi.l  #ASTRA_PAGER_OPERATION_SYNC_REPLY, 16(%sp)
+	beq     .Lpager_wait
 	subq.l  #1, 56(%sp)
 	bne     .Lpager_wait
 	lea     60(%sp), %sp
 	move.l  #KERNEL_QUALIFICATION_PAGER_EXIT_STATUS, %d1
 	moveq   #ASTRA_SYSCALL_THREAD_EXIT, %d0
 	trap    #ASTRA_SYSCALL_TRAP
+.Lpager_sync_request:
+	cmpi.l  #4096, 32(%sp)
+	bne     .Lpager_fail
+	move.l  36(%sp), %d1
+	andi.l  #~ASTRA_AREA_SYNC_ASYNC, %d1
+	bne     .Lpager_fail
+	move.l  52(%sp), %d7
+	move.l  #40, 0(%sp)
+	move.l  #ASTRA_PAGER_OPERATION_SYNC_REPLY, 16(%sp)
+	move.l  #ASTRA_STATUS_NO_SPACE, 24(%sp)
+	tst.l   36(%sp)
+	beq     .Lpager_sync_reply
+	move.l  #ASTRA_STATUS_IO, 24(%sp)
+.Lpager_sync_reply:
+	move.l  #KERNEL_QUALIFICATION_PAGER_COOKIE, 28(%sp)
+	clr.l   32(%sp)
+	move.l  #4096, 36(%sp)
+	bra     .Lpager_reply_ready
 .Lpager_fail:
 	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
 	move.l  #KERNEL_QUALIFICATION_PHASE_ERROR, \

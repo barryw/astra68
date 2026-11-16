@@ -12,7 +12,6 @@
 
 #include <astra/event_emit.h>
 #include <astra/runtime.h>
-#include <astra/vfs_host_direct.h>
 #include <astra/vfs_assign_internal.h>
 #include <astra/vfs_port_transport.h>
 

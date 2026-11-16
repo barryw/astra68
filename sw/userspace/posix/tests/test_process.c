@@ -451,6 +451,14 @@ main(void)
     assert(pid == (pid_t)125 && WIFSIGNALED(status));
     assert(WTERMSIG(status) == SIGSEGV && closed_handle == 9u);
 
+    clone_pid = 128u;
+    clone_handle = 11u;
+    assert(fork() == (pid_t)128);
+    child_status = ASTRA_STATUS_BACKING_FAULTED;
+    pid = wait(&status);
+    assert(pid == (pid_t)128 && WIFSIGNALED(status));
+    assert(WTERMSIG(status) == SIGBUS && closed_handle == 11u);
+
     clone_pid = 0u;
     clone_handle = 0u;
     assert(fork() == 0);

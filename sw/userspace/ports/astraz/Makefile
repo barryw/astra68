@@ -8,7 +8,7 @@ PROGRAM := build/cmake/astraz
 .DEFAULT_GOAL := all
 all: bundle
 
-$(PROGRAM): CMakeLists.txt src/main.c src/audio.c src/audio.h \
+$(PROGRAM): Makefile CMakeLists.txt src/main.c src/audio.c src/audio.h \
 	src/picture.c src/picture.h src/transcript_flow.c \
 	src/canvas.c src/canvas.h src/line_input.c src/line_input.h \
 	src/transcript_flow.h src/screen_grid.c src/screen_grid.h \
@@ -26,7 +26,7 @@ $(PROGRAM): CMakeLists.txt src/main.c src/audio.c src/audio.h \
 		--readelf m68k-astra-readelf \
 		--needed interface.library.12 --needed graphics.library.3 \
 		--needed font.library.5 --needed system.library.4 \
-		--needed filesystem.library.17 \
+		--needed filesystem.library.18 \
 		--needed config.library.2 \
 		--needed SDL2_mixer.library.3 \
 		--needed runtime.library.3 --needed compiler.library.2 \

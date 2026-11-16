@@ -9,12 +9,46 @@ from pathlib import Path
 import tempfile
 import threading
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 source = Path(__file__).with_name("dev-install-de25.py")
 spec = importlib.util.spec_from_file_location("astra_dev_install", source)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+
+with tempfile.TemporaryDirectory(prefix="astra-dev.", dir="/var/tmp") as directory:
+    stage = Path(directory)
+    (stage / "files").mkdir()
+    (stage / "files/artifact").write_bytes(b"artifact")
+    state_image = stage / "state.img"
+    state_image.write_bytes(b"state")
+    original_lstat = Path.lstat
+    def root_owned(path):
+        info = original_lstat(path)
+        return SimpleNamespace(st_mode=info.st_mode, st_uid=0, st_size=info.st_size)
+    mappings = [{"source": "files/artifact", "target": "/commands/probe%d" % at}
+                for at in range(128)]
+    with patch.object(Path, "lstat", root_owned), patch.object(module, "STATE", state_image):
+        assert len(module.validate(stage, mappings, [], [])[0]) == 128
+        try:
+            module.validate(stage, mappings + [{"source": "files/artifact", "target": "/commands/extra"}], [], [])
+        except ValueError as error:
+            assert "file mappings" in str(error)
+        else:
+            raise AssertionError("unbounded update manifest accepted")
+        library = {"source": "files/artifact", "target":
+            "/libs/Test.kit/libraries/test.library/abi-1/1.0.0/m68k-68040/test.library"}
+        manifest = {"source": "files/artifact", "target": "/libs/Test.kit/manifest"}
+        provider = {"source": "files/artifact", "target": "/libs/.providers/test.library.abi-1"}
+        for incomplete in ([library], [library, manifest], [library, provider]):
+            try:
+                module.validate(stage, incomplete, [], [])
+            except ValueError as error:
+                assert "manifest and provider index" in str(error)
+            else:
+                raise AssertionError("incoherent Kit update accepted")
+        assert len(module.validate(stage, [library, manifest, provider], [], [])[0]) == 3
 
 for target in ("/libs/SDL.kit/libraries/SDL2_mixer.library/abi-3/3.0.0/m68k-68040/SDL2_mixer.library", "/services/desktop",
                "/apps/Doom.app/Doom", "/fonts/system/Topaz.afnt",

@@ -23,6 +23,15 @@ bool kernel_generation_advance(uint32_t *generation)
 }
 
 static inline __attribute__((always_inline))
+bool kernel_generation_advance64(uint64_t *generation)
+{
+    if (generation == NULL || *generation == UINT64_MAX)
+        return false;
+    ++*generation;
+    return true;
+}
+
+static inline __attribute__((always_inline))
 uint32_t kernel_generation_next_masked(uint32_t generation, uint32_t mask)
 {
     generation = (generation + 1u) & mask;

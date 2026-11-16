@@ -11,7 +11,7 @@
 /** Package provider name resolved by the eager ELF loader. */
 #define ASTRA_FILESYSTEM_LIBRARY_NAME "filesystem.library"
 /** Minimum compatible Filesystem Kit ABI major requested by applications. */
-#define ASTRA_FILESYSTEM_LIBRARY_VERSION 17u
+#define ASTRA_FILESYSTEM_LIBRARY_VERSION 18u
 /** Current Filesystem Kit ABI major. */
 #define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ASTRA_FILESYSTEM_LIBRARY_VERSION
 /** Current backward-compatible Filesystem Kit ABI revision. */
@@ -252,14 +252,16 @@ uint32_t astra_filesystem_open_at_mode(AstraFilesystem *filesystem, const AstraF
 /** Close an open file. @param file Open state. @return ASTRA_VFS_* status. */
 uint32_t astra_filesystem_close(AstraFile *file);
 /**
- * Acquire a read-only, demand-paged chunk containing one file window.
+ * Acquire a demand-paged chunk containing one file window.
+ * Read access is required. Read/write files also grant shared WRITE authority
+ * after the provider retains their backing writer; read-only files never do.
  * Map only the requested window with astra_rt_area_map_range; its source
  * offset is base % ASTRA_AREA_SIZE_MAX. Windows cannot cross chunk bounds.
  * Close returned area when finished; mapping remains valid after closing file.
  * @param file Open file with read access.
  * @param base Page-aligned file offset.
  * @param span Nonzero page-aligned area size.
- * @param area Receives READ|MAP area capability.
+ * @param area Receives READ|MAP, plus WRITE for supported read/write files.
  * @param file_size Receives current file size.
  * @return ASTRA_VFS_* status; UNSUPPORTED for providers without file areas.
  */
@@ -447,6 +449,14 @@ uint32_t astra_filesystem_chmod(AstraFilesystem *filesystem,
                                 const char *path, uint16_t mode);
 /** Change permissions on an open node. @param file Open node. @param mode POSIX permission bits. @return ASTRA_VFS_* status. */
 uint32_t astra_filesystem_chmod_file(AstraFile *file, uint16_t mode);
+/** Set selected timestamps through the file's retained writable authority.
+ * @param file Writable file.
+ * @param times Metadata supplying atime/mtime seconds and nanoseconds.
+ * @param fields Nonempty subset of ASTRA_VFS_META_ATIME and ASTRA_VFS_META_MTIME.
+ * @return ASTRA_VFS_* status. Filesystem timestamp precision applies.
+ */
+uint32_t astra_filesystem_set_file_times(AstraFile *file,
+    const AstraVfsDirEntry *times, uint32_t fields);
 /** Change permissions beneath an open directory. @param filesystem Attached namespace for continuations. @param directory Open directory. @param path Relative UTF-8 path. @param mode POSIX permission bits. @param flags ASTRA_VFS_AT_* flags. @return ASTRA_VFS_* status. */
 uint32_t astra_filesystem_chmod_at(AstraFilesystem *filesystem, const AstraFile *directory,
                                    const char *path, uint16_t mode,

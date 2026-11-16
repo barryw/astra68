@@ -24,10 +24,6 @@ static uint32_t disconnects;
 static uint32_t abandons;
 static uint32_t fail_connect;
 static uint32_t seed_distinct;
-static uint32_t direct_connect;
-static uint32_t direct_resumes;
-static uint32_t fail_direct_resume;
-static uint32_t direct_forks;
 static uint32_t port_fork_rebinds;
 static uint32_t next_semaphore = 100u;
 static uint32_t seeds;
@@ -43,7 +39,7 @@ static uint32_t mock_file_length = 5u;
 static const char *held_directory_path = "/before";
 static uint32_t held_directory_status;
 static uint32_t adopt_status;
-static uint32_t share_status;
+static uint32_t share_status, share_calls, adopt_calls;
 static AstraAssign mock_assigns[ASTRA_STARTUP_CAPABILITY_MAX + 16u];
 static int catalog_enabled;
 static uint32_t catalog_count;
@@ -426,44 +422,8 @@ uint32_t astra_vfs_client_connect_service(AstraVfsClient *client,
                                           uint32_t service)
 {
     uint32_t status = astra_vfs_port_connect(client, service);
-
-    if (status == ASTRA_VFS_OK && direct_connect != 0u) {
-        client->port_direct_address = (void *)(uintptr_t)1u;
-        client->port_direct_area = 0x41u;
-        client->port_direct_scope = 0x42u;
-        client->port_direct_session = 0x43u;
-        client->features = ASTRA_VFS_FEATURE_GRANTS;
-    }
+    if (status == ASTRA_VFS_OK) client->features = ASTRA_VFS_FEATURE_GRANTS;
     return status;
-}
-
-uint32_t astra_vfs_host_direct_resume(AstraVfsClient *client, uint32_t area,
-                                      uint32_t scope, uint32_t session)
-{
-    assert(client != NULL && area == 0x41u && scope == 0x42u &&
-           session == 0x43u);
-    ++direct_resumes;
-    if (fail_direct_resume != 0u)
-        return ASTRA_VFS_ERR_IO;
-    client->port_direct_address = (void *)(uintptr_t)1u;
-    client->port_direct_area = area;
-    client->port_direct_scope = scope;
-    client->port_direct_session = session;
-    return ASTRA_VFS_OK;
-}
-
-static uint32_t fork_child_calls;
-
-void astra_vfs_host_direct_fork_child(void)
-{
-    ++fork_child_calls;
-}
-
-uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
-{
-    assert(client != NULL && client->port_direct_address != NULL);
-    ++direct_forks;
-    return ASTRA_VFS_OK;
 }
 
 void astra_vfs_port_abandon(AstraVfsClient *client)
@@ -614,6 +574,7 @@ uint32_t astra_vfs_adopt(AstraVfsClient *client, uint64_t token, AstraVfsFile *f
 {
     (void)client;
     assert(token != 0u);
+    ++adopt_calls;
     if (adopt_status != ASTRA_VFS_OK)
         return adopt_status;
     *file = 1000u;
@@ -623,9 +584,16 @@ uint32_t astra_vfs_adopt(AstraVfsClient *client, uint64_t token, AstraVfsFile *f
 uint32_t astra_vfs_share(AstraVfsClient *client, AstraVfsFile file, uint64_t *token)
 {
     assert(client != NULL && file == 1000u && token != NULL);
+    ++share_calls;
     if (share_status != ASTRA_VFS_OK) return share_status;
     *token = 1u;
     return ASTRA_VFS_OK;
+}
+uint32_t astra_vfs_unshare(AstraVfsClient *client, uint64_t token)
+{
+    (void)client; (void)token;
+    assert(0 && "LOST receipts have no provider authority to withdraw");
+    return ASTRA_VFS_ERR_IO;
 }
 static pthread_barrier_t cache_start;
 static AstraVfsClient *thread_clients[16];
@@ -783,6 +751,7 @@ int main(void)
             original._private_size = UINT64_C(0x223456789);
             original._private_kind = ASTRA_VFS_KIND_FILE;
             original._private_member = 2u;
+            original._private_client->description_acquire(original._private_client);
             assert(astra_process_file_export(&original, &state) ==
                    ASTRA_VFS_OK);
             assert(astra_process_file_import(&state, &restored) ==
@@ -800,6 +769,7 @@ int main(void)
             state.service = 0xdeadbeefu;
             assert(astra_process_file_import(&state, &restored) ==
                    ASTRA_VFS_ERR_BAD_HANDLE);
+            assert(astra_vfs_close(original._private_client, original._private_file) == ASTRA_VFS_OK);
         }
         assert(astra_process_vfs_client() != NULL);
         assert(connects == 2u);
@@ -819,39 +789,16 @@ int main(void)
         disconnects = 0u;
         abandons = 0u;
         port_fork_rebinds = 0u;
-        fork_child_calls = 0u;
         assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
         assert(astra_process_vfs_client() != NULL && connects == 1u);
         assert(astra_process_vfs_after_fork_child(&startup, NULL) == ASTRA_VFS_OK);
         assert(abandons == 1u && disconnects == 0u &&
                port_fork_rebinds == 1u);
-        assert(fork_child_calls == 1u);
         assert(astra_process_vfs_client() != NULL && connects == 2u);
         astra_process_vfs_close();
         assert(disconnects == 1u);
 
-        /* A direct child replaces only its process-local channel. It does not
-         * throw away the namespace and pay another service HELLO. */
-        connects = 0u;
-        disconnects = 0u;
-        direct_connect = 1u;
-        direct_forks = 0u;
-        port_fork_rebinds = 0u;
-        fork_child_calls = 0u;
-        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
-        assert(astra_process_vfs_client() != NULL && connects == 1u);
-        assert(astra_process_vfs_after_fork_child(&startup, NULL) == ASTRA_VFS_OK);
-        assert(direct_forks == 1u && connects == 1u &&
-               port_fork_rebinds == 1u);
-        /* Once per fork, however many clients the child carries. */
-        assert(fork_child_calls == 1u);
-        astra_process_vfs_close();
-        assert(disconnects == 1u);
-        direct_connect = 0u;
-
-        /* Exec keeps the local service's session and open-file table. The
-         * replacement image must resume that accelerator instead of silently
-         * routing every operation back through the service port. */
+        /* Exec preserves the native session and its bound reply lane. */
         {
             void *state;
             uint32_t size;
@@ -860,28 +807,20 @@ int main(void)
 
             connects = 0u;
             disconnects = 0u;
-            direct_connect = 1u;
-            direct_resumes = 0u;
             assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
             client = astra_process_vfs_client();
-            assert(client != NULL && client->port_direct_address != NULL);
+            assert(client != NULL && client->session != ASTRA_VFS_SESSION_INVALID);
             size = astra_process_vfs_state_size();
             state = malloc(size);
             assert(state != NULL);
             assert(astra_process_vfs_export(state, size, &used) ==
                        ASTRA_VFS_OK &&
                    used == size);
-            direct_connect = 0u;
-            fail_direct_resume = 1u;
-            assert(astra_process_vfs_import(&startup, state, size) ==
-                   ASTRA_VFS_ERR_IO);
-            fail_direct_resume = 0u;
             assert(astra_process_vfs_import(&startup, state, size) ==
                    ASTRA_VFS_OK);
             free(state);
             client = astra_process_vfs_client();
-            assert(client != NULL && direct_resumes == 2u &&
-                   client->port_direct_address != NULL);
+            assert(client != NULL && client->session != ASTRA_VFS_SESSION_INVALID && connects == 1u);
             /* A grant's client may still derive after exec (Kit 7). */
             assert(client->features == ASTRA_VFS_FEATURE_GRANTS);
             astra_process_vfs_close();
@@ -1302,7 +1241,8 @@ int main(void)
         astra_process_vfs_namespace_release(owner);
         assert(astra_process_vfs_after_fork_child(&startup, NULL) == ASTRA_VFS_OK);
         assert(old->ownership_epoch == parent_epoch + 1u);
-        assert(astra_process_file_export(&raw, &record) == ASTRA_VFS_ERR_LOST);
+        assert(astra_process_file_export(&raw, &record) == ASTRA_VFS_OK &&
+            record.ownership == ASTRA_PROCESS_FILE_LOST);
         assert(astra_process_file_adopt(&receipt, &adopted) == ASTRA_VFS_OK);
         assert(adopted._private_ownership_epoch == old->ownership_epoch);
         assert(astra_process_file_export(&adopted, &record) == ASTRA_VFS_OK);
@@ -1311,7 +1251,8 @@ int main(void)
         receipt.file = record; receipt.token = 2u;
         assert(astra_process_vfs_after_fork_child(&startup, NULL) == ASTRA_VFS_OK);
         assert(old->ownership_epoch == parent_epoch + 2u);
-        assert(astra_process_file_export(&adopted, &record) == ASTRA_VFS_ERR_LOST);
+        assert(astra_process_file_export(&adopted, &record) == ASTRA_VFS_OK &&
+            record.ownership == ASTRA_PROCESS_FILE_LOST);
         assert(astra_process_file_adopt(&receipt, &adopted) == ASTRA_VFS_OK);
         assert(astra_process_file_export(&adopted, &record) == ASTRA_VFS_OK);
         catalog_records[0].generation = 2u; catalog_changed = 1;
@@ -1325,6 +1266,19 @@ int main(void)
         assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
         astra_process_vfs_namespace_release(owner);
         assert(root_closes == roots_before);
+        /* Exec must restore the inherited pin and keep the old token LOST. */
+        assert(astra_process_file_export(&raw, &record) == ASTRA_VFS_OK &&
+            record.ownership == ASTRA_PROCESS_FILE_LOST);
+        uint32_t state_size = astra_process_vfs_state_size(), state_used = 0u;
+        void *state = malloc(state_size);
+        assert(state != NULL && astra_process_vfs_export(state, state_size, &state_used) ==
+            ASTRA_VFS_OK && state_used == state_size);
+        raw = (AstraFile)ASTRA_FILE_INIT;
+        assert(astra_process_vfs_import(&startup, state, state_used) == ASTRA_VFS_OK);
+        free(state);
+        assert(astra_process_file_import(&record, &raw) == ASTRA_VFS_OK &&
+            astra_vfs_file_owner_status(raw._private_client, raw._private_ownership_epoch) ==
+                ASTRA_VFS_ERR_LOST);
         uint32_t closed_before = file_closes;
         assert(astra_vfs_file_owner_close(raw._private_client, raw._private_file,
             raw._private_ownership_epoch) == ASTRA_VFS_ERR_LOST);
@@ -1335,6 +1289,54 @@ int main(void)
         assert(root_closes == roots_before + 1u);
         astra_process_vfs_close();
         catalog_enabled = 0;
+    }
+    {
+        /* Lost receipts preserve the copied owner; they never adopt a fresh
+           provider token or make another live file unusable. */
+        AstraStartupInfo startup = {.capabilities_address = 1u};
+        AstraFile file = ASTRA_FILE_INIT, empty = ASTRA_FILE_INIT;
+        AstraProcessFileShare share, again;
+        AstraProcessFileState state;
+        AstraVfsFile token;
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        AstraVfsClient *client = astra_process_vfs_client();
+        assert(astra_vfs_open(client, "/", ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY,
+            &token, NULL, NULL) == ASTRA_VFS_OK);
+        state = (AstraProcessFileState){.service = astra_process_vfs_client_handle(client),
+            .file = token, .flags = ASTRA_VFS_OPEN_READ, .kind = ASTRA_VFS_KIND_DIRECTORY};
+        assert(astra_process_file_import(&state, &file) == ASTRA_VFS_OK);
+        share_status = ASTRA_VFS_ERR_LOST;
+        uint32_t shares_before = share_calls, adopts_before = adopt_calls;
+        assert(astra_process_file_share(&file, &share) == ASTRA_VFS_OK &&
+            share.file.ownership == ASTRA_PROCESS_FILE_LOST && share.token == 0u &&
+            share.file.file != ASTRA_VFS_FILE_INVALID);
+        assert(astra_process_file_adopt(&share, &file) == ASTRA_VFS_ERR_BUSY);
+        assert(astra_process_file_adopt(&share, &empty) == ASTRA_VFS_ERR_INVALID);
+        assert(astra_process_file_import(&share.file, &empty) == ASTRA_VFS_ERR_BAD_HANDLE);
+        assert(astra_process_vfs_after_fork_child(&startup, NULL) == ASTRA_VFS_OK);
+        assert(astra_process_file_adopt(&share, &file) == ASTRA_VFS_OK);
+        assert(astra_process_file_export(&file, &state) == ASTRA_VFS_OK &&
+            state.ownership == ASTRA_PROCESS_FILE_LOST);
+        again = share; ++again.file.file;
+        assert(astra_process_file_adopt(&again, &file) == ASTRA_VFS_ERR_INVALID);
+        again = share; again.token = 1u;
+        assert(astra_process_file_adopt(&again, &file) == ASTRA_VFS_ERR_INVALID);
+        again = share; again.file.ownership = 2u;
+        assert(astra_process_file_adopt(&again, &file) == ASTRA_VFS_ERR_INVALID);
+        again = share; again.file.reserved = 1u;
+        assert(astra_process_file_adopt(&again, &file) == ASTRA_VFS_ERR_INVALID);
+        assert(astra_process_file_import(&again.file, &empty) == ASTRA_VFS_ERR_INVALID);
+        assert(astra_process_file_share(&file, &again) == ASTRA_VFS_OK &&
+            again.file.ownership == ASTRA_PROCESS_FILE_LOST && again.token == 0u);
+        assert(share_calls == shares_before + 1u && adopt_calls == adopts_before);
+        assert(astra_process_file_unshare(&again) == ASTRA_VFS_OK);
+        assert(astra_process_vfs_after_fork_child(&startup, NULL) == ASTRA_VFS_OK);
+        assert(astra_process_file_adopt(&again, &file) == ASTRA_VFS_OK);
+        uint32_t closed_before = file_closes;
+        assert(astra_vfs_file_owner_close(file._private_client, file._private_file,
+            file._private_ownership_epoch) == ASTRA_VFS_ERR_LOST && file_closes == closed_before);
+        astra_process_vfs_close();
+        share_status = ASTRA_VFS_OK;
     }
     {
         AstraStartupInfo startup = {.capabilities_address = 1u};
@@ -1355,14 +1357,36 @@ int main(void)
         share_status = ASTRA_VFS_ERR_IO;
         assert(astra_process_vfs_share_current_directory(&share) == ASTRA_VFS_ERR_IO);
         catalog_records[0].state = ASTRA_VOLUME_UNMOUNTED;
-        assert(astra_process_vfs_share_current_directory(&share) == ASTRA_VFS_ERR_LOST);
+        assert(astra_process_vfs_share_current_directory(&share) == ASTRA_VFS_ERR_IO);
         catalog_records[0].id = 809u;
         catalog_records[0].state = ASTRA_VOLUME_MOUNTED;
         share_status = ASTRA_VFS_ERR_INVALID;
-        assert(astra_process_vfs_share_current_directory(&share) == ASTRA_VFS_ERR_LOST);
+        assert(astra_process_vfs_share_current_directory(&share) == ASTRA_VFS_ERR_INVALID);
         catalog_failure = ASTRA_ERROR_BUSY;
         assert(astra_process_vfs_share_current_directory(&share) == ASTRA_VFS_ERR_INVALID);
-        catalog_failure = ASTRA_OK; share_status = ASTRA_VFS_OK;
+        catalog_failure = ASTRA_OK;
+        share_status = ASTRA_VFS_ERR_LOST;
+        assert(astra_process_vfs_share_current_directory(&share) == ASTRA_VFS_OK &&
+            share.file.ownership == ASTRA_PROCESS_FILE_LOST && share.token == 0u);
+        assert(astra_process_vfs_after_fork_child(&startup, &share) == ASTRA_VFS_OK);
+        char cwd[64];
+        assert(astra_process_vfs_current_directory(cwd, sizeof(cwd)) == ASTRA_VFS_ERR_LOST);
+        uint32_t shares_before = share_calls;
+        assert(astra_process_vfs_share_current_directory(&share) == ASTRA_VFS_OK &&
+            share.file.ownership == ASTRA_PROCESS_FILE_LOST && share_calls == shares_before);
+        assert(astra_process_vfs_after_fork_child(&startup, &share) == ASTRA_VFS_OK);
+        assert(astra_process_vfs_current_directory(cwd, sizeof(cwd)) == ASTRA_VFS_ERR_LOST);
+        uint32_t state_size = astra_process_vfs_state_size(), state_used = 0u;
+        void *state = malloc(state_size);
+        assert(state != NULL && astra_process_vfs_export(state, state_size, &state_used) ==
+            ASTRA_VFS_OK && state_used == state_size);
+        assert(astra_process_vfs_import(&startup, state, state_used) == ASTRA_VFS_OK);
+        free(state);
+        assert(astra_process_vfs_current_directory(cwd, sizeof(cwd)) == ASTRA_VFS_ERR_LOST);
+        uint32_t closed_before = file_closes;
+        assert(astra_process_vfs_set_current_directory("/") == ASTRA_VFS_OK && file_closes == closed_before);
+        assert(astra_process_vfs_current_directory(cwd, sizeof(cwd)) == ASTRA_VFS_OK && strcmp(cwd, "/") == 0);
+        share_status = ASTRA_VFS_OK;
         astra_process_vfs_close();
         catalog_enabled = 0;
     }

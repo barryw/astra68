@@ -150,13 +150,13 @@ $(VOLUME_READ_TEST): src/volume.c tests/test_volume_read.c include/volume.h
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/volume.c tests/test_volume_read.c -o $@
 
-LOADER_RECOVERY_SOURCES := tests/test_loader_recovery.c \
+LOADER_RECOVERY_SOURCES := tests/test_loader_recovery.c src/launch_report.c \
 		src/service_definition_store.c src/loader_manifest.c \
 		$(CONFIG)/src/config_document.c $(SYSTEM)/src/config_scope.c \
 		$(SYSTEM)/src/manifest.c $(ASTRA_COMMON)/utf8.c \
 		$(SYSTEM)/src/service_definition.c $(RUNTIME)/src/string.c
 
-$(LOADER_RECOVERY_TEST): $(LOADER_RECOVERY_SOURCES) src/loader.c ../../include/astra/gui.h
+$(LOADER_RECOVERY_TEST): $(LOADER_RECOVERY_SOURCES) src/loader.c include/loader.h ../../include/astra/gui.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		-ffunction-sections -fdata-sections $(LOADER_RECOVERY_SOURCES) \

@@ -257,7 +257,12 @@ typedef struct KernelThread {
     uint8_t pager_primary;
     uint8_t pager_send_wait;
     uint8_t pager_retry;
-    uint8_t pager_syscall;
+    uint8_t pager_operation;
+    uint8_t pager_flags;
+    uint32_t pager_size;
+    uint32_t pager_unmap_base;
+    uint32_t pager_unmap_size; /* Zero selects the exact-view unmap contract. */
+    uint64_t pager_unmap_sequence;
     uint32_t exit_status;
     uint32_t terminal_result;
     uint64_t deadline_cycles;

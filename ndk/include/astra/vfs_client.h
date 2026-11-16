@@ -119,31 +119,11 @@ typedef struct AstraVfsPortLane {
     uint32_t area_send;
     void *area_address;
     uint32_t area_size;
-    uint32_t direct_area;
-    void *direct_address;
-    uint32_t direct_size;
+    uint32_t scratch_area;
+    void *scratch_address;
+    uint32_t scratch_size;
     /** @endcond */
 } AstraVfsPortLane;
-/** Optional transport accelerator used behind the VFS client contract. */
-typedef struct AstraVfsPortAcceleratorOps {
-    /** Establish the lane on a scope a HELLO attached. */
-    uint32_t (*connect)(struct AstraVfsClient *client, uint32_t scope);
-    /** Disconnect a clean accelerated session. */
-    void (*disconnect)(struct AstraVfsClient *client);
-    /** Abandon a failed accelerated session without further I/O. */
-    void (*abandon)(struct AstraVfsClient *client);
-    /** Exchange one metadata request and reply. */
-    uint32_t (*transport)(struct AstraVfsClient *client, uint32_t operation,
-                          const AstraVfsRequest *request,
-                          const AstraVfsTransfer *transfer,
-                          AstraVfsReply *reply);
-    /** Exchange one request carrying bulk data. */
-    uint32_t (*bulk)(struct AstraVfsClient *client, uint32_t operation,
-                     const AstraVfsRequest *request,
-                     const AstraVfsTransfer *transfer, void *buffer,
-                     uint32_t capacity, AstraVfsReply *reply);
-} AstraVfsPortAcceleratorOps;
-
 /** Connected VFS client with independent per-thread in-flight state. */
 typedef struct AstraVfsClient {
     /** @cond ASTRA_INTERNAL */
@@ -166,22 +146,12 @@ typedef struct AstraVfsClient {
     /* Private state used by astra_vfs_port_connect/transport. */
     uint8_t port_area_capable;
     uint32_t port_service;
-    void *port_direct_address;
-    uint32_t port_direct_area;
-    uint32_t port_direct_scope; /* the grant's scope handle (Kit 6); the lane names it per command */
-    uint32_t port_direct_session;
-    const struct AstraVfsBackendOps *direct_backend_ops;
-    void *direct_backend_context;
-    uint32_t (*direct_backend_enter)(struct AstraVfsClient *client);
-    void (*direct_backend_leave)(struct AstraVfsClient *client);
     uint32_t port_connect_lock;
-    volatile uint32_t port_connecting __attribute__((aligned(4)));
     volatile uint32_t port_inflight __attribute__((aligned(4)));
     volatile uint32_t port_inflight_waiters;
     volatile uint32_t port_lifecycle __attribute__((aligned(4)));
     volatile uint32_t port_thread_lock __attribute__((aligned(4)));
     volatile uint32_t port_lane_lock __attribute__((aligned(4)));
-    const AstraVfsPortAcceleratorOps *port_accelerator_ops;
     AstraVfsPortThreadState *port_thread_states;
     uint32_t port_thread_capacity;
     AstraVfsPortLane port_lanes[ASTRA_PROCESS_THREAD_SLOT_COUNT];
@@ -326,7 +296,7 @@ uint32_t astra_vfs_close(AstraVfsClient *client, AstraVfsFile file);
  * @param offset Byte offset.
  * @param buffer Receives at most `length` bytes.
  * @param length Requested byte count.
- * @param moved Receives bytes read.
+ * @param moved Receives bytes read, including a completed prefix on error.
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_vfs_read(AstraVfsClient *client, AstraVfsFile file,
@@ -336,7 +306,7 @@ uint32_t astra_vfs_read(AstraVfsClient *client, AstraVfsFile file,
  * @param client Connected client. @param file Open file token.
  * @param offset Positioned offset, ignored for sequential I/O.
  * @param flags Zero or ASTRA_VFS_IO_SEQUENTIAL. @param buffer Receives bytes.
- * @param length Requested bytes. @param moved Receives bytes read.
+ * @param length Requested bytes. @param moved Receives a completed prefix even on error.
  * @param position Receives the position after. @return ASTRA_VFS_* status. */
 uint32_t astra_vfs_read_position(AstraVfsClient *client, AstraVfsFile file,
     uint64_t offset, uint32_t flags, void *buffer, uint32_t length,
@@ -352,14 +322,16 @@ uint32_t astra_vfs_seek(AstraVfsClient *client, AstraVfsFile file,
  * @param token Receives a one-use share. @return ASTRA_VFS_* status. */
 uint32_t astra_vfs_share(AstraVfsClient *client, AstraVfsFile file,
     uint64_t *token);
-/** Acquire the read-only file chunk containing one requested window.
+/** Acquire the file chunk containing one requested window.
+ * Read access is required; read/write files may grant shared WRITE authority
+ * only after the provider retains their backing writer.
  * Its source offset is base % ASTRA_AREA_SIZE_MAX; a window cannot cross a
  * chunk boundary. Caller maps the subrange and closes the area handle.
  * @param client Connected client with file-area capability.
  * @param file Open file description to share with the cache owner.
  * @param base Page-aligned file offset for the first mapped byte.
  * @param span Nonzero page-aligned window length.
- * @param area Receives a READ|MAP area handle on success.
+ * @param area Receives READ|MAP, plus WRITE for supported read/write files.
  * @param file_size Receives current backing file size on success.
  * @return ASTRA_VFS_* status. */
 uint32_t astra_vfs_file_area(AstraVfsClient *client, AstraVfsFile file,
@@ -388,7 +360,7 @@ uint32_t astra_vfs_file_flags(AstraVfsClient *client, AstraVfsFile file,
  * @param max_end Exclusive maximum byte position, UINT64_MAX for no bound.
  * @param buffer Source bytes.
  * @param length Requested byte count.
- * @param moved Receives bytes written.
+ * @param moved Receives bytes written, including a completed prefix on error.
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_vfs_write(AstraVfsClient *client, AstraVfsFile file,
@@ -403,7 +375,7 @@ uint32_t astra_vfs_write(AstraVfsClient *client, AstraVfsFile file,
  * @param max_end Exclusive maximum byte position, checked with append/position.
  * @param buffer Source bytes.
  * @param length Requested byte count.
- * @param moved Receives bytes written.
+ * @param moved Receives bytes written, including a completed prefix on error.
  * @param position Receives the resulting file position.
  * @return ASTRA_VFS_* status.
  */
@@ -635,6 +607,15 @@ uint32_t astra_vfs_chmod(AstraVfsClient *client, const char *path,
  */
 uint32_t astra_vfs_chmod_file(AstraVfsClient *client, AstraVfsFile file,
                               uint16_t mode);
+/** Set selected timestamps on a writable open file, without resolving its path.
+ * @param client Connected client.
+ * @param file Writable open file token.
+ * @param times Metadata supplying atime/mtime seconds and nanoseconds.
+ * @param fields Nonempty subset of ASTRA_VFS_META_ATIME and ASTRA_VFS_META_MTIME.
+ * @return ASTRA_VFS_* status. Filesystem timestamp precision applies.
+ */
+uint32_t astra_vfs_set_file_times(AstraVfsClient *client, AstraVfsFile file,
+    const AstraVfsDirEntry *times, uint32_t fields);
 /**
  * Change permissions on a relative entry beneath an open directory.
  * @param client Connected client.

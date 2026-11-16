@@ -284,6 +284,31 @@ uint32_t astra_rt_area_references(uint32_t area, uint32_t *handles,
     return result.status;
 }
 
+uint32_t astra_rt_area_next_process(uint32_t area, uint32_t after,
+    uint64_t *sequence, uint32_t *process)
+{
+    AstraSyscallResult result;
+    if (process == NULL) return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *process = 0u;
+    if (sequence == NULL) return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_AREA_NEXT_PROCESS, area, after,
+        (uint32_t)(*sequence >> 32), (uint32_t)*sequence, 0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK) {
+        *process = result.value0;
+        *sequence = ((uint64_t)result.value1 << 32) | result.value2;
+    }
+    return result.status;
+}
+
+uint32_t astra_rt_area_resize_backing(uint32_t area, uint32_t byte_size)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_AREA_RESIZE_BACKING, area, byte_size, 0u, 0u,
+                   0u, &result);
+    return result.status;
+}
+
 uint32_t astra_rt_area_read_resident(uint32_t area, uint32_t offset,
                                     void *destination, uint32_t length)
 {
@@ -310,6 +335,42 @@ uint32_t astra_rt_area_write_pager(uint32_t area, uint32_t offset,
 
     astra_syscall5(ASTRA_SYSCALL_AREA_WRITE_PAGER, area, offset,
                    (uint32_t)(uintptr_t)source, length, 0u, &result);
+    return result.status;
+}
+
+uint32_t astra_rt_area_publish_dirty_page(uint32_t area, uint32_t offset,
+                                         const void *source)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_AREA_PUBLISH_DIRTY_PAGE, area, offset,
+                   (uint32_t)(uintptr_t)source, ASTRA_MEMORY_PAGE_SIZE, 0u, &result);
+    return result.status;
+}
+
+uint32_t astra_rt_area_publish_clean_page(uint32_t area, uint32_t offset,
+    const void *source, uint32_t valid_bytes)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_AREA_PUBLISH_CLEAN_PAGE, area, offset,
+        (uint32_t)(uintptr_t)source, valid_bytes, 0u, &result);
+    return result.status;
+}
+
+uint32_t astra_rt_area_dirty_scan(uint32_t area, uint32_t start,
+                                 uint32_t *offset, uint32_t *state)
+{
+    AstraSyscallResult result;
+
+    if (offset != NULL) *offset = 0u;
+    if (state != NULL) *state = 0u;
+    if (offset == NULL || state == NULL) return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_AREA_DIRTY_SCAN, area, start, 0u, 0u, 0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK) {
+        *offset = result.value0;
+        *state = result.value1;
+    }
     return result.status;
 }
 
@@ -419,6 +480,33 @@ astra_rt_area_unmap(void *address)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     astra_syscall5(ASTRA_SYSCALL_AREA_UNMAP, (uint32_t)(uintptr_t)address,
                    0u, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_rt_area_unmap_range(void *address, uint32_t byte_size)
+{
+    AstraSyscallResult result;
+
+    if (address == NULL || byte_size == 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_AREA_UNMAP_RANGE, (uint32_t)(uintptr_t)address,
+                   byte_size, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_rt_area_sync_range(void *address, uint32_t byte_size,
+                         uint32_t flags, uint32_t *backing_status)
+{
+    AstraSyscallResult result;
+    if (backing_status == NULL) return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *backing_status = 0u;
+    if (address == NULL || byte_size == 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_AREA_SYNC_RANGE, (uint32_t)(uintptr_t)address,
+        byte_size, flags, 0u, 0u, &result);
+    *backing_status = result.value2;
     return result.status;
 }
 

@@ -118,7 +118,7 @@ AstraResult astra_volume_root(AstraHandle broker,
     return root_result;
 }
 
-uint32_t astra_vfs_host_port_connect(AstraVfsClient *client, uint32_t root)
+uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t root)
 {
     assert(client != NULL && root == 201u);
     ++connects;

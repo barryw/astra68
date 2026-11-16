@@ -43,6 +43,8 @@ static void test_tree(void)
                         ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_WRITE,
                         0640u, &file, &info) == ASTRA_VFS_OK);
     note_inode = info.meta.inode;
+    assert(ops->stat_at(&fs, 0u, "/docs/note", ASTRA_VFS_STAT_FOLLOW, &info) == ASTRA_VFS_OK &&
+        info.meta.inode == note_inode);
     assert((info.meta.valid & ASTRA_VFS_META_INODE) &&
            note_inode != docs_inode);
     assert(ops->unlink(&fs, "/docs/note", ASTRA_VFS_UNLINK_DIRECTORY) ==
@@ -57,6 +59,8 @@ static void test_tree(void)
                       &moved, &position) == ASTRA_VFS_OK && moved == 1u &&
            position == 4u);
     assert(ops->read(&fs, file, 0u, text, 4u, &moved) == ASTRA_VFS_OK &&
+           moved == 4u && memcmp(text, "abcd", 4u) == 0);
+    assert(ops->read_for_write(&fs, file, 0u, text, 4u, &moved) == ASTRA_VFS_OK &&
            moved == 4u && memcmp(text, "abcd", 4u) == 0);
     assert(ops->write(&fs, file, 0u, ASTRA_VFS_WRITE_APPEND, 6u,
                       "efgh", 4u, &moved, &position) == ASTRA_VFS_OK &&

@@ -7,7 +7,6 @@
 #include <astra/vfs_path_payload.h>
 #include <astra/vfs_file_lifetime.h>
 #include <astra/vfs_assign_internal.h>
-#include <astra/vfs_host_direct.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_process.h>
 #include <astra/vfs_library_source.h>
@@ -360,9 +359,9 @@ void astra_process_vfs_namespace_release(void *owner)
 }
 
 #define PROCESS_VFS_EXEC_MAGIC 0x56465345u
-/* 12 serializes complete owned root/CWD strings and exact lazy broker identity.
+/* Native sessions, LOST file state and inherited local pins survive exec.
  * No pointers or fixed pathname arrays cross the exec boundary. */
-#define PROCESS_VFS_EXEC_VERSION 12u
+#define PROCESS_VFS_EXEC_VERSION 14u
 
 typedef struct ProcessVfsExecHeader {
     uint32_t magic;
@@ -395,9 +394,6 @@ typedef struct ProcessVfsExecClient {
     uint32_t activity;
     uint32_t port_service;
     AstraVfsPortExecLane lane;
-    uint32_t port_direct_area;
-    uint32_t port_direct_scope;
-    uint32_t port_direct_session;
     uint32_t features;
     uint16_t version;
     uint8_t port_area_capable;
@@ -406,6 +402,7 @@ typedef struct ProcessVfsExecClient {
     uint32_t rights;
     uint32_t broker;
     uint32_t descriptions;
+    uint32_t inherited_descriptions;
     uint8_t owned;
     uint8_t connected;
     uint16_t reserved_owner;
@@ -500,6 +497,7 @@ static uint32_t export_locked(void *state, uint32_t capacity,
         output[count].rights = clients[slot]->rights;
         output[count].broker = clients[slot]->broker;
         output[count].descriptions = clients[slot]->descriptions;
+        output[count].inherited_descriptions = clients[slot]->inherited_descriptions;
         output[count].owned = clients[slot]->owned;
         output[count].connected = clients[slot]->connected;
         if (clients[slot]->connected == 0u) { ++count; continue; }
@@ -509,9 +507,6 @@ static uint32_t export_locked(void *state, uint32_t capacity,
         if (astra_vfs_port_exec_lane_export(client, &output[count].lane) !=
             ASTRA_VFS_OK)
             return ASTRA_VFS_ERR_IO;
-        output[count].port_direct_area = client->port_direct_area;
-        output[count].port_direct_scope = client->port_direct_scope;
-        output[count].port_direct_session = client->port_direct_session;
         output[count].version = client->version;
         output[count].features = client->features;
         output[count].port_area_capable = client->port_area_capable;
@@ -593,17 +588,22 @@ uint32_t astra_process_vfs_client_handle(const AstraVfsClient *client)
     return handle;
 }
 
+/* Called under cache_lock; finding a local owner does not admit new I/O. */
+static uint32_t client_slot_locked(uint32_t handle)
+{
+    for (uint32_t slot = 0u; slot < client_count; ++slot)
+        if (clients[slot]->handle == handle) return slot;
+    return client_count;
+}
+
 AstraVfsClient *astra_process_vfs_client_handle_lookup(uint32_t handle)
 {
     AstraVfsClient *client = NULL;
 
     if (astra_mutex_lock(&cache_lock) != ASTRA_SYSCALL_OK)
         return NULL;
-    for (uint32_t slot = 0u; slot < client_count; ++slot)
-        if (clients[slot]->handle == handle) {
-            client = client_ready(slot);
-            break;
-        }
+    uint32_t slot = client_slot_locked(handle);
+    if (slot != client_count) client = client_ready(slot);
     (void)astra_mutex_unlock(&cache_lock);
     return client;
 }
@@ -619,9 +619,6 @@ static uint32_t file_export_locked(const AstraFile *file,
     service = client_handle_locked(file->_private_client);
     if (service == 0u)
         return ASTRA_VFS_ERR_BAD_HANDLE;
-    uint32_t owner_status = astra_vfs_file_owner_status(file->_private_client,
-        file->_private_ownership_epoch);
-    if (owner_status != ASTRA_VFS_OK) return owner_status;
     *state = (AstraProcessFileState){
         .offset = file->_private_offset,
         .size = file->_private_size,
@@ -630,8 +627,23 @@ static uint32_t file_export_locked(const AstraFile *file,
         .flags = file->_private_flags,
         .kind = file->_private_kind,
         .member = file->_private_member,
+        .ownership = astra_vfs_file_owner_status(file->_private_client,
+            file->_private_ownership_epoch) == ASTRA_VFS_ERR_LOST ? ASTRA_PROCESS_FILE_LOST : 0u,
     };
     return ASTRA_VFS_OK;
+}
+
+static int file_state_valid(const AstraProcessFileState *state)
+{
+    return state != NULL && state->service != 0u &&
+        state->file != ASTRA_VFS_FILE_INVALID &&
+        state->ownership <= ASTRA_PROCESS_FILE_LOST && state->reserved == 0u;
+}
+
+static int file_share_valid(const AstraProcessFileShare *share)
+{
+    return share != NULL && file_state_valid(&share->file) &&
+        ((share->file.ownership == ASTRA_PROCESS_FILE_LOST) == (share->token == 0u));
 }
 
 uint32_t astra_process_file_export(const AstraFile *file, AstraProcessFileState *state)
@@ -647,23 +659,31 @@ uint32_t astra_process_file_import(const AstraProcessFileState *state,
 {
     AstraVfsClient *client;
 
-    if (state == NULL || file == NULL || state->service == 0u ||
-        state->file == ASTRA_VFS_FILE_INVALID)
+    if (file == NULL || !file_state_valid(state))
         return ASTRA_VFS_ERR_INVALID;
-    client = astra_process_vfs_client_handle_lookup(state->service);
-    if (client == NULL)
+    if (astra_mutex_lock(&cache_lock) != ASTRA_SYSCALL_OK)
+        return ASTRA_VFS_ERR_IO;
+    uint32_t slot = client_slot_locked(state->service);
+    if (slot == client_count ||
+        (state->ownership == 0u ? !clients[slot]->connected ||
+            clients[slot]->descriptions == 0u : clients[slot]->inherited_descriptions == 0u)) {
+        (void)astra_mutex_unlock(&cache_lock);
         return ASTRA_VFS_ERR_BAD_HANDLE;
+    }
+    client = &clients[slot]->client;
     *file = (AstraFile)ASTRA_FILE_INIT;
     file->_private_client = client;
     file->_private_read = astra_vfs_port_read_bulk_position;
     file->_private_write = astra_vfs_port_write_bulk_position;
     file->_private_file = state->file;
-    file->_private_ownership_epoch = client->ownership_epoch;
+    file->_private_ownership_epoch = state->ownership == ASTRA_PROCESS_FILE_LOST ?
+        0u : client->ownership_epoch;
     file->_private_flags = state->flags;
     file->_private_offset = state->offset;
     file->_private_size = state->size;
     file->_private_kind = state->kind;
     file->_private_member = state->member;
+    (void)astra_mutex_unlock(&cache_lock);
     return ASTRA_VFS_OK;
 }
 
@@ -676,14 +696,14 @@ uint32_t astra_process_file_share(const AstraFile *file,
         return ASTRA_VFS_ERR_INVALID;
     *share = (AstraProcessFileShare){0};
     status = astra_process_file_export(file, &share->file);
-    if (status != ASTRA_VFS_OK) return status;
-    if (status == ASTRA_VFS_OK)
-        status = astra_vfs_share(file->_private_client,
-                                  file->_private_file, &share->token);
-    /* A lost scope refreshes before sharing the disconnected description. */
-    if (status == ASTRA_VFS_ERR_LOST)
-        status = astra_vfs_share(file->_private_client,
-                                  file->_private_file, &share->token);
+    if (status != ASTRA_VFS_OK || share->file.ownership == ASTRA_PROCESS_FILE_LOST)
+        return status;
+    status = astra_vfs_share(file->_private_client, file->_private_file, &share->token);
+    if (status == ASTRA_VFS_ERR_LOST) {
+        share->token = 0u;
+        share->file.ownership = ASTRA_PROCESS_FILE_LOST;
+        return ASTRA_VFS_OK;
+    }
     return status;
 }
 
@@ -695,7 +715,7 @@ uint32_t astra_process_file_adopt(const AstraProcessFileShare *share,
     uint32_t status;
     AstraFile inherited;
 
-    if (share == NULL || file == NULL || share->token == 0u)
+    if (file == NULL || !file_share_valid(share))
         return ASTRA_VFS_ERR_INVALID;
     inherited = *file;
     if (inherited._private_client != NULL &&
@@ -703,6 +723,12 @@ uint32_t astra_process_file_adopt(const AstraProcessFileShare *share,
         astra_vfs_file_owner_status(inherited._private_client,
             inherited._private_ownership_epoch) == ASTRA_VFS_OK)
         return ASTRA_VFS_ERR_BUSY;
+    if (share->file.ownership == ASTRA_PROCESS_FILE_LOST) {
+        status = astra_process_file_export(&inherited, &state);
+        return status == ASTRA_VFS_OK && state.ownership == ASTRA_PROCESS_FILE_LOST &&
+            state.service == share->file.service && state.file == share->file.file ?
+                ASTRA_VFS_OK : ASTRA_VFS_ERR_INVALID;
+    }
     client = astra_process_vfs_client_handle_lookup(share->file.service);
     if (client == NULL)
         return ASTRA_VFS_ERR_BAD_HANDLE;
@@ -724,8 +750,9 @@ uint32_t astra_process_file_unshare(const AstraProcessFileShare *share)
 {
     AstraVfsClient *client;
 
-    if (share == NULL || share->token == 0u)
+    if (!file_share_valid(share))
         return ASTRA_VFS_ERR_INVALID;
+    if (share->file.ownership == ASTRA_PROCESS_FILE_LOST) return ASTRA_VFS_OK;
     client = astra_process_vfs_client_handle_lookup(share->file.service);
     return client == NULL ? ASTRA_VFS_ERR_BAD_HANDLE :
         astra_vfs_unshare(client, share->token);
@@ -744,6 +771,7 @@ uint32_t astra_process_vfs_import(const AstraStartupInfo *startup,
         header->magic != PROCESS_VFS_EXEC_MAGIC ||
         header->version != PROCESS_VFS_EXEC_VERSION ||
         header->size != size || header->current_ready > 1u ||
+        (header->cwd.file != ASTRA_VFS_FILE_INVALID && !header->current_ready) ||
         header->current_assign[sizeof(header->current_assign) - 1u] != '\0' ||
         header->client_count >
             (size - (uint32_t)sizeof(*header)) /
@@ -787,6 +815,8 @@ uint32_t astra_process_vfs_import(const AstraStartupInfo *startup,
                 (input[index].version != ASTRA_VFS_VERSION || input[index].port_area_capable > 1u)) ||
             input[index].reserved_owner != 0u || input[index].reserved != 0u ||
             (input[index].connected == 0u && input[index].descriptions != 0u) ||
+            input[index].inherited_descriptions > UINT32_MAX - input[index].descriptions ||
+            (input[index].inherited_descriptions != 0u && input[index].service == 0u) ||
             (input[index].owned && (input[index].volume.epoch == 0u ||
                 input[index].volume.id == 0u || input[index].volume.generation == 0u ||
                 input[index].broker == 0u ||
@@ -817,25 +847,21 @@ uint32_t astra_process_vfs_import(const AstraStartupInfo *startup,
         clients[slot]->broker = input[index].broker;
         clients[slot]->volume = input[index].volume;
         clients[slot]->descriptions = input[index].descriptions;
+        clients[slot]->inherited_descriptions = input[index].inherited_descriptions;
         clients[slot]->connected = input[index].connected;
-        if (input[index].connected == 0u) continue;
-        if (input[index].service == 0u || input[index].port_service !=
-                                    input[index].service ||
-            ((input[index].port_direct_area == 0u) !=
-                 (input[index].port_direct_scope == 0u)) ||
-            ((input[index].port_direct_area == 0u) !=
-                 (input[index].port_direct_session ==
-                  ASTRA_VFS_SESSION_INVALID)))
-            goto invalid;
         client = &clients[slot]->client;
         memset(client, 0, sizeof(*client));
         client->ownership_epoch = 1u;
+        client->description_acquire = description_acquire;
+        client->description_release = description_release;
+        if (input[index].connected == 0u) continue;
+        if (input[index].service == 0u || input[index].port_service !=
+                                    input[index].service)
+            goto invalid;
         client->transport = astra_vfs_port_transport;
         client->context = client;
         client->area_payload = astra_vfs_port_call_area;
         client->call_acquire = astra_vfs_port_call_acquire;
-        client->description_acquire = description_acquire;
-        client->description_release = description_release;
         status = astra_rt_semaphore_create(
             1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
             &client->port_connect_lock);
@@ -859,15 +885,7 @@ uint32_t astra_process_vfs_import(const AstraStartupInfo *startup,
             failure = status;
             goto invalid;
         }
-        if (input[index].port_direct_area != 0u &&
-            (status = astra_vfs_host_direct_resume(
-                client, input[index].port_direct_area,
-                input[index].port_direct_scope,
-                input[index].port_direct_session)) != ASTRA_VFS_OK) {
-            failure_operation = "VFS exec direct restore";
-            failure = status;
-            goto invalid;
-        }
+
     }
     ProcessNamespace *restored = astra_runtime_allocate(sizeof(*restored));
     if (restored == NULL) { failure = ASTRA_VFS_ERR_LIMIT; goto invalid; }
@@ -984,11 +1002,7 @@ static uint32_t seed_process_vfs(const AstraStartupInfo *startup,
         /* Receive endpoints are process-private and are not cloned. */
         namespace_watch = (AstraVolumeWatch)ASTRA_VOLUME_WATCH_INIT;
         namespace_dirty = 1u;
-        /* The parent's lanes did not come across; forget them once, before
-         * any client's after_fork opens a lane of the child's own. */
-        astra_vfs_host_direct_fork_child();
         for (uint32_t index = 0u; index < client_count; ++index) {
-            uint32_t status;
             /* Copied native owners keep invalid local pins until they close
                or receipt adoption replaces each pin with a child token. */
             uint32_t epoch = ++clients[index]->client.ownership_epoch;
@@ -998,15 +1012,8 @@ static uint32_t seed_process_vfs(const AstraStartupInfo *startup,
             if (clients[index]->connected == 0u)
                 continue;
             astra_vfs_port_after_fork_child(&clients[index]->client);
-            if (clients[index]->client.port_direct_address != NULL) {
-                status = astra_vfs_host_direct_after_fork(
-                    &clients[index]->client);
-                if (status != ASTRA_VFS_OK)
-                    return status;
-            } else {
-                astra_vfs_port_abandon(&clients[index]->client);
-                clients[index]->connected = 0u;
-            }
+            astra_vfs_port_abandon(&clients[index]->client);
+            clients[index]->connected = 0u;
             clients[index]->client.ownership_epoch = epoch;
             clients[index]->client.description_acquire = description_acquire;
             clients[index]->client.description_release = description_release;
@@ -1086,10 +1093,11 @@ uint32_t astra_process_vfs_after_fork_child(
     current_lock = 0u;
     cache_lock = 0u;
     if (current_file._private_file != ASTRA_VFS_FILE_INVALID &&
-        (cwd == NULL || cwd->token == 0u))
+        !file_share_valid(cwd))
         return ASTRA_VFS_ERR_INVALID;
     status = vfs_initialized ? seed_process_vfs(startup, 1) : ASTRA_VFS_OK;
-    if (status == ASTRA_VFS_OK && cwd != NULL && cwd->token != 0u)
+    if (status == ASTRA_VFS_OK && cwd != NULL &&
+        (cwd->token != 0u || cwd->file.file != ASTRA_VFS_FILE_INVALID))
         status = astra_process_file_adopt(cwd, &current_file);
     return status;
 }
@@ -1294,7 +1302,6 @@ uint32_t astra_process_vfs_current_directory(char *path, uint32_t capacity)
 
 uint32_t astra_process_vfs_share_current_directory(AstraProcessFileShare *share)
 {
-    const AstraFile *directory;
     uint32_t status;
 
     if (share == NULL)
@@ -1302,37 +1309,14 @@ uint32_t astra_process_vfs_share_current_directory(AstraProcessFileShare *share)
     *share = (AstraProcessFileShare){0};
     if (!vfs_initialized)
         return ASTRA_VFS_OK;
-    status = astra_process_vfs_current_acquire(&directory);
-    if (status == ASTRA_VFS_OK) {
-        if (directory != NULL)
-            status = astra_process_file_share(directory, share);
-        if (status != ASTRA_VFS_OK && current_file._private_client != NULL &&
-            namespace_catalog != ASTRA_INVALID_HANDLE) {
-            const ProcessVfsClient *entry =
-                (const ProcessVfsClient *)(const void *)current_file._private_client;
-            if (entry->owned && entry->volume.id != 0u) {
-                AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
-                if (astra_volume_snapshot_open(namespace_catalog, &catalog) == ASTRA_OK) {
-                    int live = 0;
-                    for (uint32_t at = 0u; at < catalog.count; ++at) {
-                        const AstraVolumeRecord *record = &catalog.records[at];
-                        if (catalog.epoch == entry->volume.epoch &&
-                            record->id == entry->volume.id &&
-                            record->generation == entry->volume.generation &&
-                            record->kind == ASTRA_VOLUME_MOUNT &&
-                            (record->state == ASTRA_VOLUME_MOUNTED ||
-                             record->state == ASTRA_VOLUME_QUIESCING)) {
-                            live = 1;
-                            break;
-                        }
-                    }
-                    astra_volume_snapshot_close(&catalog);
-                    if (!live) status = ASTRA_VFS_ERR_LOST;
-                }
-            }
-        }
-        astra_process_vfs_current_release();
-    }
+    if (astra_mutex_lock(&current_lock) != ASTRA_SYSCALL_OK)
+        return ASTRA_VFS_ERR_IO;
+    /* Retention may copy a LOST identity; live-directory acquisition may not. */
+    status = current_prepare();
+    if ((status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_LOST) &&
+        current_file._private_file != ASTRA_VFS_FILE_INVALID)
+        status = astra_process_file_share(&current_file, share);
+    astra_process_vfs_current_release();
     return status;
 }
 

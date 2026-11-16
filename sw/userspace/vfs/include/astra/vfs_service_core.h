@@ -2,6 +2,7 @@
 #define ASTRA_VFS_SERVICE_CORE_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #include <astra/limits.h>
 #include <astra/vfs_backend.h>
@@ -34,6 +35,43 @@
 /* A transported session owns kernel handles; the 8-bit handle ABI is final. */
 #define ASTRA_VFS_SESSION_MAX ASTRA_HANDLE_COUNT_MAX
 
+struct AstraVfsOpenFile;
+
+/* One node-wide backing revision and logical view, held by its native writer.
+ * Page bytes and dirty/snapshot generations remain in VM-owned areas. */
+typedef struct AstraVfsFileCache {
+    AstraVfsNodeInfo backing;
+    uint64_t size;
+    uint64_t modified_ns;
+    AstraVfsFile writer;
+    uint32_t error;
+    uint8_t written;
+    /* Shared WRITE authority can outlive the description that exposed it. */
+    uint8_t external_writes;
+} AstraVfsFileCache;
+
+#define ASTRA_VFS_CACHE_EXTERNAL_WRITES 1u
+
+/* A retry conflict must not hide the writeback failure that left bytes dirty. */
+static inline void astra_vfs_file_cache_record_status(AstraVfsFileCache *cache,
+    uint32_t status)
+{
+    if (cache != NULL && (status != ASTRA_VFS_ERR_BUSY || cache->error == ASTRA_VFS_OK))
+        cache->error = status;
+}
+
+/* Exact nodes in one backend incarnation share an I/O owner. Unknown nodes
+ * share only through description transfer. Cells use the file-storage budget. */
+typedef struct AstraVfsFileIO {
+    struct AstraVfsOpenFile *active;
+    volatile uint32_t sequence __attribute__((aligned(4)));
+    uint32_t references;
+    uint16_t waiters;
+    uint64_t incarnation;
+    AstraVfsNodeMeta identity;
+    AstraVfsFileCache *cache;
+} AstraVfsFileIO;
+
 typedef struct AstraVfsOpenFile {
     AstraVfsBackend backend;
     /* A pending transfer owns a description too, in the same bounded table. */
@@ -43,14 +81,18 @@ typedef struct AstraVfsOpenFile {
     };
     uint32_t session;       /* the owning session id, 0 when the slot is free */
     uint32_t flags;
-    volatile uint32_t sequence __attribute__((aligned(4)));
-    uint16_t generation;
+    AstraVfsFileIO io_storage;
+    AstraVfsFileIO *io;
+    uint16_t generation;    /* 0 after exhaustion; never issued or reused */
     uint16_t kind;
-    uint16_t waiters;
     uint8_t state;
-    uint8_t active;
     uint16_t retained;     /* cache owners holding this backend description */
 } AstraVfsOpenFile;
+
+static inline int astra_vfs_open_file_active(const AstraVfsOpenFile *file)
+{
+    return file->io != NULL && file->io->active == file;
+}
 
 enum {
     ASTRA_VFS_FILE_FREE = 0,
@@ -109,9 +151,48 @@ typedef int (*AstraVfsStateWait)(void *context,
                                 uint32_t expected);
 typedef void (*AstraVfsStateWake)(void *context,
                                  volatile uint32_t *sequence);
-/* Called under the service state lock after authenticated session admission
- * and actual retirement. It must not reenter this service. */
-typedef void (*AstraVfsSessionChanged)(void *context);
+/* Called under the state lock after session/file holder admission, ownership
+ * changes and retirement. It must not reenter this service. */
+typedef void (*AstraVfsHoldersChanged)(void *context);
+
+/* Runs outside the state lock with this file's node I/O owner held. The owned
+ * WRITE reference may be adopted by clearing it; otherwise VFS releases it.
+ * Use backing operations for preparation/writeback, never reenter node I/O. */
+typedef uint32_t (*AstraVfsCacheWrite)(void *context,
+    const AstraVfsOpenFile *file, AstraVfsFile *owned,
+    uint64_t offset, uint32_t flags, uint64_t max_end,
+    const void *buffer, uint32_t length, uint32_t *moved, uint64_t *position);
+
+/* Reads the canonical byte view outside the state lock with node I/O held.
+ * The owner honors sequential cursor semantics and confirmed error prefixes.
+ * Backing-page preparation deliberately bypasses this front end. */
+typedef uint32_t (*AstraVfsCacheRead)(void *context,
+    const AstraVfsOpenFile *file, uint64_t offset, uint32_t flags,
+    void *buffer, uint32_t length, uint32_t *moved, uint64_t *position);
+
+/* Holds node I/O across snapshots and completion. NULL flushes all; otherwise
+ * scan calls consume the shared remaining budget. Incomplete work returns BUSY.
+ * Success promises clean VM pages and a complete backing EOF. */
+typedef uint32_t (*AstraVfsCacheSync)(void *context,
+    const AstraVfsOpenFile *file, uint32_t *remaining);
+
+/* Refresh backing metadata and mapped extents under node I/O, with the state
+ * lock released. The core applies logical cache metadata after this returns. */
+typedef uint32_t (*AstraVfsCacheStat)(void *context,
+    const AstraVfsOpenFile *file, AstraVfsNodeInfo *info);
+
+/* Publish a read-only view while node I/O fences metadata and page ownership.
+ * The temporary READ reference may be adopted, as with the write callback. */
+typedef uint32_t (*AstraVfsFileAreaCreate)(void *context,
+    const AstraVfsOpenFile *file, AstraVfsFile *owned,
+    const AstraVfsNodeInfo *info, uint64_t base, uint32_t span, uint32_t *area);
+
+typedef struct AstraVfsCacheOps {
+    AstraVfsCacheWrite write;
+    AstraVfsCacheSync sync;
+    AstraVfsCacheRead read;
+    AstraVfsCacheStat stat;
+} AstraVfsCacheOps;
 
 /* Called under the service state lock, without reentry or backend I/O.
  * Successful acquire/retain owns one reference; release consumes it.
@@ -122,6 +203,8 @@ typedef struct AstraVfsBackendBindingOps {
                         AstraVfsBackend *backend);
     uint32_t (*retain)(void *context, const AstraVfsBackend *backend);
     void (*release)(void *context, const AstraVfsBackend *backend);
+    /* Same nonzero value for every root of this mount incarnation; no I/O. */
+    uint64_t (*incarnation)(void *context, const AstraVfsBackend *backend);
 } AstraVfsBackendBindingOps;
 
 #ifdef ASTRA_VFS_TEST_HOOKS
@@ -147,7 +230,7 @@ typedef struct AstraVfsService {
     uint32_t file_high_water;
     AstraVfsServiceStats stats;
     AstraVfsChangeSnapshot changes;
-    uint32_t next_session;
+    uint32_t next_session;  /* 0 after exhaustion; live sessions remain valid */
     uint16_t open_sessions;
     uint32_t open_files;
     uint32_t owner_session_limit;
@@ -157,8 +240,13 @@ typedef struct AstraVfsService {
     AstraVfsStateWait state_wait;
     AstraVfsStateWake state_wake;
     void *state_lock_context;
-    AstraVfsSessionChanged session_changed;
-    void *session_changed_context;
+    AstraVfsHoldersChanged holders_changed;
+    void *holders_changed_context;
+    const AstraVfsCacheOps *cache_ops;
+    void *cache_context;
+    uint32_t cached_nodes;
+    /* Cache-aware path transactions reuse the native I/O wait/wake owner. */
+    AstraVfsFileIO namespace_io;
 #ifdef ASTRA_VFS_TEST_HOOKS
     AstraVfsTestTransition test_transition;
     void *test_transition_context;
@@ -179,8 +267,37 @@ int astra_vfs_service_set_state_wait(AstraVfsService *service,
                                      AstraVfsStateWait wait,
                                      AstraVfsStateWake wake);
 /* Configure before the service admits sessions. */
-int astra_vfs_service_set_session_changed(AstraVfsService *service,
-    AstraVfsSessionChanged changed, void *context);
+int astra_vfs_service_set_holders_changed(AstraVfsService *service,
+    AstraVfsHoldersChanged changed, void *context);
+/* Configure before admission; ops must outlive the service. Ordinary and
+ * retained writes use this owner. An absent sync callback leaves pending
+ * cache flushes BUSY. An absent read callback refuses attached cache metadata
+ * instead of exposing stale backing bytes. Backing-page I/O bypasses the
+ * front end. */
+int astra_vfs_service_set_cache_ops(AstraVfsService *service,
+    const AstraVfsCacheOps *ops, void *context);
+
+/* Cache preparation requires exact node identity and runs in the writer hook
+ * with the node I/O owner held; unknown identities cannot cohere path metadata.
+ * First preparation attaches caller-owned zeroed storage and adopts owned;
+ * storage must outlive attachment. Later writers may pass NULL storage and
+ * keep their temporary pin. EXTERNAL_WRITES retains backing-generated writeback
+ * timestamps: later mapped stores must not inherit an older ordinary-write time.
+ * Publish only after accepting bytes into VM pages. */
+uint32_t astra_vfs_service_cache_prepare(AstraVfsService *service,
+    const AstraVfsOpenFile *file, AstraVfsFile *owned, uint32_t flags,
+    AstraVfsFileCache *storage, AstraVfsFileCache *snapshot);
+uint32_t astra_vfs_service_cache_publish(AstraVfsService *service,
+    const AstraVfsOpenFile *file, uint64_t size, uint64_t modified_ns);
+/* Output snapshots are changed only on success. Writer is borrowed; the
+ * retained argument keeps the I/O cell alive. */
+uint32_t astra_vfs_service_cache_snapshot(AstraVfsService *service,
+    AstraVfsFile retained, AstraVfsFileCache *snapshot, uint32_t *sequence);
+/* Retire only after all VM pages are clean and no external writable mapping
+ * can dirty them. The snapshot sequence fences intervening native I/O.
+ * Detachment clears caller storage before releasing the backing writer. */
+uint32_t astra_vfs_service_cache_retire(AstraVfsService *service,
+    AstraVfsFile retained, uint32_t sequence);
 /* Configure before admitting sessions or files. Without bindings, the
  * service's single backend remains the owner of every session and file. */
 int astra_vfs_service_set_backend_bindings(AstraVfsService *service,
@@ -237,10 +354,20 @@ void astra_vfs_service_release_grant(AstraVfsService *service,
 int astra_vfs_service_session_capacity_reached(
     const AstraVfsService *service);
 
+/* Borrow a caller-owned transfer without consuming it. The callback runs
+ * outside the state lock with its source session and description pinned.
+ * It may retain a separate external lease; it must not keep the slot pointer. */
+typedef uint32_t (*AstraVfsSharedOperation)(void *context, const AstraVfsOpenFile *file);
+uint32_t astra_vfs_service_borrow_share(AstraVfsService *service,
+    uint32_t owner, uint64_t token, AstraVfsSharedOperation operation, void *context);
+
 /*
  * Open, read whole, close -- as one call. `node_size` is filled even when the
  * file does not fit `capacity`, so a caller that guessed too small learns what
  * to allocate without a second round trip.
+ * Uses a native description charged to the caller; size is refreshed after
+ * acquiring node I/O, which stays held through all short reads. Session death
+ * cannot release the rooted backend before the temporary description closes.
  */
 uint32_t astra_vfs_service_read_path(AstraVfsService *service,
                                      uint32_t session, const char *path, void *buffer,
@@ -264,49 +391,74 @@ uint32_t astra_vfs_service_read_position_into(AstraVfsService *service,
                                      uint64_t offset, uint32_t flags, void *buffer,
                                      uint32_t length, uint32_t *moved, uint64_t *position);
 
-/* Cache owners can retain an open description across client close. Each
- * successful retain needs one release. Tokens stay internal to VFS. */
+/* Cache owners retain an open description across client close after checking
+ * nonzero READ/WRITE access. The token keeps the description's original access;
+ * each operation checks its own permission. Each retain needs one release.
+ * Tokens stay internal to VFS. */
 uint32_t astra_vfs_service_retain_file(AstraVfsService *service,
-    uint32_t session, AstraVfsFile file, AstraVfsFile *retained);
+    uint32_t session, AstraVfsFile file, uint32_t access, AstraVfsFile *retained);
+/* Retain the borrowed callback file while it owns node I/O. The reference keeps
+ * its original access/backend through close, without reopening a path. */
+uint32_t astra_vfs_service_retain_active(AstraVfsService *service,
+    const AstraVfsOpenFile *active, AstraVfsFile *copy);
+/* Any returned area is caller-owned, including on cleanup failure. */
+uint32_t astra_vfs_service_file_area(AstraVfsService *service,
+    uint32_t session, AstraVfsFile file, uint64_t base, uint32_t span,
+    AstraVfsFileAreaCreate create, void *context,
+    uint32_t *area, uint64_t *file_size);
 uint32_t astra_vfs_service_read_retained(AstraVfsService *service,
     AstraVfsFile retained, uint64_t offset, void *buffer,
     uint32_t length, uint32_t *moved);
 /* One aligned pager page from the retained description. A complete expected
  * identity guards shared cache objects; NULL means this open has its own
  * cache object. Short backend reads are joined, and size/identity are
- * rechecked before a caller may publish the page. */
+ * rechecked before a caller may publish the page. An independent retained
+ * reference pins I/O without taking the description's exclusive cursor lock.
+ * Overlapping description I/O returns BUSY instead of publishing its page.
+ * access is exactly READ for readers or WRITE for internal partial-write
+ * preparation. WRITE uses the backend's read_for_write, never client READ. */
 uint32_t astra_vfs_service_read_page_retained(AstraVfsService *service,
-    AstraVfsFile retained, const AstraVfsNodeMeta *expected_identity,
+    AstraVfsFile retained, uint32_t access, const AstraVfsNodeMeta *expected_identity,
     uint64_t offset, void *page, uint32_t *valid_bytes);
-/* Shared page source for a service-owned backend description, including
- * direct HostFS descriptions that do not live in the VFS slot table. The
- * caller keeps `node` open until this call returns. */
+/* Shared page reader for a service-owned backend description. The caller
+ * authorizes the operation and keeps `node` open until this call returns. */
 uint32_t astra_vfs_backend_read_page(const AstraVfsBackend *backend,
-    uintptr_t node, const AstraVfsNodeMeta *expected_identity,
-    uint64_t offset, void *page, uint32_t *valid_bytes);
-/* Write and sync one positioned snapshot, trimmed to expected EOF. Caller
+    uintptr_t node, uint32_t access, const AstraVfsNodeMeta *expected_identity,
+    const AstraVfsNodeInfo *expected_revision, uint64_t offset,
+    void *page, uint32_t *valid_bytes);
+/* Write and sync one positioned snapshot, trimmed to logical_size. Expected
+ * describes the current backing revision, independently of cached logical EOF.
+ * Writing can extend backing EOF through this page but never truncates it.
+ * Caller
  * retains/serializes the node and reconciles external changes before cleaning
  * its VM snapshot. Short writes are joined; cursor/append state is untouched.
  * `moved` reports validated accepted bytes even on error. `current` is zero
  * unless a checked post-I/O stat succeeded, including after partial failure.
+ * Optional modified time is persisted before sync; filesystem precision applies.
  * An error never authorizes cleaning the VM snapshot. */
 uint32_t astra_vfs_backend_write_page(const AstraVfsBackend *backend,
-    uintptr_t node, const AstraVfsNodeInfo *expected, uint64_t offset,
-    const void *page, uint32_t *moved, AstraVfsNodeInfo *current);
-/* The retained-description form keeps one file acquisition across the full
- * snapshot write, sync and final stat; accepted prefixes count as mutations. */
+    uintptr_t node, const AstraVfsNodeInfo *expected, uint64_t offset, uint64_t logical_size,
+    const AstraVfsNodeInfo *modified, const void *page, uint32_t *moved, AstraVfsNodeInfo *current);
+/* With active NULL, acquire the node across write/sync/stat. Cache callbacks
+ * pass their held active file instead; the retained WRITE description must
+ * share its I/O owner, which this helper then leaves held. Accepted prefixes
+ * count as mutations. This is a private service callback contract. */
 uint32_t astra_vfs_service_write_page_retained(AstraVfsService *service,
-    AstraVfsFile retained, const AstraVfsNodeInfo *expected, uint64_t offset,
+    AstraVfsFile retained, const AstraVfsOpenFile *active,
+    const AstraVfsNodeInfo *expected, uint64_t offset, uint64_t logical_size,
     const void *page, uint32_t *moved, AstraVfsNodeInfo *current);
 uint32_t astra_vfs_service_stat_retained(AstraVfsService *service,
     AstraVfsFile retained, AstraVfsNodeInfo *info);
 uint32_t astra_vfs_service_write_retained(AstraVfsService *service,
     AstraVfsFile retained, uint64_t offset, uint64_t max_end,
     const void *buffer, uint32_t length, uint32_t *moved);
+/* Bounded maintenance never waits for an already-active node I/O owner. */
 uint32_t astra_vfs_service_sync_retained(AstraVfsService *service,
-    AstraVfsFile retained);
+    AstraVfsFile retained, uint32_t *remaining);
+/* Clears the owned reference when consumed, including backend close errors.
+ * A failed wait/lock leaves it owned so its caller can retry cleanup. */
 uint32_t astra_vfs_service_release_retained(AstraVfsService *service,
-    AstraVfsFile retained);
+    AstraVfsFile *retained);
 
 /* The write-side twin: bytes come from the session's bound transfer area. */
 uint32_t astra_vfs_service_write_from(AstraVfsService *service,

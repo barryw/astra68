@@ -115,6 +115,11 @@ typedef struct SupervisorVolumeLease {
     uint32_t registered;
 } SupervisorVolumeLease;
 
+typedef struct SupervisorDependency {
+    char name[ASTRA_CAPABILITY_NAME_MAX];
+    uint32_t is_namespace;
+} SupervisorDependency;
+
 typedef struct SupervisorProcessRecord {
     uint32_t handle;
     uint32_t shutdown_send;
@@ -135,8 +140,8 @@ typedef struct SupervisorProcessRecord {
     uint32_t gui_session;
     /* Parent session for provider-rooted APP/CWD grants on removable media. */
     SupervisorVolumeLease volume;
-    char (*namespace_names)[ASTRA_CAPABILITY_NAME_MAX];
-    uint32_t namespace_count;
+    SupervisorDependency *dependencies;
+    uint32_t dependency_count;
     uint32_t namespace_lost;
     char service_name[ASTRA_SERVICE_NAME_MAX];
     /* "/apps/NAME.app" for an application, else empty. */

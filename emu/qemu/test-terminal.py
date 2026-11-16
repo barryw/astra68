@@ -500,11 +500,20 @@ READY_RECORD = re.compile(
     r"(?:\s+act\s+[0-9a-f]+)?\s+shell ready\s+"
     r"\(console_session\.c:\d+\)$")
 TRACE_RECORD = re.compile(r"^seq\s+(\d+)\s+")
+# READY follows the first visible frame; remote-desktop logs a different readiness.
+DESKTOP_READY = re.compile(r"\blaunch /services/desktop\s.*\bstatus=0\b")
 
 
 def ready_sequence(line):
     match = READY_RECORD.match(line)
     return int(match.group(1)) if match is not None else None
+
+
+class QmpCommandError(RuntimeError):
+    def __init__(self, command, detail):
+        super().__init__("QMP %s failed: %s" % (command, detail))
+        self.command = command
+        self.detail = detail
 
 
 class Qmp:
@@ -545,8 +554,7 @@ class Qmp:
             if "event" in reply:
                 continue
             if "error" in reply:
-                raise RuntimeError("QMP %s failed: %s" % (command,
-                                                          reply["error"]))
+                raise QmpCommandError(command, reply["error"])
             return reply.get("return")
 
     def close(self):
@@ -604,7 +612,17 @@ class Qmp:
                 raise RuntimeError("guest never drained the input queue")
             time.sleep(0.001)
             queued = self.word(INPUT_STATUS) & INPUT_COUNT_MASK
-        self.execute("input-send-event", {"events": events})
+        while True:
+            try:
+                self.execute("input-send-event", {"events": events})
+                break
+            except QmpCommandError as error:
+                # QEMU rejects the whole batch before dispatch while paused.
+                if error.detail != {"class": "GenericError", "desc": "VM not running"}:
+                    raise
+                if time.monotonic() >= end:
+                    raise RuntimeError("VM did not resume before input deadline") from error
+                time.sleep(0.001)
         while (self.word(INPUT_STATUS) & INPUT_COUNT_MASK) > queued:
             if time.monotonic() >= end:
                 raise RuntimeError("guest never consumed queued input")
@@ -752,12 +770,11 @@ class TraceReader:
                 body = body[:-1]
             if sequence > after:
                 pending += body
-                highest = max(highest, sequence)
             if not continued and pending:
                 lines.append(pending)
                 pending = ""
-        if pending:
-            lines.append(pending)
+                highest = sequence
+        # A live snapshot can end mid-line; reread its prefix next time.
         return lines, highest
 
     def desktop_icon(self, bundle="/apps", deadline=30.0):
@@ -977,6 +994,10 @@ class Machine:
                 highest = max(highest, int(match.group(1)))
         return highest
 
+    def trace_cursor(self):
+        """Capture both event streams before the action being observed."""
+        return self.trace_sequence(), tuple(self.syslog_lines())
+
     def trace_with_syslog(self):
         """`trace()`, plus the host syslog (docs/SYSTEM_LOG.md section 7),
         for callers that read `trace()` directly rather than through
@@ -987,20 +1008,27 @@ class Machine:
                 self.reader.hostfs_root).splitlines()
         return lines
 
-    def wait_for_trace_text(self, text, deadline, after=0):
+    def wait_for_trace_text(self, text, deadline, after=(0, ())):
+        """Find a substring or compiled regex after the trace/syslog cursor."""
+        pattern = re.compile(re.escape(text)) if isinstance(text, str) else text
+        trace_after, syslog_before = after
         end = time.monotonic() + deadline
         while True:
             for line in self.trace():
                 match = TRACE_RECORD.match(line)
-                if (match is not None and int(match.group(1)) > after and
-                        text in line):
+                if (match is not None and int(match.group(1)) > trace_after and
+                        pattern.search(line)):
                     return True
-            # A program holding LOG moves its NOTICE+ text off the kernel
-            # ring the first time it logs (docs/SYSTEM_LOG.md section 7);
-            # `after` has no meaning in the syslog, so this just requires
-            # presence, like `said_with_syslog`.
-            if self.reader.hostfs_root is not None and \
-                    text in read_host_syslog(self.reader.hostfs_root):
+            rows = self.syslog_lines()
+            overlap = 0
+            if syslog_before:
+                # Rotation retains a suffix of the earlier ordered log.
+                for index in range(min(len(syslog_before), len(rows)) - 1, -1, -1):
+                    if rows[index] == syslog_before[-1] and \
+                            tuple(rows[:index + 1]) == syslog_before[-index - 1:]:
+                        overlap = index + 1
+                        break
+            if any(pattern.search(row) for row in rows[overlap:]):
                 return True
             if time.monotonic() >= end:
                 return False
@@ -1063,10 +1091,11 @@ class Machine:
         return False
 
     def close(self):
-        try:
-            self.qmp.execute("quit")
-        except (BrokenPipeError, EOFError, OSError, RuntimeError):
-            pass
+        if self.process.poll() is None:
+            try:
+                self.qmp.execute("quit")
+            except (BrokenPipeError, EOFError, OSError, RuntimeError):
+                pass
         # A launcher unmounts and writes the image back after QEMU exits;
         # killing it then would leave a half-written image. Give it time,
         # and fail rather than let a caller inspect that image.
@@ -1367,7 +1396,7 @@ def zsh_interactive(machine, command_deadline, verbose=False):
         print("FAIL: zsh ZLE history did not replay the interactive line")
         return False
 
-    finished_after = machine.trace_sequence()
+    finished_after = machine.trace_cursor()
     machine.qmp.type_line("exit")
     if not machine.wait_for_trace_text("finished with status 0",
                                        command_deadline, finished_after):

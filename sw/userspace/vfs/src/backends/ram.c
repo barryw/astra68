@@ -606,7 +606,8 @@ static uint32_t ram_stat_at(void *context, uintptr_t directory,
                             const char *path, uint32_t flags, AstraVfsNodeInfo *info)
 {
     AstraVfsRamBackend *fs = context;
-    AstraVfsRamNode *base = (AstraVfsRamNode *)directory;
+    AstraVfsRamNode *base = directory == 0u && fs != NULL ? fs->root :
+        (AstraVfsRamNode *)directory;
     uint32_t status;
 
     if (fs == NULL || base == NULL || info == NULL ||
@@ -1029,6 +1030,7 @@ static const AstraVfsBackendOps ram_ops = {
     .open = ram_open,
     .close = ram_close,
     .read = ram_read,
+    .read_for_write = ram_read,
     .write = ram_write,
     .sync = ram_sync,
     .truncate = ram_truncate,

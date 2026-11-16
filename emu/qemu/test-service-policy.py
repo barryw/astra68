@@ -164,13 +164,68 @@ def check_policy_after_restart(shell):
     shell.ok("service inspect media", "boot: yes", "restart: on-fault")
 
 
+def check_shutdown_cancellation(machine, shell, deadline, mode='--lose-shutdown-port'):
+    shell.ok("service add shutdown-probe /services/fault-probe --manual "
+             "--restart=never --grant=LIBS:r -- " + mode)
+    shell.ok("service start shutdown-probe")
+    info = shell.ok("service inspect shutdown-probe", "state: running")
+    process = next(int(line.split(':', 1)[1]) for line in info if line.startswith('pid: '))
+    assert process > 0
+    shell.ok("service add shutdown-survivor /services/fault-probe --manual "
+             "--restart=never --grant=LIBS:r -- --stay-ready")
+    shell.ok("service start shutdown-survivor")
+    survivor = shell.ok("service inspect shutdown-survivor", "state: running")
+    survivor_process = next(int(line.split(':', 1)[1]) for line in survivor if line.startswith('pid: '))
+    shell.ok("service add shutdown-idle /services/fault-probe --manual "
+             "--restart=never --grant=LIBS:r -- --stay-ready")
+    before = machine.trace_cursor()
+    machine.qmp.type_line('shutdown')
+    expected = ('shutdown declined shutdown-probe pid=%u status=0 reason=0'
+                if mode == '--cancel-shutdown' else
+                'shutdown request shutdown-probe pid=%u status=8 reason=0') % process
+    if not machine.wait_for_trace_text(expected, deadline, before):
+        raise RuntimeError('shutdown lost native failure context:\n' +
+                           '\n'.join(machine.trace_with_syslog()[-80:]))
+    if not terminal.open_terminal_window(machine, deadline):
+        raise RuntimeError('no fresh Terminal after declined shutdown')
+    survivor = shell.ok('service inspect shutdown-survivor',
+                        'state: running', 'boot: no', 'restart: never')
+    restored_process = next(int(line.split(':', 1)[1]) for line in survivor if line.startswith('pid: '))
+    if restored_process <= 0 or restored_process == survivor_process:
+        raise RuntimeError('stopped service was not relaunched after declined shutdown')
+    shell.ok('service inspect shutdown-idle', 'state: stopped', 'boot: no')
+    shell.ok('service stop shutdown-survivor')
+    until = time.monotonic() + deadline
+    while not any('state: stopped' in line for line in shell.ok('service inspect shutdown-survivor')):
+        if time.monotonic() >= until:
+            raise RuntimeError('shutdown-survivor did not stop')
+    shell.ok('service delete shutdown-survivor')
+    shell.ok('service delete shutdown-idle')
+    shell.ok('service stop shutdown-probe')
+    until = time.monotonic() + deadline
+    while not any('state: stopped' in line for line in shell.ok('service inspect shutdown-probe')):
+        if time.monotonic() >= until:
+            raise RuntimeError('shutdown-probe did not stop')
+    shell.ok('service delete shutdown-probe')
+    shell.ok('print SHUTDOWN-RECOVERED', 'SHUTDOWN-RECOVERED')
+    print('SHUTDOWN DIAGNOSTIC PASS: %s, exact service/PID/native status, fresh Terminal, restored manual service, idle service stays stopped and service removal' % mode, flush=True)
+
+
 def clean_shutdown(machine, deadline):
     machine.qmp.type_line("shutdown")
-    try:
-        code = machine.process.wait(timeout=deadline)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("shutdown did not complete:\n" +
-                           "\n".join(machine.recent_trace(40)))
+    end = time.monotonic() + deadline
+    snapshots = []
+    for interval in (min(5.0, deadline), deadline):
+        try:
+            code = machine.process.wait(timeout=max(0.0, min(interval, end - time.monotonic())))
+            break
+        except subprocess.TimeoutExpired:
+            try:
+                snapshots.append("\n".join(machine.trace_with_syslog()))
+            except (EOFError, OSError, RuntimeError, ValueError) as error:
+                snapshots.append("shutdown trace unavailable: %s" % error)
+    else:
+        raise RuntimeError("shutdown did not complete:\n" + "\n".join(snapshots))
     if code != SHUTDOWN_EXIT:
         raise RuntimeError("shutdown exited QEMU with %d" % code)
 
@@ -187,6 +242,9 @@ def run_policy(arguments, root):
         shell = Shell(machine)
         check_tiers(shell)
         deaths = check_backoff(machine, shell)
+        check_shutdown_cancellation(machine, shell, arguments.command_deadline)
+        check_shutdown_cancellation(machine, shell, arguments.command_deadline,
+                                    '--cancel-shutdown')
         check_policy_before_restart(shell)
         clean_shutdown(machine, arguments.command_deadline)
     finally:

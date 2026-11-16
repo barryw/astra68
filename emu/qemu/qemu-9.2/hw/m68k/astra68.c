@@ -64,6 +64,7 @@
 #include "astra/copy_engine.h"
 #include "astra/display.h"
 #include "astra/host.h"
+#include "astra/limits.h"
 #include "astra/secret_memory.h"
 #include "astra/font_worker.h"
 #include "astra/codec_worker.h"
@@ -4016,6 +4017,7 @@ static int astra_host_provider_path(Astra68State *s, const AstraHostSession *ses
                                     const char *path, const char *path2,
                                     uint32_t operation, uint32_t flags, uint32_t mode,
                                     uint32_t resolve, uint32_t links, uint32_t capacity,
+                                    const AstraHostTime *times,
                                     AstraStoragePathReply *reply, int *result)
 {
     AstraStoragePathRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
@@ -4038,6 +4040,7 @@ static int astra_host_provider_path(Astra68State *s, const AstraHostSession *ses
         return ENAMETOOLONG;
     strcpy(request.path, path);
     strcpy(request.path2, path2);
+    if (times != NULL) memcpy(request.times, times, sizeof(request.times));
     qemu_mutex_lock(lock);
     if (qatomic_read(&s->host.provider_broken) ||
         (network && qatomic_read(&s->host.provider_network_path_broken)))
@@ -4090,7 +4093,7 @@ static int astra_host_open_resolved(Astra68State *s, const AstraHostSession *ses
         return -1;
     }
     int error = astra_host_provider_path(s, session, root, base, -1, path, "",
-        ASTRA_STORAGE_PATH_OPEN, flags, mode, resolve, links_left, 0u, &reply, &fd);
+        ASTRA_STORAGE_PATH_OPEN, flags, mode, resolve, links_left, 0u, NULL, &reply, &fd);
     astra_host_resolution(&reply, resolved);
     if (error != 0) {
         errno = error;
@@ -4105,7 +4108,7 @@ static int astra_host_rooted(Astra68State *s, const AstraHostSession *session,
     AstraStoragePathReply reply;
     int result;
     return -astra_host_provider_path(s, session, root, fd, -1, "", "",
-        ASTRA_STORAGE_PATH_ROOTED, 0u, 0u, 0u, 0u, 0u, &reply, &result);
+        ASTRA_STORAGE_PATH_ROOTED, 0u, 0u, 0u, 0u, 0u, NULL, &reply, &result);
 }
 
 static int astra_host_descriptor_path(Astra68State *s, const AstraHostSession *session,
@@ -4116,7 +4119,7 @@ static int astra_host_descriptor_path(Astra68State *s, const AstraHostSession *s
     int result;
     int error = astra_host_provider_path(s, session, root, fd, -1, "", "",
         ASTRA_STORAGE_PATH_NAME, 0u, 0u, 0u, 0u,
-        MIN(capacity, ASTRA_STORAGE_PROVIDER_PATH_MAX), &reply, &result);
+        MIN(capacity, ASTRA_STORAGE_PROVIDER_PATH_MAX), NULL, &reply, &result);
     if (error == 0) {
         memcpy(path, reply.data, reply.length);
         *length = reply.length;
@@ -6239,9 +6242,11 @@ static bool astra_host_channel_scope(Astra68State *s,
     return found;
 }
 
-static bool astra_host_fs_mutates(uint16_t operation, uint16_t flags)
+static bool astra_host_fs_requires_write(uint16_t operation, uint16_t flags)
 {
     switch (operation) {
+    case ASTRA_HOST_FS_READ:
+        return (flags & ASTRA_HOST_FS_READ_FOR_WRITE) != 0u;
     case ASTRA_HOST_FS_OPEN:
         return (flags & (ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
                          ASTRA_VFS_OPEN_TRUNCATE | ASTRA_VFS_OPEN_APPEND)) != 0u;
@@ -6250,6 +6255,7 @@ static bool astra_host_fs_mutates(uint16_t operation, uint16_t flags)
     case ASTRA_HOST_FS_RENAME: case ASTRA_HOST_FS_CHMOD:
     case ASTRA_HOST_FS_SYMLINK: case ASTRA_HOST_FS_LINK:
     case ASTRA_HOST_FS_TRY_LOCK:
+    case ASTRA_HOST_FS_SET_FILE_TIMES:
         return true;
     default:
         return false;
@@ -6995,7 +7001,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             goto done;
         }
         if ((scope.flags & ASTRA_HOST_SCOPE_READ_ONLY) != 0u &&
-            astra_host_fs_mutates(operation, flags)) {
+            astra_host_fs_requires_write(operation, flags)) {
             status = ASTRA_STATUS_READ_ONLY;
             goto done;
         }
@@ -7083,13 +7089,17 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             stl_be_p(command + HOST_FIELD(result_value), s->host.fs_epoch);
         goto done;
     }
-    astra_host_job_session(s, job, session);
+    /* Reading notification bookkeeping must not invalidate its observers.
+     * The local session reference still protects lifetime through completion. */
+    if (operation != ASTRA_HOST_FS_CHANGE_SNAPSHOT &&
+        operation != ASTRA_HOST_FS_CHANGE_NEXT)
+        astra_host_job_session(s, job, session);
     if (operation == ASTRA_HOST_FS_SESSION_CLOSE) {
         status = astra_host_fs_session_close(s, owner, session_id);
         goto done;
     }
     if ((session->flags & ASTRA_HOST_FS_SESSION_READ_ONLY) != 0u &&
-        astra_host_fs_mutates(operation, flags)) {
+        astra_host_fs_requires_write(operation, flags)) {
         status = ASTRA_STATUS_READ_ONLY;
         goto done;
     }
@@ -7334,21 +7344,28 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             s, physical, bytes, command_bytes, command, capacity);
         uint64_t offset = astra_host_get64(command, HOST_FIELD(offset_hi));
         bool sequential = flags & ASTRA_HOST_FS_IO_SEQUENTIAL;
+        bool for_write = flags & ASTRA_HOST_FS_READ_FOR_WRITE;
         ssize_t moved;
         off_t position;
 
-        if (flags & ~ASTRA_HOST_FS_IO_SEQUENTIAL || path[0] || path2[0] ||
-            (!sequential && offset > INT64_MAX))
+        if (flags & ~(ASTRA_HOST_FS_IO_SEQUENTIAL | ASTRA_HOST_FS_READ_FOR_WRITE) ||
+            path[0] || path2[0] || (!sequential && offset > INT64_MAX) ||
+            (for_write && (sequential || capacity == 0u ||
+                capacity > ASTRA_MEMORY_PAGE_SIZE - offset % ASTRA_MEMORY_PAGE_SIZE)))
             break;
         file = astra_host_session_file(s, owner, session_id, handle);
         if (file == NULL) {
             status = ASTRA_STATUS_BAD_HANDLE;
-        } else if ((file->description->flags & ASTRA_VFS_OPEN_READ) == 0) {
+        } else if ((file->description->flags &
+                    (for_write ? ASTRA_VFS_OPEN_WRITE : ASTRA_VFS_OPEN_READ)) == 0) {
             status = ASTRA_STATUS_ACCESS;
         } else if (file->description->directory != NULL) {
             status = ASTRA_STATUS_IS_DIR;
         } else if (data == NULL) {
             status = ASTRA_STATUS_INVALID;
+        } else if (for_write &&
+                   (fcntl(file->description->fd, F_GETFL) & O_ACCMODE) == O_WRONLY) {
+            status = ASTRA_STATUS_UNSUPPORTED;
         } else {
             moved = sequential ? read(file->description->fd, data, capacity) :
                     pread(file->description->fd, data, capacity, offset);
@@ -7606,6 +7623,35 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
                 ASTRA_STATUS_OK : astra_host_status_from_errno(errno);
         }
         break;
+    case ASTRA_HOST_FS_SET_FILE_TIMES: {
+        uint32_t length = ldl_be_p(command + HOST_FIELD(data_length));
+        const uint8_t *data = astra_host_command_data(s, physical, bytes,
+            command_bytes, command, length);
+        if (length != ASTRA_VFS_FILE_TIMES_SIZE || data == NULL ||
+            path[0] != '\0' || path2[0] != '\0' ||
+            !astra_vfs_file_times_valid(flags, ldl_be_p(data + 8u), ldl_be_p(data + 20u)))
+            break;
+        if (file == NULL) { status = ASTRA_STATUS_BAD_HANDLE; break; }
+        if (!(file->description->flags & ASTRA_VFS_OPEN_WRITE)) {
+            status = ASTRA_STATUS_ACCESS; break;
+        }
+        AstraHostTime times[2];
+        for (unsigned at = 0u; at < 2u; ++at) {
+            times[at].seconds_hi = (int32_t)ldl_be_p(data + 12u * at);
+            times[at].seconds_lo = ldl_be_p(data + 12u * at + 4u);
+            times[at].nanoseconds = ldl_be_p(data + 12u * at + 8u);
+        }
+        AstraStoragePathReply reply;
+        int result;
+        int error = astra_host_provider_path(s, session, root, file->description->fd, -1,
+            "", "", ASTRA_STORAGE_PATH_SET_FILE_TIMES, flags, 0u, 0u, 0u, 0u,
+            times, &reply, &result);
+        status = astra_host_status_from_errno(error);
+        changed_nodes = error == 0 || qatomic_read(&s->host.provider_broken) ||
+            (session->network && qatomic_read(&s->host.provider_network_path_broken));
+        if (changed_nodes) changed_inode = file->identity.inode;
+        break;
+    }
     case ASTRA_HOST_FS_TRUNCATE:
         file = astra_host_session_file(s, owner, session_id, handle);
         if (file == NULL) {
@@ -7886,7 +7932,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         }
         int error = astra_host_provider_path(s, session, root, base, second_base,
             path, path2, broker_operation, broker_flags, mode, resolve,
-            ASTRA_RESOLVE_LINK_MAX, capacity, &reply, &result);
+            ASTRA_RESOLVE_LINK_MAX, capacity, NULL, &reply, &result);
         /* A lost provider reply can follow a committed mutation. Ordinary
          * syscall failures did not change the tree. */
         if (error == 0 || qatomic_read(&s->host.provider_broken) ||
@@ -8013,7 +8059,7 @@ done:
         qemu_mutex_unlock(&namespace->changes_lock);
     }
     if (namespace_locked && operation != ASTRA_HOST_FS_TRY_LOCK &&
-        astra_host_fs_mutates(operation, flags)) {
+        astra_host_fs_requires_write(operation, flags)) {
         qemu_mutex_lock(&s->host.files_lock);
         astra_host_usage_changed_locked(s);
         qemu_mutex_unlock(&s->host.files_lock);
@@ -10731,7 +10777,8 @@ static void astra68_init(MachineState *machine)
             { "astra-host-fs-path", "astra-host-fs-path-execution-ns" },
             { "astra-host-fs-try-lock", "astra-host-fs-try-lock-execution-ns" },
             { "astra-host-fs-change-snapshot", "astra-host-fs-change-snapshot-execution-ns" },
-            { "astra-host-fs-change-next", "astra-host-fs-change-next-execution-ns" }
+            { "astra-host-fs-change-next", "astra-host-fs-change-next-execution-ns" },
+            { "astra-host-fs-set-file-times", "astra-host-fs-set-file-times-execution-ns" }
         };
 
         G_STATIC_ASSERT(G_N_ELEMENTS(properties) ==

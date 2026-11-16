@@ -267,6 +267,15 @@ uint32_t astra_vfs_host_transport_submit(
         return host->failure;
     }
     switch (command->operation) {
+    case ASTRA_HOST_FS_SET_FILE_TIMES: {
+        const uint8_t *wire = input;
+        assert(command->handle == 0x1234u && command->flags == ASTRA_VFS_META_MTIME &&
+            request->path_length == 0u && request->path2_length == 0u &&
+            input_size == ASTRA_VFS_FILE_TIMES_SIZE && output_capacity == 0u);
+        assert(astra_load_be64(wire) == 0u && astra_load_be32(wire + 8u) == 0u &&
+            astra_load_be64(wire + 12u) == UINT64_MAX && astra_load_be32(wire + 20u) == 999999999u);
+        break;
+    }
     case ASTRA_HOST_FS_CHANGE_NEXT:
         assert(command->flags == 0u && command->handle == 0u &&
                input_size == 0u && output_capacity == sizeof(AstraHostFsChangeRecord) &&
@@ -346,6 +355,8 @@ uint32_t astra_vfs_host_transport_submit(
         command->node.nlink = 1u;
         break;
     case ASTRA_HOST_FS_READ:
+        assert(command->flags == 0u || command->flags == ASTRA_HOST_FS_IO_SEQUENTIAL ||
+               command->flags == ASTRA_HOST_FS_READ_FOR_WRITE);
         assert(command->handle == 0x1234u &&
                command->offset_lo ==
                    (command->flags == ASTRA_HOST_FS_IO_SEQUENTIAL ? 0u : 4u));
@@ -776,6 +787,7 @@ int main(void)
     assert(node == 0x1234u && info.size == 17u && info.mode == 0640u);
     EXPECT(ASTRA_HOST_FS_READ);
     assert(ops->read(&backend, node, 4u, bytes, 8u, &moved) == ASTRA_VFS_OK);
+    assert(ops->read_for_write(&backend, node, 4u, bytes, 8u, &moved) == ASTRA_VFS_OK);
     assert(moved == 3u && memcmp(bytes, "abc", 3u) == 0);
     EXPECT(ASTRA_HOST_FS_WRITE);
     assert(ops->write(&backend, node, 17u, ASTRA_VFS_WRITE_APPEND, UINT64_MAX,
@@ -846,6 +858,13 @@ int main(void)
                           ASTRA_VFS_UNLINK_DIRECTORY) == ASTRA_VFS_OK);
     EXPECT(ASTRA_HOST_FS_CHMOD);
     assert(ops->chmod_node(&backend, node, 0644u) == ASTRA_VFS_OK);
+    EXPECT(ASTRA_HOST_FS_SET_FILE_TIMES);
+    AstraVfsNodeInfo times = {.mtime = -1, .meta = {.mtime_nsec = 999999999u}};
+    assert(ops->set_file_times(&backend, node, &times, ASTRA_VFS_META_MTIME) == ASTRA_VFS_OK);
+    uint32_t timestamp_calls = host.calls;
+    times.meta.mtime_nsec = 1000000000u;
+    assert(ops->set_file_times(&backend, node, &times, ASTRA_VFS_META_MTIME) == ASTRA_VFS_ERR_INVALID &&
+        host.calls == timestamp_calls);
     EXPECT(ASTRA_HOST_FS_CHMOD);
     assert(ops->chmod_at(&backend, node, "child", 0750u,
                          ASTRA_VFS_AT_SYMLINK_NOFOLLOW) == ASTRA_VFS_OK);
@@ -856,6 +875,10 @@ int main(void)
            filesystem_info.blocks == 100u &&
            filesystem_info.blocks_available == 30u &&
            filesystem_info.name_max == 255u);
+    EXPECT(ASTRA_HOST_FS_STAT);
+    assert(ops->stat_at(&backend, 0u, "/file", ASTRA_VFS_STAT_FOLLOW, &info) == ASTRA_VFS_OK &&
+        info.size == 12u);
+    assert(ops->stat_at(&backend, 0u, "/file", UINT32_MAX, &info) == ASTRA_VFS_ERR_INVALID);
     EXPECT(ASTRA_HOST_FS_STAT);
     assert(ops->stat_at(&backend, node, "child", 0u, &info) == ASTRA_VFS_OK);
     assert(info.size == 23u && info.mtime == 99 && info.uid == 17u &&
@@ -897,7 +920,7 @@ int main(void)
     assert(ops->close(&backend, node) == ASTRA_VFS_OK);
 #undef EXPECT
     /* Backend calls, including identity and generation boundary checks. */
-    assert(host.calls == 43u);
+    assert(host.calls == 46u);
     {
         uint8_t continuation[ASTRA_VFS_PATH_MAX];
         AstraVfsEscape escape = {.path = continuation, .capacity = ASTRA_VFS_ESCAPE_PATH_MAX};
@@ -915,7 +938,7 @@ int main(void)
         assert(ops->lookup(&backend, 0u, "/escape",
                            ASTRA_VFS_LOOKUP_ENTRY | ASTRA_VFS_LOOKUP_FOLLOW,
                            3u, &info, &escape) == ASTRA_VFS_ERR_INVALID);
-        assert(host.calls == 45u);
+        assert(host.calls == 48u);
     }
     {
         uint64_t token;

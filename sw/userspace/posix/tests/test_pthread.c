@@ -16,6 +16,8 @@ static uint32_t wake_count;
 static uint32_t mutex_wait_calls;
 static uint32_t mutex_unlock_calls;
 static volatile uint32_t *mock_mutex_state;
+static pthread_mutex_t *handoff_mutex;
+static uint32_t mutex_unlock_status;
 static uint32_t once_calls;
 static uint32_t created_thread_rights;
 static uint8_t mock_thread_priority = ASTRA_PROCESS_PRIORITY_NORMAL;
@@ -65,7 +67,16 @@ void astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
     } else {
         assert(number == ASTRA_SYSCALL_MUTEX_UNLOCK);
         ++mutex_unlock_calls;
+        if (mutex_unlock_status != ASTRA_SYSCALL_OK) {
+            result->status = mutex_unlock_status;
+            return;
+        }
         *mock_mutex_state = 0u;
+        if (handoff_mutex != NULL) {
+            *mock_mutex_state = 9u;
+            handoff_mutex->owner = 9u;
+            handoff_mutex->depth = 1u;
+        }
     }
 }
 
@@ -118,6 +129,8 @@ uint32_t astra_rt_thread_create(const AstraThreadStart *start,
     (void)start; (void)priority; (void)id;
     created_thread_rights = rights;
     *handle = 9u;
+    /* Successful mock startup consumes the record normally freed by thread_entry. */
+    free((void *)start);
     return ASTRA_SYSCALL_OK;
 }
 static jmp_buf exit_jump;
@@ -240,6 +253,15 @@ int main(void)
            mutex.depth == 1u);
     assert(pthread_mutex_unlock(&mutex) == 0);
     assert(mutex_unlock_calls != 0u);
+    assert(pthread_mutex_lock(&mutex) == 0);
+    mutex_unlock_status = ASTRA_SYSCALL_ACCESS_DENIED;
+    assert(pthread_mutex_unlock(&mutex) == EPERM);
+    assert(mutex.state == 7u && mutex.owner == 7u && mutex.depth == 1u);
+    mutex_unlock_status = ASTRA_SYSCALL_OK;
+    handoff_mutex = &mutex;
+    assert(pthread_mutex_unlock(&mutex) == 0);
+    assert(mutex.state == 9u && mutex.owner == 9u && mutex.depth == 1u);
+    handoff_mutex = NULL;
     assert(pthread_mutex_lock(NULL) == EINVAL);
     assert(pthread_once(&once, initialize_once) == 0);
     assert(pthread_once(&once, initialize_once) == 0);

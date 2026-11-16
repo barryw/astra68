@@ -1339,6 +1339,11 @@ KernelPortStatus kernel_port_commit_wait(KernelPort *port,
         KERNEL_PORT_OK : KERNEL_PORT_INVALID_STATE;
 }
 
+uint32_t kernel_port_owner(const KernelPort *port)
+{
+    return valid_port_pointer(port) && port->state != KERNEL_PORT_FREE ? port->owner : 0u;
+}
+
 KernelPortStatus kernel_port_owner_died(uint32_t owner,
                                         uint32_t *closed_ports,
                                         uint32_t *woken_threads)

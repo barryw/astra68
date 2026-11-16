@@ -104,7 +104,7 @@ def rendered(machine, predicate, after, timeout):
     raise RuntimeError("busy presentation did not match: %s" % (seen[-6:],))
 
 
-def expected_text(lines):
+def expected_text(lines, mapped_pid=None):
     rows = []
     for line in lines:
         if line.startswith("PID COMMAND "):
@@ -116,10 +116,13 @@ def expected_text(lines):
         if kind != "file" or access != "r" or path not in ("/cd0/Folder/café.txt", LONG_PATH):
             raise RuntimeError("unexpected retained resource: %r" % line)
         rows.append((int(handle), int(pid), name, int(inode), path))
-    if len(rows) != 33 or len({row[1] for row in rows}) != 1:
-        raise RuntimeError("not all 33 exact shell-held files appeared: %s" % rows)
-    if sum(row[4] == LONG_PATH for row in rows) != 1:
-        raise RuntimeError("complete escaped long-path holder missing: %s" % rows)
+    if mapped_pid is None:
+        if len(rows) != 33 or len({row[1] for row in rows}) != 1:
+            raise RuntimeError("not all 33 exact shell-held files appeared: %s" % rows)
+        if sum(row[4] == LONG_PATH for row in rows) != 1:
+            raise RuntimeError("complete escaped long-path holder missing: %s" % rows)
+    elif len(rows) != 1 or rows[0][1:3] != (mapped_pid, "fssem") or rows[0][4] != "/cd0/Folder/café.txt":
+        raise RuntimeError("closed-descriptor mapper lacks exact PID/name/path: %s" % rows)
     crc = 0
     for handle, pid, name, inode, path in sorted(rows):
         text = "PID %d (%s) — file #%d — read only — inode %d\n%s" % (pid, name, handle, inode, path)
@@ -133,25 +136,29 @@ def main():
     parser.add_argument("rom")
     parser.add_argument("image")
     parser.add_argument("--deadline", type=float, default=90.0)
+    parser.add_argument("--prepared-image", action="store_true",
+                        help="use an already built/coherent candidate; install only test fixtures")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="astra-volume-ui-") as temporary:
         work = Path(temporary)
         image = work / "system.img"
         shutil.copyfile(args.image, image)
-        atlas.image_tools.install(str(image))
+        if not args.prepared_image:
+            atlas.image_tools.install(str(image))
         built = subprocess.run(atlas.image_tools._build_invocation([
             "make", "-C", os.path.join(terminal.ROOT, "sw", "userspace", "commands"),
-            "build/m68k/sbase-sleep"]), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            "build/m68k/sbase-sleep", "build/m68k/fssem"]), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if built.returncode != 0:
             raise RuntimeError("could not build native fixture delay command: %s" %
                                built.stdout[-400:].decode("utf-8", "replace"))
         atlas.image_tools.install_test_command(str(image), "sbase-sleep")
+        atlas.image_tools.install_test_command(str(image), "fssem")
         fixture(image, work)
         machine = terminal.Machine(args.qemu, args.rom, str(image), temporary)
         early_lines = []
         boot_deadline = time.monotonic() + 15.0
         while time.monotonic() < boot_deadline and not any(
-                "desktop ready" in line for _, line in machine.serial_times):
+                terminal.DESKTOP_READY.search(line) for _, line in machine.serial_times):
             time.sleep(.1)
         early_lines = machine.said_with_syslog()[0]
         step = 0
@@ -164,6 +171,9 @@ def main():
         try:
             if not terminal.open_terminal(machine, 120, args.deadline):
                 raise RuntimeError("Terminal did not start")
+            # Hosted QEMU has no HDMI-audio or RFB host for these optional services.
+            stopped = command("service disable media; service stop media; service disable remote-desktop; service stop remote-desktop; service inspect media; service inspect remote-desktop")
+            assert sum("state: stopped" in line for line in stopped) == 2, stopped
             command("/commands/sbase-sleep 0")
             roots = [line.split(" ", 7) for line in command("lsof /dh0")
                      if not line.startswith("PID COMMAND ")]
@@ -236,6 +246,34 @@ def main():
             atlas.click(machine, 200, 140)
             command(closes)
             assert command("lsof /cd0") == ["PID COMMAND KIND HANDLE ACCESS INODE VOLUME PATH"]
+            command("fssem --hold-map /cd0/Folder/caf*.txt > /work/mapped-holder.log & print MAPPER-STARTED")
+            end = time.monotonic() + args.deadline
+            while True:
+                ready_lines = command("cat /work/mapped-holder.log")
+                matches = [match for line in ready_lines
+                           if (match := re.fullmatch(r"FSSEM MAPPING holding (\d+)", line))]
+                if matches:
+                    mapper = int(matches[-1].group(1))
+                    break
+                if time.monotonic() >= end:
+                    raise RuntimeError("closed-descriptor mapping holder did not start")
+                time.sleep(.1)
+            crc = expected_text(command("lsof /cd0"), mapper)
+            before = machine.sequence()
+            context_unmount(machine, "/cd0", args.deadline)
+            rendered(machine, lambda row: row[0] == 1 and row[1] == crc, before, args.deadline)
+            desktop_has(machine, "/cd0", True, args.deadline)
+            machine.qmp.key("esc")
+            atlas.click(machine, 200, 140)
+            marker = Path(machine.reader.hostfs_root) / "work" / ("fssem-map-%d" % mapper)
+            marker.unlink()
+            end = time.monotonic() + args.deadline
+            while "FSSEM MAPPING done" not in command("cat /work/mapped-holder.log"):
+                if time.monotonic() >= end:
+                    raise RuntimeError("mapping holder did not release")
+                time.sleep(.1)
+            assert command("lsof /cd0") == ["PID COMMAND KIND HANDLE ACCESS INODE VOLUME PATH"]
+            print("VOLUME UI mapped-only holder exact PID/name/path, lsof, safe refusal and release PASS", flush=True)
             context_unmount(machine, "/cd0", args.deadline)
             desktop_has(machine, "/cd0", False, args.deadline)
             atlas.click(machine, 200, 140)
@@ -252,6 +290,13 @@ def main():
             print("VOLUME UI context Unmount actual retirement, disappearing icon and retained ISO source release PASS", flush=True)
         except Exception:
             print("Volume UI diagnostics:", flush=True)
+            try:
+                machine.qmp.key("esc")
+                atlas.click(machine, 200, 140)
+                print("Volume catalog at failure:", command("volumes --all"), flush=True)
+                print("Usage at failure:", command("lsof /cd0"), flush=True)
+            except (OSError, RuntimeError, TimeoutError) as error:
+                print("Volume UI extra diagnostics unavailable:", error, flush=True)
             print("Early guest event log:", flush=True)
             for line in early_lines:
                 print(line, flush=True)

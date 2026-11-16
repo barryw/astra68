@@ -56,7 +56,7 @@ HOST_CC ?= cc
 HOST_TEST_CPPFLAGS := $(filter-out -I$(RUNTIME)/freestanding,$(CPPFLAGS))
 HOST_TEST_FLAGS := -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 
-build/host/test_settings: tests/test_settings.c main.c $(CONFIG)/src/config_document.c $(SYSTEM)/src/manifest.c ../../../common/utf8.c $(RUNTIME)/src/string.c $(VFS)/src/volume.c $(VFS)/src/vfs_file_pager.c
+build/host/test_settings: tests/test_settings.c main.c $(CONFIG)/src/config_document.c $(SYSTEM)/src/manifest.c ../../../common/utf8.c $(RUNTIME)/src/string.c $(VFS)/src/volume.c $(VFS)/src/vfs_file_pager.c $(wildcard $(NDK)/include/astra/*.h ../../../include/astra/*.h $(VFS)/include/astra/*.h)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_TEST_FLAGS) $< $(CONFIG)/src/config_document.c $(SYSTEM)/src/manifest.c ../../../common/utf8.c $(RUNTIME)/src/string.c $(VFS)/src/volume.c $(VFS)/src/vfs_file_pager.c -o $@
 

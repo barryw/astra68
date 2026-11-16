@@ -192,7 +192,8 @@ ASTRA_NODISCARD AstraResult astra_volume_broker_info(AstraHandle broker,
  */
 ASTRA_NODISCARD AstraResult astra_volume_usage(AstraHandle service,
     const AstraVolumeUsageQuery *query, AstraVolumeUsagePage *page);
-/** Collect every usage page, publishing no partial result on failure.
+/** Capture complete resource usage under the service ownership lock.
+ * Publishes no partial result on failure; background client IPC cannot split collection.
  * @param service VOLUME_USAGE capability. @param volume Exact mount, all-zero filter or NULL for every mount.
  * @param snapshot Empty owned output. @return ASTRA_OK or transport/resource/BUSY error.
  */

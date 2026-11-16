@@ -477,11 +477,15 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
         --mutex->depth;
         return 0;
     }
-    status = astra_mutex_unlock(&mutex->state);
-    if (status != ASTRA_SYSCALL_OK)
-        return syscall_error(status);
+    /* Native release may run the next owner before this thread resumes. */
     mutex->owner = 0u;
     mutex->depth = 0u;
+    status = astra_mutex_unlock(&mutex->state);
+    if (status != ASTRA_SYSCALL_OK) {
+        mutex->owner = self;
+        mutex->depth = 1u;
+        return syscall_error(status);
+    }
     return 0;
 }
 

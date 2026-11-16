@@ -76,6 +76,7 @@ ASTRA_NODISCARD AstraResult astra_area_map(AstraArea *area,
 
 /**
  * Remove an area's complete mapping from the current process.
+ * Shared backing errors leave its mapping fields and view intact for retry.
  *
  * @param[in,out] area Mapped view to unmap and clear.
  * @return ::ASTRA_OK or a validation, peer-death, or I/O error.

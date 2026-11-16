@@ -413,7 +413,11 @@ KernelDispatchTarget syscall_entry_dispatch_profiled(
             metric = KERNEL_PERFORMANCE_AREA_MAP;
             break;
         case ASTRA_SYSCALL_AREA_UNMAP:
+        case ASTRA_SYSCALL_AREA_UNMAP_RANGE:
             metric = KERNEL_PERFORMANCE_AREA_UNMAP;
+            break;
+        case ASTRA_SYSCALL_AREA_SYNC_RANGE:
+            metric = KERNEL_PERFORMANCE_PAGER_REQUEST;
             break;
         case ASTRA_SYSCALL_RING_NOTIFY:
             metric = KERNEL_PERFORMANCE_RING_NOTIFY;

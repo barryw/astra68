@@ -6,7 +6,6 @@
 
 #define M68K_SR_SUPERVISOR 0x2000u
 
-#define M68040_SSW_READ       0x0100u
 #define M68040_SSW_SIZE_SHIFT 5u
 #define M68040_SSW_SIZE_MASK  0x0003u
 #define M68040_SSW_TM_MASK    0x0007u
@@ -46,7 +45,7 @@ static void decode_access(KernelExceptionFrame *frame)
     uint16_t ssw = frame->special_status;
     uint8_t transfer_mode = (uint8_t)(ssw & M68040_SSW_TM_MASK);
 
-    frame->access_write = (ssw & M68040_SSW_READ) == 0u;
+    frame->access_write = kernel_exception_access_write(ssw);
     frame->access_data = (transfer_mode & 0x3u) == M68040_TM_DATA;
     frame->access_supervisor =
         (transfer_mode & M68040_TM_SUPERVISOR) != 0u;

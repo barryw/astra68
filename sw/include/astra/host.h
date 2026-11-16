@@ -260,10 +260,11 @@ enum {
     ASTRA_HOST_FS_PATH,             /**< Current directory path beneath the session root, or NOT_FOUND when unnamed. */
     ASTRA_HOST_FS_TRY_LOCK,         /**< Nonblocking exclusive advisory lock on an open writable file; closing it releases the lock. */
     ASTRA_HOST_FS_CHANGE_SNAPSHOT, /**< Return this session's volume node generation in offset and entry generation in value. */
-    ASTRA_HOST_FS_CHANGE_NEXT      /**< Read next exact mutation after offset's sequence; result_value is ASTRA_HOST_FS_CHANGE_*. */
+    ASTRA_HOST_FS_CHANGE_NEXT,     /**< Read next exact mutation after offset's sequence; result_value is ASTRA_HOST_FS_CHANGE_*. */
+    ASTRA_HOST_FS_SET_FILE_TIMES   /**< Set handle timestamps, same flags/payload as native SET_FILE_TIMES. */
 };
 /** Highest valid ASTRA_HOST_FS_* operation code. */
-#define ASTRA_HOST_FS_MAX ASTRA_HOST_FS_CHANGE_NEXT
+#define ASTRA_HOST_FS_MAX ASTRA_HOST_FS_SET_FILE_TIMES
 
 /** No exact mutation remains after the supplied cursor. */
 #define ASTRA_HOST_FS_CHANGE_NONE 0u
@@ -302,6 +303,9 @@ _Static_assert(sizeof(AstraHostFsChangeRecord) == 304u,
 #define ASTRA_HOST_FS_WRITE_APPEND      (1u << 15)
 /** READ/WRITE at the shared position; value answers the position after. */
 #define ASTRA_HOST_FS_IO_SEQUENTIAL     (1u << 14)
+/** Internal cache preparation: positioned backing read requires logical WRITE.
+ * Confined to one page; cannot combine with sequential I/O or grant READ. */
+#define ASTRA_HOST_FS_READ_FOR_WRITE    (1u << 13)
 /** SEEK: advance by input value_lo only if current position equals offset.
  * Input value_hi is zero; output value is the observed/resulting position,
  * and result_value is one on advance, zero on comparison failure. */

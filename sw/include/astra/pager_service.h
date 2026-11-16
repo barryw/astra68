@@ -2,12 +2,15 @@
 #define ASTRA_PAGER_SERVICE_H
 
 #include <astra/message_abi.h>
+#include <astra/object_abi.h>
 #include <astra/status.h>
 
 #define ASTRA_PAGER_PROTOCOL 0x50414752 /* PAGR */
 #define ASTRA_PAGER_PROTOCOL_VERSION 1
 #define ASTRA_PAGER_OPERATION_PAGE 1u
 #define ASTRA_PAGER_OPERATION_PAGE_REPLY 2u
+#define ASTRA_PAGER_OPERATION_SYNC 3u
+#define ASTRA_PAGER_OPERATION_SYNC_REPLY 4u
 
 #ifndef __ASSEMBLER__
 /** Upper bound for one native pager request, including transient retries. */
@@ -35,10 +38,30 @@ typedef struct AstraPagerPageReply {
     uint32_t reserved;
 } AstraPagerPageReply;
 
+/* Kernel-authorized shared mapping range; same sole reply capability as PAGE.
+ * Completion means native writeback and backing sync succeeded. */
+typedef struct AstraPagerSyncRequest {
+    AstraMessageHeader header;
+    uint32_t cookie;
+    uint32_t offset;
+    uint32_t byte_size;
+    uint32_t flags;
+} AstraPagerSyncRequest;
+
+typedef struct AstraPagerSyncReply {
+    AstraMessageHeader header;
+    uint32_t status;
+    uint32_t cookie;
+    uint32_t offset;
+    uint32_t byte_size;
+} AstraPagerSyncReply;
+
 _Static_assert(sizeof(AstraPagerPageRequest) == 40u,
                "pager request ABI changed");
 _Static_assert(sizeof(AstraPagerPageReply) == 52u,
                "pager reply ABI changed");
+_Static_assert(sizeof(AstraPagerSyncRequest) == 40u, "pager sync request ABI changed");
+_Static_assert(sizeof(AstraPagerSyncReply) == 40u, "pager sync reply ABI changed");
 #endif
 
 #endif

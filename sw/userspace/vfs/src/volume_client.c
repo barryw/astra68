@@ -9,8 +9,7 @@
 #include <astra/secret_memory.h>
 #include <string.h>
 
-/* Both complete snapshot collectors use one bounded owned-array admission
- * contract. A failed growth preserves the old owner for rollback. */
+/* Catalog growth preserves its old owner for rollback. */
 static AstraResult snapshot_capacity(void *records, uint32_t count, uint32_t *capacity,
     uint32_t width, uint32_t initial, uint32_t added, void **grown_records)
 {
@@ -214,36 +213,68 @@ AstraResult astra_volume_usage_snapshot_open(AstraHandle service,
         snapshot->volume.generation != 0u || snapshot->sequence != 0u ||
         snapshot->catalog_sequence != 0u || snapshot->records != NULL || snapshot->count != 0u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    const AstraVolumeReference all = {0};
-    AstraVolumeUsageQuery query = {ASTRA_VOLUME_USAGE_VERSION, sizeof(query), volume == NULL ? all : *volume,
-        0u, 0u, 0u, 0u, 0u};
+    AstraVolumeUsageQuery query = {.version = ASTRA_VOLUME_USAGE_VERSION,
+        .size = sizeof(query)};
+    if (volume != NULL) query.volume = *volume;
     if (!astra_volume_usage_query_valid(&query)) return ASTRA_ERROR_INVALID_ARGUMENT;
-    AstraVolumeUsagePage *page = astra_runtime_allocate(sizeof(*page));
-    if (page == NULL) return ASTRA_ERROR_OUT_OF_MEMORY;
-    AstraVolumeUsageSnapshot collected = ASTRA_VOLUME_USAGE_SNAPSHOT_INIT;
-    uint32_t capacity = 0u;
-    AstraResult result;
+    AstraVolumeUsageSnapshotRequest request = {0};
+    astra_message_header_set(&request.header, sizeof(request), ASTRA_VOLUME_PROTOCOL,
+        ASTRA_VOLUME_PROTOCOL_VERSION, ASTRA_VOLUME_USAGE_SNAPSHOT, 1u);
+    request.volume = query.volume;
+    uint32_t capacity = ASTRA_VOLUME_USAGE_PAGE_RECORDS;
     for (;;) {
-        result = astra_volume_usage(service, &query, page);
-        if (result != ASTRA_OK) break;
-        void *grown_records = NULL;
-        result = snapshot_capacity(collected.records, collected.count, &capacity,
-            sizeof(*collected.records), ASTRA_VOLUME_USAGE_PAGE_RECORDS, page->count, &grown_records);
-        if (result != ASTRA_OK) break;
-        collected.records = grown_records;
-        if (page->count != 0u) memcpy(collected.records + collected.count, page->records,
-            (size_t)page->count * sizeof(*collected.records));
-        collected.count += page->count; collected.volume = page->volume;
-        collected.sequence = page->sequence; collected.catalog_sequence = page->catalog_sequence;
-        if (page->next == 0u) break;
-        query.volume = page->volume; query.sequence = page->sequence;
-        query.catalog_sequence = page->catalog_sequence;
-        query.after = page->next; query.after_kind = page->next_kind; query.after_process = page->next_process;
+        AstraVolumeUsageSnapshotReply reply = {0};
+        AstraVolumeUsageSnapshot collected = ASTRA_VOLUME_USAGE_SNAPSHOT_INIT;
+        AstraArea area = ASTRA_AREA_INIT;
+        AstraHandle sent = ASTRA_INVALID_HANDLE;
+        AstraResult result = astra_area_create(capacity * sizeof(AstraVolumeUsageRecord),
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &area);
+        if (result == ASTRA_OK)
+            result = astra_handle_duplicate(area.handle, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &sent);
+        if (result == ASTRA_OK)
+            result = exchange(service, &request, sizeof(request), &sent,
+                &reply.reply, sizeof(reply), NULL);
+        if (sent != ASTRA_INVALID_HANDLE) {
+            AstraResult closed = astra_handle_close(&sent);
+            if ((result == ASTRA_OK || result == ASTRA_ERROR_BUFFER_TOO_SMALL) && closed != ASTRA_OK)
+                result = closed;
+        }
+        if (result == ASTRA_OK || result == ASTRA_ERROR_BUFFER_TOO_SMALL) {
+            if (!astra_volume_usage_snapshot_info_valid(&query.volume, &reply.info) ||
+                (result == ASTRA_OK ? reply.info.count > capacity : reply.info.count <= capacity))
+                result = ASTRA_ERROR_IO;
+        }
+        if (result == ASTRA_OK && reply.info.count != 0u) {
+            result = astra_area_map(&area, ASTRA_AREA_MAP_READ);
+            uint32_t bytes = reply.info.count * sizeof(AstraVolumeUsageRecord);
+            if (result == ASTRA_OK && area.size < bytes) result = ASTRA_ERROR_IO;
+            if (result == ASTRA_OK) {
+                collected.records = astra_runtime_allocate(bytes);
+                if (collected.records == NULL) result = ASTRA_ERROR_OUT_OF_MEMORY;
+                else {
+                    memcpy(collected.records, area.address, bytes);
+                    if (!astra_volume_usage_records_valid(&query, &reply.info.volume,
+                        collected.records, reply.info.count)) result = ASTRA_ERROR_IO;
+                }
+            }
+        }
+        if (area.handle != ASTRA_INVALID_HANDLE) {
+            AstraResult closed = astra_area_close(&area);
+            if ((result == ASTRA_OK || result == ASTRA_ERROR_BUFFER_TOO_SMALL) && closed != ASTRA_OK)
+                result = closed;
+        }
+        if (result == ASTRA_ERROR_BUFFER_TOO_SMALL) {
+            capacity = reply.info.count;
+            continue;
+        }
+        if (result == ASTRA_OK) {
+            collected.volume = reply.info.volume; collected.sequence = reply.info.sequence;
+            collected.catalog_sequence = reply.info.catalog_sequence; collected.count = reply.info.count;
+            *snapshot = collected;
+        } else astra_runtime_deallocate(collected.records);
+        return result;
     }
-    astra_runtime_deallocate(page);
-    if (result == ASTRA_OK) *snapshot = collected;
-    else astra_volume_usage_snapshot_close(&collected);
-    return result;
 }
 
 static AstraResult control_call(AstraHandle administrator, const AstraVolumeControl *control,

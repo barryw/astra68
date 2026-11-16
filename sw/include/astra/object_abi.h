@@ -51,13 +51,19 @@
     (ASTRA_SHARED_AREA_ADDRESS_END - ASTRA_SHARED_AREA_ADDRESS_START)
 /** Map readable pages. Every mapping must include this flag. */
 #define ASTRA_AREA_MAP_READ  (1u << 0)
-/** Map writable pages; requires write rights on the area handle. */
+/** Map writable pages; shared writes require write rights on the area handle. */
 #define ASTRA_AREA_MAP_WRITE (1u << 1)
+/** Copy pages on private writes; requires READ and MAP, never source WRITE. */
+#define ASTRA_AREA_MAP_PRIVATE (1u << 3)
 /**
  * Create flag: take the address range and commit nothing. Pages arrive as
  * they are touched, a cluster at a time, and are charged to the owner then.
  */
 #define ASTRA_AREA_CREATE_RESERVED (1u << 0)
+/** Mappings retain the area after its last handle closes, until final unmap. */
+#define ASTRA_AREA_CREATE_MAPPED_LIFETIME (1u << 1)
+/** Accept mapped writes into the native owner's existing writeback work. */
+#define ASTRA_AREA_SYNC_ASYNC (1u << 0)
 
 /** Native-big-endian `ARIN` bulk-ring header signature. */
 #define ASTRA_BULK_RING_MAGIC 0x4152494eu

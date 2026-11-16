@@ -380,6 +380,15 @@ static uint32_t host_read_sequential(void *context, uintptr_t node,
                              buffer, length, moved, position);
 }
 
+static uint32_t host_read_for_write(void *context, uintptr_t node, uint64_t offset,
+                                    void *buffer, uint32_t length, uint32_t *moved)
+{
+    uint64_t position;
+
+    return host_read_common(context, node, offset, ASTRA_HOST_FS_READ_FOR_WRITE,
+                             buffer, length, moved, &position);
+}
+
 static uint32_t host_write(void *context, uintptr_t node, uint64_t offset,
                            uint32_t flags, uint64_t max_end, const void *buffer, uint32_t length,
                            uint32_t *moved, uint64_t *position)
@@ -483,7 +492,7 @@ static uint32_t host_stat(void *context, const char *path,
 static uint32_t host_stat_at(void *context, uintptr_t directory,
                              const char *path, uint32_t flags, AstraVfsNodeInfo *info)
 {
-    if (directory == 0u || path == NULL)
+    if (path == NULL || (flags & ~ASTRA_VFS_STAT_FOLLOW) != 0u)
         return ASTRA_VFS_ERR_INVALID;
     return host_stat_common(context, directory, path, flags, info);
 }
@@ -648,6 +657,28 @@ static uint32_t host_unlink_at(void *context, uintptr_t directory,
         (flags & ASTRA_VFS_UNLINK_DIRECTORY) != 0u ?
             ASTRA_HOST_FS_UNLINK_DIRECTORY : 0u,
         0u);
+}
+
+static uint32_t host_set_file_times(void *context, uintptr_t node,
+    const AstraVfsNodeInfo *times, uint32_t fields)
+{
+    AstraVfsHostBackend *backend = context;
+    AstraVfsHostRequest request;
+    uint8_t wire[ASTRA_VFS_FILE_TIMES_SIZE];
+
+    if (node == 0u || node > UINT32_MAX || times == NULL ||
+        !astra_vfs_file_times_valid(fields, times->meta.atime_nsec, times->meta.mtime_nsec))
+        return ASTRA_VFS_ERR_INVALID;
+    uint32_t status = command_begin(backend, &request, ASTRA_HOST_FS_SET_FILE_TIMES,
+        sizeof(wire), NULL, NULL);
+    if (status != ASTRA_VFS_OK) return status;
+    request.command->handle = (uint32_t)node;
+    request.command->flags = fields;
+    astra_store_be64(wire, fields & ASTRA_VFS_META_ATIME ? (uint64_t)times->meta.atime : 0u);
+    astra_store_be32(wire + 8u, fields & ASTRA_VFS_META_ATIME ? times->meta.atime_nsec : 0u);
+    astra_store_be64(wire + 12u, fields & ASTRA_VFS_META_MTIME ? (uint64_t)times->mtime : 0u);
+    astra_store_be32(wire + 20u, fields & ASTRA_VFS_META_MTIME ? times->meta.mtime_nsec : 0u);
+    return submit(backend, &request, wire, sizeof(wire), NULL, 0u);
 }
 
 static uint32_t host_chmod_node(void *context, uintptr_t node, uint16_t mode)
@@ -1040,6 +1071,7 @@ static uint32_t host_file_flags(void *context, uintptr_t node, uint32_t mask,
 
 static const AstraVfsBackendOps host_ops = {
     .open = host_open, .close = host_close, .read = host_read,
+    .read_for_write = host_read_for_write,
     .write = host_write, .sync = host_sync, .try_lock = host_try_lock,
     .truncate = host_truncate,
     .stat = host_stat, .readdir = host_readdir, .mkdir = host_mkdir,
@@ -1048,6 +1080,7 @@ static const AstraVfsBackendOps host_ops = {
     .readlink = host_readlink, .symlink = host_symlink, .link = host_link,
     .open_at = host_open_at, .unlink_at = host_unlink_at,
     .chmod_node = host_chmod_node, .chmod_at = host_chmod_at,
+    .set_file_times = host_set_file_times,
     .filesystem_info = host_filesystem_info, .stat_at = host_stat_at,
     .stat_node = host_stat_node, .lookup = host_lookup,
     .read_sequential = host_read_sequential, .seek = host_seek,

@@ -42,15 +42,17 @@
 /** Native-big-endian `STOR` storage-protocol signature. */
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
 /** Current storage-protocol wire-format version. */
-#define ASTRA_VFS_VERSION  UINT16_C(41)
+#define ASTRA_VFS_VERSION  UINT16_C(42)
 
 /** Current version only: in-tree clients and providers change together.
- * Version 41 returns the owning 128 MiB file area for FILE_AREA windows.
+ * Version 42 names the caller's native file and bound session in FILE_AREA;
+ * the cache retains that description instead of adopting a provider token.
+ * Version 41 returned the owning 128 MiB file area for FILE_AREA windows.
  * Version 40 carried directory-entry node identity alongside metadata.
  * Version 38 carries complete pathname operands in the bound transfer area.
  * Version 37 carried full-width native volume identity. A mismatch
  * fails closed; no rolling-upgrade or obsolete request format is supported. */
-#define ASTRA_VFS_VERSION_MIN UINT16_C(41)
+#define ASTRA_VFS_VERSION_MIN UINT16_C(42)
 
 /** Maximum byte length of a path, including its terminating NUL, on the wire. */
 #define ASTRA_VFS_PATH_MAX 4096u
@@ -196,21 +198,23 @@
 #define ASTRA_VFS_OP_CONFIG_CRYPT UINT32_C(43)
 /** Try an exclusive advisory lock on an open writable file; close releases it. */
 #define ASTRA_VFS_OP_TRY_LOCK     UINT32_C(44)
-/** Exchange one open-file share for a read-only, pager-backed file window.
- * `offset` is the one-use token, `write_limit` the page-aligned file base,
+/** Retain the session's native open file for a read-only, pager-backed window.
+ * `file` is the native handle, `offset` is zero, `write_limit` the page-aligned file base,
  * `length` the page-aligned span. Reply transfers one READ|MAP area handle
  * and reports current file size in `node_size`. */
 #define ASTRA_VFS_OP_FILE_AREA    UINT32_C(45)
-/** A completed direct-lane mutation supplies a one-use file share token.
- * The cache owner revokes matching mapped pages before acknowledging it. */
-#define ASTRA_VFS_OP_FILE_MUTATED UINT32_C(46)
 /** Conditional description advance: offset is expected position, length is
  * the completed byte count; reply count is 0/1 and position is observed/final. */
 #define ASTRA_VFS_OP_POSITION_ADVANCE UINT32_C(47)
 /** Release unused cache owners before retrying resource admission. No payload. */
 #define ASTRA_VFS_OP_CACHE_RECLAIM UINT32_C(48)
+/** Set open file timestamps; flags selects ATIME/MTIME, payload is two BE64
+ * seconds/BE32 nanoseconds pairs. Unselected timestamps remain unchanged. */
+#define ASTRA_VFS_OP_SET_FILE_TIMES UINT32_C(49)
+/** Bytes in a SET_FILE_TIMES payload. */
+#define ASTRA_VFS_FILE_TIMES_SIZE UINT32_C(24)
 /** Highest operation code this build defines. */
-#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_CACHE_RECLAIM
+#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_SET_FILE_TIMES
 
 /** Encrypt a Config Kit value under the receiving grant's provider root. */
 #define ASTRA_VFS_CONFIG_SEAL UINT32_C(1)
@@ -275,6 +279,21 @@
 #define ASTRA_VFS_META_OWNER      (UINT32_C(1) << 9)
 /** All defined metadata validity bits. */
 #define ASTRA_VFS_META_ALL        ((UINT32_C(1) << 10) - 1u)
+
+/** Validate selected timestamp fields at both native and provider boundaries.
+ * @param fields Nonempty subset of ATIME and MTIME validity bits.
+ * @param atime_nsec Access-time nanoseconds, checked when selected.
+ * @param mtime_nsec Modification-time nanoseconds, checked when selected.
+ * @return Nonzero for valid fields and selected nanoseconds below one billion.
+ */
+static inline int astra_vfs_file_times_valid(uint32_t fields,
+    uint32_t atime_nsec, uint32_t mtime_nsec)
+{
+    return fields != 0u &&
+        (fields & ~(ASTRA_VFS_META_ATIME | ASTRA_VFS_META_MTIME)) == 0u &&
+        (!(fields & ASTRA_VFS_META_ATIME) || atime_nsec < UINT32_C(1000000000)) &&
+        (!(fields & ASTRA_VFS_META_MTIME) || mtime_nsec < UINT32_C(1000000000));
+}
 
 /** Node identity and metadata validity, shared by native result records.
  * A field with its validity bit clear is unknown, even when its value is zero. */

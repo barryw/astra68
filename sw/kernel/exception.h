@@ -6,6 +6,11 @@
 
 #define KERNEL_EXCEPTION_FRAME_MAX_SIZE 60u
 
+static inline bool kernel_exception_access_write(uint16_t special_status)
+{
+    return (special_status & 0x0100u) == 0u;
+}
+
 typedef enum KernelExceptionStatus {
     KERNEL_EXCEPTION_OK = 0,
     KERNEL_EXCEPTION_INVALID_ARGUMENT,

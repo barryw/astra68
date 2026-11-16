@@ -58,9 +58,13 @@ application is deciding.
 2. After apps have exited, stop services in dependency order. A service fault
    does not become a kernel panic. Never terminate a writable volume before
    its clients and request workers have stopped.
-3. HostFS stops volume admission, drains workers and retires grants through
-   the same lifecycle used for normal removal. Stalled ports, busy resources
-   or failed session/claim release prevent a READY response. The Linux provider
+3. HostFS drains queued work, then checks cached-area owners before retiring
+   its private provider sessions and claim. Stalled ports, busy resources
+   or failed session/claim release prevent a READY response. Public endpoints
+   and native session IDs survive cancellation; provider bindings recover
+   through the existing rebind path. Failed closes retain their owned IDs for
+   retry. Local pager and transport cleanup follows a successfully sent READY,
+   and process exit closes the remaining local capabilities. The Linux provider
    owns filesystem synchronization, unmount, loop/source release and child
    retirement; QEMU does not implement a second filesystem flush engine.
    The runtime waits for actual provider exit and never converts a cleanup
@@ -77,6 +81,55 @@ application is deciding.
    respectively. A crash, panic, unrelated QEMU exit, or `systemctl stop astra`
    never triggers either host power action.
 
+Private embedded-guest trials set `ASTRA_POWER_POLICY=guest` in their trusted
+service environment. The same launcher still drains the provider and helpers,
+then returns the exact clean guest status (88 or 89) without requesting a host
+power action. The default `host` policy above remains unchanged. Invalid
+policies are rejected before child launch; this is host lifecycle policy, not
+a guest setting or an alternate shutdown path.
+
+Haiku `src/system/kernel/shutdown.cpp:13-33` separates service teardown and sync
+from architecture power control. Astra keeps guest teardown and provider
+retirement unchanged and makes propagation to the containing host explicit.
+
+Supervisor logs every failed shutdown stage with service name, PID, native
+status and opaque reason. Request/reply transport errors remain distinct from
+a participant's explicit cancellation or unsuccessful exit. Reporting uses
+the existing launch-report formatter with a bounded stack buffer so allocation
+failure does not suppress its own diagnostic. A dependency cycle reports the
+blocked service and cancels rather than stopping a publisher still in use.
+The service-policy gate uses the existing test-only fault-probe to close a
+managed shutdown endpoint, checks exact `PEER_DEAD` context, opens a fresh
+Terminal, removes the faulty service, then requires clean shutdown. This is
+diagnostic/recovery coverage, not proof of recovery after partial service
+teardown; that remaining gap is recorded below.
+
+Cancellation-recovery checkpoint46 (DE25 qualified, unreleased) captures
+definitions of live services before teardown, while configuration remains available. Preparation
+failure refuses shutdown before closing any participant. After a later
+refusal, the normal dependency-checked launcher restores only those services
+that were running and have since stopped, including manual/never-restart
+services. Applications are not relaunched and never-started services remain
+stopped. Restore failures name the service and native status; they never
+authorize force shutdown. Haiku
+`src/servers/registrar/ShutdownProcess.cpp:650-730` restores roster admission
+on cancellation; Astra additionally has already stopped services to recover.
+The native regression fails on the previous Supervisor with the stopped
+service still at PID zero. Host coverage includes preparation allocation and
+configuration-read failure, owned snapshot cleanup and unchanged process
+records. Native QEMU passes both broken-endpoint and explicit-CANCEL cases,
+restored service/new PID, preserved manual/never-restart settings, an idle
+service remaining stopped, clean shutdown and offline fsck. The complete
+native filesystem/provider/HostFS recovery gate passes in 83.5 seconds.
+DE25 passes the same two cancellation cases and restoration assertions,
+provider and HostFS recovery, fresh I/O and clean shutdown 88. All four gate
+outcomes are zero; private runtime takes 527 seconds within its unchanged
+600-second guard. The sealed archive verifies 57 hashes, paired private
+settings/key, read-only fsck and unchanged Linux boot identity. Private board
+files are removed after verified transfer; selected services return to stage 8
+with zero restarts, loop0 only and 8.4 GiB free. See Current State for exact
+candidate and evidence identities.
+
 Current implementation: the native mount lifecycle and HostFS/provider stop
 handlers, process lifecycle transport, managed startup declaration, Terminal's
 clean-prompt/zsh-exit gate, Supervisor reverse-order stop sequence, CLI and
@@ -91,8 +144,38 @@ filesystem lifecycle gate also verifies acknowledged data after clean shutdown
 and offline fsck. Normal/fatal provider tests reread durable file and directory
 acknowledgements after retirement. These tests do not simulate physical power
 loss or loss of Linux's page cache.
-Malformed wire replies have host tests. Desktop consent/status UI and recovery
-from a cancellation after partial service teardown remain to be built. The NDK
+Malformed wire replies have host tests. Desktop consent/status UI remains
+open. Checkpoint47 qualifies HostFS failure retention on DE25:
+busy checks follow request draining, failed retirement preserves public
+endpoints, repeated close errors retain ownership, and failed READY delivery
+reclaims provider authority instead of exiting. Host and ASan/UBSan tests pass.
+Haiku
+`src/system/kernel/fs/vfs.cpp:7888-8013` performs sync and busy checks before
+destructive unmount work; Astra adapts that ordering to native service consent.
+
+Deep cancellation testing also exposes missing ordinary service dependencies
+in Supervisor's recovery snapshot. The existing per-process dependency list
+now records received publications, including private GUI endpoints, alongside
+narrowed filesystem grants. Shutdown uses all observed dependencies; namespace
+recovery still waits only for filesystem bindings. Saved definitions inherit
+the observed dependencies through the existing service-definition API; optional
+capabilities that were not granted and implicit best-effort LOG access create
+no teardown dependency. A requested restart retains its pending action when
+termination reports that the target is already dead; otherwise a dependency
+loss racing the stop syscall is misclassified as an unexpected critical exit.
+Other termination errors remain failures. Haiku
+`src/servers/launch/Job.cpp:235-287` orders job requirements and rejects cycles.
+The complete native gate passes two injected close failures, preserved session
+IDs, restored services, fresh I/O, provider reset, two HostFS replacements,
+clean shutdown 88 and offline fsck in 61.4 seconds. DE25 passes the same
+injected failures, preserved sessions, restored services and fresh I/O,
+provider reset, HostFS replacement and clean shutdown 88 in 365/600 seconds.
+All four gate outcomes are zero. The sealed archive verifies 66 hashes,
+paired private settings/key, read-only fsck and unchanged Linux boot identity.
+Disposable board files are removed after verified transfer; the unchanged
+selected release reaches stage 8 with zero service restarts, loop0 only and
+8.6 GiB free. This supersedes checkpoint46 for the scoped participant recovery;
+the original trial31 refusal remains unexplained. The NDK
 request acknowledges only that the supervisor accepted the request, not that
 the power action completed. [Current State](CURRENT_STATE.md) records the exact
 qualified build and production deployment status.

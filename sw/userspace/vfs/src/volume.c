@@ -82,27 +82,41 @@ int astra_volume_usage_query_valid(const AstraVolumeUsageQuery *query)
         (query->sequence != 0u || query->after == 0u);
 }
 
-int astra_volume_usage_page_valid(const AstraVolumeUsageQuery *query,
-    const AstraVolumeUsagePage *page)
+static int usage_identity_valid(const AstraVolumeReference *wanted,
+    const AstraVolumeReference *actual, uint64_t sequence, uint64_t catalog_sequence)
 {
-    if (!astra_volume_usage_query_valid(query) || page == NULL ||
-        page->version != ASTRA_VOLUME_USAGE_VERSION || page->size != sizeof(*page) ||
-        page->volume.epoch == 0u || page->volume.id != query->volume.id ||
-        page->volume.generation != query->volume.generation ||
-        (query->volume.epoch != 0u && page->volume.epoch != query->volume.epoch) ||
-        page->sequence == 0u || page->catalog_sequence == 0u ||
-        (query->sequence != 0u && page->sequence != query->sequence) ||
-        (query->catalog_sequence != 0u && page->catalog_sequence != query->catalog_sequence) ||
-        page->count > ASTRA_VOLUME_USAGE_PAGE_RECORDS || page->reserved != 0u) return 0;
+    return actual->epoch != 0u && actual->id == wanted->id &&
+        actual->generation == wanted->generation &&
+        (wanted->epoch == 0u || actual->epoch == wanted->epoch) &&
+        sequence != 0u && catalog_sequence != 0u;
+}
+
+int astra_volume_usage_snapshot_info_valid(const AstraVolumeReference *volume,
+    const AstraVolumeUsageSnapshotInfo *info)
+{
+    AstraVolumeUsageQuery query = {.version = ASTRA_VOLUME_USAGE_VERSION,
+        .size = sizeof(query)};
+    if (volume == NULL || info == NULL) return 0;
+    query.volume = *volume;
+    return astra_volume_usage_query_valid(&query) &&
+        usage_identity_valid(volume, &info->volume, info->sequence, info->catalog_sequence) &&
+        info->reserved == 0u && info->count <= UINT32_MAX / sizeof(AstraVolumeUsageRecord);
+}
+
+int astra_volume_usage_records_valid(const AstraVolumeUsageQuery *query,
+    const AstraVolumeReference *volume, const AstraVolumeUsageRecord *records, uint32_t count)
+{
+    if (!astra_volume_usage_query_valid(query) || volume == NULL ||
+        count > UINT32_MAX / sizeof(*records) || (count != 0u && records == NULL)) return 0;
     uint64_t handle = query->after;
     uint32_t kind = query->after_kind;
     uint32_t process = query->after_process;
-    for (uint32_t at = 0u; at < page->count; ++at) {
-        const AstraVolumeUsageRecord *row = &page->records[at];
-        if (row->volume.epoch != page->volume.epoch || row->volume.id == 0u ||
+    for (uint32_t at = 0u; at < count; ++at) {
+        const AstraVolumeUsageRecord *row = &records[at];
+        if (row->volume.epoch != volume->epoch || row->volume.id == 0u ||
             row->volume.generation == 0u || row->handle == 0u ||
-            (page->volume.id != 0u && (row->volume.id != page->volume.id ||
-                row->volume.generation != page->volume.generation)) ||
+            (volume->id != 0u && (row->volume.id != volume->id ||
+                row->volume.generation != volume->generation)) ||
             row->kind < ASTRA_VOLUME_USAGE_FILE || row->kind > ASTRA_VOLUME_USAGE_IMAGE ||
             astra_volume_usage_key_compare(row->kind, row->handle, row->process, kind, handle, process) <= 0 ||
             (row->rights & ~(ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE)) != 0u ||
@@ -116,8 +130,22 @@ int astra_volume_usage_page_valid(const AstraVolumeUsageQuery *query,
             !astra_utf8_validate(row->path, row->path_length, 0u)) return 0;
         kind = row->kind; handle = row->handle; process = row->process;
     }
+    return 1;
+}
+
+int astra_volume_usage_page_valid(const AstraVolumeUsageQuery *query,
+    const AstraVolumeUsagePage *page)
+{
+    if (!astra_volume_usage_query_valid(query) || page == NULL ||
+        page->version != ASTRA_VOLUME_USAGE_VERSION || page->size != sizeof(*page) ||
+        !usage_identity_valid(&query->volume, &page->volume, page->sequence, page->catalog_sequence) ||
+        (query->sequence != 0u && page->sequence != query->sequence) ||
+        (query->catalog_sequence != 0u && page->catalog_sequence != query->catalog_sequence) ||
+        page->count > ASTRA_VOLUME_USAGE_PAGE_RECORDS || page->reserved != 0u ||
+        !astra_volume_usage_records_valid(query, &page->volume, page->records, page->count)) return 0;
+    const AstraVolumeUsageRecord *last = page->count != 0u ? &page->records[page->count - 1u] : NULL;
     return (page->next == 0u && page->next_kind == 0u && page->next_process == 0u) ||
-        (page->count != 0u && page->next == handle && page->next_kind == kind && page->next_process == process);
+        (last != NULL && page->next == last->handle && page->next_kind == last->kind && page->next_process == last->process);
 }
 
 int astra_volume_query_valid(const AstraVolumeCatalogQuery *query)

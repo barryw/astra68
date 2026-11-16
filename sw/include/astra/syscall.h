@@ -217,11 +217,13 @@
 /**
  * Maps an area into the calling process. data[1] is the area handle,
  * data[2] the ASTRA_AREA_MAP_* permissions (must include READ and must be
- * a subset of the handle's rights). Returns the mapped base address in
+ * allowed by the handle's rights). PRIVATE copies on write and requires
+ * READ and MAP; shared writable views also require WRITE. Returns the mapped base address in
  * data[1] and its byte size in data[2].
  */
 #define ASTRA_SYSCALL_AREA_MAP         23
-/** Unmaps a previously mapped area. data[1] is the virtual base it was mapped at. */
+/** Unmap an exact view base in D1 after shared pager error checks.
+ * Failure leaves views intact; IO_ERROR returns exact backing status in D3. */
 #define ASTRA_SYSCALL_AREA_UNMAP       24
 /**
  * Creates a bulk ring: a fixed-element-size SPSC queue laid out in an area
@@ -1137,6 +1139,49 @@
  * Failure or modification after the snapshot preserves pending data.
  */
 #define ASTRA_SYSCALL_AREA_WRITEBACK_COMPLETE 124
+/**
+ * Publish one absent pager page as dirty through WRITE | ADMINISTER.
+ * data[1] is the area, data[2] page-aligned offset, data[3] a complete 4 KiB
+ * source and data[4] exactly 4096. Validation and source copying precede
+ * publication. An already resident page returns WOULD_BLOCK unchanged.
+ */
+#define ASTRA_SYSCALL_AREA_PUBLISH_DIRTY_PAGE 125
+/** Inspect pending pager pages through ADMINISTER authority. data[1] is the
+ * area, data[2] a page-aligned scan cursor. Returns offset in D1 and
+ * ASTRA_AREA_DIRTY_* state in D2. With state zero, offset is the next cursor;
+ * area byte size means end. One allocated metadata leaf is examined per call.
+ * This query neither snapshots pages nor changes their lifetime. */
+#define ASTRA_SYSCALL_AREA_DIRTY_SCAN 126
+/** Publish one absent pager page as clean through READ | ADMINISTER.
+ * data[1] is the area, data[2] page-aligned offset, data[3] source and
+ * data[4] valid bytes (1..4096). Copying precedes publication; VM zeroes
+ * the page tail. A resident page returns WOULD_BLOCK unchanged. No dirty
+ * generation, writeback snapshot or pager request is created. */
+#define ASTRA_SYSCALL_AREA_PUBLISH_CLEAN_PAGE 127
+
+/** Set a pager area's backing byte length (D1 area, D2 bytes); ADMINISTER required. */
+#define ASTRA_SYSCALL_AREA_RESIZE_BACKING 128
+/** Unmap the calling process's page-aligned range (D1 base, D2 bytes).
+ * Holes are allowed. Other views retain their backing and permissions.
+ * Shared pager errors leave the range intact; exact backing status is in D3.
+ * Native dirty owners retain pending work; this is not a durability barrier. */
+#define ASTRA_SYSCALL_AREA_UNMAP_RANGE 129
+/** Sync the caller's mapped range (D1 base, D2 page-aligned bytes, D3 flags).
+ * Flags are zero for completion or ASTRA_AREA_SYNC_ASYNC for owner admission.
+ * Private/anonymous views require no backing write. Shared pager areas use
+ * their retained owner; no file/area handle is needed. D3 receives an exact
+ * ASTRA_STATUS_* backing error, or zero for success/kernel/transport errors.
+ * A backing error returns IO_ERROR without discarding dirty data. */
+#define ASTRA_SYSCALL_AREA_SYNC_RANGE 130
+/** ADMINISTER-only area holder enumeration. D1 area, D2 exclusive PID,
+ * D3/D4 expected 64-bit mapping sequence (zero starts), D5 zero. Returns PID
+ * in D1 (zero ends) and sequence in D2/D3. Mutation returns WOULD_BLOCK.
+ * After UINT32_MAX obtains only the sequence without scanning holders. */
+#define ASTRA_SYSCALL_AREA_NEXT_PROCESS 131
+/** Pending modifications have not been covered by a successful snapshot. */
+#define ASTRA_AREA_DIRTY_MODIFIED 1
+/** A writeback snapshot is still in flight; it cannot establish cleanliness. */
+#define ASTRA_AREA_DIRTY_WRITEBACK 2
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */

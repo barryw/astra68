@@ -2,6 +2,7 @@
 #include "astra_storage_path.h"
 #include "astra_storage_transport.h"
 #include "astra68-resolve.h"
+#include <astra/vfs_service.h>
 
 #include <assert.h>
 #include <errno.h>
@@ -60,6 +61,30 @@ static void semantics(int root)
     close(parent);
     assert(write(result, "old", 3) == 3);
     close(result);
+    value.flags = O_WRONLY;
+    execute(root, 0, &value, fds, &reply, &result);
+    assert(reply.error == 0 && result >= 0);
+    char backing_bytes[3];
+    assert(pread(result, backing_bytes, sizeof(backing_bytes), 0) == 3 &&
+           memcmp(backing_bytes, "old", 3) == 0);
+    assert(renameat(root, "sub/file", root, "sub/pinned") == 0);
+    int replacement = openat(root, "sub/file", O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+    assert(replacement >= 0 && write(replacement, "new", 3) == 3);
+    close(replacement);
+    assert(pread(result, backing_bytes, sizeof(backing_bytes), 0) == 3 &&
+           memcmp(backing_bytes, "old", 3) == 0);
+    assert(unlinkat(root, "sub/file", 0) == 0);
+    assert(renameat(root, "sub/pinned", root, "sub/file") == 0);
+    close(result);
+    if (geteuid() != 0) {
+        assert(fchmodat(root, "sub/file", 0200, 0) == 0);
+        execute(root, 0, &value, fds, &reply, &result);
+        assert(reply.error == 0 && result >= 0 &&
+               (fcntl(result, F_GETFL) & O_ACCMODE) == O_WRONLY);
+        assert(pwrite(result, "old", 3u, 0) == 3);
+        close(result);
+        assert(fchmodat(root, "sub/file", 0600, 0) == 0);
+    }
     value.flags = O_RDWR;
     execute(root, 0, &value, fds, &reply, &result);
     assert(reply.error == 0 && result >= 0 && reply.parent_inode == 0u);
@@ -226,6 +251,48 @@ static void seeding(int root)
     assert(unlinkat(root, "shipped", AT_REMOVEDIR) == 0);
 }
 
+static void timestamps(int root)
+{
+    int file = openat(root, "times", O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
+    int fds[3] = {root, file, -1}, result;
+    struct stat info;
+    AstraStoragePathReply reply;
+    AstraStoragePathRequest value = request(ASTRA_STORAGE_PATH_SET_FILE_TIMES, "");
+    value.fd_mask = 3u;
+    value.flags = ASTRA_VFS_META_ATIME | ASTRA_VFS_META_MTIME;
+    value.times[0] = (AstraHostTime){.seconds_lo = 1234u, .nanoseconds = 123456789u};
+    value.times[1] = (AstraHostTime){.seconds_hi = -1, .seconds_lo = UINT32_MAX,
+        .nanoseconds = 999999999u};
+    assert(file >= 0);
+    execute(root, 1, &value, fds, &reply, &result);
+    assert(reply.error == EROFS);
+    execute(root, 0, &value, fds, &reply, &result);
+    assert(reply.error == 0 && fstat(file, &info) == 0 && info.st_mtim.tv_sec == -1 &&
+        info.st_mtim.tv_nsec == 999999999 && info.st_atim.tv_sec == 1234 &&
+        info.st_atim.tv_nsec == 123456789);
+    value.times[1].nanoseconds = 1000000000u;
+    execute(root, 0, &value, fds, &reply, &result);
+    assert(reply.error == EINVAL);
+    value.times[1].nanoseconds = 7u;
+    value.flags = ASTRA_VFS_META_MTIME;
+    assert(unlinkat(root, "times", 0) == 0);
+    execute(root, 0, &value, fds, &reply, &result);
+    assert(reply.error == 0 && fstat(file, &info) == 0 && info.st_mtim.tv_nsec == 7 &&
+        info.st_atim.tv_sec == 1234 && info.st_atim.tv_nsec == 123456789);
+    close(file);
+    fds[1] = openat(root, "readonly-times", O_CREAT | O_EXCL | O_RDONLY | O_CLOEXEC, 0600);
+    assert(fds[1] >= 0);
+    execute(root, 0, &value, fds, &reply, &result);
+    assert(reply.error == EACCES);
+    close(fds[1]);
+    assert(unlinkat(root, "readonly-times", 0) == 0);
+    fds[1] = open("/proc/self/stat", O_RDONLY | O_CLOEXEC);
+    assert(fds[1] >= 0);
+    execute(root, 0, &value, fds, &reply, &result);
+    assert(reply.error == EXDEV);
+    close(fds[1]);
+}
+
 static void lending(int root)
 {
     int sockets[2];
@@ -264,7 +331,17 @@ static void lending(int root)
         assert(reply.error == 0 && result >= 0);
         assert(pread(result, bytes, sizeof(bytes), 0) == 3 && memcmp(bytes, "old", 3) == 0);
         assert(pwrite(result, "new", 3, 0) == 3);
-        close(result);
+        int retained = result;
+        const struct timespec times[2] = {{.tv_nsec = UTIME_OMIT}, {.tv_sec = 1234, .tv_nsec = 567u}};
+        if (before.st_uid != geteuid())
+            assert(futimens(retained, times) != 0 && errno == EPERM);
+        value = request(ASTRA_STORAGE_PATH_SET_FILE_TIMES, "");
+        value.serial = 3u; value.fd_mask = 3u; value.flags = ASTRA_VFS_META_MTIME;
+        value.times[1] = (AstraHostTime){.seconds_lo = 1234u, .nanoseconds = 567u};
+        fds[1] = retained;
+        assert(astra_storage_path_call(sockets[1], &value, fds, &reply, &result) == 0 &&
+            reply.error == 0 && result == -1);
+        close(retained); fds[1] = -1;
         /* Missing rooted authority is refused. */
         ++value.serial;
         value.fd_mask = 0;
@@ -274,14 +351,14 @@ static void lending(int root)
         _exit(0);
     }
     close(sockets[1]);
-    for (unsigned at = 0; at < 3; ++at) {
+    for (unsigned at = 0; at < 4; ++at) {
         AstraStoragePathRequest value;
         AstraStoragePathReply reply;
         int fds[3];
         int result = -1;
         int error = astra_storage_path_receive(sockets[0], at == 0 ? getpid() : child,
                                                uid, gid, &value, fds);
-        if (at == 1) {
+        if (at == 1 || at == 2) {
             assert(error == 0);
             execute(root, 0, &value, fds, &reply, &result);
         } else {
@@ -300,7 +377,7 @@ static void lending(int root)
     assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
     assert(fstatat(root, "private", &after, 0) == 0);
     assert(before.st_uid == after.st_uid && before.st_gid == after.st_gid &&
-           before.st_mode == after.st_mode);
+           before.st_mode == after.st_mode && after.st_mtim.tv_sec == 1234 && after.st_mtim.tv_nsec == 567);
     file = openat(root, "private", O_RDONLY | O_CLOEXEC);
     char bytes[3];
     assert(file >= 0 && read(file, bytes, sizeof(bytes)) == 3 && memcmp(bytes, "new", 3) == 0);
@@ -356,6 +433,7 @@ int main(void)
     assert(root >= 0);
     semantics(root);
     seeding(root);
+    timestamps(root);
     lending(root);
     close(root);
     assert(rmdir(path) == 0);

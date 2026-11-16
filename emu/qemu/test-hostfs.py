@@ -92,6 +92,7 @@ FS_FILE_FLAGS = 23
 FS_PATH = 24
 FS_CHANGE_SNAPSHOT = 26
 FS_CHANGE_NEXT = 27
+FS_SET_FILE_TIMES = 28
 CHANGE_NONE = 0
 CHANGE_NODE = 1
 CHANGE_GAP = 2
@@ -99,6 +100,7 @@ CHANGE_ENTRY_CREATED = 3
 CHANGE_ENTRY_REMOVED = 4
 CHANGE_RECORD_SIZE = 304
 IO_SEQUENTIAL = 1 << 14
+READ_FOR_WRITE = 1 << 13
 SEEK_ADVANCE = 4
 ADOPT_DISCARD = 1
 UNLINK_DIRECTORY = 1
@@ -109,7 +111,7 @@ METRICS_SNAPSHOT = 1
 SERVICE_ENTROPY = 4
 ENTROPY_FILL = 1
 ENTROPY_MAX = 256
-METRICS_CAPACITY = 16 + 8 * (12 + 2 * (FS_CHANGE_NEXT + 1))
+METRICS_CAPACITY = 16 + 8 * (12 + 2 * (FS_SET_FILE_TIMES + 1))
 METRIC_HOST_COMMANDS = 8
 
 OPEN_READ = 1 << 0
@@ -886,7 +888,9 @@ def claims_and_sessions(qtest, root):
                     session=readonly),
             Command(generation, FS_OPEN, "/ro-file",
                     flags=OPEN_READ | OPEN_WRITE | OPEN_CREATE, value=0o600,
-                    session=readonly)):
+                    session=readonly),
+            Command(generation, FS_READ, flags=READ_FOR_WRITE,
+                    handle=1, capacity=1, session=readonly)):
         assert status(execute(qtest, [command])[0]) == STATUS_READ_ONLY
     assert not os.path.exists(os.path.join(root, "ro-made"))
 
@@ -1127,6 +1131,48 @@ def run(qtest, root, outside, external=False):
         return get64(answer.raw, 24), kind, \
             (*struct.unpack_from(">QQQQQII", record),
              record[48:].split(b"\0", 1)[0]) if record is not None else None
+
+    usage_bytes = 72 + 2 * (64 + PATH_MAX)
+    assert configure_channel(qtest, generation, CONFIG_OPEN, slot=30,
+        channel_generation=173, buffer=RACE_BUFFER,
+        byte_size=CHANNEL_HEADER_SIZE + COMMAND_SIZE + usage_bytes,
+        scope_flags=CHANNEL_PROVIDER) == 0
+    usage_producer = 0
+
+    def usage_query(epoch=0, sequence=0, catalog_sequence=0, observation=None):
+        nonlocal usage_producer
+        query = struct.pack(">IIQQQQQQII", 2, 64, epoch, 0, 0,
+                            sequence, catalog_sequence, 0, 0, 0)
+        offsets = channel_write(qtest, RACE_BUFFER, 1, [observation or Command(
+            generation, 3, service=6, data=query, capacity=usage_bytes)],
+            first=usage_producer)
+        usage_producer += 1
+        qtest.write32(RACE_BUFFER + 36, usage_producer)
+        qtest.write32(CHANNEL_APERTURE + 30 * 4096 + 0x20, usage_producer)
+        answer = scoped_wait(qtest, usage_producer,
+            RACE_BUFFER + CHANNEL_HEADER_SIZE, buffer=RACE_BUFFER)
+        return status(answer), qtest.read(RACE_BUFFER + offsets[0], usage_bytes)
+
+    result, usage_page = usage_query()
+    assert result == STATUS_OK, result
+    admitted = (get64(usage_page, 8), get64(usage_page, 32), get64(usage_page, 40))
+    # HOST_EXECUTE has no asynchronous job; use the real channel for both polls.
+    assert usage_query(observation=Command(generation,
+        FS_CHANGE_SNAPSHOT, session=work))[0] == STATUS_OK
+    assert usage_query(observation=Command(generation, FS_CHANGE_NEXT,
+        value=2, capacity=CHANGE_RECORD_SIZE, session=work))[0] == STATUS_OK
+    result, _ = usage_query(*admitted)
+    assert result == STATUS_OK, ("notification polling invalidated usage", result)
+    opened_usage = execute(qtest, [Command(generation, FS_OPEN, "/",
+        flags=OPEN_READ | OPEN_DIRECTORY, session=work)])[0]
+    assert status(opened_usage) == STATUS_OK
+    result, _ = usage_query(*admitted)
+    assert result == STATUS_BUSY, ("real file open did not invalidate usage", result)
+    assert status(execute(qtest, [Command(generation, FS_CLOSE,
+        handle=get32(opened_usage.raw, 16), session=work)])[0]) == STATUS_OK
+    assert configure_channel(qtest, generation, CONFIG_CLOSE, slot=30,
+        channel_generation=173) == 0
+    print("PASS notification polls preserve usage sequence; real file opens invalidate")
 
     baseline_changes = changes()
 
@@ -1410,6 +1456,41 @@ def run(qtest, root, outside, external=False):
         generation, FS_READ, handle=write_only_handle, capacity=1,
         session=work)])[0]
     assert status(denied_read) == STATUS_ACCESS
+    backing_data = b"cache-backing"
+    assert status(execute(qtest, [Command(generation, FS_WRITE,
+        handle=write_only_handle, data=backing_data, session=work)])[0]) == STATUS_OK
+    assert status(execute(qtest, [Command(generation, FS_SEEK,
+        handle=write_only_handle, offset=7, session=work)])[0]) == STATUS_OK
+    backing_read = execute(qtest, [Command(generation, FS_READ,
+        handle=write_only_handle, flags=READ_FOR_WRITE,
+        capacity=len(backing_data), session=work)])[0]
+    assert status(backing_read) == STATUS_OK
+    assert get32(backing_read.raw, 52) == len(backing_data)
+    assert output(qtest, backing_read, len(backing_data)) == backing_data
+    cursor = execute(qtest, [Command(generation, FS_SEEK,
+        handle=write_only_handle, flags=1, session=work)])[0]
+    assert status(cursor) == STATUS_OK and get64(cursor.raw, 32) == 7
+    for flags, offset, capacity in ((READ_FOR_WRITE | IO_SEQUENTIAL, 0, 1),
+                                    (READ_FOR_WRITE, 4095, 2)):
+        assert status(execute(qtest, [Command(generation, FS_READ,
+            handle=write_only_handle, flags=flags, offset=offset,
+            capacity=capacity, session=work)])[0]) == STATUS_INVALID
+    assert status(execute(qtest, [Command(generation, FS_READ,
+        handle=write_only_handle, capacity=1, session=work)])[0]) == STATUS_ACCESS
+    assert status(execute(qtest, [Command(generation, FS_RENAME,
+        "/write-only", "/cache-original", session=work)])[0]) == STATUS_OK
+    assert status(execute(qtest, [Command(generation, FS_UNLINK,
+        "/cache-original", session=work)])[0]) == STATUS_OK
+    replacement = execute(qtest, [Command(generation, FS_OPEN,
+        "/write-only", flags=OPEN_WRITE | OPEN_CREATE | OPEN_EXCLUSIVE,
+        value=0o600, session=work)])[0]
+    assert status(replacement) == STATUS_OK
+    assert status(execute(qtest, [Command(generation, FS_CLOSE,
+        handle=get32(replacement.raw, 16), session=work)])[0]) == STATUS_OK
+    pinned = execute(qtest, [Command(generation, FS_READ,
+        handle=write_only_handle, flags=READ_FOR_WRITE,
+        capacity=len(backing_data), session=work)])[0]
+    assert status(pinned) == STATUS_OK and output(qtest, pinned, len(backing_data)) == backing_data
     assert status(execute(qtest, [Command(
         generation, FS_CLOSE, handle=write_only_handle,
         session=work)])[0]) == STATUS_OK
@@ -1418,6 +1499,9 @@ def run(qtest, root, outside, external=False):
         generation, FS_OPEN, "/write-only", flags=OPEN_READ,
         session=work)])[0]
     assert status(read_only) == STATUS_OK
+    assert status(execute(qtest, [Command(generation, FS_READ,
+        handle=get32(read_only.raw, 16), flags=READ_FOR_WRITE,
+        capacity=1, session=work)])[0]) == STATUS_ACCESS
     read_only_handle = get32(read_only.raw, 16)
     denied_write = execute(qtest, [Command(
         generation, FS_WRITE, handle=read_only_handle, data=b"x",

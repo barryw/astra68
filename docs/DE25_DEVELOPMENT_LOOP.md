@@ -3,6 +3,22 @@
 The DE25 is an active development machine. A selected release is a checkpoint,
 not a production deployment gate. Use the focused installer for source edits;
 build a complete release image only after the fix works on hardware.
+
+Bounded `emu/qemu/de25-private-trial.sh` runs configure
+`ASTRA_POWER_POLICY=guest`: clean guest shutdown/restart returns status 88/89
+after provider cleanup and leaves the host powered on. Selected normal service
+keeps the default host power policy. See [shutdown](SHUTDOWN.md).
+
+The DE25 Linux host has about 934 MiB usable RAM. Qualification helpers must
+stream image and archive checksums instead of reading entire files into
+memory. Run staging/preflight checks in a bounded systemd unit; a 48 MiB
+limit is sufficient for the release verifier and streamed image checksum.
+Run separate provider/QEMU protocol gates only while the normal runtime is
+stopped under the private-trial restoration guard, with a 256 MiB limit.
+Do not run a second emulator alongside the 512 MiB guest. A staging preflight
+that read a whole image triggered global OOM and killed Astra on November 13;
+the failed attempt and kernel diagnosis remain in checkpoint51 evidence.
+
 `run-arty.sh` keeps an existing image at
 `/var/lib/astra/state/system/storage-terminal.img`. Changing a release's
 `storage-terminal.img` seed does not update that running state, so a boot after

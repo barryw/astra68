@@ -343,6 +343,7 @@ typedef struct DisplayState {
     uint32_t menu_owner;
     uint32_t menu_request;
     uint8_t menu_persistent;
+    uint8_t menu_application;
     uint32_t menu_selection_offset;
     DisplayWindowMenuEntry *window_menu_entries;
     uint32_t window_menu_entry_count;
@@ -1767,7 +1768,8 @@ static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp
     uint32_t offset = state->menu_selection_offset;
     uint32_t source = state->window_menu_source;
     uint32_t target = 0u;
-    uint32_t app_row = request == DISPLAY_APP_MENU_REQUEST &&
+    uint32_t application = state->menu_application;
+    uint32_t app_row = application &&
         selection != 0u && selection <= 4u ?
         state->bar_app_source[selection - 1u] : 0u;
 
@@ -1795,6 +1797,7 @@ static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp
     state->menu_owner = state->menu_request = 0u;
     state->bar_selected_heading = UINT32_MAX;
     state->menu_persistent = 0u;
+    state->menu_application = 0u;
     state->menu_selection_offset = 0u;
     state->window_menu_source = state->window_menu_entry_count = 0u;
     astra_runtime_deallocate(state->window_menu_entries);
@@ -1809,15 +1812,14 @@ static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp
     if (owner != 0u) {
         uint32_t index = find_id(state, owner);
         if (index != state->count) {
-            if (request == DISPLAY_APP_MENU_REQUEST && selection != 0u &&
+            if (application && selection != 0u &&
                 status == ASTRA_STATUS_OK)
                 app_menu_action(state, index, selection - 1u,
                                 app_row, timestamp_ms);
             else {
                 AstraWindowEvent event = {.type = ASTRA_WINDOW_EVENT_MENU_RESULT,
                     .timestamp_ms = timestamp_ms};
-                event.data.menu_result.request = request ==
-                    DISPLAY_APP_MENU_REQUEST ?
+                event.data.menu_result.request = application ?
                     ASTRA_WINDOW_MENU_BAR_REQUEST : request;
                 event.data.menu_result.selection = selection != 0u ?
                     selection + offset : 0u;
@@ -1947,6 +1949,7 @@ static uint32_t menu_install(DisplayState *state, const AstraMenu *menu,
     state->menu_owner = owner;
     state->menu_request = request;
     state->menu_persistent = 0u;
+    state->menu_application = 0u;
     state->menu_rows = rows;
     state->menu_document = document;
     state->overlay = DISPLAY_OVERLAY_MENU;
@@ -2237,9 +2240,11 @@ static uint32_t menu_bar_open(DisplayState *state, uint32_t heading)
         }
         status = menu_install(state, &menu, window->id,
                               DISPLAY_APP_MENU_REQUEST, items, NULL);
-        if (status == ASTRA_STATUS_OK)
+        if (status == ASTRA_STATUS_OK) {
+            /* Client request cookies can equal our internal application-menu cookie. */
+            state->menu_application = 1u;
             memcpy(state->bar_app_source, sources, sizeof(sources));
-        else
+        } else
             astra_runtime_deallocate(items);
         return status;
     }

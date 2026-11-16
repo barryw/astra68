@@ -125,6 +125,8 @@ typedef struct KernelAddressSpace {
     uint32_t root_physical;
     uint32_t mapped_pages;
     uint32_t table_pages;
+    /* Area-view changes across a blocked pager check; saturation never aliases. */
+    uint64_t area_mapping_sequence;
     uint32_t private_reserved[KERNEL_VM_PRIVATE_BITMAP_WORDS];
     uint32_t private_writable[KERNEL_VM_PRIVATE_BITMAP_WORDS];
     uint8_t initialized;
@@ -199,6 +201,11 @@ KernelVmStatus kernel_vm_cow_make_private(KernelAddressSpace *space,
                                           uint32_t virtual_address);
 KernelVmStatus kernel_vm_cow_fault(KernelAddressSpace *space,
                                    uint32_t virtual_address);
+/* Copy only an area's read-only alias in this space's own page table. */
+KernelVmStatus kernel_vm_copy_shared_page(KernelAddressSpace *space,
+                                          uint32_t virtual_address,
+                                          uint32_t physical_address,
+                                          uint32_t frame_owner);
 KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
                                     uint32_t virtual_address);
 KernelVmStatus kernel_vm_map_supervisor_stack(uint16_t slot,

@@ -640,13 +640,13 @@ shared host command header also serves audio, entropy, metrics, and remote
 desktop; any incompatible change must update and verify those consumers. Do
 not introduce filesystem records by repurposing unrelated private fields.
 
-FS44. Existing ordinary and accelerated requests converge on the same trusted
-validation and Linux implementation. Accelerators carry scoped authority and
-generations. The broad host-device handoff was removed at storage protocol
-27. Protocol 28 hands a client a kernel-bound filesystem scope instead, which
-reaches only that scope's session; the device itself must not return as a
-grant bypass. Keep acceleration only where measurements justify it, with
-behavioral parity tests.
+FS44. Ordinary file and path requests pass through the authenticated native
+service and its canonical ownership and cache rules. Provider sessions and
+capabilities remain private to that service; no grant bypass is exposed to
+clients. Wire 42 removes the former direct-provider accelerator. Certification
+must attribute test traffic to native service accounting, excluding background
+activity. Any future acceleration must preserve that same authority and cache
+boundary and justify its complexity with measurements and behavior tests.
 
 FS45. Cut over the selected system volume, bootstrap loader, existing HostFS
 exports, RAM storage, and application bindings. Preserve existing files and

@@ -82,7 +82,7 @@ typedef struct PosixDescriptor {
 } PosixDescriptor;
 
 #define POSIX_EXEC_MAGIC 0x50584543u
-#define POSIX_EXEC_VERSION 5u
+#define POSIX_EXEC_VERSION 6u
 
 typedef struct PosixExecHeader {
     uint32_t magic;

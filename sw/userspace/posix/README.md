@@ -26,7 +26,7 @@ correct answer rather than a missing feature.
 | file | provides |
 |---|---|
 | `src/console.c` | the descriptor table. 0/1/2 arrive as the `STDIN`/`STDOUT`/`STDERR` stream capabilities; anything above them is what `open` or `pipe` put there. `read`, `write`, `close`, `dup`, `dup2`, `fcntl`, `pipe`, `isatty`, `lseek`, `_exit` |
-| `src/file.c` | `open`, `stat`, `fstat`, `access`, `unlink`, `rmdir`, `mkdir`, `chdir`, `getcwd`, `opendir`, `readdir`, `closedir`, read-only file-backed `mmap`/`munmap` |
+| `src/file.c` | `open`, `stat`, `fstat`, `access`, `unlink`, `rmdir`, `mkdir`, `chdir`, `getcwd`, `opendir`, `readdir`, `closedir`, native-backed `mmap`/`munmap`/`msync` |
 | `src/heap.c` | `sbrk`, so picolibc's `malloc`, `free` and `realloc` work |
 | `src/startup.c` | standard `main(argc, argv, envp)` entry over Astra's native startup block |
 | `src/terminal.c` | termios state, raw/canonical switching, window size, drain and flush |
@@ -93,13 +93,36 @@ what matters is that each one has an Astra answer before it has a Unix one.
 | missing | Astra answer | first needed by |
 |---|---|---|
 | `realpath` | normalising is `path_normalise`; there is no root to resolve against | rarely |
-| writable/anonymous `mmap`, partial `munmap` | native areas need dirty writeback and range unmap | large-file editing |
 
-Read-only file-backed `mmap` uses native HostFS areas. `MAP_SHARED` and
-`MAP_PRIVATE` accept page-aligned offsets and remain valid after `close(fd)`.
-`munmap` accepts the complete rounded mapping span. Writable mappings,
-anonymous mappings, fixed placement, and partial unmap return `ENOTSUP`;
-strict EOF and truncate behavior remains part of the general file-cache work.
+File-backed `mmap` uses native HostFS areas. Writable `MAP_SHARED` requires a
+read/write description; `MAP_PRIVATE` supports writes through native COW, including a
+read-only file descriptor. Private writes never update the file or other
+views, and fork retains the native private-copy isolation. Both accept
+page-aligned offsets and remain valid after `close(fd)`. On MC68040,
+`PROT_WRITE` also permits reads. `munmap` removes any page-aligned subrange,
+including ranges crossing mapping windows or unmapped holes. Surviving views
+keep their native backing, permissions and fork behavior. Native view records
+are the only mapping inventory; POSIX has no separate mapping list or mutex.
+Before removal, native unmap checks shared backing for saved errors. `munmap`
+returns `EIO` on a backing failure and keeps its range intact for retry. It
+does not wait for pending writes; `msync(MS_SYNC)` is the durability barrier.
+`MAP_ANONYMOUS` ignores the file descriptor and uses demand-zero native areas.
+Private anonymous views keep fork isolation; shared anonymous views share
+changes across fork. Native mapping references own backing through close,
+unmap, exec and process exit, with no extra userspace handle ledger.
+`msync` resolves the native mappings even after descriptor close or partial
+unmap. `MS_SYNC` awaits native writeback and backing sync; `MS_ASYNC` refreshes
+metadata and acknowledges existing native dirty-generation work, without
+waiting for the writes. No POSIX worker or pending-message list is involved.
+Native owner refresh/sync keeps shared aliases coherent for `MS_INVALIDATE`;
+private copies remain private. Backing errors retain their exact `errno`.
+Shared-write/sync/unmap integration passes host/DE25 qualification. Empty files and
+initial ranges beyond EOF can be mapped; accessing an unavailable backing page
+terminates with `SIGBUS` wait status through the native backing-fault verdict. An unmapped address
+or a write denied by view permissions terminates with `SIGSEGV` wait status. Mapped reservations
+survive backing growth and shrink; whole pages past EOF remain inaccessible.
+EOF/fault termination passes native and DE25 qualification.
+Fixed placement and no-access/execute protection return `ENOTSUP`.
 
 `execve` is an atomic replacement over the shared native ELF loader. POSIX
 exports descriptor/VFS state into the opaque startup handoff, so redirections,

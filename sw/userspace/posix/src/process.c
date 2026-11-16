@@ -533,6 +533,8 @@ posix_wait_status(uint32_t astra_status, uint32_t wait_result)
 {
     if (ASTRA_STATUS_IS_SIGNALLED(astra_status))
         return (int)ASTRA_STATUS_SIGNAL_NUMBER(astra_status);
+    if (astra_status == ASTRA_STATUS_BACKING_FAULTED)
+        return SIGBUS;
     if (wait_result == ASTRA_SYSCALL_PEER_DEAD ||
         (astra_status & ASTRA_STATUS_VERDICT) != 0u)
         return SIGSEGV;

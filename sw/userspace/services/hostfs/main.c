@@ -34,7 +34,8 @@ enum {
 
 static uint32_t device_handle;
 static uint32_t secret_device_handle;
-static uint32_t provider_epoch;
+/* Last completely rebound provider view; zero requires revalidation. */
+static uint32_t bound_provider_epoch;
 static uint32_t owner_files;
 static uint32_t owner_sessions;
 static uint32_t queue_messages;
@@ -99,6 +100,7 @@ typedef struct HostfsBackend {
     struct HostfsVolume *owner;
     struct HostfsGrant *grant;
     uint32_t references;
+    uint32_t epoch;
 } HostfsBackend;
 
 typedef struct HostfsVolume {
@@ -140,13 +142,12 @@ static _Alignas(16) uint8_t signal_stack[4096u];
 
 /*
  * A grant HostFS answers on its own port (docs/FILESYSTEM_PRODUCTION_PRD.md
- * FS15): its provider session, the scope that binds clients' channels to
- * that session with the grant's rights, and the service whose sessions it
- * binds. The port record comes first, so the port layer's grant pointer is
- * this record.
+ * FS15). Its rooted provider session stays private; native service sessions
+ * bind callers to the grant's rights. The port record comes first, so the
+ * port layer's grant pointer is this record.
  */
 typedef struct HostfsGrant {
-    AstraVfsPortGrant port;        /* receive, id, rights, scope */
+    AstraVfsPortGrant port;        /* receive, id, rights */
     HostfsVolume *owner;          /* canonical owner of this mounted volume */
     uint32_t session;              /* its provider session */
     HostfsBackend *backend;       /* immutable rooted context for this incarnation */
@@ -158,9 +159,8 @@ typedef struct HostfsGrant {
     uint32_t deriver;              /* kernel-stamped deriving process */
     uint32_t deriver_session;      /* its session on `parent` */
     uint32_t requester;            /* kernel-stamped creation/recovery provenance */
-    uint32_t retiring;             /* charged until actual scope/session/port retirement */
-    uint32_t scope_revoked;
-    uint32_t backing_references;  /* areas and backend contexts retaining this grant */
+    uint32_t retiring;             /* charged until backend/session/port retirement */
+    uint32_t backing_references;  /* backend contexts retaining this grant */
     AstraVolumeReference volume;
     char root[ASTRA_HOST_FS_PATH_MAX]; /* recorded volume-relative recovery path */
     AstraVfsNodeMeta root_meta;
@@ -168,31 +168,39 @@ typedef struct HostfsGrant {
 
 typedef struct HostfsFileArea {
     struct HostfsFileArea *next;
+    HostfsVolume *owner;
     HostfsGrant *grant;
-    AstraVfsHostBackend backend;
     AstraVfsFilePageSource source;
-    AstraVfsNodeInfo snapshot;
+    AstraVfsFileIO *io;
+    AstraVfsFileCache cache;
+    uint32_t writeback_cursor;
     uint32_t provider_epoch;
     uint32_t area;
+    uint64_t usage_mapping_sequence;
     uint32_t pins;
     uint8_t stale;
     uint8_t check_links;
+    uint8_t retired_grant;
+    uint8_t reclaim_requested;
 } HostfsFileArea;
 
 static HostfsFileArea *file_areas;
 static AstraVfsFilePager file_pager;
 static uint32_t file_pager_send;
+static uint32_t file_sync_receive;
 static uint32_t file_pager_thread;
 static uint32_t file_pager_cookie = 1u;
 static volatile uint32_t file_pager_stop;
 static uint32_t file_pager_failed;
 static void *file_pager_page;
+static _Alignas(16) uint8_t cache_page[ASTRA_MEMORY_PAGE_SIZE];
+static _Alignas(16) uint8_t cache_sync_page[ASTRA_MEMORY_PAGE_SIZE];
 
 /*
  * The grant table grows on demand: no count is compiled in or configured
  * (CLAUDE.md, "no ceilings compiled into an image"). The limits that remain
- * are real ones and answer for themselves: the kernel's scope pool
- * (astra_host_scope_create), the wait-set ABI (ASTRA_WAIT_MULTIPLE_MAX) and
+ * are real ones and answer for themselves: the kernel's handle pool,
+ * the wait-set ABI (ASTRA_WAIT_MULTIPLE_MAX) and
  * memory. Each record is allocated on its own so the port layer's grant
  * pointer never moves while a pump is using it.
  */
@@ -200,14 +208,14 @@ static HostfsGrant **grants;
 static uint32_t grant_count;       /* live records, packed at the front */
 static uint32_t grant_capacity;    /* slots in grants, wait_* */
 static uint32_t next_grant_id = 1u;
-static uint32_t *wait_handles;     /* grant_capacity + 11 */
+static uint32_t *wait_handles;     /* grant_capacity + HOSTFS_FIXED_WAITS */
 static uint32_t *wait_owners;      /* what each handle is */
 static uint32_t wait_rotation;     /* first grant served this pass (M6) */
 static uint32_t usage_holders_changed;
 
 /* Existing service slots own holder identity. This notification only invalidates
  * the canonical QEMU usage sequence before another page can be published. */
-static void hostfs_sessions_changed(void *context)
+static void hostfs_holders_changed(void *context)
 {
     (void)context;
     usage_holders_changed = 1u;
@@ -225,6 +233,8 @@ static void hostfs_sessions_changed(void *context)
 #define WAIT_RAM_READ (UINT32_MAX - 7u)
 #define WAIT_RAM_WRITE (UINT32_MAX - 8u)
 #define WAIT_SHUTDOWN UINT32_MAX
+#define WAIT_FILE_SYNC (UINT32_MAX - 11u)
+#define HOSTFS_FIXED_WAITS 12u
 
 static void hostfs_signal(int number)
 {
@@ -241,13 +251,18 @@ static uint32_t volume_noop_unmount(void *context)
 static AstraVfsPortService *grant_host(const HostfsGrant *grant);
 static int grant_retire(uint32_t at);
 static void file_areas_maintain(int discard_idle);
+static uint32_t file_areas_writeback(uint32_t budget);
 static int file_areas_observe_nodes(HostfsVolume *volume, uint64_t nodes);
 static void file_pager_stop_and_close(void);
+static uint32_t close_owned_session(uint32_t *session);
+static uint32_t grant_backend_detach(HostfsGrant *grant, int lost);
+static uint32_t hostfs_check_provider(void);
 
 static int hostfs_reclaim_once(uint32_t attempt, int limited)
 {
     if (attempt != 0u || !limited) return 0;
-    /* Idle cache areas hold handles as well as pages. */
+    /* Dirty owners must make bounded progress before clean handles can retire. */
+    (void)file_areas_writeback(16u);
     file_areas_maintain(1);
     return 1;
 }
@@ -268,49 +283,95 @@ static uint32_t hostfs_session_open(uint32_t parent,
 static void hostfs_cache_reclaim(void *context)
 {
     (void)context;
-    file_areas_maintain(1);
+    (void)hostfs_reclaim_once(0u, 1);
+}
+
+static uint32_t file_pager_check(void)
+{
+    uint32_t status = __atomic_load_n(&file_pager_failed, __ATOMIC_ACQUIRE);
+    if (status != ASTRA_SYSCALL_RESOURCE_LIMIT) return status;
+    /* Only the control thread may retire cache owners while the pager waits. */
+    hostfs_cache_reclaim(NULL);
+    __atomic_store_n(&file_pager_failed, 0u, __ATOMIC_RELEASE);
+    (void)astra_log("HostFS pager admission reclaim");
+    return astra_futex_wake(&file_pager_failed, 1u, NULL);
 }
 
 static uint32_t finish_hostfs(void)
 {
-    const AstraVfsMountOps metrics_mount = {NULL, volume_noop_unmount};
     uint32_t status;
+    uint32_t sync_status;
 
-    file_areas_maintain(1);
-    if (file_areas != NULL) return ASTRA_VFS_ERR_BUSY;
-    astra_volume_port_destroy(&volume_port);
+    if (file_sync_receive != 0u) {
+        while (astra_vfs_file_pager_sync_pump(&file_pager, file_sync_receive,
+                8u, &sync_status) != 0u) {}
+        if (sync_status != ASTRA_SYSCALL_OK) return ASTRA_STATUS_IO;
+    }
+
     while (astra_vfs_port_service_worker_pump(&metrics_port,
                                                &metrics_worker, 1u) != 0u) {}
     for (uint32_t at = 0u; at < grant_count; ++at)
         while (!grants[at]->retiring && astra_vfs_port_service_grant_pump(
                    grant_host(grants[at]), &worker, &grants[at]->port,
                    1u) != 0u) {}
-    if (metrics_port.stalled != 0u)
+    if (metrics_port.stalled != 0u) {
+        (void)astra_log_failure("HostFS shutdown metrics drain", metrics_port.stalled);
         return ASTRA_STATUS_IO;
+    }
     for (HostfsVolume *volume = volumes; volume != NULL; volume = volume->next)
-        if (volume->port.stalled != 0u)
+        if (volume->port.stalled != 0u) {
+            (void)astra_log_failure("HostFS shutdown volume drain", volume->port.stalled);
             return ASTRA_STATUS_IO;
-    file_pager_stop_and_close();
-    /* Normal retirement is also the shutdown owner; failed cleanup remains
-       charged until retry or canonical process/provider teardown. */
-    while (grant_count != 0u)
-        if (!grant_retire(0u)) return ASTRA_VFS_ERR_BUSY;
-    status = astra_vfs_service_shutdown(&metrics_service, &metrics_mount,
-                                        NULL);
-    if (status != ASTRA_VFS_OK)
-        return status;
-    for (HostfsVolume *volume = volumes; volume != NULL; volume = volume->next) {
-        status = astra_vfs_service_shutdown(&volume->service, &metrics_mount, NULL);
-        if (status != ASTRA_VFS_OK)
+        }
+    /* Draining requests can admit another file area. */
+    status = file_areas_writeback(0u);
+    if (status != ASTRA_VFS_OK) return status;
+    file_areas_maintain(1);
+    if (file_areas != NULL) return ASTRA_VFS_ERR_BUSY;
+    bound_provider_epoch = 0u;
+    for (uint32_t at = 0u; at < grant_count; ++at) {
+        HostfsGrant *grant = grants[at];
+        status = grant_backend_detach(grant, 1);
+        if (status == ASTRA_VFS_OK)
+            status = close_owned_session(&grant->session);
+        if (status != ASTRA_VFS_OK) {
+            (void)astra_log_failure("HostFS shutdown grant", status);
             return status;
+        }
     }
     for (HostfsVolume *volume = volumes; volume != NULL; volume = volume->next) {
-        if (volume->backend.provider.session == 0u) continue;
-        status = astra_vfs_host_session_close(&transport, transport.generation, volume->backend.provider.session);
-        if (status != ASTRA_VFS_OK) return status;
+        status = close_owned_session(&volume->backend.provider.session);
+        if (status == ASTRA_VFS_OK)
+            status = close_owned_session(&volume->pending_session);
+        if (status != ASTRA_VFS_OK) {
+            (void)astra_log_failure("HostFS shutdown volume", status);
+            return status;
+        }
     }
+    /* Public endpoints survive until READY and process exit, so failed
+     * retirement can reuse normal provider recovery without breaking clients. */
     status = astra_vfs_host_claim(&transport, transport.generation, 1, NULL);
-    astra_vfs_host_transport_destroy(&transport);
+    if (status != ASTRA_VFS_OK)
+        (void)astra_log_failure("HostFS shutdown claim", status);
+    return status;
+}
+
+static uint32_t hostfs_shutdown(const AstraShutdownRequest *request, uint32_t reply)
+{
+    uint32_t status = finish_hostfs();
+    uint32_t sent = astra_shutdown_respond(reply, request->header.transaction_id,
+        status == ASTRA_VFS_OK ? ASTRA_SHUTDOWN_READY : ASTRA_SHUTDOWN_CANCEL,
+        status);
+
+    if (status == ASTRA_VFS_OK && sent == ASTRA_SYSCALL_OK)
+        return ASTRA_VFS_OK;
+    if (bound_provider_epoch == 0u) {
+        uint32_t recovered = hostfs_check_provider();
+        if (recovered != ASTRA_VFS_OK)
+            (void)astra_log_failure("HostFS shutdown recovery", recovered);
+    }
+    if (status == ASTRA_VFS_OK)
+        status = ASTRA_VFS_ERR_PEER;
     return status;
 }
 
@@ -353,7 +414,8 @@ static const char *const fs_group_names[] = {
     "host.fs.filesystem_info", "host.fs.session_open",
     "host.fs.session_close", "host.fs.claim", "host.fs.seek",
     "host.fs.share", "host.fs.adopt", "host.fs.file_flags", "host.fs.path",
-    "host.fs.try_lock", "host.fs.change_snapshot", "host.fs.change_next"
+    "host.fs.try_lock", "host.fs.change_snapshot", "host.fs.change_next",
+    "host.fs.set_file_times"
 };
 _Static_assert(sizeof(fs_group_names) / sizeof(fs_group_names[0]) ==
                    ASTRA_HOST_FS_MAX + 1u,
@@ -524,9 +586,8 @@ static uint32_t grow_grants(void)
     uint32_t *handles;
     uint32_t *owners;
 
-    /* Grants and the eleven canonical control endpoints. */
-    if (capacity + 11u > ASTRA_WAIT_MULTIPLE_MAX)
-        capacity = ASTRA_WAIT_MULTIPLE_MAX - 11u;
+    if (capacity + HOSTFS_FIXED_WAITS > ASTRA_WAIT_MULTIPLE_MAX)
+        capacity = ASTRA_WAIT_MULTIPLE_MAX - HOSTFS_FIXED_WAITS;
     if (capacity <= grant_capacity)
         return ASTRA_VFS_ERR_LIMIT;
     table = astra_runtime_reallocate(grants, capacity * sizeof(*grants));
@@ -534,31 +595,17 @@ static uint32_t grow_grants(void)
         return ASTRA_VFS_ERR_LIMIT;
     grants = table;
     handles = astra_runtime_reallocate(wait_handles,
-                                       (capacity + 11u) * sizeof(*handles));
+                                       (capacity + HOSTFS_FIXED_WAITS) * sizeof(*handles));
     if (handles == NULL)
         return ASTRA_VFS_ERR_LIMIT;
     wait_handles = handles;
     owners = astra_runtime_reallocate(wait_owners,
-                                      (capacity + 11u) * sizeof(*owners));
+                                      (capacity + HOSTFS_FIXED_WAITS) * sizeof(*owners));
     if (owners == NULL)
         return ASTRA_VFS_ERR_LIMIT;
     wait_owners = owners;
     grant_capacity = capacity;
     return ASTRA_VFS_OK;
-}
-
-static uint32_t scope_status(uint32_t status)
-{
-    return status == ASTRA_SYSCALL_RESOURCE_LIMIT ||
-           status == ASTRA_SYSCALL_OUT_OF_MEMORY ? ASTRA_VFS_ERR_LIMIT :
-           status == ASTRA_SYSCALL_PEER_DEAD ? ASTRA_VFS_ERR_PEER :
-                                               ASTRA_VFS_ERR_IO;
-}
-
-static uint32_t grant_scope_flags(uint32_t rights)
-{
-    return ((rights & ASTRA_VFS_GRANT_WRITE) == 0u ? ASTRA_HOST_SCOPE_READ_ONLY : 0u) |
-           ((rights & ASTRA_VFS_GRANT_DELEGATE) != 0u ? ASTRA_HOST_SCOPE_DELEGATE : 0u);
 }
 
 static uint32_t close_owned_session(uint32_t *session)
@@ -619,6 +666,13 @@ static void hostfs_backend_release(void *context, const AstraVfsBackend *backend
     hostfs_backend_put(backend->context);
 }
 
+static uint64_t hostfs_backend_incarnation(void *context, const AstraVfsBackend *backend)
+{
+    const HostfsBackend *root = backend->context;
+    (void)context;
+    return root->epoch;
+}
+
 static uint32_t hostfs_backend_acquire(void *context, uint32_t owner, uint32_t id,
     AstraVfsBackend *backend)
 {
@@ -635,10 +689,11 @@ static uint32_t hostfs_backend_acquire(void *context, uint32_t owner, uint32_t i
 }
 
 static const AstraVfsBackendBindingOps hostfs_backend_bindings = {
-    hostfs_backend_acquire, hostfs_backend_retain, hostfs_backend_release
+    hostfs_backend_acquire, hostfs_backend_retain, hostfs_backend_release,
+    hostfs_backend_incarnation
 };
 
-static uint32_t grant_backend_create(HostfsGrant *grant)
+static uint32_t grant_backend_create(HostfsGrant *grant, uint32_t epoch)
 {
     HostfsBackend *backend = astra_runtime_callocate(1u, sizeof(*backend));
     uint32_t status;
@@ -651,6 +706,7 @@ static uint32_t grant_backend_create(HostfsGrant *grant)
     backend->owner = grant->owner;
     backend->grant = grant;
     backend->references = 1u;
+    backend->epoch = epoch;
     if (!astra_vfs_state_lock_acquire(&state_lock)) {
         astra_runtime_deallocate(backend);
         return ASTRA_VFS_ERR_IO;
@@ -662,29 +718,26 @@ static uint32_t grant_backend_create(HostfsGrant *grant)
     return status;
 }
 
-static uint32_t grant_backend_detach(HostfsGrant *grant)
+static uint32_t grant_backend_detach(HostfsGrant *grant, int lost)
 {
     if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
     HostfsBackend *backend = grant->backend;
     grant->backend = NULL;
     if (backend != NULL) {
-        __atomic_store_n(&backend->provider.lost, 1u, __ATOMIC_RELEASE);
+        if (lost) __atomic_store_n(&backend->provider.lost, 1u, __ATOMIC_RELEASE);
         hostfs_backend_put(backend);
     }
     astra_vfs_state_lock_release(&state_lock);
     return ASTRA_VFS_OK;
 }
 
-/* Adds a grant over provider `session` with `rights`; answers its send
- * handle. Its scope carries exactly those rights: read-only without WRITE,
- * delegable only with DELEGATE. */
+/* Grant port carries native authority; the rooted provider session stays private. */
 static uint32_t grant_add(HostfsVolume *owner, uint32_t session,
                           uint32_t rights, const AstraVolumeReference *volume, const char *root, uint32_t requester, uint32_t *send,
                           HostfsGrant **added)
 {
     HostfsGrant *grant;
     uint32_t status;
-    uint32_t flags = grant_scope_flags(rights);
 
     *send = 0u;
     if (added != NULL) *added = NULL;
@@ -722,26 +775,17 @@ static uint32_t grant_add(HostfsVolume *owner, uint32_t session,
         (void)grant_retire(at);
         return status;
     }
-    status = grant_backend_create(grant);
+    status = grant_backend_create(grant, bound_provider_epoch);
     if (status != ASTRA_VFS_OK) {
         (void)astra_log_failure("hostfs grant backend", status);
         (void)grant_retire(at);
         return status;
     }
     AstraHostLeaseInfo lease = {0};
-    for (uint32_t attempt = 0u; attempt < 2u; ++attempt) {
-        status = astra_host_scope_create(device_handle, session, flags, &grant->port.scope);
-        if (!hostfs_reclaim_once(attempt,
-            status == ASTRA_SYSCALL_RESOURCE_LIMIT || status == ASTRA_SYSCALL_OUT_OF_MEMORY)) break;
-    }
-    if (status == ASTRA_SYSCALL_OK)
-        status = astra_host_scope_limit(grant->port.scope, owner_files);
-    if (status == ASTRA_SYSCALL_OK)
-        status = astra_host_lease_query(grant->port.scope, &lease);
+    status = astra_host_lease_query(device_handle, &lease);
     if (status != ASTRA_SYSCALL_OK) {
-        (void)astra_log_failure("hostfs grant scope setup", status);
         (void)grant_retire(at);
-        return scope_status(status);
+        return astra_vfs_host_status_from_syscall(status);
     }
     for (uint32_t attempt = 0u; attempt < 2u; ++attempt) {
         status = astra_rt_port_create(
@@ -757,7 +801,7 @@ static uint32_t grant_add(HostfsVolume *owner, uint32_t session,
         (void)grant_retire(at);
         if (*send != 0u) (void)astra_close(*send);
         *send = 0u;
-        return scope_status(status);
+        return astra_vfs_host_status_from_syscall(status);
     }
     grant->port.features = ASTRA_VFS_FEATURE_RESOLVES | ASTRA_VFS_FEATURE_NODE_META |
                            ASTRA_VFS_FEATURE_DESCRIPTIONS | ASTRA_VFS_FEATURE_DIRECTORY_PATH;
@@ -904,9 +948,10 @@ static const AstraVfsFilePageSource *file_page_acquire(void *context,
     (void)context;
     if (!astra_vfs_state_lock_acquire(&state_lock)) return NULL;
     for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next)
-        if (entry->source.cookie == cookie) {
+        if (entry->source.cookie == cookie &&
+            entry->source.retained != ASTRA_VFS_FILE_INVALID) {
             ++entry->pins;
-            ++entry->grant->owner->cache_stats[CACHE_PAGE_REQUESTS];
+            ++entry->owner->cache_stats[CACHE_PAGE_REQUESTS];
             source = &entry->source;
             break;
         }
@@ -941,6 +986,20 @@ static void file_pager_run(uint32_t argument)
             break;
         }
         (void)astra_vfs_file_pager_pump(&file_pager, 8u);
+        if (file_pager.stalled == ASTRA_SYSCALL_RESOURCE_LIMIT) {
+            __atomic_store_n(&file_pager_failed, file_pager.stalled, __ATOMIC_RELEASE);
+            while (!file_pager_stop && __atomic_load_n(&file_pager_failed,
+                    __ATOMIC_ACQUIRE) == ASTRA_SYSCALL_RESOURCE_LIMIT) {
+                status = astra_futex_wait(&file_pager_failed,
+                    ASTRA_SYSCALL_RESOURCE_LIMIT, ASTRA_DEADLINE_FOREVER);
+                if (status != ASTRA_SYSCALL_OK && status != ASTRA_SYSCALL_WOULD_BLOCK &&
+                    status != ASTRA_SYSCALL_CANCELLED) break;
+            }
+            if (status == ASTRA_SYSCALL_OK || status == ASTRA_SYSCALL_WOULD_BLOCK ||
+                status == ASTRA_SYSCALL_CANCELLED)
+                file_pager.stalled = 0u;
+            else file_pager.stalled = status;
+        }
         if (file_pager.stalled != 0u) break;
     }
     if (file_pager.stalled != 0u)
@@ -950,12 +1009,16 @@ static void file_pager_run(uint32_t argument)
 
 static uint32_t file_pager_start(void)
 {
-    uint32_t scratch = 0u, mapped = 0u;
+    uint32_t scratch = 0u, mapped = 0u, sync_send = 0u;
     uint32_t status = astra_rt_port_create(queue_messages,
         queue_messages * (uint32_t)sizeof(AstraPagerPageRequest),
         &file_pager.receive, &file_pager_send);
     if (status != ASTRA_SYSCALL_OK) return ASTRA_VFS_ERR_LIMIT;
-    status = astra_rt_area_create(ASTRA_MEMORY_PAGE_SIZE,
+    status = astra_rt_port_create(queue_messages,
+        queue_messages * (uint32_t)sizeof(AstraPagerSyncRequest),
+        &file_sync_receive, &sync_send);
+    if (status == ASTRA_SYSCALL_OK)
+        status = astra_rt_area_create(ASTRA_MEMORY_PAGE_SIZE,
         ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
         ASTRA_RIGHT_TRANSFER, &scratch);
     if (status == ASTRA_SYSCALL_OK)
@@ -970,10 +1033,14 @@ static uint32_t file_pager_start(void)
         if (scratch != 0u) (void)astra_close(scratch);
         (void)astra_close(file_pager_send);
         (void)astra_close(file_pager.receive);
+        if (sync_send != 0u) (void)astra_close(sync_send);
+        if (file_sync_receive != 0u) (void)astra_close(file_sync_receive);
+        file_sync_receive = 0u;
         file_pager_send = file_pager.receive = 0u;
         file_pager_page = NULL;
         return ASTRA_VFS_ERR_LIMIT;
     }
+    file_pager.sync_send = sync_send;
     AstraThreadStart start = {file_pager_run, 0u};
     status = astra_rt_thread_create(&start, ASTRA_PROCESS_PRIORITY_NORMAL,
         ASTRA_RIGHT_WAIT | ASTRA_RIGHT_ADMINISTER, &file_pager_thread, NULL);
@@ -982,6 +1049,9 @@ static uint32_t file_pager_start(void)
         (void)astra_close(file_pager.data_area);
         (void)astra_close(file_pager_send);
         (void)astra_close(file_pager.receive);
+        (void)astra_close(file_pager.sync_send);
+        (void)astra_close(file_sync_receive);
+        file_sync_receive = 0u;
         file_pager = (AstraVfsFilePager){0};
         file_pager_page = NULL;
         file_pager_send = 0u;
@@ -1003,159 +1073,267 @@ static void file_pager_stop_and_close(void)
     if (file_pager.data_area != 0u) (void)astra_close(file_pager.data_area);
     if (file_pager_send != 0u) (void)astra_close(file_pager_send);
     if (file_pager.receive != 0u) (void)astra_close(file_pager.receive);
+    if (file_pager.sync_send != 0u) (void)astra_close(file_pager.sync_send);
+    if (file_sync_receive != 0u) (void)astra_close(file_sync_receive);
+    file_sync_receive = 0u;
     file_pager = (AstraVfsFilePager){0};
     file_pager_page = NULL;
     file_pager_send = 0u;
 }
 
-static uint32_t hostfs_file_area(void *context,
-    const AstraVfsPortGrant *port, uint32_t requester, uint64_t token,
-    uint64_t base, uint32_t span, uint32_t *area, uint64_t *file_size)
+/* The caller pins the source while reclaiming other idle area handles. */
+static uint32_t file_area_duplicate(uint32_t source, uint32_t rights, uint32_t *area)
 {
-    HostfsGrant *grant = (HostfsGrant *)(void *)port;
-    const AstraVfsBackendOps *ops = astra_vfs_host_ops();
-    AstraVfsNodeInfo info = {0};
-    AstraVfsHostBackend backend;
-    HostfsFileArea *entry;
-    uintptr_t node = 0u;
-    uint32_t status;
-    uint64_t owner_base;
-
-    (void)context;
-    (void)requester;
-    *area = 0u;
-    *file_size = 0u;
-    if (span == 0u || span > ASTRA_AREA_SIZE_MAX ||
-        (base & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
-        (span & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
-        span > ASTRA_AREA_SIZE_MAX - base % ASTRA_AREA_SIZE_MAX ||
-        base > UINT64_MAX - span)
-        return ASTRA_VFS_ERR_INVALID;
-    owner_base = base - base % ASTRA_AREA_SIZE_MAX;
-    if (grant->retiring || file_pager_thread == 0u ||
-        __atomic_load_n(&file_pager_failed, __ATOMIC_ACQUIRE) != 0u ||
-        file_pager_cookie == UINT32_MAX)
-        return ASTRA_VFS_ERR_BUSY;
-    if (!astra_vfs_host_init(&backend, &transport,
-                             transport.generation, grant->session))
-        return ASTRA_VFS_ERR_LOST;
-    for (uint32_t attempt = 0u; attempt < 2u; ++attempt) {
-        status = ops->adopt(&backend, token, 0u, &node);
-        if (!hostfs_reclaim_once(attempt, status == ASTRA_VFS_ERR_LIMIT)) break;
-    }
-    if (status != ASTRA_VFS_OK) return status;
-    uint32_t open_flags = 0u;
-    status = ops->file_flags(&backend, node, 0u, 0u, &open_flags);
-    if (status != ASTRA_VFS_OK || (open_flags & ASTRA_VFS_OPEN_READ) == 0u) {
-        (void)ops->close(&backend, node);
-        return status != ASTRA_VFS_OK ? status : ASTRA_VFS_ERR_ACCESS;
-    }
-    status = ops->stat_node(&backend, node, &info);
-    if (status != ASTRA_VFS_OK || info.kind != ASTRA_VFS_KIND_FILE ||
-        base >= info.size) {
-        (void)ops->close(&backend, node);
-        return status != ASTRA_VFS_OK ? status : ASTRA_VFS_ERR_INVALID;
-    }
-    uint64_t nodes = 0u, entries = 0u;
-    status = astra_vfs_host_change_snapshot(&grant->owner->backend.provider,
-                                            &nodes, &entries);
-    if (status != ASTRA_VFS_OK) {
-        (void)ops->close(&backend, node);
-        return status;
-    }
-    if (!file_areas_observe_nodes(grant->owner, nodes)) {
-        (void)ops->close(&backend, node);
-        return ASTRA_VFS_ERR_BUSY;
-    }
-    file_areas_maintain(0);
-    if (!astra_vfs_state_lock_acquire(&state_lock)) {
-        (void)ops->close(&backend, node);
-        return ASTRA_VFS_ERR_IO;
-    }
-    for (entry = file_areas; entry != NULL; entry = entry->next)
-        if (entry->grant->owner == grant->owner &&
-            entry->provider_epoch == provider_epoch && !entry->stale &&
-            entry->source.node != 0u &&
-            entry->source.base == owner_base &&
-            entry->source.span == ASTRA_AREA_SIZE_MAX &&
-            astra_vfs_node_identity_equal(&info.meta, &info.meta) &&
-            astra_vfs_node_identity_equal(&entry->source.identity,
-                                           &info.meta)) {
-            ++grant->owner->cache_stats[CACHE_HITS];
-            if (!astra_vfs_node_revision_equal(&entry->snapshot, &info)) {
-                uint32_t released = 0u;
-                if (astra_rt_area_reclaim(entry->area, 0u,
-                        entry->source.span, &released) != ASTRA_SYSCALL_OK) {
-                    entry->stale = 1u;
-                    astra_vfs_state_lock_release(&state_lock);
-                    (void)ops->close(&backend, node);
-                    return ASTRA_VFS_ERR_IO;
-                }
-                entry->snapshot = info;
-            }
-            status = astra_rt_handle_duplicate(entry->area,
-                ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
-                area);
-            astra_vfs_state_lock_release(&state_lock);
-            (void)ops->close(&backend, node);
-            if (status == ASTRA_SYSCALL_OK) *file_size = info.size;
-            return status == ASTRA_SYSCALL_OK ? ASTRA_VFS_OK : ASTRA_VFS_ERR_LIMIT;
-        }
-    astra_vfs_state_lock_release(&state_lock);
     for (uint32_t attempt = 0u; ; ++attempt) {
-        status = ASTRA_VFS_ERR_LIMIT;
-        entry = astra_runtime_callocate(1u, sizeof(*entry));
-        if (entry != NULL) {
-            entry->backend = backend;
-            entry->grant = grant;
-            entry->snapshot = info;
-            entry->provider_epoch = provider_epoch;
-            if (!astra_vfs_file_page_source_init(&entry->source,
-                &(AstraVfsBackend){ops, &entry->backend}, node, &info.meta,
-                owner_base, ASTRA_AREA_SIZE_MAX, file_pager_cookie))
-                status = ASTRA_VFS_ERR_INVALID;
-            else if (astra_rt_area_create_flagged(ASTRA_AREA_SIZE_MAX,
-                ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER |
-                ASTRA_RIGHT_ADMINISTER, ASTRA_AREA_CREATE_RESERVED,
-                &entry->area) != ASTRA_SYSCALL_OK)
-                status = ASTRA_VFS_ERR_LIMIT;
-            else if (astra_rt_area_bind_pager(entry->area, file_pager_send,
-                                              file_pager_cookie) != ASTRA_SYSCALL_OK)
-                status = ASTRA_VFS_ERR_IO;
-            else if (astra_rt_handle_duplicate(entry->area,
-                ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
-                area) != ASTRA_SYSCALL_OK)
-                status = ASTRA_VFS_ERR_LIMIT;
-            else
-                status = ASTRA_VFS_OK;
-            if (status == ASTRA_VFS_OK) break;
-            if (entry->area != 0u) (void)astra_close(entry->area);
-            astra_runtime_deallocate(entry);
-        }
-        if (!hostfs_reclaim_once(attempt, status == ASTRA_VFS_ERR_LIMIT)) {
-            (void)ops->close(&backend, node);
-            return status;
+        uint32_t status = astra_rt_handle_duplicate(source, rights, area);
+        if (status == ASTRA_SYSCALL_OK) return ASTRA_VFS_OK;
+        int limited = status == ASTRA_SYSCALL_RESOURCE_LIMIT ||
+                      status == ASTRA_SYSCALL_OUT_OF_MEMORY;
+        if (!hostfs_reclaim_once(attempt, limited))
+            return limited ? ASTRA_VFS_ERR_LIMIT : ASTRA_VFS_ERR_IO;
+    }
+}
+
+static uint32_t file_area_resize(const AstraVfsFilePageSource *source,
+    uint32_t area, uint64_t size)
+{
+    uint64_t bytes = size > source->base ? size - source->base : 0u;
+    uint32_t status = astra_rt_area_resize_backing(area,
+        bytes < source->span ? (uint32_t)bytes : source->span);
+    return status == ASTRA_SYSCALL_OK ? ASTRA_VFS_OK :
+        astra_vfs_host_status_from_syscall(status);
+}
+
+/* The native caller holds node I/O across validation and extent publication. */
+static uint32_t hostfs_stat(void *context, const AstraVfsOpenFile *file,
+    AstraVfsNodeInfo *info)
+{
+    (void)context;
+    if (!astra_vfs_open_file_active(file)) return ASTRA_VFS_ERR_ACCESS;
+    HostfsBackend *backend = file->backend.context;
+    uint64_t nodes = 0u, entries = 0u;
+    uint32_t status = astra_vfs_host_change_snapshot(&backend->owner->backend.provider,
+        &nodes, &entries);
+    if (status != ASTRA_VFS_OK) return status;
+    if (!file_areas_observe_nodes(backend->owner, nodes)) return ASTRA_VFS_ERR_BUSY;
+    status = astra_vfs_host_ops()->stat_node(file->backend.context, file->node, info);
+    if (status != ASTRA_VFS_OK) return status;
+    if (info->kind != ASTRA_VFS_KIND_FILE || info->size > INT64_MAX ||
+        (astra_vfs_node_identity_equal(&file->io->identity, &file->io->identity) &&
+         !astra_vfs_node_identity_equal(&file->io->identity, &info->meta)))
+        return ASTRA_VFS_ERR_LOST;
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
+    AstraVfsFileCache *cache = file->io->cache;
+    int reset = cache != NULL && !astra_vfs_node_revision_equal(&cache->backing, info);
+    int refresh = reset;
+    if (cache == NULL)
+        for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next)
+            if (entry->io == file->io && entry->source.cookie != 0u &&
+                (entry->stale || !astra_vfs_node_revision_equal(&entry->cache.backing, info))) {
+                refresh = 1;
+                break;
+            }
+    for (HostfsFileArea *entry = file_areas;
+            refresh && status == ASTRA_VFS_OK && entry != NULL; entry = entry->next) {
+        if (entry->io != file->io || entry->source.cookie == 0u) continue;
+        uint32_t released = 0u;
+        uint32_t reclaimed = astra_rt_area_reclaim(entry->area, 0u,
+            entry->source.span, &released);
+        if (reclaimed != ASTRA_SYSCALL_OK) {
+            status = reclaimed == ASTRA_SYSCALL_WOULD_BLOCK ?
+                ASTRA_VFS_ERR_BUSY : ASTRA_VFS_ERR_IO;
+            break;
         }
     }
-    ++file_pager_cookie;
-    if (!astra_vfs_state_lock_acquire(&state_lock)) status = ASTRA_VFS_ERR_IO;
-    else {
-        status = grant_backing_retain(grant);
-        if (status == ASTRA_VFS_OK) {
-            entry->next = file_areas;
-            file_areas = entry;
-            ++grant->owner->cache_stats[CACHE_CREATES];
+    /* Refuse dirty conflicts across every chunk before revoking private copies. */
+    for (HostfsFileArea *entry = file_areas;
+            refresh && status == ASTRA_VFS_OK && entry != NULL; entry = entry->next)
+        if (entry->io == file->io && entry->source.cookie != 0u)
+            status = file_area_resize(&entry->source, entry->area, info->size);
+    if (status == ASTRA_VFS_OK) {
+        /* Every owner is clean/reclaimed before adopting an external revision. */
+        if (reset) *cache = (AstraVfsFileCache){.backing = *info,
+            .size = info->size, .writer = cache->writer,
+            .external_writes = cache->external_writes};
+        for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next)
+            if (entry->io == file->io && entry->source.cookie != 0u) {
+                entry->cache.backing = *info;
+                entry->stale = 0u;
+            }
+    } else astra_vfs_file_cache_record_status(cache, status);
+    astra_vfs_state_lock_release(&state_lock);
+    return status;
+}
+
+static void file_area_release(HostfsFileArea *entry)
+{
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return;
+    --entry->pins;
+    astra_vfs_state_lock_release(&state_lock);
+}
+
+/* Rotate the existing owner list; no second writeback queue owns these nodes. */
+static void file_area_rotate(HostfsFileArea *entry)
+{
+    HostfsFileArea **slot = &file_areas;
+    while (*slot != entry) slot = &(*slot)->next;
+    *slot = entry->next;
+    while (*slot != NULL) slot = &(*slot)->next;
+    entry->next = NULL;
+    *slot = entry;
+}
+
+static uint32_t file_area_get(const AstraVfsOpenFile *file,
+    const AstraVfsNodeInfo *info, uint64_t base, HostfsFileArea **result)
+{
+    HostfsBackend *backend = file->backend.context;
+    HostfsGrant *grant = backend->grant;
+    AstraVfsFilePageSource prepared = {0};
+    HostfsFileArea *entry = NULL, *cached;
+    uint32_t status, cookie;
+    uint64_t owner_base = base - base % ASTRA_AREA_SIZE_MAX;
+
+    *result = NULL;
+    if (file_pager_thread == 0u ||
+        __atomic_load_n(&file_pager_failed, __ATOMIC_ACQUIRE) != 0u)
+        return ASTRA_VFS_ERR_BUSY;
+select_owner:
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
+    for (cached = file_areas; cached != NULL; cached = cached->next)
+        if (cached->io == file->io && cached->owner == grant->owner &&
+            cached->provider_epoch == bound_provider_epoch &&
+            cached->area != 0u && cached->source.cookie != 0u &&
+            cached->source.retained != ASTRA_VFS_FILE_INVALID &&
+            cached->source.base == owner_base) {
+            ++grant->owner->cache_stats[CACHE_HITS];
+            ++cached->pins;
+            *result = cached;
+            if (entry != NULL) entry->pins = 0u;
             astra_vfs_state_lock_release(&state_lock);
-            *file_size = info.size;
             return ASTRA_VFS_OK;
         }
+    if (entry != NULL) {
+        entry->source = prepared;
+        entry->cache.backing = *info;
+        entry->provider_epoch = bound_provider_epoch;
+        ++grant->owner->cache_stats[CACHE_CREATES];
+        *result = entry;
         astra_vfs_state_lock_release(&state_lock);
+        return ASTRA_VFS_OK;
     }
-    (void)astra_close(*area);
+    astra_vfs_state_lock_release(&state_lock);
+    for (uint32_t attempt = 0u; ; ++attempt) {
+        entry = astra_runtime_callocate(1u, sizeof(*entry));
+        if (entry != NULL) break;
+        if (!hostfs_reclaim_once(attempt, 1)) return ASTRA_VFS_ERR_LIMIT;
+    }
+    entry->owner = grant->owner;
+    entry->grant = grant;
+    entry->io = file->io;
+    entry->source.service = &grant->owner->service;
+    status = astra_vfs_service_retain_active(entry->source.service,
+        file, &entry->source.retained);
+    if (status != ASTRA_VFS_OK) {
+        astra_runtime_deallocate(entry);
+        return status;
+    }
+    /* An unpublished source owns its native reference but cannot serve faults. */
+    entry->pins = 1u;
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
+    HostfsFileArea **tail = &file_areas;
+    while (*tail != NULL) tail = &(*tail)->next;
+    *tail = entry;
+    if (file_pager_cookie == UINT32_MAX) {
+        astra_vfs_state_lock_release(&state_lock);
+        status = ASTRA_VFS_ERR_LIMIT;
+        goto done;
+    }
+    cookie = file_pager_cookie++;
+    astra_vfs_state_lock_release(&state_lock);
+    for (uint32_t attempt = 0u; ; ++attempt) {
+        status = astra_rt_area_create_flagged(ASTRA_AREA_SIZE_MAX,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER |
+            ASTRA_RIGHT_ADMINISTER, ASTRA_AREA_CREATE_RESERVED, &entry->area);
+        if (status == ASTRA_SYSCALL_OK) break;
+        if (!hostfs_reclaim_once(attempt,
+                status == ASTRA_SYSCALL_RESOURCE_LIMIT || status == ASTRA_SYSCALL_OUT_OF_MEMORY)) {
+            status = ASTRA_VFS_ERR_LIMIT;
+            goto done;
+        }
+    }
+    if (astra_rt_area_bind_pager(entry->area, file_pager_send, cookie) != ASTRA_SYSCALL_OK) {
+        status = ASTRA_VFS_ERR_IO;
+        goto done;
+    }
+    if (!astra_vfs_file_page_source_init(&prepared,
+        &grant->owner->service, entry->source.retained,
+        file->flags & ASTRA_VFS_OPEN_READ ? ASTRA_VFS_OPEN_READ : ASTRA_VFS_OPEN_WRITE,
+        &info->meta,
+        owner_base, ASTRA_AREA_SIZE_MAX, cookie)) {
+        status = ASTRA_VFS_ERR_INVALID;
+        goto done;
+    }
+    status = file_area_resize(&prepared, entry->area,
+        file->io->cache != NULL ? file->io->cache->size : info->size);
+    if (status != ASTRA_VFS_OK) goto done;
+    goto select_owner;
+
+done:
+    file_area_release(entry);
+    return status;
+}
+
+static uint32_t hostfs_area(void *context, const AstraVfsOpenFile *file,
+    AstraVfsFile *owned, const AstraVfsNodeInfo *information,
+    uint64_t base, uint32_t span, uint32_t *area)
+{
+    HostfsGrant *admission = context;
+    HostfsFileArea *entry;
+    (void)span;
     *area = 0u;
-    (void)astra_close(entry->area);
-    (void)ops->close(&entry->backend, node);
-    astra_runtime_deallocate(entry);
+    if (admission->retiring) return ASTRA_VFS_ERR_BUSY;
+    const AstraVfsNodeInfo *backing = file->io->cache != NULL ?
+        &file->io->cache->backing : information;
+    uint32_t status = file_area_get(file, backing, base, &entry);
+    if (status != ASTRA_VFS_OK) {
+        (void)astra_log_failure("HostFS map owner", status);
+        return status;
+    }
+    uint32_t rights = ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER;
+    if ((file->flags & ASTRA_VFS_OPEN_WRITE) != 0u) {
+        AstraVfsFileCache snapshot;
+        status = astra_vfs_service_cache_prepare(entry->source.service,
+            file, owned, ASTRA_VFS_CACHE_EXTERNAL_WRITES, &entry->cache, &snapshot);
+        if (status != ASTRA_VFS_OK) {
+            file_area_release(entry);
+            return status;
+        }
+        rights |= ASTRA_RIGHT_WRITE;
+    }
+    status = file_area_duplicate(entry->area, rights, area);
+    if (status != ASTRA_VFS_OK)
+        (void)astra_log_failure("HostFS map duplicate", status);
+    file_area_release(entry);
+    return status;
+}
+
+static uint32_t hostfs_file_area(void *context,
+    const AstraVfsPortGrant *port, uint32_t requester, uint32_t session,
+    AstraVfsFile file, uint64_t base, uint32_t span, uint32_t *area,
+    uint64_t *file_size)
+{
+    HostfsGrant *grant = (HostfsGrant *)(void *)port;
+    (void)context;
+    *area = 0u;
+    *file_size = 0u;
+    if (!astra_vfs_service_session_bound(&grant->owner->service,
+            session, requester, port->id))
+        return ASTRA_VFS_ERR_ACCESS;
+    uint32_t status = astra_vfs_service_file_area(&grant->owner->service,
+        session, file, base, span, hostfs_area, grant, area, file_size);
+    if (status != ASTRA_VFS_OK)
+        (void)astra_log_failure("HostFS map source", status);
+    file_areas_maintain(0);
     return status;
 }
 
@@ -1164,7 +1342,7 @@ static int file_areas_invalidate(HostfsVolume *volume, uint32_t kind,
 {
     if (!astra_vfs_state_lock_acquire(&state_lock)) return 0;
     for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next)
-        if (entry->grant->owner == volume &&
+        if (entry->owner == volume && entry->source.cookie != 0u &&
             (kind != ASTRA_HOST_FS_CHANGE_NODE ||
              !astra_vfs_node_identity_equal(&entry->source.identity,
                                             &entry->source.identity) ||
@@ -1249,17 +1427,25 @@ static void file_areas_maintain(int discard_idle)
     if (!astra_vfs_state_lock_acquire(&state_lock)) return;
     while (*slot != NULL) {
         HostfsFileArea *entry = *slot;
-        uint32_t handles = 0u, mappings = 0u, children = 0u, released = 0u;
+        /* Reclaim may run inside a cache callback; never reenter its node I/O. */
+        if (entry->io != NULL && entry->io->active != NULL) {
+            slot = &entry->next;
+            continue;
+        }
+        uint32_t handles = 0u, mappings = 0u, children = 0u;
         uint32_t status = ASTRA_SYSCALL_OK;
         int idle = 0;
         int unidentified = !astra_vfs_node_identity_equal(
             &entry->source.identity, &entry->source.identity);
-        int link_retirement = (entry->snapshot.meta.valid & ASTRA_VFS_META_NLINK) == 0u ||
-            entry->snapshot.meta.nlink == 0u;
-        int discard = discard_idle || entry->grant->retiring ||
-            entry->provider_epoch != provider_epoch || entry->source.node == 0u ||
+        int link_retirement = (entry->cache.backing.meta.valid & ASTRA_VFS_META_NLINK) == 0u ||
+            entry->cache.backing.meta.nlink == 0u;
+        int discard = discard_idle || entry->grant == NULL || entry->grant->retiring ||
+            entry->provider_epoch != bound_provider_epoch ||
+            entry->source.retained == ASTRA_VFS_FILE_INVALID || entry->source.cookie == 0u ||
             unidentified || link_retirement;
-        if (discard || entry->check_links) {
+        if (entry->source.cookie == 0u)
+            idle = entry->pins == 0u;
+        else if (discard || entry->check_links) {
             status = astra_rt_area_references(entry->area,
                 &handles, &mappings, &children);
             idle = status == ASTRA_SYSCALL_OK && handles == 1u &&
@@ -1269,8 +1455,8 @@ static void file_areas_maintain(int discard_idle)
             AstraVfsNodeInfo info = {0};
             ++entry->pins;
             astra_vfs_state_lock_release(&state_lock);
-            uint32_t checked = astra_vfs_host_ops()->stat_node(
-                &entry->backend, entry->source.node, &info);
+            uint32_t checked = astra_vfs_service_stat_retained(
+                entry->source.service, entry->source.retained, &info);
             if (!astra_vfs_state_lock_acquire(&state_lock)) return;
             --entry->pins;
             link_retirement = checked != ASTRA_VFS_OK ||
@@ -1281,25 +1467,60 @@ static void file_areas_maintain(int discard_idle)
             idle = status == ASTRA_SYSCALL_OK && handles == 1u &&
                 mappings == 0u && children == 0u && entry->pins == 0u;
         }
+        if (idle && discard && entry->io != NULL && entry->io->cache == &entry->cache) {
+            /* Detach shared metadata only after every chunk has no client or dirty pin. */
+            for (HostfsFileArea *sibling = file_areas; sibling != NULL; sibling = sibling->next) {
+                if (sibling->io != entry->io || sibling == entry) continue;
+                status = astra_rt_area_references(sibling->area, &handles, &mappings, &children);
+                if (status != ASTRA_SYSCALL_OK || handles != 1u || mappings != 0u ||
+                    children != 0u || sibling->pins != 0u) { idle = 0; break; }
+            }
+            if (idle) {
+                AstraVfsFileCache snapshot;
+                uint32_t sequence;
+                ++entry->pins;
+                astra_vfs_state_lock_release(&state_lock);
+                status = astra_vfs_service_cache_snapshot(entry->source.service,
+                    entry->source.retained, &snapshot, &sequence);
+                if (status == ASTRA_VFS_OK)
+                    status = astra_vfs_service_cache_retire(entry->source.service,
+                        entry->source.retained, sequence);
+                if (!astra_vfs_state_lock_acquire(&state_lock)) return;
+                --entry->pins;
+                status = astra_rt_area_references(entry->area, &handles, &mappings, &children);
+                idle = status == ASTRA_SYSCALL_OK && handles == 1u && mappings == 0u &&
+                    children == 0u && entry->pins == 0u && entry->io->cache != &entry->cache;
+            }
+        }
         if (idle && discard) {
+            entry->retired_grant |= entry->grant != NULL && entry->grant->retiring;
+            entry->reclaim_requested |= discard_idle != 0;
             *slot = entry->next;
+            hostfs_holders_changed(NULL);
             astra_vfs_state_lock_release(&state_lock);
-            status = entry->source.node == 0u ? ASTRA_VFS_OK :
-                astra_vfs_host_ops()->close(&entry->backend, entry->source.node);
-            if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_LOST ||
-                status == ASTRA_VFS_ERR_BAD_HANDLE)
-                entry->source.node = 0u;
-            status = entry->source.node == 0u ?
-                astra_close(entry->area) : ASTRA_SYSCALL_IO_ERROR;
-            if (entry->source.node == 0u &&
-                (status == ASTRA_SYSCALL_OK ||
-                 status == ASTRA_SYSCALL_INVALID_HANDLE)) {
-                --entry->grant->backing_references;
-                ++entry->grant->owner->cache_stats[CACHE_CLOSES];
-                entry->grant->owner->cache_stats[CACHE_IDENTITY_RETIREMENTS] += unidentified;
-                entry->grant->owner->cache_stats[CACHE_LINK_RETIREMENTS] += link_retirement;
-                entry->grant->owner->cache_stats[CACHE_GRANT_RETIREMENTS] += entry->grant->retiring != 0u;
-                entry->grant->owner->cache_stats[CACHE_REQUESTED_RETIREMENTS] += discard_idle != 0;
+            if (entry->source.retained != ASTRA_VFS_FILE_INVALID) {
+                status = astra_vfs_service_release_retained(
+                    entry->source.service, &entry->source.retained);
+                if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_BAD_HANDLE &&
+                    status != ASTRA_VFS_ERR_LOST)
+                    (void)astra_log_failure("HostFS retained close", status);
+            }
+            if (entry->source.retained == ASTRA_VFS_FILE_INVALID) {
+                entry->grant = NULL;
+                if (entry->area != 0u) {
+                    status = astra_close(entry->area);
+                    if (status == ASTRA_SYSCALL_OK || status == ASTRA_SYSCALL_INVALID_HANDLE)
+                        entry->area = 0u;
+                }
+            }
+            if (entry->source.retained == ASTRA_VFS_FILE_INVALID && entry->area == 0u) {
+                if (entry->source.cookie != 0u) {
+                    ++entry->owner->cache_stats[CACHE_CLOSES];
+                    entry->owner->cache_stats[CACHE_IDENTITY_RETIREMENTS] += unidentified;
+                    entry->owner->cache_stats[CACHE_LINK_RETIREMENTS] += link_retirement;
+                    entry->owner->cache_stats[CACHE_GRANT_RETIREMENTS] += entry->retired_grant;
+                    entry->owner->cache_stats[CACHE_REQUESTED_RETIREMENTS] += entry->reclaim_requested;
+                }
                 astra_runtime_deallocate(entry);
             } else {
                 if (!astra_vfs_state_lock_acquire(&state_lock)) return;
@@ -1312,187 +1533,283 @@ static void file_areas_maintain(int discard_idle)
             slot = &file_areas;
             continue;
         }
-        if (entry->stale && status == ASTRA_SYSCALL_OK &&
-            astra_rt_area_reclaim(entry->area, 0u, entry->source.span,
-                                   &released) == ASTRA_SYSCALL_OK)
-            entry->stale = 0u;
+        if (entry->source.cookie != 0u && entry->stale && status == ASTRA_SYSCALL_OK) {
+            AstraVfsNodeInfo info;
+            ++entry->pins;
+            astra_vfs_state_lock_release(&state_lock);
+            (void)astra_vfs_service_stat_retained(entry->source.service,
+                entry->source.retained, &info);
+            if (!astra_vfs_state_lock_acquire(&state_lock)) return;
+            --entry->pins;
+        }
         slot = &entry->next;
     }
     astra_vfs_state_lock_release(&state_lock);
 }
 
-/* Provider change notifications reach other clients asynchronously. A local
- * mutation must retire old mapped pages before its VFS reply is published. */
-static uint32_t file_areas_reclaim_mutation(HostfsBackend *backend,
-    uintptr_t node, const AstraVfsNodeInfo *known)
+static uint32_t hostfs_io(const AstraVfsOpenFile *file, AstraVfsFile *owned,
+    uint64_t offset, uint32_t flags, uint64_t max_end,
+    void *buffer, uint32_t length, uint32_t *moved, uint64_t *position)
 {
-    HostfsVolume *volume = backend->owner;
-    AstraVfsNodeInfo current = {0};
-    const AstraVfsNodeMeta *identity = NULL;
-    uint32_t status;
-
-
-    if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
-    for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next)
-        if (entry->grant->owner == volume) {
-            astra_vfs_state_lock_release(&state_lock);
-            goto populated;
-        }
-    astra_vfs_state_lock_release(&state_lock);
-    return ASTRA_VFS_OK;
-
-populated:
-    if (known != NULL && astra_vfs_node_identity_equal(&known->meta, &known->meta))
-        identity = &known->meta;
-    else if (node != 0u && astra_vfs_host_ops()->stat_node(&backend->provider,
-             node, &current) == ASTRA_VFS_OK &&
-             astra_vfs_node_identity_equal(&current.meta, &current.meta))
-        identity = &current.meta;
-    if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
-    for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next) {
-        uint32_t released = 0u;
-        if (entry->grant->owner != volume ||
-            (identity != NULL &&
-             astra_vfs_node_identity_equal(&entry->source.identity,
-                                           &entry->source.identity) &&
-             !astra_vfs_node_identity_equal(
-                 &entry->source.identity, identity)))
-            continue;
-        entry->stale = 1u;
-        status = astra_rt_area_reclaim(entry->area, 0u,
-                                       entry->source.span, &released);
-        if (status != ASTRA_SYSCALL_OK) {
-            astra_vfs_state_lock_release(&state_lock);
+    const int writing = owned != NULL;
+    const uint32_t allowed = ASTRA_VFS_IO_SEQUENTIAL |
+        (writing ? ASTRA_VFS_WRITE_APPEND : 0u);
+    AstraVfsNodeInfo info;
+    AstraVfsReply reply = {0};
+    uint64_t cursor = offset, size, modified_ns = 0u;
+    uint32_t status, wanted = length;
+    *moved = 0u; *position = offset;
+    if (!astra_vfs_open_file_active(file) || (flags & ~allowed) != 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    if ((flags & ASTRA_VFS_IO_SEQUENTIAL) != 0u) {
+        AstraVfsRequest request = {.flags = 1u};
+        status = astra_vfs_backend_description_operation(&file->backend,
+            file->node, ASTRA_VFS_OP_SEEK, &request, &reply, NULL);
+        if (status != ASTRA_VFS_OK) return status;
+        offset = cursor = reply.position;
+    }
+    *position = offset;
+    if (length == 0u) return ASTRA_VFS_OK;
+    status = hostfs_stat(NULL, file, &info);
+    if (status != ASTRA_VFS_OK) return status;
+    size = file->io->cache != NULL ? file->io->cache->size : info.size;
+    if (writing) {
+        AstraVfsRequest request = {0};
+        status = astra_vfs_backend_description_operation(&file->backend,
+            file->node, ASTRA_VFS_OP_FILE_FLAGS, &request, &reply, NULL);
+        if (status != ASTRA_VFS_OK) return status;
+        if ((flags & ASTRA_VFS_WRITE_APPEND) != 0u ||
+            ((flags & ASTRA_VFS_IO_SEQUENTIAL) != 0u &&
+             (reply.open_flags & ASTRA_VFS_OPEN_APPEND) != 0u)) offset = size;
+        if (max_end > INT64_MAX) max_end = INT64_MAX;
+        if (offset >= max_end) return ASTRA_VFS_ERR_FILE_TOO_LARGE;
+        if (wanted > max_end - offset) wanted = (uint32_t)(max_end - offset);
+        if (astra_clock_realtime(&modified_ns) != ASTRA_SYSCALL_OK)
             return ASTRA_VFS_ERR_IO;
-        }
-        entry->stale = 0u;
+    } else {
+        if (offset >= size) return ASTRA_VFS_OK;
+        if (wanted > size - offset) wanted = (uint32_t)(size - offset);
     }
-    astra_vfs_state_lock_release(&state_lock);
-    return ASTRA_VFS_OK;
-}
-
-static uint32_t hostfs_open(void *context, const char *path, uint32_t flags,
-    uint16_t mode, uintptr_t *node, AstraVfsNodeInfo *info)
-{
-    uint32_t status = astra_vfs_host_ops()->open(context, path, flags,
-                                                   mode, node, info);
-    if ((flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u) {
-        uint32_t reclaimed = file_areas_reclaim_mutation(
-            context, status == ASTRA_VFS_OK ? *node : 0u,
-            status == ASTRA_VFS_OK ? info : NULL);
-        if (reclaimed != ASTRA_VFS_OK && status == ASTRA_VFS_OK) {
-            (void)astra_vfs_host_ops()->close(context, *node);
-            return reclaimed;
+    while (*moved < wanted) {
+        HostfsFileArea *entry = NULL;
+        uint64_t at = offset + *moved;
+        uint64_t page_base = at - at % ASTRA_MEMORY_PAGE_SIZE;
+        uint32_t within = (uint32_t)(at % ASTRA_MEMORY_PAGE_SIZE);
+        uint32_t chunk = ASTRA_MEMORY_PAGE_SIZE - within;
+        if (chunk > wanted - *moved) chunk = wanted - *moved;
+        status = file_area_get(file, &info, at, &entry);
+        if (status != ASTRA_VFS_OK) break;
+        uint32_t relative = (uint32_t)(at - entry->source.base);
+        if (writing && file->io->cache == NULL) {
+            AstraVfsFileCache snapshot;
+            status = astra_vfs_service_cache_prepare(entry->source.service,
+                file, owned, 0u, &entry->cache, &snapshot);
+            if (status != ASTRA_VFS_OK) { file_area_release(entry); break; }
         }
+        for (;;) {
+            uint32_t result = writing ?
+                astra_rt_area_write_pager(entry->area, relative,
+                    (const uint8_t *)buffer + *moved, chunk) :
+                astra_rt_area_read_resident(entry->area, relative,
+                    (uint8_t *)buffer + *moved, chunk);
+            if (result != ASTRA_SYSCALL_WOULD_BLOCK) {
+                status = result == ASTRA_SYSCALL_OK ? ASTRA_VFS_OK :
+                    astra_vfs_host_status_from_syscall(result);
+                break;
+            }
+            memset(cache_page, 0, sizeof(cache_page));
+            if (!writing || within != 0u || chunk != ASTRA_MEMORY_PAGE_SIZE) {
+                uint32_t valid = 0u;
+                status = astra_vfs_backend_read_page(&file->backend, file->node,
+                    writing ? ASTRA_VFS_OPEN_WRITE : ASTRA_VFS_OPEN_READ,
+                    &entry->source.identity,
+                    file->io->cache != NULL ? &file->io->cache->backing : &info,
+                    page_base, cache_page, &valid);
+                if (status != ASTRA_VFS_OK) break;
+            }
+            if (writing) {
+                memcpy(cache_page + within, (const uint8_t *)buffer + *moved, chunk);
+                result = astra_rt_area_publish_dirty_page(entry->area,
+                    relative - within, cache_page);
+            } else {
+                uint32_t valid = size - page_base < ASTRA_MEMORY_PAGE_SIZE ?
+                    (uint32_t)(size - page_base) : ASTRA_MEMORY_PAGE_SIZE;
+                result = astra_rt_area_publish_clean_page(entry->area,
+                    relative - within, cache_page, valid);
+            }
+            if (result == ASTRA_SYSCALL_WOULD_BLOCK) continue;
+            if (result != ASTRA_SYSCALL_OK) {
+                status = astra_vfs_host_status_from_syscall(result);
+                break;
+            }
+            if (writing) { status = ASTRA_VFS_OK; break; }
+            /* Clean frames can be reclaimed before the resident copy; retry. */
+        }
+        if (status == ASTRA_VFS_OK && writing) {
+            if (at + chunk > size) {
+                size = at + chunk;
+                if (!astra_vfs_state_lock_acquire(&state_lock)) {
+                    file_area_release(entry);
+                    return ASTRA_VFS_ERR_IO;
+                }
+                for (HostfsFileArea *sibling = file_areas; sibling != NULL; sibling = sibling->next) {
+                    if (sibling->io != file->io || sibling->source.cookie == 0u) continue;
+                    status = file_area_resize(&sibling->source, sibling->area, size);
+                    if (status != ASTRA_VFS_OK) break;
+                }
+                astra_vfs_state_lock_release(&state_lock);
+            }
+            if (status == ASTRA_VFS_OK)
+                status = astra_vfs_service_cache_publish(entry->source.service,
+                    file, size, modified_ns);
+        }
+        file_area_release(entry);
+        if (status != ASTRA_VFS_OK) break;
+        *moved += chunk;
     }
+    *position = offset + *moved;
+    if ((flags & ASTRA_VFS_IO_SEQUENTIAL) != 0u && *moved != 0u) {
+        /* Node I/O also serializes shared-description cursor commits. */
+        AstraVfsRequest request = {.offset = *position};
+        uint32_t advanced = astra_vfs_backend_description_operation(&file->backend,
+            file->node, ASTRA_VFS_OP_SEEK, &request, &reply, NULL);
+        if (advanced != ASTRA_VFS_OK) status = advanced;
+    } else if (*moved == 0u) *position = cursor;
     return status;
 }
 
-static uint32_t hostfs_open_at(void *context, uintptr_t directory,
-    const char *path, uint32_t flags, uint16_t mode, uintptr_t *node,
-    AstraVfsNodeInfo *info)
+static uint32_t hostfs_write(void *context, const AstraVfsOpenFile *file,
+    AstraVfsFile *owned, uint64_t offset, uint32_t flags, uint64_t max_end,
+    const void *buffer, uint32_t length, uint32_t *moved, uint64_t *position)
 {
-    uint32_t status = astra_vfs_host_ops()->open_at(context, directory,
-        path, flags, mode, node, info);
-    if ((flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u) {
-        uint32_t reclaimed = file_areas_reclaim_mutation(
-            context, status == ASTRA_VFS_OK ? *node : 0u,
-            status == ASTRA_VFS_OK ? info : NULL);
-        if (reclaimed != ASTRA_VFS_OK && status == ASTRA_VFS_OK) {
-            (void)astra_vfs_host_ops()->close(context, *node);
-            return reclaimed;
-        }
-    }
-    return status;
+    (void)context;
+    return hostfs_io(file, owned, offset, flags, max_end, (void *)buffer,
+        length, moved, position);
 }
 
-static uint32_t hostfs_write(void *context, uintptr_t node, uint64_t offset,
-    uint32_t flags, uint64_t max_end, const void *buffer, uint32_t length,
+static uint32_t hostfs_read(void *context, const AstraVfsOpenFile *file,
+    uint64_t offset, uint32_t flags, void *buffer, uint32_t length,
     uint32_t *moved, uint64_t *position)
 {
-    uint32_t status = astra_vfs_host_ops()->write(context, node, offset,
-        flags, max_end, buffer, length, moved, position);
-    if (length != 0u) {
-        uint32_t reclaimed = file_areas_reclaim_mutation(
-            context, node, NULL);
-        if (status == ASTRA_VFS_OK) status = reclaimed;
+    (void)context;
+    return hostfs_io(file, NULL, offset, flags, 0u, buffer, length, moved, position);
+}
+
+static uint32_t hostfs_sync(void *context, const AstraVfsOpenFile *file,
+    uint32_t *remaining)
+{
+    (void)context;
+    AstraVfsNodeInfo info;
+    int full = remaining == NULL;
+    uint32_t complete = UINT32_MAX;
+    if (full) remaining = &complete;
+    if (*remaining == 0u) return ASTRA_VFS_ERR_BUSY;
+    uint32_t status = hostfs_stat(NULL, file, &info);
+    if (status != ASTRA_VFS_OK) return status;
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
+    for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next) {
+        if (entry->io != file->io || entry->source.cookie == 0u) continue;
+        if (full) entry->writeback_cursor = 0u;
+        ++entry->pins;
+        astra_vfs_state_lock_release(&state_lock);
+        status = astra_vfs_file_pager_writeback(&entry->source, file,
+            file->io->cache->writer, entry->area, cache_sync_page,
+            remaining, &entry->writeback_cursor);
+        if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
+        --entry->pins;
+        /* Own backing writes are already reflected in the shared revision. */
+        for (HostfsFileArea *sibling = file_areas; sibling != NULL; sibling = sibling->next)
+            if (sibling->io == file->io)
+                sibling->cache.backing = file->io->cache->backing;
+        if (status == ASTRA_VFS_OK && *remaining == 0u)
+            for (HostfsFileArea *next = entry->next; next != NULL; next = next->next)
+                if (next->io == file->io && next->source.cookie != 0u) {
+                    status = ASTRA_VFS_ERR_BUSY; break;
+                }
+        if (status != ASTRA_VFS_OK || *remaining == 0u) {
+            if (!full) {
+                file_area_rotate(entry);
+            }
+            break;
+        }
     }
+    astra_vfs_state_lock_release(&state_lock);
     return status;
 }
 
-static uint32_t hostfs_truncate(void *context, uintptr_t node, uint64_t size)
+static const AstraVfsCacheOps hostfs_cache_ops = {
+    .read = hostfs_read, .write = hostfs_write, .sync = hostfs_sync,
+    .stat = hostfs_stat
+};
+
+static uint32_t file_areas_writeback(uint32_t budget)
 {
-    uint32_t status = astra_vfs_host_ops()->truncate(context, node, size);
-    uint32_t reclaimed = file_areas_reclaim_mutation(
-        context, node, NULL);
-    return status == ASTRA_VFS_OK ? reclaimed : status;
+    HostfsFileArea *entry;
+    uint32_t status = ASTRA_VFS_OK;
+    uint32_t remaining = budget;
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
+    entry = file_areas;
+    while (entry != NULL) {
+        if (entry->io == NULL || entry->io->cache != &entry->cache ||
+            entry->cache.writer == ASTRA_VFS_FILE_INVALID) { entry = entry->next; continue; }
+        if (entry->io->active != NULL) {
+            if (budget == 0u) { status = ASTRA_VFS_ERR_BUSY; break; }
+            entry = entry->next;
+            continue;
+        }
+        AstraVfsFile writer = entry->cache.writer;
+        uint32_t before = remaining;
+        ++entry->pins;
+        astra_vfs_state_lock_release(&state_lock);
+        status = astra_vfs_service_sync_retained(entry->source.service, writer, budget == 0u ? NULL : &remaining);
+        if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_BUSY)
+            (void)astra_log_failure("HostFS writeback", status);
+        if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
+        --entry->pins;
+        if (budget != 0u) {
+            file_area_rotate(entry);
+            /* Failed admission still consumes a turn so no-progress work is bounded. */
+            if (remaining == before) --remaining;
+            if (remaining == 0u || (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_BUSY)) break;
+            entry = file_areas;
+            continue;
+        }
+        if (status != ASTRA_VFS_OK) break;
+        entry = entry->next;
+    }
+    astra_vfs_state_lock_release(&state_lock);
+    return status;
 }
 
-static uint32_t hostfs_file_mutated(void *context,
-    const AstraVfsPortGrant *port, uint64_t token)
+static void hostfs_backend_ops_init(AstraVfsBackendOps *ops)
 {
-    const HostfsGrant *grant = (const HostfsGrant *)(const void *)port;
-    const AstraVfsBackendOps *ops = astra_vfs_host_ops();
-    AstraVfsHostBackend backend;
-    AstraVfsNodeInfo info = {0};
-    uintptr_t node = 0u;
-    uint32_t status;
-
-    (void)context;
-    if (grant->retiring || grant->backend == NULL || !astra_vfs_host_init(&backend, &transport,
-            transport.generation, grant->session))
-        return ASTRA_VFS_ERR_LOST;
-    status = ops->adopt(&backend, token, 0u, &node);
-    if (status != ASTRA_VFS_OK) return status;
-    status = ops->stat_node(&backend, node, &info);
-    if (status == ASTRA_VFS_OK)
-        status = file_areas_reclaim_mutation(grant->backend, 0u, &info);
-    else
-        (void)file_areas_reclaim_mutation(grant->backend, 0u, NULL);
-    uint32_t closed = ops->close(&backend, node);
-    return status == ASTRA_VFS_OK ? closed : status;
+    *ops = *astra_vfs_host_ops();
+    ops->cache_reclaim = hostfs_cache_reclaim;
 }
 
-/* The grant's last holder closed its handle, or its deriver's session
- * ended. Revoke its scope -- every channel bound to it stops at once --
- * then end its sessions with their reply lanes, and its provider session,
- * whose handles go with it (Task 4). The way Haiku's disconnect_fd
- * (src/system/kernel/fs/fd.cpp) cuts every descriptor of a vnode at once
- * rather than waiting for each holder. */
+/* Withdraw native admission and sessions first. Retained descriptions keep the
+ * private backend alive until their final cache/map reference is released. */
 static int grant_retire(uint32_t at)
 {
     HostfsGrant *grant = grants[at];
     uint32_t status;
     if (!grant->retiring) {
         grant->retiring = 1u;
-        hostfs_sessions_changed(NULL);
+        hostfs_holders_changed(NULL);
         astra_vfs_port_service_release_grant(grant_host(grant), grant->port.id);
     }
-    if (grant_backend_detach(grant) != ASTRA_VFS_OK) return 0;
+    if (grant_backend_detach(grant, 0) != ASTRA_VFS_OK) return 0;
     /* Stop further control admission even when provider cleanup must retry. */
     if (grant->port.receive != 0u) {
         status = astra_close(grant->port.receive);
         if (status == ASTRA_SYSCALL_OK || status == ASTRA_SYSCALL_INVALID_HANDLE)
             grant->port.receive = 0u;
     }
-    if (grant->port.scope != 0u && !grant->scope_revoked) {
-        status = astra_host_scope_revoke(grant->port.scope);
-        if (status == ASTRA_SYSCALL_OK || status == ASTRA_SYSCALL_INVALID_HANDLE)
-            grant->scope_revoked = 1u;
-        else (void)astra_log_failure("hostfs grant revoke", status);
-    }
-    if (grant->port.scope != 0u && grant->scope_revoked) {
-        status = astra_close(grant->port.scope);
-        if (status == ASTRA_SYSCALL_OK || status == ASTRA_SYSCALL_INVALID_HANDLE)
-            grant->port.scope = 0u;
-    }
-    if (grant->backing_references == 0u &&
-        (grant->port.scope == 0u || grant->scope_revoked) && grant->session != 0u) {
+    if (grant->backing_references == 0u && grant->session != 0u) {
         status = close_owned_session(&grant->session);
         if (status != ASTRA_VFS_OK) (void)astra_log_failure("hostfs grant session close", status);
     }
-    if (grant->port.scope != 0u || grant->session != 0u ||
-        grant->port.receive != 0u || grant->backing_references != 0u)
+    if (grant->session != 0u || grant->port.receive != 0u || grant->backing_references != 0u)
         return 0;
     astra_runtime_deallocate(grant);
     grants[at] = grants[--grant_count];
@@ -1528,10 +1845,12 @@ static uint32_t volume_release(HostfsVolume *volume)
     return status;
 }
 
-static int volume_has_grants(const HostfsVolume *volume)
+static int volume_referenced(const HostfsVolume *volume)
 {
     for (uint32_t at = 0u; at < grant_count; ++at)
         if (grants[at]->owner == volume) return 1;
+    for (const HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next)
+        if (entry->owner == volume) return 1;
     return 0;
 }
 
@@ -1540,7 +1859,7 @@ static void volume_reap_idle(void)
     HostfsVolume **at = &volumes;
     while (*at != NULL) {
         HostfsVolume *volume = *at;
-        int held = !volume->dynamic || volume_has_grants(volume);
+        int held = !volume->dynamic || volume_referenced(volume);
         if (held) { at = &volume->next; continue; }
         uint32_t status = volume_release(volume);
         if (status != ASTRA_VFS_OK) { at = &volume->next; continue; }
@@ -1590,13 +1909,13 @@ static int grant_root_matches(const HostfsGrant *grant, const AstraVfsNodeMeta *
     return astra_vfs_node_identity_equal(meta, &grant->root_meta);
 }
 
-/* Control-plane recovery keeps grant ports; old files and scopes stay lost. */
+/* Recovery keeps native grant ports; old captured backend incarnations stay lost. */
 static uint32_t hostfs_check_provider(void)
 {
     uint32_t epoch = 0u;
     uint32_t status = astra_vfs_host_claim(&transport, transport.generation, 0, &epoch);
 
-    if (status != ASTRA_VFS_OK || epoch == provider_epoch)
+    if (status != ASTRA_VFS_OK || epoch == bound_provider_epoch)
         return status;
     for (HostfsVolume *volume = volumes; volume != NULL; volume = volume->next)
         if (!file_areas_invalidate(volume, ASTRA_HOST_FS_CHANGE_GAP, 0u))
@@ -1617,34 +1936,19 @@ static uint32_t hostfs_check_provider(void)
     for (uint32_t at = 0u; at < grant_count;) {
         HostfsGrant *grant = grants[at];
         if (grant->retiring) { ++at; continue; }
-        if (grant_backend_detach(grant) != ASTRA_VFS_OK) return ASTRA_VFS_ERR_IO;
-        uint32_t session = 0u, scope = 0u;
+        if (grant_backend_detach(grant, 1) != ASTRA_VFS_OK) return ASTRA_VFS_ERR_IO;
+        uint32_t session = 0u;
         uint16_t flags = (grant->port.rights & ASTRA_VFS_GRANT_WRITE) == 0u ?
             ASTRA_HOST_FS_SESSION_READ_ONLY : 0u;
 
-        /* A new scope must never overwrite an old scope whose cleanup failed.
-         * Existing retirement keeps that exact resource owned and retryable. */
-        uint32_t revoked = grant->port.scope == 0u ? ASTRA_SYSCALL_OK : astra_host_scope_revoke(grant->port.scope);
-        if (revoked == ASTRA_SYSCALL_OK || revoked == ASTRA_SYSCALL_INVALID_HANDLE) grant->scope_revoked = 1u;
-        uint32_t closed = grant->scope_revoked && grant->port.scope != 0u ? astra_close(grant->port.scope) : ASTRA_SYSCALL_OK;
-        if (!grant->scope_revoked || (closed != ASTRA_SYSCALL_OK && closed != ASTRA_SYSCALL_INVALID_HANDLE)) {
-            grant->port.lost = 1u;
-            if (!grant_retire(at)) ++at;
-            continue;
-        }
-        grant->port.scope = 0u;
-        grant->scope_revoked = 0u;
         if (grant->session != 0u) {
-            if (close_owned_session(&grant->session) != ASTRA_VFS_OK) {
-                grant->port.lost = 1u;
-                if (!grant_retire(at)) ++at;
-                continue;
-            }
+            status = close_owned_session(&grant->session);
+            if (status != ASTRA_VFS_OK) return status;
         }
         status = hostfs_session_open(
             0u, &grant->volume, grant->root, flags, grant->requester, &session);
         grant->session = session;
-        if (status == ASTRA_VFS_OK) status = grant_backend_create(grant);
+        if (status == ASTRA_VFS_OK) status = grant_backend_create(grant, epoch);
         if (status == ASTRA_VFS_OK) {
             AstraVfsNodeMeta meta = {0};
             status = strcmp(grant->root, "/") == 0 ? ASTRA_VFS_OK :
@@ -1658,27 +1962,33 @@ static uint32_t hostfs_check_provider(void)
                 continue;
             }
         }
-        if (status == ASTRA_VFS_OK) {
-            uint32_t created = astra_host_scope_create(device_handle, session,
-                grant_scope_flags(grant->port.rights), &scope);
-            if (created == ASTRA_SYSCALL_OK)
-                created = astra_host_scope_limit(scope, owner_files);
-            grant->port.scope = scope;
-            if (created != ASTRA_SYSCALL_OK) {
-                grant->port.lost = 1u;
-                if (!grant_retire(at)) ++at;
-                continue;
-            }
-        }
-        grant->session = session;
-        grant->port.scope = scope;
         grant->port.lost = status != ASTRA_VFS_OK;
         if (grant->port.lost)
             (void)astra_log_failure(grant->root, status);
         ++at;
     }
-    provider_epoch = epoch;
-    (void)astra_log("hostfs recovered from provider loss");
+    /* Rebind path authority through HELLO; open files keep their lost backend.
+     * Recovery runs on the sole control worker, outside retained pager I/O. */
+    for (HostfsVolume *volume = volumes; volume != NULL; volume = volume->next) {
+        for (uint32_t index = 0u; index < volume->service.session_capacity; ++index) {
+            AstraVfsRequest request = {.size = ASTRA_VFS_REQUEST_SIZE, .version = ASTRA_VFS_VERSION};
+            AstraVfsReply reply;
+            uint32_t owner, grant_id, features = 0u;
+            if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_VFS_ERR_IO;
+            const AstraVfsSessionSlot *slot = &volume->service.sessions[index];
+            request.session = slot->closing ? 0u : slot->id;
+            owner = slot->owner; grant_id = slot->grant;
+            astra_vfs_state_lock_release(&state_lock);
+            if (request.session == 0u) continue;
+            for (uint32_t at = 0u; at < grant_count; ++at)
+                if (grants[at]->port.id == grant_id) features = grants[at]->port.features;
+            astra_vfs_service_dispatch_grant(&volume->service, owner, grant_id, features,
+                ASTRA_VFS_OP_HELLO, &request, NULL, &reply);
+            if (reply.status != ASTRA_VFS_OK) return reply.status;
+        }
+    }
+    bound_provider_epoch = epoch;
+    (void)astra_log("hostfs restored provider bindings");
     return ASTRA_VFS_OK;
 }
 
@@ -1824,12 +2134,7 @@ static uint32_t volume_add(const AstraVolumeReference *reference, const char *na
          !astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile), &volume->storage, &capacity)))
         status = ASTRA_STATUS_LIMIT;
     if (status == ASTRA_VFS_OK) {
-        volume->ops = *astra_vfs_host_ops();
-        volume->ops.open = hostfs_open;
-        volume->ops.open_at = hostfs_open_at;
-        volume->ops.write = hostfs_write;
-        volume->ops.truncate = hostfs_truncate;
-        volume->ops.cache_reclaim = hostfs_cache_reclaim;
+        hostfs_backend_ops_init(&volume->ops);
         volume->service_ready = astra_vfs_service_init(&volume->service, &volume->ops, &volume->backend,
             volume->sessions, ASTRA_VFS_SESSION_MAX, volume->storage.address, capacity);
         if (!volume->service_ready) status = ASTRA_STATUS_LIMIT;
@@ -1842,7 +2147,8 @@ static uint32_t volume_add(const AstraVolumeReference *reference, const char *na
          !astra_vfs_service_set_owner_sessions(&volume->service, owner_sessions) ||
          !astra_vfs_service_set_owner_files(&volume->service, owner_files) ||
          !astra_vfs_service_set_backend_bindings(&volume->service, &hostfs_backend_bindings, volume) ||
-         !astra_vfs_service_set_session_changed(&volume->service, hostfs_sessions_changed, NULL)))
+         !astra_vfs_service_set_cache_ops(&volume->service, &hostfs_cache_ops, NULL) ||
+         !astra_vfs_service_set_holders_changed(&volume->service, hostfs_holders_changed, NULL)))
         status = ASTRA_STATUS_LIMIT;
     if (status == ASTRA_VFS_OK)
         status = hostfs_session_open(0u,
@@ -1858,8 +2164,6 @@ static uint32_t volume_add(const AstraVolumeReference *reference, const char *na
          !astra_vfs_port_service_set_derive(&volume->port, hostfs_derive, NULL) ||
          (!volume->config_store && !astra_vfs_port_service_set_file_area(
              &volume->port, hostfs_file_area, NULL)) ||
-         (!volume->config_store && !astra_vfs_port_service_set_file_mutated(
-             &volume->port, hostfs_file_mutated, NULL)) ||
          (volume->config_store && !astra_vfs_port_service_set_config_crypt(
              &volume->port, hostfs_config_crypt, NULL))))
         status = HOSTFS_FAIL_PORT;
@@ -1874,7 +2178,7 @@ static uint32_t volume_add(const AstraVolumeReference *reference, const char *na
             (void)astra_close(*send);
             *send = 0u;
         }
-        if (!volume_has_grants(volume) && volume_release(volume) == ASTRA_VFS_OK)
+        if (!volume_referenced(volume) && volume_release(volume) == ASTRA_VFS_OK)
             astra_runtime_deallocate(volume);
         else {
             /* Keep failed cleanup owned and charged until actual retirement. */
@@ -1955,6 +2259,23 @@ static uint32_t hostfs_volume_root(void *context, uint32_t requester,
     return status;
 }
 
+static uint32_t hostfs_image_from_share(void *context, const AstraVfsOpenFile *file)
+{
+    const HostfsBackend *backend = file->backend.context;
+    if (file->kind != ASTRA_VFS_KIND_FILE || (file->flags & ASTRA_VFS_OPEN_READ) == 0u ||
+        (file->flags & ASTRA_VFS_OPEN_WRITE) != 0u) return ASTRA_VFS_ERR_ACCESS;
+    if (backend == NULL || __atomic_load_n(&backend->provider.lost, __ATOMIC_ACQUIRE))
+        return ASTRA_VFS_ERR_LOST;
+    uint32_t process = 0u;
+    AstraProcessInfo info = {.size = sizeof(info)};
+    if (astra_query_abi(NULL, &process, NULL) != ASTRA_SYSCALL_OK ||
+        astra_process_info(process, &info) != ASTRA_SYSCALL_OK || info.id == 0u)
+        return ASTRA_VFS_ERR_IO;
+    AstraVolumeControl control = {.operation = ASTRA_VOLUME_IMAGE, .image_share = file->token};
+    return astra_vfs_host_volume_control(&transport, transport.generation,
+        info.id, &control, context);
+}
+
 static uint32_t hostfs_volume_control(void *context, uint32_t requester,
     const AstraVolumeControl *control, AstraVolumeReference *reference)
 {
@@ -1963,6 +2284,14 @@ static uint32_t hostfs_volume_control(void *context, uint32_t requester,
     if (status != ASTRA_STATUS_OK) return status;
     file_areas_maintain(1);
     retire_orphans();
+    if (control->operation == ASTRA_VOLUME_IMAGE) {
+        for (HostfsVolume *volume = volumes; volume != NULL; volume = volume->next) {
+            status = astra_vfs_service_borrow_share(&volume->service, requester,
+                control->image_share, hostfs_image_from_share, reference);
+            if (status != ASTRA_VFS_ERR_BAD_HANDLE) return status;
+        }
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    }
     return astra_vfs_host_volume_control(&transport, transport.generation,
         requester, control, reference);
 }
@@ -2054,30 +2383,100 @@ static int usage_emit(AstraVolumeUsagePage *page, const AstraVolumeUsageQuery *q
     return 0;
 }
 
-static uint32_t hostfs_read_usage(const AstraVolumeUsageQuery *query,
+/* Native tables own client identity; provider rows supply the retained name. */
+static const AstraVfsOpenFile *usage_file_owner(AstraVolumeUsageRecord *row, uint32_t *owner)
+{
+    if (row->kind != ASTRA_VOLUME_USAGE_FILE && row->kind != ASTRA_VOLUME_USAGE_DIRECTORY &&
+        row->kind != ASTRA_VOLUME_USAGE_SHARE) return 0;
+    for (const HostfsVolume *volume = volumes; volume != NULL; volume = volume->next) {
+        const AstraVfsService *service = &volume->service;
+        for (uint32_t at = 0u; at < service->file_high_water; ++at) {
+            const AstraVfsOpenFile *file = &service->files[at];
+            int share = file->state == ASTRA_VFS_FILE_SHARED ||
+                        file->state == ASTRA_VFS_FILE_TRANSFERRING;
+            if (row->kind == ASTRA_VOLUME_USAGE_SHARE ?
+                    !share || file->token != row->handle :
+                    (file->state != ASTRA_VFS_FILE_OPEN && file->state != ASTRA_VFS_FILE_CLOSING &&
+                     file->state != ASTRA_VFS_FILE_DETACHED) || file->node != row->handle)
+                continue;
+            *owner = 0u;
+            for (uint32_t index = 0u; index < service->session_capacity; ++index) {
+                const AstraVfsSessionSlot *slot = &service->sessions[index];
+                if (slot->id != 0u && slot->id == file->session) {
+                    *owner = slot->owner;
+                    if (slot->closing) row->flags |= ASTRA_VOLUME_USAGE_CLEANUP_PENDING;
+                    break;
+                }
+            }
+            if (astra_vfs_open_file_active(file)) row->flags |= ASTRA_VOLUME_USAGE_ACTIVE;
+            return file;
+        }
+    }
+    return 0;
+}
+
+/* A double collect brackets the existing streamed usage page. */
+static uint32_t usage_check_mappings(const AstraVolumeUsageQuery *query, int refresh)
+{
+    for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next) {
+        if (entry->area == 0u || entry->source.cookie == 0u) continue;
+        if (query->volume.id != 0u &&
+            !astra_volume_reference_equal(&query->volume, &entry->owner->reference)) continue;
+        uint64_t sequence = refresh ? 0u : entry->usage_mapping_sequence;
+        uint32_t process = 0u;
+        uint32_t status = astra_rt_area_next_process(entry->area, UINT32_MAX,
+            &sequence, &process);
+        if (status != ASTRA_SYSCALL_OK ||
+            (!refresh && sequence != entry->usage_mapping_sequence)) {
+            hostfs_holders_changed(NULL);
+            return status == ASTRA_SYSCALL_OK ? ASTRA_STATUS_BUSY :
+                astra_vfs_host_status_from_syscall(status);
+        }
+        if (refresh && sequence != entry->usage_mapping_sequence) {
+            entry->usage_mapping_sequence = sequence;
+            hostfs_holders_changed(NULL);
+        }
+    }
+    return ASTRA_STATUS_OK;
+}
+
+static uint32_t usage_next_file_owner(const AstraVfsOpenFile *file,
+    uint32_t direct, uint32_t after, uint32_t *owner)
+{
+    *owner = direct > after ? direct : 0u;
+    if (file == NULL || file->io == NULL) return ASTRA_STATUS_OK;
+    for (HostfsFileArea *entry = file_areas; entry != NULL; entry = entry->next) {
+        if (entry->io != file->io || entry->area == 0u || entry->source.cookie == 0u)
+            continue;
+        uint64_t sequence = entry->usage_mapping_sequence;
+        uint32_t process = 0u;
+        uint32_t status = astra_rt_area_next_process(entry->area, after, &sequence, &process);
+        if (status != ASTRA_SYSCALL_OK || sequence != entry->usage_mapping_sequence) {
+            hostfs_holders_changed(NULL);
+            return status == ASTRA_SYSCALL_OK ? ASTRA_STATUS_BUSY :
+                astra_vfs_host_status_from_syscall(status);
+        }
+        if (process > after && (*owner == 0u || process < *owner)) *owner = process;
+    }
+    return ASTRA_STATUS_OK;
+}
+
+static uint32_t usage_read_page(const AstraVolumeUsageQuery *query,
     AstraVolumeUsagePage *page)
 {
     if (!astra_volume_usage_query_valid(query)) return ASTRA_STATUS_INVALID;
     memset(page, 0, sizeof(*page));
-    file_areas_maintain(1);
-    /* The same core state lock keeps canonical holder slots stable through
-     * the streamed page, including continuation inside one shared root. */
-    if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_STATUS_BUSY;
-    if (usage_holders_changed != 0u) {
-        uint32_t status = astra_vfs_host_usage_holders_changed(&transport, transport.generation);
-        if (status != ASTRA_STATUS_OK) { astra_vfs_state_lock_release(&state_lock); return status; }
-        usage_holders_changed = 0u;
-    }
+    uint32_t status;
     AstraVolumeUsagePage *raw = astra_runtime_allocate(sizeof(*raw));
-    if (raw == NULL) { astra_vfs_state_lock_release(&state_lock); return ASTRA_STATUS_LIMIT; }
+    if (raw == NULL) return ASTRA_STATUS_LIMIT;
     AstraVolumeUsageQuery cursor = *query;
     /* A public page may stop between the holders of one retained root. Reread
      * that exact raw root under the same sequence before expanding its tail. */
-    if (cursor.after_kind == ASTRA_VOLUME_USAGE_ROOT) {
+    if (cursor.after_kind == ASTRA_VOLUME_USAGE_ROOT || cursor.after_kind == ASTRA_VOLUME_USAGE_FILE ||
+        cursor.after_kind == ASTRA_VOLUME_USAGE_DIRECTORY || cursor.after_kind == ASTRA_VOLUME_USAGE_SHARE) {
         cursor.after_process = UINT32_MAX;
         if (--cursor.after == 0u) { --cursor.after_kind; cursor.after = UINT64_MAX; }
     }
-    uint32_t status;
     do {
         status = astra_vfs_host_usage(&transport, transport.generation, &cursor, raw);
         if (status != ASTRA_STATUS_OK) break;
@@ -2100,7 +2499,22 @@ static uint32_t hostfs_read_usage(const AstraVolumeUsageQuery *query,
                         previous = owner;
                     } while (!complete && usage_root_owner(grant, previous, &owner));
                 } else complete = usage_emit(page, query, row, 0u);
-            } else complete = usage_emit(page, query, row, row->process);
+            } else {
+                uint32_t owner = row->process;
+                const AstraVfsOpenFile *file = usage_file_owner(row, &owner);
+                if (row->kind == ASTRA_VOLUME_USAGE_FILE && file != NULL) {
+                    uint32_t direct = owner;
+                    status = usage_next_file_owner(file, direct, 0u, &owner);
+                    if (status != ASTRA_STATUS_OK) goto done;
+                    if (owner == 0u) complete = usage_emit(page, query, row, 0u);
+                    while (owner != 0u) {
+                        complete = usage_emit(page, query, row, owner);
+                        if (complete) break;
+                        status = usage_next_file_owner(file, direct, owner, &owner);
+                        if (status != ASTRA_STATUS_OK) goto done;
+                    }
+                } else complete = usage_emit(page, query, row, owner);
+            }
             if (complete) goto done;
         }
         cursor.volume = raw->volume; cursor.sequence = raw->sequence;
@@ -2109,7 +2523,89 @@ static uint32_t hostfs_read_usage(const AstraVolumeUsageQuery *query,
     } while (raw->next != 0u);
 done:
     astra_runtime_deallocate(raw);
+    return status;
+}
+
+static uint32_t usage_begin(const AstraVolumeUsageQuery *query)
+{
+    uint32_t status = usage_check_mappings(query, 1);
+    if (status == ASTRA_STATUS_OK && usage_holders_changed != 0u) {
+        status = astra_vfs_host_usage_holders_changed(&transport, transport.generation);
+        if (status == ASTRA_STATUS_OK) usage_holders_changed = 0u;
+    }
+    return status;
+}
+
+static uint32_t hostfs_read_usage(const AstraVolumeUsageQuery *query,
+    AstraVolumeUsagePage *page)
+{
+    if (!astra_volume_usage_query_valid(query)) return ASTRA_STATUS_INVALID;
+    memset(page, 0, sizeof(*page));
+    file_areas_maintain(1);
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_STATUS_BUSY;
+    uint32_t status = usage_begin(query);
+    if (status == ASTRA_STATUS_OK) status = usage_read_page(query, page);
+    if (status == ASTRA_STATUS_OK) status = usage_check_mappings(query, 0);
     astra_vfs_state_lock_release(&state_lock);
+    return status;
+}
+
+/* Count and fill under one existing ownership lock. The first pass admits
+ * caller storage; the second retains that exact provider/resource generation. */
+static uint32_t hostfs_read_usage_snapshot(const AstraVolumeReference *volume,
+    AstraVolumeUsageRecord *records, uint32_t capacity, AstraVolumeUsageSnapshotInfo *info)
+{
+    memset(info, 0, sizeof(*info));
+    AstraVolumeUsageQuery initial = {.version = ASTRA_VOLUME_USAGE_VERSION,
+        .size = sizeof(initial), .volume = *volume};
+    if (!astra_volume_usage_query_valid(&initial) || (capacity != 0u && records == NULL))
+        return ASTRA_STATUS_INVALID;
+    file_areas_maintain(1);
+    if (!astra_vfs_state_lock_acquire(&state_lock)) return ASTRA_STATUS_BUSY;
+    uint32_t status = usage_begin(&initial);
+    AstraVolumeUsagePage *page = status == ASTRA_STATUS_OK ? astra_runtime_allocate(sizeof(*page)) : NULL;
+    if (status == ASTRA_STATUS_OK && page == NULL) status = ASTRA_STATUS_LIMIT;
+    for (uint32_t pass = 0u; pass < 2u && status == ASTRA_STATUS_OK; ++pass) {
+        AstraVolumeUsageQuery cursor = initial;
+        uint32_t count = 0u;
+        if (pass != 0u) {
+            cursor.volume = info->volume; cursor.sequence = info->sequence;
+            cursor.catalog_sequence = info->catalog_sequence;
+        }
+        do {
+            status = usage_read_page(&cursor, page);
+            if (status != ASTRA_STATUS_OK) break;
+            if (page->count > UINT32_MAX / sizeof(*records) - count) {
+                status = ASTRA_STATUS_LIMIT; break;
+            }
+            if (pass != 0u) {
+                if (count > capacity || page->count > capacity - count) {
+                    status = ASTRA_STATUS_BUSY; break;
+                }
+                if (page->count != 0u)
+                    memcpy(records + count, page->records, (size_t)page->count * sizeof(*records));
+            }
+            count += page->count;
+            cursor.volume = page->volume; cursor.sequence = page->sequence;
+            cursor.catalog_sequence = page->catalog_sequence;
+            cursor.after = page->next; cursor.after_kind = page->next_kind; cursor.after_process = page->next_process;
+        } while (cursor.after != 0u);
+        if (status != ASTRA_STATUS_OK) break;
+        if (pass == 0u) {
+            info->volume = cursor.volume; info->sequence = cursor.sequence;
+            info->catalog_sequence = cursor.catalog_sequence; info->count = count;
+            if (count > capacity) status = ASTRA_STATUS_BUFFER_TOO_SMALL;
+            if (count == 0u) break;
+        } else if (count != info->count) status = ASTRA_STATUS_BUSY;
+    }
+    if (status == ASTRA_STATUS_OK || status == ASTRA_STATUS_BUFFER_TOO_SMALL) {
+        uint32_t checked = usage_check_mappings(&initial, 0);
+        if (checked != ASTRA_STATUS_OK) status = checked;
+    }
+    astra_runtime_deallocate(page);
+    astra_vfs_state_lock_release(&state_lock);
+    if (status != ASTRA_STATUS_OK && status != ASTRA_STATUS_BUFFER_TOO_SMALL)
+        memset(info, 0, sizeof(*info));
     return status;
 }
 
@@ -2121,6 +2617,17 @@ static uint32_t hostfs_volume_usage(void *context,
     if (status != ASTRA_STATUS_OK) return status;
     retire_orphans();
     return hostfs_read_usage(query, page);
+}
+
+static uint32_t hostfs_volume_usage_snapshot(void *context,
+    const AstraVolumeReference *volume, AstraVolumeUsageRecord *records,
+    uint32_t capacity, AstraVolumeUsageSnapshotInfo *info)
+{
+    (void)context;
+    uint32_t status = hostfs_check_provider();
+    if (status != ASTRA_STATUS_OK) return status;
+    retire_orphans();
+    return hostfs_read_usage_snapshot(volume, records, capacity, info);
 }
 
 /* Configured authority belongs to the persistent source, even while unmounted.
@@ -2194,7 +2701,7 @@ int astra_main(const AstraStartupInfo *startup)
     if (!astra_vfs_host_transport_init(&transport, device_handle,
         astra_vfs_state_lock_acquire, astra_vfs_state_lock_release, &transport_lock))
         return HOSTFS_FAIL_DEVICE;
-    status = astra_vfs_host_claim(&transport, transport.generation, 0, &provider_epoch);
+    status = astra_vfs_host_claim(&transport, transport.generation, 0, &bound_provider_epoch);
     if (status == ASTRA_VFS_OK)
         status = astra_vfs_host_lookup_mount(&transport, transport.generation,
             "/dh0", ASTRA_VOLUME_SYSTEM, &initial_volumes, &system);
@@ -2273,6 +2780,8 @@ int astra_main(const AstraStartupInfo *startup)
     volume_port.format = hostfs_volume_format;
     volume_port.partition = hostfs_volume_partition;
     volume_port.usage = hostfs_volume_usage;
+    volume_port.usage_snapshot = hostfs_volume_usage_snapshot;
+    volume_port.reclaim = hostfs_cache_reclaim;
     published[5] = metrics_send;
     published[6] = volume_send;
     published[7] = volume_read_send;
@@ -2298,8 +2807,11 @@ int astra_main(const AstraStartupInfo *startup)
         uint32_t count = 0u;
         uint32_t selected = ASTRA_WAIT_INDEX_NONE;
 
-        if (__atomic_load_n(&file_pager_failed, __ATOMIC_ACQUIRE) != 0u)
+        status = file_pager_check();
+        if (status != ASTRA_SYSCALL_OK) {
+            (void)astra_log_failure("HostFS file pager", status);
             return (int)ASTRA_STATUS_IO;
+        }
 
         uint64_t now = astra_clock_monotonic();
         if (now >= catalog_deadline) {
@@ -2314,8 +2826,11 @@ int astra_main(const AstraStartupInfo *startup)
             }
             retire_orphans();
             publish_filesystem_changes(messaging->handle);
+            file_areas_writeback(16u);
             file_areas_maintain(0);
-            catalog_deadline = now + UINT64_C(1000000000);
+            uint64_t completed = astra_clock_monotonic();
+            /* Missed periods cannot starve the queued control requests. */
+            catalog_deadline = completed + UINT64_C(1000000000);
         }
 
         wait_handles[count] = shutdown_receive;
@@ -2340,6 +2855,8 @@ int astra_main(const AstraStartupInfo *startup)
         wait_owners[count++] = WAIT_RAM_READ;
         wait_handles[count] = ram_write_receive;
         wait_owners[count++] = WAIT_RAM_WRITE;
+        wait_handles[count] = file_sync_receive;
+        wait_owners[count++] = WAIT_FILE_SYNC;
         /* Grants in rotation: the first grant served moves on each pass,
          * so one busy port cannot starve the others' control plane (M6). */
         if (grant_count != 0u)
@@ -2362,29 +2879,28 @@ int astra_main(const AstraStartupInfo *startup)
 
             if (result != ASTRA_SYSCALL_OK)
                 return (int)ASTRA_STATUS_PROTOCOL;
-            file_areas_maintain(1);
-            if (file_areas != NULL) {
-                (void)astra_shutdown_respond(reply,
-                    request.header.transaction_id,
-                    ASTRA_SHUTDOWN_CANCEL, ASTRA_VFS_ERR_BUSY);
-                continue;
-            }
-            result = finish_hostfs();
-            (void)astra_shutdown_respond(
-                reply, request.header.transaction_id,
-                result == ASTRA_VFS_OK ? ASTRA_SHUTDOWN_READY :
-                                         ASTRA_SHUTDOWN_CANCEL,
-                result);
-            return (int)result;
+            status = hostfs_shutdown(&request, reply);
+            if (status == ASTRA_VFS_OK) break;
+            continue;
         }
-        if (shutdown_requested != 0u)
-            return (int)finish_hostfs();
+        if (shutdown_requested != 0u) {
+            status = finish_hostfs();
+            break;
+        }
         if (status == ASTRA_SYSCALL_CANCELLED)
             continue;
         if (status == ASTRA_SYSCALL_TIMED_OUT)
             continue;
         if (selected >= count || wait_owners[selected] == WAIT_SHUTDOWN)
             return (int)status;
+        if (wait_owners[selected] == WAIT_FILE_SYNC) {
+            if (status != ASTRA_SYSCALL_OK) return (int)status;
+            uint32_t sync_status;
+            (void)astra_vfs_file_pager_sync_pump(&file_pager,
+                file_sync_receive, 1u, &sync_status);
+            if (sync_status != ASTRA_SYSCALL_OK) return (int)sync_status;
+            continue;
+        }
         if (wait_owners[selected] == WAIT_METRICS) {
             if (status != ASTRA_SYSCALL_OK)
                 return (int)status;
@@ -2438,7 +2954,7 @@ int astra_main(const AstraStartupInfo *startup)
             return (int)status;
         status = hostfs_check_provider();
         if (status != ASTRA_VFS_OK)
-            return (int)status;
+            (void)astra_log_failure("HostFS provider recovery", status);
         /* A dead deriver's grants go before this request is served, so a
          * derive never competes with grants nobody holds (re-review M4). */
         retire_orphans();
@@ -2451,4 +2967,8 @@ int astra_main(const AstraStartupInfo *startup)
             &grants[wait_owners[selected]]->port, 1u);
         retire_orphans();
     }
+    file_pager_stop_and_close();
+    astra_volume_port_destroy(&volume_port);
+    astra_vfs_host_transport_destroy(&transport);
+    return (int)status;
 }

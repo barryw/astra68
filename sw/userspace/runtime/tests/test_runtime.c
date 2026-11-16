@@ -439,10 +439,18 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_VM_PRIVATE_RESERVE &&
         number != ASTRA_SYSCALL_VM_PRIVATE_COMMIT &&
         number != ASTRA_SYSCALL_VM_PRIVATE_DECOMMIT &&
+        number != ASTRA_SYSCALL_AREA_CREATE &&
         number != ASTRA_SYSCALL_AREA_BIND_PAGER &&
         number != ASTRA_SYSCALL_AREA_RECLAIM &&
         number != ASTRA_SYSCALL_AREA_READ_RESIDENT &&
         number != ASTRA_SYSCALL_AREA_WRITE_PAGER &&
+        number != ASTRA_SYSCALL_AREA_PUBLISH_CLEAN_PAGE &&
+        number != ASTRA_SYSCALL_AREA_RESIZE_BACKING &&
+        number != ASTRA_SYSCALL_AREA_UNMAP_RANGE &&
+        number != ASTRA_SYSCALL_AREA_SYNC_RANGE &&
+        number != ASTRA_SYSCALL_AREA_NEXT_PROCESS &&
+        number != ASTRA_SYSCALL_AREA_PUBLISH_DIRTY_PAGE &&
+        number != ASTRA_SYSCALL_AREA_DIRTY_SCAN &&
         number != ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN &&
         number != ASTRA_SYSCALL_AREA_WRITEBACK_COMPLETE &&
         number != ASTRA_SYSCALL_AREA_PREFETCH &&
@@ -464,6 +472,7 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         assert(argument2 == 0u);
         assert(argument3 == 0u);
     }
+    if (number == ASTRA_SYSCALL_AREA_CREATE) assert(argument3 == 0u);
     if (number != ASTRA_SYSCALL_PROCESS_CREATE &&
         number != ASTRA_SYSCALL_PROCESS_EXEC &&
         number != ASTRA_SYSCALL_RING_CREATE &&
@@ -502,8 +511,17 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         result->value1 = 1u;
         result->value2 = 0u;
     }
+    if (number == ASTRA_SYSCALL_AREA_NEXT_PROCESS) {
+        result->value0 = 101u;
+        result->value1 = 0x11223344u;
+        result->value2 = 0x55667788u;
+    }
     if (number == ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN)
         result->value0 = 0x1234u;
+    if (number == ASTRA_SYSCALL_AREA_DIRTY_SCAN) {
+        result->value0 = 8192u;
+        result->value1 = ASTRA_AREA_DIRTY_MODIFIED | ASTRA_AREA_DIRTY_WRITEBACK;
+    }
     if (number == ASTRA_SYSCALL_CLOCK_MONOTONIC) {
         ++mock_clock_calls;
         result->value0 = (uint32_t)(mock_time_ns >> 32);
@@ -925,10 +943,54 @@ test_syscall_wrappers(void)
     assert(astra_close(0x12345678u) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_CLOSE);
     assert(mock_argument0 == 0x12345678u);
+    {
+        uint32_t handle = 0u;
+        assert(astra_rt_area_create_flagged(4096u,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP,
+            ASTRA_AREA_CREATE_RESERVED | ASTRA_AREA_CREATE_MAPPED_LIFETIME,
+            &handle) == ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_AREA_CREATE && mock_argument0 == 4096u &&
+            mock_argument1 == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP) &&
+            mock_argument2 == (ASTRA_AREA_CREATE_RESERVED | ASTRA_AREA_CREATE_MAPPED_LIFETIME));
+        assert(handle == ASTRA_SYSCALL_ABI_VERSION);
+    }
     assert(astra_rt_area_bind_pager(7u, 8u, 9u) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_AREA_BIND_PAGER);
     assert(mock_argument0 == 7u && mock_argument1 == 8u &&
            mock_argument2 == 9u);
+    assert(astra_rt_area_resize_backing(7u, 0u) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_AREA_RESIZE_BACKING &&
+           mock_argument0 == 7u && mock_argument1 == 0u &&
+           mock_argument2 == 0u && mock_argument3 == 0u && mock_argument4 == 0u);
+    assert(astra_rt_area_unmap_range((void *)(uintptr_t)ASTRA_SHARED_AREA_ADDRESS_START,
+        4096u) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_AREA_UNMAP_RANGE &&
+        mock_argument0 == ASTRA_SHARED_AREA_ADDRESS_START && mock_argument1 == 4096u &&
+        mock_argument2 == 0u && mock_argument3 == 0u && mock_argument4 == 0u);
+    assert(astra_rt_area_unmap_range(NULL, 4096u) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_rt_area_unmap_range((void *)(uintptr_t)ASTRA_SHARED_AREA_ADDRESS_START,
+        0u) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    {
+        uint32_t backing_status = UINT32_MAX;
+        assert(astra_rt_area_sync_range((void *)(uintptr_t)ASTRA_SHARED_AREA_ADDRESS_START,
+            4096u, 0u, &backing_status) == ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_AREA_SYNC_RANGE &&
+            mock_argument0 == ASTRA_SHARED_AREA_ADDRESS_START && mock_argument1 == 4096u &&
+            mock_argument2 == 0u && mock_argument3 == 0u && mock_argument4 == 0u);
+        assert(backing_status == mock_thread_handle);
+        mock_status = ASTRA_SYSCALL_IO_ERROR;
+        assert(astra_rt_area_sync_range((void *)(uintptr_t)ASTRA_SHARED_AREA_ADDRESS_START,
+            4096u, 0u, &backing_status) == ASTRA_SYSCALL_IO_ERROR);
+        assert(backing_status == mock_thread_handle);
+        mock_status = ASTRA_SYSCALL_OK;
+        assert(astra_rt_area_sync_range((void *)(uintptr_t)ASTRA_SHARED_AREA_ADDRESS_START,
+            4096u, ASTRA_AREA_SYNC_ASYNC, &backing_status) == ASTRA_SYSCALL_OK);
+        assert(mock_argument2 == ASTRA_AREA_SYNC_ASYNC);
+        assert(astra_rt_area_sync_range(NULL, 4096u, 0u, &backing_status) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+        assert(backing_status == 0u);
+        assert(astra_rt_area_sync_range((void *)(uintptr_t)ASTRA_SHARED_AREA_ADDRESS_START,
+            4096u, 0u, NULL) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    }
     {
         void *address = NULL;
         uint32_t mapped_bytes = 0u;
@@ -965,6 +1027,22 @@ test_syscall_wrappers(void)
         assert(handles == 2u && mappings == 1u && children == 0u);
         assert(astra_rt_area_references(7u, NULL, &mappings,
                                         &children) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+        uint64_t sequence = UINT64_C(0x123456789abcdef0);
+        uint32_t process = 0u;
+        assert(astra_rt_area_next_process(7u, 99u, &sequence, &process) == ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_AREA_NEXT_PROCESS && mock_argument0 == 7u &&
+            mock_argument1 == 99u && mock_argument2 == 0x12345678u &&
+            mock_argument3 == 0x9abcdef0u && mock_argument4 == 0u);
+        assert(process == 101u && sequence == UINT64_C(0x1122334455667788));
+        const uint32_t errors[] = {ASTRA_SYSCALL_ACCESS_DENIED, ASTRA_SYSCALL_WOULD_BLOCK};
+        for (uint32_t at = 0u; at < sizeof(errors) / sizeof(errors[0]); ++at) {
+            mock_status = errors[at]; process = 77u;
+            assert(astra_rt_area_next_process(7u, 0u, &sequence, &process) == errors[at]);
+            assert(process == 0u && sequence == UINT64_C(0x1122334455667788));
+        }
+        mock_status = ASTRA_SYSCALL_OK; process = 77u;
+        assert(astra_rt_area_next_process(7u, 0u, NULL, &process) == ASTRA_SYSCALL_INVALID_ARGUMENT && process == 0u);
+        assert(astra_rt_area_next_process(7u, 0u, &sequence, NULL) == ASTRA_SYSCALL_INVALID_ARGUMENT);
         assert(astra_rt_area_read_resident(7u, 32u, ring_bytes, 4u) ==
                ASTRA_SYSCALL_OK);
         assert(mock_number == ASTRA_SYSCALL_AREA_READ_RESIDENT);
@@ -980,7 +1058,32 @@ test_syscall_wrappers(void)
                mock_argument0 == 7u && mock_argument1 == 32u &&
                mock_argument2 == (uint32_t)(uintptr_t)ring_bytes &&
                mock_argument3 == 4u);
+        assert(astra_rt_area_publish_dirty_page(7u, 4096u, ring_bytes) ==
+               ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_AREA_PUBLISH_DIRTY_PAGE &&
+               mock_argument0 == 7u && mock_argument1 == 4096u &&
+               mock_argument2 == (uint32_t)(uintptr_t)ring_bytes &&
+               mock_argument3 == ASTRA_MEMORY_PAGE_SIZE);
+        assert(astra_rt_area_publish_clean_page(7u, 4096u, ring_bytes, 5u) == ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_AREA_PUBLISH_CLEAN_PAGE &&
+            mock_argument0 == 7u && mock_argument1 == 4096u &&
+            mock_argument2 == (uint32_t)(uintptr_t)ring_bytes && mock_argument3 == 5u &&
+            mock_argument4 == 0u);
         uint32_t token = 99u;
+        uint32_t dirty_offset = 99u, dirty_state = 99u;
+        assert(astra_rt_area_dirty_scan(7u, 4096u, &dirty_offset, &dirty_state) ==
+            ASTRA_SYSCALL_OK && dirty_offset == 8192u &&
+            dirty_state == (ASTRA_AREA_DIRTY_MODIFIED | ASTRA_AREA_DIRTY_WRITEBACK));
+        assert(mock_number == ASTRA_SYSCALL_AREA_DIRTY_SCAN && mock_argument0 == 7u &&
+            mock_argument1 == 4096u && mock_argument2 == 0u);
+        assert(astra_rt_area_dirty_scan(7u, 0u, NULL, &dirty_state) ==
+            ASTRA_SYSCALL_INVALID_ARGUMENT && dirty_state == 0u);
+        assert(astra_rt_area_dirty_scan(7u, 0u, &dirty_offset, NULL) ==
+            ASTRA_SYSCALL_INVALID_ARGUMENT && dirty_offset == 0u);
+        mock_status = ASTRA_SYSCALL_INVALID_HANDLE;
+        assert(astra_rt_area_dirty_scan(7u, 0u, &dirty_offset, &dirty_state) ==
+            ASTRA_SYSCALL_INVALID_HANDLE && dirty_offset == 0u && dirty_state == 0u);
+        mock_status = ASTRA_SYSCALL_OK;
         assert(astra_rt_area_writeback_begin(7u, 4096u, ring_bytes, &token) ==
                ASTRA_SYSCALL_OK);
         assert(mock_number == ASTRA_SYSCALL_AREA_WRITEBACK_BEGIN &&

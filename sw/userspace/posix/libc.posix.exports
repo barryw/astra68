@@ -136,6 +136,7 @@ mkdir
 mkdtemp
 mkostemp
 mmap
+msync
 munmap
 nanosleep
 nl_langinfo

@@ -1,5 +1,6 @@
 #include "allocation.h"
 #include "area.h"
+#include "port.h"
 #include "memory.h"
 #include "performance.h"
 #include "pmmu.h"
@@ -14,6 +15,8 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+
+uint32_t kernel_port_owner(const KernelPort *port) { (void)port; return 0u; }
 #include <stdio.h>
 #include <string.h>
 
@@ -299,6 +302,32 @@ static void test_ring_injection_releases_child_authority(void)
     assert(kernel_ring_pool_valid());
     assert(kernel_area_pool_valid());
     assert(kernel_allocation_valid());
+}
+
+static void test_ring_child_ref_limit_preserves_area(void)
+{
+    KernelArea *area;
+    KernelRing *ring = (KernelRing *)(uintptr_t)1u;
+    KernelRingPoolStats stats;
+    uint32_t handles, mappings, children;
+    initialize_test();
+    assert(kernel_area_create(61u, KERNEL_PAGE_SIZE, 0u, &area) == KERNEL_AREA_OK);
+    for (uint32_t reference = 0u; reference < UINT16_MAX; ++reference)
+        assert(kernel_area_child_retain(area) == KERNEL_AREA_OK);
+    assert(kernel_ring_create(61u, area, 0u, 16u, 4u, &ring) == KERNEL_RING_NO_SLOT);
+    assert(ring == NULL);
+    assert(kernel_area_references(area, &handles, &mappings, &children) &&
+        handles == 1u && mappings == 0u && children == UINT16_MAX);
+    assert(kernel_ring_pool_stats(&stats) && stats.active_rings == 0u &&
+        stats.allocation_failures == 1u);
+    for (uint32_t reference = 0u; reference < UINT16_MAX; ++reference)
+        assert(kernel_area_child_release(area) == KERNEL_AREA_OK);
+    assert(kernel_ring_create(61u, area, 0u, 16u, 4u, &ring) == KERNEL_RING_OK);
+    kernel_ring_handle_release(ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER);
+    kernel_ring_handle_release(ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_CONSUMER);
+    assert(kernel_area_references(area, &handles, &mappings, &children) && children == 0u);
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_ring_pool_valid() && kernel_area_pool_valid());
 }
 
 static void test_ring_pool_grows_past_former_table(void)
@@ -783,6 +812,7 @@ int main(void)
     _Static_assert(offsetof(AstraBulkRingHeader, consumer_position) == 0x30u,
                    "bulk-ring consumer offset");
     test_ring_injection_releases_child_authority();
+    test_ring_child_ref_limit_preserves_area();
     test_ring_pool_grows_past_former_table();
     test_ring_metadata_reset_discards_stale_pages();
     test_header_batching_waits_and_wrap();

@@ -1342,6 +1342,16 @@ check_vfs_open_at_after_rename(void)
     if (status != ASTRA_VFS_OK || child == 0u ||
         info.kind != ASTRA_VFS_KIND_FILE || (info.mode & 0777u) != 0600u)
         return fail("VFS create through renamed directory", (int)status);
+    char backing_bytes[3];
+    uint32_t moved = 0u;
+    uint64_t position = 0u;
+    status = ops->write(&backend, child, 0u, 0u, UINT64_MAX,
+        "old", 3u, &moved, &position);
+    if (status != ASTRA_VFS_OK || moved != 3u)
+        return fail("VFS write-only backing write", (int)status);
+    status = ops->read_for_write(&backend, child, 0u, backing_bytes, sizeof(backing_bytes), &moved);
+    if (status != ASTRA_VFS_OK || moved != 3u || memcmp(backing_bytes, "old", 3u) != 0)
+        return fail("VFS write-only cache preparation", (int)status);
     status = ops->chmod_node(&backend, child, 0u);
     if (status != ASTRA_VFS_OK)
         return fail("VFS chmod zero permissions", (int)status);

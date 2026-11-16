@@ -77,6 +77,7 @@ Environment=ASTRA_STORE=$trial_root
 Environment=ASTRA_STATE_ROOT=$trial_root/state/system
 Environment=ASTRA_EXPORTS_ROOT=$trial_root/hostfs
 Environment=ASTRA_LOG_ROOT=$trial_root/log
+Environment=ASTRA_POWER_POLICY=guest
 Environment=ASTRA_RUN_ROOT=/run/astra
 Environment=STORAGE=$image
 ExecStart=

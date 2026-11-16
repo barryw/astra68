@@ -262,13 +262,15 @@ def main():
         assert not (observed / "power.args").exists()
         assert (observed / "qemu.args").exists(), (result.stdout, result.stderr)
         qemu_args = (observed / "qemu.args").read_text().splitlines()
-        assert qemu_args.count("-qmp") == 2
+        assert qemu_args.count("-qmp") == 3
         qmp_arguments = [qemu_args[index + 1] for index, value in
                          enumerate(qemu_args) if value == "-qmp"]
         assert qmp_arguments == [
             "unix:%s,server=on,wait=off" % (observed / "run/qemu/qmp.sock"),
             "unix:%s,server=on,wait=off" %
             (observed / "run/qemu/remote-desktop-qmp.sock"),
+            "unix:%s,server=on,wait=off" %
+            (observed / "run/qemu/watchdog-qmp.sock"),
         ]
         assert "-no-reboot" not in qemu_args
         assert qemu_args[qemu_args.index("-display") + 1] == "none"
@@ -419,6 +421,24 @@ def main():
                                  status=1)
         result = launch(environment(root, observed))
         assert result.returncode == 1, result.stderr
+        assert not (observed / "power.args").exists()
+        writable(root)
+    for status in (88, 89):
+        with tempfile.TemporaryDirectory() as directory:
+            root, observed = fixture(directory, 0, status=status)
+            launch_environment = environment(root, observed)
+            launch_environment["ASTRA_POWER_POLICY"] = "guest"
+            result = launch(launch_environment)
+            assert result.returncode == status, (result.returncode, result.stderr)
+            assert not (observed / "power.args").exists(), "private guest changed host power"
+            writable(root)
+    with tempfile.TemporaryDirectory() as directory:
+        root, observed = fixture(directory, 0, status=88)
+        launch_environment = environment(root, observed)
+        launch_environment["ASTRA_POWER_POLICY"] = "invalid"
+        result = launch(launch_environment)
+        assert result.returncode != 0 and "invalid choice" in result.stderr
+        assert not (observed / "provider.args").exists()
         assert not (observed / "power.args").exists()
         writable(root)
     with tempfile.TemporaryDirectory() as directory:

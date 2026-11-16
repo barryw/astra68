@@ -1,9 +1,27 @@
 # Filesystem Kit
 
 Include `astra/filesystem_kit.h` for the complete API. Link against
-`filesystem.library.17` and declare the minimum compatible version in the
+`filesystem.library.18` and declare the minimum compatible version in the
 bundle manifest. The process loader resolves that dependency before `main`;
 applications call the declared `astra_filesystem_*` functions directly.
+
+`astra_filesystem_set_file_times` updates an open writable file's access time,
+modification time, or both. Pass an `AstraVfsDirEntry` and select
+`ASTRA_VFS_META_ATIME` and/or `ASTRA_VFS_META_MTIME`; unselected fields stay
+unchanged. Seconds are signed and nanoseconds must be below one billion.
+The operation uses the retained descriptor, flushes pending cached bytes first,
+and reports permission, provider and writeback errors. Filesystem timestamp
+precision applies; read metadata back for the stored value. Explicit `sync`
+also persists the timestamp. The mount-relative client equivalent is
+`astra_vfs_set_file_times`. Providers without timestamp updates return
+`ASTRA_VFS_ERR_UNSUPPORTED`.
+
+Native reads and writes report the confirmed completed prefix through `moved`,
+including when the operation returns an error. Consume that prefix once;
+sequential operations also advance their cursor by the confirmed bytes. The
+POSIX adapter returns a nonzero completed count using the same native result.
+A failed transport or malformed reply confirms no bytes, but does not prove
+that a write had no backing effects. Do not blindly replay an ambiguous write.
 
 The library attaches to the process namespace already created from startup
 grants. It supports assign-aware files, explicit-offset I/O, 64-bit seeks,
@@ -12,14 +30,39 @@ the underlying VFS client operations for filesystem and compatibility tools.
 The ABI has no dependency on lwext4 or any other on-disk implementation; RAM
 drives and other filesystem services use the same protocol and API.
 
-ABI 17.0 returns a canonical file-area chunk from
+ABI 18.0 removes the client-side provider bypass. File and path operations use
+the authenticated native VFS session; file areas retain that session's native
+open description. Provider handles remain private to the service. Exec keeps
+the native session and reply lane; fork adopts shared native descriptions.
+All clients and services must be rebuilt together.
+
+Filesystem Kit returns a canonical file-area chunk from
 `astra_filesystem_file_area`; map the requested window with
 `astra_rt_area_map_range` at `base % ASTRA_AREA_SIZE_MAX`. Requests cannot
-cross a chunk boundary. ABI 16.0 moved volume change delivery onto generic Messaging. Volume protocol
+cross a chunk boundary. Read-only descriptions receive READ/MAP authority.
+HostFS read/write descriptions also receive WRITE after the native cache owner
+retains their backing writer. Shared mapped stores, ordinary I/O and native
+file sync use the same pages and retained authority, including after the
+original description and client area handles close. Read-only descriptions of
+that node remain read-only. A later native file sync may flush mapped stores
+using the retained writer. Native `astra_rt_area_sync_range` instead resolves
+the caller's mapped range directly, requiring no descriptor or area handle.
+It awaits backing completion, or accepts `ASTRA_AREA_SYNC_ASYNC` to acknowledge
+the existing native writeback worker. Both preserve saved backing errors.
+POSIX shared writable `mmap` and `msync` adapt to these native owners and pass
+host/DE25 qualification. File-area admission also permits empty files and
+ranges beyond the current length: reserving a view does not access its pages.
+The native pager still refuses accesses to whole pages outside backing EOF.
+An authorized mapped access that cannot obtain backing ends the process with
+`ASTRA_STATUS_BACKING_FAULTED`; an unmapped address or denied write keeps the
+ordinary fault verdict. POSIX death waits translate the backing verdict to `SIGBUS`.
+EOF/fault termination passes native and DE25 qualification.
+
+ABI 16.0 moved volume change delivery onto generic Messaging. Volume protocol
 6 removes its private subscription operations. Pass the `MESSAGING` startup
 capability to `astra_volume_watch_open` and `astra_volume_watch_close`; keep
 using `VOLUMES` for snapshots. All in-tree clients require the single
-`ASTRA_FILESYSTEM_17.0` symbol namespace.
+`ASTRA_FILESYSTEM_18.0` symbol namespace.
 
 `astra_volume_reference_equal` compares the full provider epoch, volume ID,
 and generation. Use it when matching a selected or retained volume against a
@@ -182,11 +225,21 @@ namespace refresh. POSIX fork adopts its descriptors and cwd through the same
 native mechanism. Multi-threaded fork is refused by the kernel before clone and
 maps to `ENOTSUP` in POSIX.
 
+A disconnected source sets `ASTRA_PROCESS_FILE_LOST` in its portable file
+state and produces a receipt without a transfer token. Adoption preserves only the matching inherited
+local owner and its LOST epoch; it cannot replace a live file or populate an
+empty one. No backend operation or path reopening occurs. Its local pin is
+released on close, and another fork preserves the same LOST state. CWD uses
+the same receipt contract; changing to an absolute live directory recovers
+the child's current directory independently of the lost identity. In-place
+exec preserves that same ownership state and the native client's inherited
+pin count; restoring a LOST file does not connect or reopen its grant.
+
 The process VFS owns current directory identity. Process facades accept relative
 paths against that retained directory; rename does not reopen its old spelling.
 Fork shares the directory description and exec restores it in native VFS state.
-Exec state version 12 owns variable-length root and current-directory strings;
-it preserves the same complete native path bounds across handoff.
+Exec state version 14 owns variable-length root and current-directory strings
+and preserves native sessions and lanes without provider capabilities.
 `astra_process_vfs_current_directory` returns its current native slash path or
 NOT_FOUND after removal or escape from its grant. Explicit directory-anchored
 APIs support mutations and readlink; STAT_AT selects final-link following with
@@ -202,8 +255,8 @@ through the shared assign resolver, with its consumed links charged to the same
 Provider loss returns `ASTRA_VFS_ERR_LOST`; POSIX reports `ESTALE`. Old file,
 directory and CWD descriptions stay lost even when the same pathname exists
 again. Fork can inherit a disconnected description. A provider reset preserves
-grant ports: the Kit refreshes the scope through HELLO while retaining its
-control session, and new absolute opens can succeed. A grant root is recovered
+grant ports: HostFS rebinds each native path session to its recovered backend,
+and new absolute opens can succeed. A grant root is recovered
 only when its volume, inode and generation still match. Absolute chdir can
 replace a lost CWD; relative operations cannot silently reopen its spelling.
 When HostFS dies, its old grants remain lost. Supervisor restarts affected

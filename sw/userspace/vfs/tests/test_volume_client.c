@@ -12,6 +12,7 @@
 static unsigned owned[512], next_handle = 1u;
 static AstraVolumeCatalogPage shared;
 static AstraVolumeUsagePage shared_usage;
+static AstraVolumeUsageRecord shared_usage_records[4];
 static AstraVolumeNetworkSource shared_network;
 static AstraVolumeMountAuth shared_auth;
 static uint32_t shared_size;
@@ -21,6 +22,7 @@ static uint32_t service_failure, corrupt_reply, corrupt_page;
 static uint32_t maps, closes, queued;
 static uint64_t subscription;
 static unsigned allocations, fail_allocation, snapshot_pages, fail_continuation;
+static unsigned interleaved_usage;
 static uint32_t shares, unshares;
 static uint32_t image_releases;
 static uint32_t expected_network_id;
@@ -65,12 +67,14 @@ AstraResult astra_handle_duplicate(AstraHandle source, uint32_t rights, AstraHan
 AstraResult astra_area_create(uint32_t size, uint32_t rights, AstraArea *area)
 {
     assert((size == sizeof(shared) || size == sizeof(shared_usage) ||
-        size == sizeof(shared_network) || size == sizeof(shared_auth)) &&
+        size == sizeof(shared_network) || size == sizeof(shared_auth) ||
+        (size != 0u && size <= sizeof(shared_usage_records) && size % sizeof(AstraVolumeUsageRecord) == 0u)) &&
         (rights & ASTRA_RIGHT_WRITE) != 0u);
     shared_size = size;
     area->handle = acquire(); memset(&shared, 0, sizeof(shared));
     memset(&shared_usage, 0, sizeof(shared_usage)); memset(&shared_network, 0, sizeof(shared_network));
     memset(&shared_auth, 0, sizeof(shared_auth));
+    memset(shared_usage_records, 0, sizeof(shared_usage_records));
     return ASTRA_OK;
 }
 AstraResult astra_area_map(AstraArea *area, uint32_t flags)
@@ -81,7 +85,8 @@ AstraResult astra_area_map(AstraArea *area, uint32_t flags)
     if (map_failure != 0) return map_failure;
     area->address = shared_size == sizeof(shared) ? (void *)&shared :
         shared_size == sizeof(shared_usage) ? (void *)&shared_usage :
-        shared_size == sizeof(shared_network) ? (void *)&shared_network : (void *)&shared_auth;
+        shared_size == sizeof(shared_network) ? (void *)&shared_network :
+        shared_size == sizeof(shared_auth) ? (void *)&shared_auth : (void *)shared_usage_records;
     area->size = shared_size; area->map_flags = flags;
     return ASTRA_OK;
 }
@@ -122,10 +127,12 @@ AstraResult astra_port_call(AstraHandle endpoint, AstraCall *call, AstraMonotoni
     int partition = request->header.operation == ASTRA_VOLUME_PARTITION ||
         request->header.operation == ASTRA_VOLUME_PARTITION_STATUS;
     int broker_info = request->header.operation == ASTRA_VOLUME_BROKER_INFO;
+    int usage_snapshot = request->header.operation == ASTRA_VOLUME_USAGE_SNAPSHOT;
     uint32_t reply_size = control ? sizeof(AstraVolumeControlReply) : format ?
         sizeof(AstraVolumeFormatReply) : broker_info ?
         sizeof(AstraVolumeBrokerInfoReply) : partition ?
-        sizeof(AstraVolumePartitionReply) : sizeof(AstraVolumeReply);
+        sizeof(AstraVolumePartitionReply) : usage_snapshot ?
+        sizeof(AstraVolumeUsageSnapshotReply) : sizeof(AstraVolumeReply);
     assert(call->request_size == ((request->header.operation == ASTRA_VOLUME_NETWORK_SOURCE ||
         request->header.operation == ASTRA_VOLUME_MANAGED_NETWORK_LOOKUP) ?
         sizeof(AstraVolumeNetworkRequest) :
@@ -135,6 +142,7 @@ AstraResult astra_port_call(AstraHandle endpoint, AstraCall *call, AstraMonotoni
         partition ? sizeof(AstraVolumePartitionRequest) :
         request->header.operation == ASTRA_VOLUME_ROOT ? sizeof(AstraVolumeRootRequest) :
         request->header.operation == ASTRA_VOLUME_USAGE ? sizeof(AstraVolumeUsageRequest) :
+        usage_snapshot ? sizeof(AstraVolumeUsageSnapshotRequest) :
         broker_info ? sizeof(AstraMessageHeader) : sizeof(*request)) &&
         call->reply_capacity == reply_size);
     assert(request->header.protocol == ASTRA_VOLUME_PROTOCOL && request->header.flags == 0u);
@@ -200,6 +208,22 @@ AstraResult astra_port_call(AstraHandle endpoint, AstraCall *call, AstraMonotoni
             root_request->reference.generation == 1u && root_request->reserved == 0u);
         *call->reply_handles = acquire();
         call->reply_handle_count = 1u;
+    } else if (usage_snapshot && reply->status == 0u) {
+        const AstraVolumeUsageSnapshotRequest *wanted = call->request;
+        AstraVolumeUsageSnapshotInfo *info = &((AstraVolumeUsageSnapshotReply *)reply)->info;
+        assert(call->handle_count == 1u);
+        *info = (AstraVolumeUsageSnapshotInfo){.volume = {25u, wanted->volume.id, wanted->volume.generation},
+            .sequence = 11u, .catalog_sequence = 3u, .count = snapshot_pages == 3u ? 3u : snapshot_pages ? 2u : 1u};
+        if (fail_continuation) reply->status = ASTRA_STATUS_BUSY;
+        else if (info->count > shared_size / sizeof(AstraVolumeUsageRecord))
+            reply->status = ASTRA_STATUS_BUFFER_TOO_SMALL;
+        else for (uint32_t at = 0u; at < info->count; ++at) {
+            shared_usage_records[at] = (AstraVolumeUsageRecord){.volume = {25u, 5u, 1u},
+                .handle = snapshot_pages == 2u ? 1u : at + 1u, .inode = 51u,
+                .process = 17u + 2u * at, .kind = snapshot_pages == 2u ? ASTRA_VOLUME_USAGE_ROOT : ASTRA_VOLUME_USAGE_FILE,
+                .rights = ASTRA_RIGHT_READ, .path_length = 15u, .path = "/ram0/held file"};
+            if (corrupt_page) shared_usage_records[at].reserved = 1u;
+        }
     } else if (request->header.operation == ASTRA_VOLUME_USAGE && reply->status == 0u) {
         const AstraVolumeUsageQuery *wanted = &((const AstraVolumeUsageRequest *)request)->query;
         assert(call->handle_count == 1u && astra_volume_usage_query_valid(wanted));
@@ -221,7 +245,7 @@ AstraResult astra_port_call(AstraHandle endpoint, AstraCall *call, AstraMonotoni
                     wanted->after_kind == shared_usage.records[0].kind && wanted->after_process == 17u);
                 if (snapshot_pages == 2) shared_usage.records[0].process = 19u;
                 else shared_usage.records[0].handle = 2u;
-                if (fail_continuation) reply->status = ASTRA_STATUS_BUSY;
+                if (fail_continuation || interleaved_usage) reply->status = ASTRA_STATUS_BUSY;
             }
         }
     } else if (request->header.operation == ASTRA_VOLUME_QUERY && reply->status == 0u) {
@@ -631,6 +655,11 @@ int main(void)
     assert(astra_volume_usage_snapshot_open(77u, NULL, &usage_snapshot) == ASTRA_ERROR_INVALID_ARGUMENT);
     astra_volume_usage_snapshot_close(&usage_snapshot); balanced();
     assert(allocations == 0u && usage_snapshot.records == NULL);
+    interleaved_usage = 1u;
+    assert(astra_volume_usage_snapshot_open(77u, NULL, &usage_snapshot) == ASTRA_OK &&
+        usage_snapshot.count == 2u);
+    astra_volume_usage_snapshot_close(&usage_snapshot); balanced();
+    interleaved_usage = 0u;
     fail_continuation = 1u;
     assert(astra_volume_usage_snapshot_open(77u, NULL, &usage_snapshot) == ASTRA_ERROR_BUSY &&
         usage_snapshot.records == NULL && usage_snapshot.count == 0u && allocations == 0u);
@@ -642,6 +671,14 @@ int main(void)
         usage_snapshot.records[0].kind == ASTRA_VOLUME_USAGE_ROOT &&
         usage_snapshot.records[0].handle == usage_snapshot.records[1].handle &&
         usage_snapshot.records[0].process == 17u && usage_snapshot.records[1].process == 19u);
+    astra_volume_usage_snapshot_close(&usage_snapshot); balanced();
+    snapshot_pages = 0u;
+    corrupt_page = 1u;
+    assert(astra_volume_usage_snapshot_open(77u, NULL, &usage_snapshot) == ASTRA_ERROR_IO &&
+        usage_snapshot.records == NULL && usage_snapshot.count == 0u && allocations == 0u);
+    corrupt_page = 0u; balanced();
+    snapshot_pages = 3u;
+    assert(astra_volume_usage_snapshot_open(77u, NULL, &usage_snapshot) == ASTRA_OK && usage_snapshot.count == 3u);
     astra_volume_usage_snapshot_close(&usage_snapshot); balanced();
     snapshot_pages = 0u;
     AstraVolumeBrokerInfo info = {0};

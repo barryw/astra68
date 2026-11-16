@@ -447,7 +447,7 @@ uint32_t astra_vfs_path_request(uint32_t operation,
     if (operands == 0u) {
         *paths = (AstraVfsPathOperands){0};
         /* WRITE uses this union for binary bytes, never path descriptors. */
-        if (operation == ASTRA_VFS_OP_WRITE)
+        if (operation == ASTRA_VFS_OP_WRITE || operation == ASTRA_VFS_OP_SET_FILE_TIMES)
             return ASTRA_VFS_OK;
     }
     return astra_vfs_path_unpack(&request->body.paths,

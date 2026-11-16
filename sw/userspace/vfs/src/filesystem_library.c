@@ -5,6 +5,7 @@
 #include <astra/vfs_path.h>
 #include <astra/vfs_path_payload.h>
 #include <astra/vfs_file_lifetime.h>
+#include <astra/vfs_backend.h>
 
 #include <stddef.h>
 #include <string.h>
@@ -681,6 +682,7 @@ uint32_t astra_filesystem_read(AstraFile *file, void *buffer,
 {
     uint32_t status;
 
+    if (moved != NULL) *moved = 0u;
     if (file_owner_status(file) == ASTRA_VFS_ERR_LOST)
         return ASTRA_VFS_ERR_LOST;
     if (!file_valid(file))
@@ -691,8 +693,6 @@ uint32_t astra_filesystem_read(AstraFile *file, void *buffer,
         uint32_t chunk = file->_private_read != NULL ?
             ASTRA_VFS_BULK_MAX : ASTRA_VFS_IO_MAX;
 
-        if (moved != NULL)
-            *moved = 0u;
         if (buffer == NULL || moved == NULL ||
             (file->_private_flags & ASTRA_VFS_OPEN_READ) == 0u)
             return ASTRA_VFS_ERR_INVALID;
@@ -707,7 +707,7 @@ uint32_t astra_filesystem_read(AstraFile *file, void *buffer,
             astra_vfs_read_position(file->_private_client, file->_private_file,
                 0u, ASTRA_VFS_IO_SEQUENTIAL, buffer, chunk, moved,
                 &position);
-        if (status == ASTRA_VFS_OK)
+        if (status == ASTRA_VFS_OK || *moved != 0u)
             file->_private_offset = position;
         return status;
     }
@@ -724,6 +724,7 @@ uint32_t astra_filesystem_write(AstraFile *file, uint64_t max_end, const void *b
     uint32_t status;
     uint64_t position;
 
+    if (moved != NULL) *moved = 0u;
     if (file_owner_status(file) == ASTRA_VFS_ERR_LOST)
         return ASTRA_VFS_ERR_LOST;
     if (!file_valid(file))
@@ -774,19 +775,8 @@ uint32_t astra_filesystem_seek(AstraFile *file, int64_t delta,
     }
     else
         return ASTRA_VFS_ERR_INVALID;
-    if (delta < 0) {
-        uint64_t amount = (uint64_t)(-(delta + 1)) + 1u;
-
-        if (amount > base)
-            return ASTRA_VFS_ERR_INVALID;
-        result = base - amount;
-    } else {
-        uint64_t amount = (uint64_t)delta;
-
-        if (amount > UINT64_MAX - base)
-            return ASTRA_VFS_ERR_INVALID;
-        result = base + amount;
-    }
+    status = astra_vfs_seek_offset(base, delta, UINT64_MAX, &result);
+    if (status != ASTRA_VFS_OK) return status;
     file->_private_offset = result;
     *offset = result;
     return ASTRA_VFS_OK;
@@ -1463,6 +1453,15 @@ uint32_t astra_filesystem_chmod_file(AstraFile *file, uint16_t mode)
     status = astra_vfs_chmod_file(file->_private_client, file->_private_file,
                                   mode);
     return status;
+}
+
+uint32_t astra_filesystem_set_file_times(AstraFile *file,
+    const AstraVfsDirEntry *times, uint32_t fields)
+{
+    if (file_owner_status(file) == ASTRA_VFS_ERR_LOST) return ASTRA_VFS_ERR_LOST;
+    if (!file_valid(file)) return ASTRA_VFS_ERR_BAD_HANDLE;
+    if ((file_rights(file) & ASTRA_RIGHT_WRITE) == 0u) return ASTRA_VFS_ERR_ACCESS;
+    return astra_vfs_set_file_times(file->_private_client, file->_private_file, times, fields);
 }
 
 static uint32_t astra_filesystem_chmod_at_bound(AstraFilesystem *filesystem, const AstraFile *directory,

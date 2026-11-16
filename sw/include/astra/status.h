@@ -123,6 +123,8 @@
 #define ASTRA_STATUS_NO_STARTUP  0x80000002  /* its startup block was refused */
 /** Verdict: the process returned a status that already carried the verdict bit, which crt0 refuses to pass through. */
 #define ASTRA_STATUS_BAD_EXIT    0x80000003  /* it returned a negative status */
+/** Verdict: an authorized mapped access failed because its backing was unavailable. */
+#define ASTRA_STATUS_BACKING_FAULTED 0x80000004
 /**
  * Test whether a status is a kernel verdict rather than a value the process itself returned.
  *

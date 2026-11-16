@@ -21,10 +21,86 @@ static char renamed_from[ASTRA_VFS_PATH_MAX], renamed_to[ASTRA_VFS_PATH_MAX];
 static int config_mode;
 static uint32_t old_config_exists, new_config_exists;
 static uint32_t config_rename_result;
+static uint32_t shutdown_wait_status, shutdown_exit_status;
+static uint32_t shutdown_final_wait_status, shutdown_terminate_status;
+static uint32_t shutdown_request_status, shutdown_reply_status;
+static uint32_t shutdown_decision, shutdown_reason, shutdown_waits;
+static char shutdown_report[256];
+
+uint32_t astra_log_line(uint32_t level, uint32_t stream,
+                        const char *text, uint32_t length)
+{
+    assert(level == ASTRA_EVENT_LEVEL_ERROR && stream == ASTRA_LOG_STREAM_LOG);
+    assert(length < sizeof(shutdown_report));
+    memcpy(shutdown_report, text, length);
+    shutdown_report[length] = '\0';
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t astra_process_wait(uint32_t handle, uint64_t deadline, uint32_t *status)
+{
+    assert(handle == 71u);
+    ++shutdown_waits;
+    uint32_t result = deadline == ASTRA_DEADLINE_FOREVER ?
+        shutdown_final_wait_status : shutdown_wait_status;
+    if (result == ASTRA_SYSCALL_OK)
+        *status = shutdown_exit_status;
+    return result;
+}
+
+uint32_t astra_process_terminate(uint32_t handle, uint32_t signal)
+{
+    assert(handle == 71u && signal == ASTRA_SIGNAL_KILL);
+    return shutdown_terminate_status;
+}
+
+AstraAssignTable *supervisor_assigns(void)
+{ assert(0 && "fixture has no unbound filesystem publication"); return NULL; }
+uint32_t astra_assign_unbind(AstraAssignTable *table, const char *name)
+{ (void)table; (void)name; assert(0); return ASTRA_VFS_ERR_IO; }
+void supervisor_vfs_unbind_system(AstraVfsClient *client) { (void)client; assert(0); }
+void supervisor_vfs_unbind_config(AstraVfsClient *client) { (void)client; assert(0); }
+void supervisor_vfs_unregister(AstraVfsClient *client) { (void)client; assert(0); }
+uint32_t astra_vfs_disconnect(AstraVfsClient *client)
+{ (void)client; assert(0); return ASTRA_VFS_ERR_IO; }
+
+uint32_t astra_shutdown_request(uint32_t send, uint32_t transaction, uint32_t *receive)
+{
+    assert(send == 72u && transaction != 0u);
+    *receive = shutdown_request_status == ASTRA_SYSCALL_OK ? 73u : 0u;
+    return shutdown_request_status;
+}
+
+uint32_t astra_shutdown_receive_reply(uint32_t receive, uint32_t transaction,
+                                      AstraShutdownReply *reply)
+{
+    assert(receive == 73u && transaction != 0u);
+    *reply = (AstraShutdownReply){.decision = shutdown_decision, .reason = shutdown_reason};
+    return shutdown_reply_status;
+}
+
+uint32_t astra_close(uint32_t handle)
+{
+    assert(handle == 73u);
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t astra_wait_multiple(const uint32_t *handles, uint32_t count,
+    uint64_t deadline, uint32_t *index, uint32_t *detail)
+{
+    (void)handles; (void)count; (void)deadline; (void)index; (void)detail;
+    assert(0 && "shutdown reply is immediate in this fixture");
+    return ASTRA_SYSCALL_INVALID_ARGUMENT;
+}
 
 void *astra_runtime_allocate(size_t size)
 {
     return allocation_fail ? NULL : malloc(size);
+}
+
+void *astra_runtime_callocate(size_t count, size_t size)
+{
+    return allocation_fail ? NULL : calloc(count, size);
 }
 
 void *astra_runtime_reallocate(void *pointer, size_t size)
@@ -36,7 +112,8 @@ void astra_runtime_deallocate(void *pointer) { free(pointer); }
 uint64_t astra_clock_monotonic(void) { return now; }
 uint32_t astra_log_failure(const char *operation, uint32_t status)
 {
-    assert(strcmp(operation, "service failure state") == 0);
+    assert(strcmp(operation, "service failure state") == 0 ||
+           strcmp(operation, "namespace holder restart") == 0);
     logged_status = status;
     return ASTRA_STATUS_OK;
 }
@@ -106,6 +183,11 @@ uint32_t astra_vfs_rename(AstraVfsClient *client, const char *from,
 
 static uint32_t read_policy(const char *path, void **buffer, uint32_t *length)
 {
+    if (strcmp(path, "/config/services/missing/service.conf") == 0) {
+        *buffer = NULL;
+        *length = 0u;
+        return ASTRA_VFS_ERR_IO;
+    }
     assert(strcmp(path, "/config/services/hostfs/policy.conf") == 0);
     *buffer = NULL;
     *length = 0u;
@@ -159,6 +241,170 @@ static void reset(void)
 
 int main(void)
 {
+    {
+        SupervisorDependency dependencies[] = {{"SYSTEM", 1u}, {"INPUT_SERVICE", 0u}};
+        SupervisorProcessRecord record = {.handle = 71u, .namespace_lost = 1u,
+            .dependencies = dependencies, .dependency_count = 2u};
+        strcpy(record.service_name, "display");
+        process_table = (SupervisorProcessTable){&record, 1u, 1u};
+        service_count = 1u;
+        strcpy(service_names[0], "SYSTEM"); service_handles[0] = 70u;
+        /* Death can win the stop syscall after an upstream namespace loss. */
+        shutdown_terminate_status = ASTRA_SYSCALL_PEER_DEAD;
+        restart_namespace_holders();
+        assert(record.action == SUPERVISOR_PROCESS_ACTION_RESTART);
+        record.action = SUPERVISOR_PROCESS_ACTION_NONE;
+        shutdown_terminate_status = ASTRA_SYSCALL_ACCESS_DENIED;
+        assert(stop_process_slot(0u, SUPERVISOR_PROCESS_ACTION_RESTART) == ASTRA_SYSCALL_ACCESS_DENIED &&
+            record.action == SUPERVISOR_PROCESS_ACTION_NONE);
+        shutdown_terminate_status = ASTRA_SYSCALL_OK;
+        process_table = (SupervisorProcessTable){0}; service_count = 0u;
+    }
+    {
+        AstraLaunchGrant grants[4] = {{.handle = 99u,
+            .flags = ASTRA_CAPABILITY_FLAG_NAMESPACE}, {.handle = 300u}, {.handle = 300u}, {.handle = 91u}};
+        SupervisorManifestEntry entry = {.grant_count = 1u};
+        strcpy(entry.grants[0].name, "GUI");
+        SupervisorNarrowed derived = {.handle = 99u, .source = 77u};
+        SupervisorDependency *names = NULL;
+        uint32_t count = 0u;
+        strcpy(grants[0].name, "APPS");
+        strcpy(grants[1].name, "GUI"); strcpy(grants[2].name, "GUI");
+        strcpy(grants[3].name, "LOG");
+        service_count = 5u;
+        strcpy(service_names[0], "SYSTEM"); strcpy(service_names[1], "ROOT_ALIAS");
+        strcpy(service_names[2], "GUI"); strcpy(service_names[3], "FONTS_RENDER");
+        strcpy(service_names[4], "LOG"); service_handles[4] = 91u;
+        service_handles[0] = service_handles[1] = 77u;
+        service_handles[2] = 88u; service_handles[3] = 90u;
+        service_is_vfs[0] = service_is_vfs[1] = 1u;
+        service_is_vfs[2] = service_is_vfs[3] = 0u;
+        narrowed = &derived; narrowed_count = 1u;
+        allocation_fail = 1;
+        assert(launch_dependencies(&entry, grants, 4u, &names, &count) == ASTRA_STATUS_LIMIT);
+        assert(names == NULL && count == 0u);
+        allocation_fail = 0;
+        assert(launch_dependencies(&entry, grants, 4u, &names, &count) == ASTRA_STATUS_OK);
+        assert(count == 3u && strcmp(names[0].name, "SYSTEM") == 0 &&
+            strcmp(names[1].name, "ROOT_ALIAS") == 0 && strcmp(names[2].name, "GUI") == 0 &&
+            names[0].is_namespace && names[1].is_namespace && !names[2].is_namespace);
+        free(names);
+        /* One namespace may name more publications than granted handles. */
+        assert(launch_dependencies(&entry, grants, 1u, &names, &count) == ASTRA_STATUS_OK && count == 2u);
+        free(names);
+        narrowed = NULL; narrowed_count = service_count = 0u;
+    }
+    {
+        SupervisorProcessRecord record = {.handle = 71u, .shutdown_send = 72u,
+            .shutdown_managed = 1u, .id = 42u};
+        strcpy(record.service_name, "hostfs");
+        process_table = (SupervisorProcessTable){&record, 1u, 1u};
+        shutdown_wait_status = ASTRA_SYSCALL_TIMED_OUT;
+        shutdown_request_status = ASTRA_SYSCALL_OUT_OF_MEMORY;
+        allocation_fail = 1;
+        assert(shutdown_process(0u) == ASTRA_STATUS_PEER_DEAD);
+        assert(strstr(shutdown_report, "shutdown request hostfs") != NULL);
+        assert(strstr(shutdown_report, "pid=42") != NULL);
+        assert(strstr(shutdown_report, "status=11") != NULL);
+        assert(shutdown_waits == 1u);
+
+        shutdown_report[0] = '\0';
+        shutdown_request_status = shutdown_reply_status = ASTRA_SYSCALL_OK;
+        shutdown_decision = ASTRA_SHUTDOWN_CANCEL;
+        shutdown_reason = 123u;
+        assert(shutdown_process(0u) == ASTRA_STATUS_BUSY);
+        assert(strstr(shutdown_report, "shutdown declined hostfs") != NULL);
+        assert(strstr(shutdown_report, "reason=123") != NULL);
+
+        shutdown_report[0] = '\0';
+        shutdown_reply_status = ASTRA_SYSCALL_PEER_DEAD;
+        assert(shutdown_process(0u) == ASTRA_STATUS_BUSY);
+        assert(strstr(shutdown_report, "shutdown reply hostfs") != NULL);
+        assert(strstr(shutdown_report, "status=8") != NULL);
+
+        shutdown_report[0] = '\0';
+        shutdown_reply_status = ASTRA_SYSCALL_OK;
+        shutdown_decision = ASTRA_SHUTDOWN_READY;
+        shutdown_reason = 0u;
+        shutdown_exit_status = 31u;
+        assert(shutdown_process(0u) == ASTRA_STATUS_PEER_DEAD);
+        assert(strstr(shutdown_report, "shutdown exit hostfs") != NULL);
+        assert(strstr(shutdown_report, "reason=31") != NULL);
+
+        shutdown_report[0] = '\0';
+        shutdown_exit_status = 0u;
+        assert(shutdown_process(0u) == ASTRA_STATUS_OK);
+        assert(shutdown_report[0] == '\0');
+        shutdown_wait_status = ASTRA_SYSCALL_OK;
+        shutdown_exit_status = 19u;
+        assert(shutdown_process(0u) == ASTRA_STATUS_PEER_DEAD);
+        assert(strstr(shutdown_report, "shutdown exit hostfs") != NULL);
+        assert(strstr(shutdown_report, "reason=19") != NULL);
+        shutdown_report[0] = '\0';
+        record.shutdown_managed = 0u;
+        assert(shutdown_process(0u) == ASTRA_STATUS_OK);
+        assert(shutdown_report[0] == '\0');
+        shutdown_wait_status = ASTRA_SYSCALL_TIMED_OUT;
+        shutdown_terminate_status = ASTRA_SYSCALL_ACCESS_DENIED;
+        assert(shutdown_process(0u) == ASTRA_STATUS_IO);
+        assert(strstr(shutdown_report, "shutdown terminate hostfs") != NULL);
+        assert(strstr(shutdown_report, "status=4") != NULL);
+        shutdown_report[0] = '\0';
+        shutdown_terminate_status = ASTRA_SYSCALL_OK;
+        shutdown_final_wait_status = ASTRA_SYSCALL_OUT_OF_MEMORY;
+        assert(shutdown_process(0u) == ASTRA_STATUS_IO);
+        assert(strstr(shutdown_report, "shutdown wait hostfs") != NULL);
+        assert(strstr(shutdown_report, "status=11") != NULL);
+        shutdown_report[0] = '\0';
+        shutdown_final_wait_status = ASTRA_SYSCALL_PEER_DEAD;
+        assert(shutdown_process(0u) == ASTRA_STATUS_OK);
+        assert(shutdown_report[0] == '\0');
+        allocation_fail = 0;
+        process_table = (SupervisorProcessTable){0};
+    }
+    {
+        SupervisorProcessRecord records[3] = {0};
+        SupervisorDependency namespaces[2] = {{"SYSTEM", 1u}, {"PROC", 1u}};
+
+        /* A restarted publisher follows its still-running native clients. */
+        records[0].resident = records[1].resident = records[2].resident = 1u;
+        records[0].dependencies = records[1].dependencies = namespaces;
+        records[0].dependency_count = records[1].dependency_count = 2u;
+        strcpy(records[2].service_name, "files");
+        process_table = (SupervisorProcessTable){records, 3u, 3u};
+        service_count = 2u;
+        strcpy(service_names[0], "SYSTEM");
+        strcpy(service_owner_names[0], "files");
+        strcpy(service_names[1], "PROC");
+        service_owner_names[1][0] = '\0';
+        assert(shutdown_next(0u) == UINT32_MAX);
+        assert(shutdown_next(1u) == 1u);
+        records[1].resident = 0u;
+        assert(shutdown_next(0u) == 1u);
+        assert(shutdown_next(1u) == 0u);
+        process_table.records = &records[2];
+        process_count = 1u;
+        records[2].dependencies = namespaces;
+        records[2].dependency_count = 2u;
+        assert(shutdown_next(1u) == 0u);
+        /* A namespace cycle must cancel, never stop either publisher. */
+        process_table = (SupervisorProcessTable){records, 3u, 3u};
+        SupervisorDependency cache_names[1] = {{"CACHE", 0u}};
+        strcpy(records[0].service_name, "cache");
+        records[2].dependencies = cache_names;
+        records[2].dependency_count = 1u;
+        service_count = 2u;
+        strcpy(service_names[1], "CACHE");
+        strcpy(service_owner_names[1], "cache");
+        shutdown_report[0] = '\0';
+        assert(shutdown_next(1u) == UINT32_MAX);
+        assert(strstr(shutdown_report, "shutdown dependency cache") != NULL);
+        /* Unrelated publications do not impose an ordering edge. */
+        strcpy(service_owner_names[0], "absent");
+        assert(shutdown_next(1u) == 2u);
+        process_table = (SupervisorProcessTable){0};
+        service_count = 0u;
+    }
     assert(config_launch_status(ASTRA_CONFIG_IO) == ASTRA_STATUS_IO);
     assert(config_launch_status(ASTRA_CONFIG_ACCESS) == ASTRA_STATUS_ACCESS);
     assert(config_launch_status(ASTRA_CONFIG_NO_MEMORY) == ASTRA_STATUS_LIMIT);
@@ -167,6 +413,49 @@ int main(void)
     AstraStartupInfo startup = {0};
     AstraServiceDefinition definition = ASTRA_SERVICE_DEFINITION_INIT;
     expected_startup = &startup;
+    {
+        SupervisorProcessRecord records[3] = {{.handle = 71u}, {.handle = 71u}, {0}};
+        SupervisorManifestEntry entry = {.resident = 1u, .required = 1u};
+        AstraServiceDefinition *saved = NULL;
+        uint32_t count = 99u;
+
+        strcpy(entry.path, "/services/hostfs");
+        strcpy(records[0].service_name, "hostfs");
+        SupervisorDependency dependencies[3] = {{"GUI", 0u}, {"SYSTEM", 1u}, {"GUI", 0u}};
+        records[0].dependencies = dependencies;
+        records[0].dependency_count = 3u;
+        strcpy(records[1].service_name, "hostfs");
+        records[1].action = SUPERVISOR_PROCESS_ACTION_STOP;
+        startup_manifest = (SupervisorManifest){&entry, 1u, 1u};
+        process_table = (SupervisorProcessTable){records, 3u, 3u};
+        shutdown_wait_status = ASTRA_SYSCALL_TIMED_OUT;
+        allocation_fail = 1;
+        assert(shutdown_definitions_capture(&startup, &saved, &count) == ASTRA_STATUS_LIMIT);
+        assert(saved == NULL && count == 0u && process_count == 3u);
+        allocation_fail = 0;
+        assert(shutdown_definitions_capture(&startup, &saved, &count) == ASTRA_STATUS_OK);
+        assert(count == 1u && saved != NULL && strcmp(saved[0].name, "hostfs") == 0 &&
+               strcmp(saved[0].executable, "/services/hostfs") == 0 &&
+               saved[0].dependency_count == 2u &&
+               strcmp(saved[0].dependencies[0], "GUI") == 0 &&
+               strcmp(saved[0].dependencies[1], "SYSTEM") == 0);
+        shutdown_definitions_release(saved, count);
+        records[2].handle = 71u;
+        records[2].id = 88u;
+        strcpy(records[2].service_name, "missing");
+        managed = 1;
+        assert(shutdown_definitions_capture(&startup, &saved, &count) == ASTRA_STATUS_IO);
+        assert(saved == NULL && count == 0u && process_count == 3u &&
+               strstr(shutdown_report, "shutdown prepare missing pid=88") != NULL);
+        managed = 0;
+        records[2].service_name[0] = '\0';
+        shutdown_wait_status = ASTRA_SYSCALL_OK;
+        assert(shutdown_definitions_capture(&startup, &saved, &count) == ASTRA_STATUS_OK);
+        assert(count == 0u);
+        shutdown_definitions_release(saved, count);
+        process_table = (SupervisorProcessTable){0};
+        startup_manifest = (SupervisorManifest){0};
+    }
     {
         SupervisorManifestEntry entry = {0};
         char root[ASTRA_VFS_PATH_MAX], path[ASTRA_VFS_PATH_MAX];

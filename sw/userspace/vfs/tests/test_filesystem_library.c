@@ -573,6 +573,14 @@ uint32_t astra_vfs_chmod_file(AstraVfsClient *value, AstraVfsFile file,
     return ASTRA_VFS_OK;
 }
 
+uint32_t astra_vfs_set_file_times(AstraVfsClient *value, AstraVfsFile file,
+    const AstraVfsDirEntry *times, uint32_t fields)
+{
+    (void)value;
+    assert(file == 1u && times->mtime == 1234 && fields == ASTRA_VFS_META_MTIME);
+    return ASTRA_VFS_OK;
+}
+
 uint32_t astra_vfs_chmod_at(AstraVfsClient *value, AstraVfsFile directory,
                             const char *path, uint16_t mode, uint32_t flags)
 {
@@ -897,6 +905,24 @@ static void test_foreign_root_is_not_a_system_link(void)
     astra_assign_table_destroy(&assigns);
 }
 
+static uint32_t prefix_file_read(AstraVfsClient *value, AstraVfsFile file,
+    uint64_t offset, uint32_t flags, void *bytes, uint32_t length,
+    uint32_t *moved, uint64_t *position)
+{
+    uint32_t status = astra_vfs_port_read_bulk_position(value, file, offset,
+        flags, bytes, length < 3u ? length : 3u, moved, position);
+    return status == ASTRA_VFS_OK ? ASTRA_VFS_ERR_IO : status;
+}
+
+static uint32_t prefix_file_write(AstraVfsClient *value, AstraVfsFile file,
+    uint64_t offset, uint32_t flags, uint64_t limit, const void *bytes, uint32_t length,
+    uint32_t *moved, uint64_t *position)
+{
+    uint32_t status = astra_vfs_write_position(value, file, offset,
+        flags, limit, bytes, length < 3u ? length : 3u, moved, position);
+    return status == ASTRA_VFS_OK ? ASTRA_VFS_ERR_IO : status;
+}
+
 static void test_provider_position_is_the_authority(void)
 {
     AstraFile first = ASTRA_FILE_INIT;
@@ -954,6 +980,16 @@ static void test_provider_position_is_the_authority(void)
     read_calls = 0u;
     assert(astra_filesystem_read(&first, bytes, sizeof(bytes), &moved) == ASTRA_VFS_OK &&
            moved == sizeof(bytes) && read_calls == 1u);
+    first._private_read = prefix_file_read;
+    first._private_write = prefix_file_write;
+    provider_position = 0u;
+    assert(astra_filesystem_read(&first, bytes, sizeof(bytes), &moved) == ASTRA_VFS_ERR_IO &&
+        moved == 3u && first._private_offset == 3u && provider_position == 3u);
+    assert(astra_filesystem_write(&first, UINT64_MAX, "XYZ12", 5u, &moved) == ASTRA_VFS_ERR_IO &&
+        moved == 3u && first._private_offset == 6u && provider_position == 6u &&
+        memcmp(contents + 3u, "XYZ", 3u) == 0);
+    memset(contents, 'R', sizeof(contents));
+    provider_position = sizeof(bytes); read_calls = 1u;
     client.features = 0u;
 }
 
@@ -1018,7 +1054,10 @@ static void test_copied_native_tokens_do_not_reach_reused_child_tokens(void)
     fresh = old;
     fresh._private_ownership_epoch = 5u;
     uint32_t reads_before = read_calls;
-    assert(astra_filesystem_read(&old, &byte, 1u, &moved) == ASTRA_VFS_ERR_LOST);
+    moved = 99u;
+    assert(astra_filesystem_read(&old, &byte, 1u, &moved) == ASTRA_VFS_ERR_LOST && moved == 0u);
+    moved = 99u;
+    assert(astra_filesystem_write(&old, UINT64_MAX, &byte, 1u, &moved) == ASTRA_VFS_ERR_LOST && moved == 0u);
     assert(astra_filesystem_read_at(&old, 0u, &byte, 1u, &moved) == ASTRA_VFS_ERR_LOST);
     assert(astra_filesystem_file_info(&old, &info) == ASTRA_VFS_ERR_LOST);
     assert(astra_filesystem_seek(&old, 0, ASTRA_FILE_SEEK_BEGIN, &offset) == ASTRA_VFS_ERR_LOST);
@@ -1433,6 +1472,8 @@ int main(void)
                               ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE,
                               0600u, &file) == ASTRA_VFS_OK);
     assert(last_create_mode == 0600u);
+    AstraVfsDirEntry times = {.mtime = 1234};
+    assert(astra_filesystem_set_file_times(&file, &times, ASTRA_VFS_META_MTIME) == ASTRA_VFS_OK);
     assert(astra_filesystem_close(&file) == ASTRA_VFS_OK);
     assert(astra_filesystem_chmod(&filesystem, "/work/note", 0640u) == ASTRA_VFS_OK);
     assert(last_chmod_mode == 0640u);

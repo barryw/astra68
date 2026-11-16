@@ -49,15 +49,6 @@ static PosixFileSlot *file_slots;
 static uint32_t file_capacity;
 static int started;
 static mode_t creation_mask = 0022u;
-typedef struct PosixFileMapping {
-    struct PosixFileMapping *next;
-    void *address;
-    uint32_t span;
-    void *views[2];
-} PosixFileMapping;
-static PosixFileMapping *file_mappings;
-static _Alignas(4) volatile uint32_t file_mapping_lock;
-
 typedef struct PosixPath {
     const char *native;
     int root;
@@ -198,7 +189,7 @@ static const AstraPosixFileOps ops = {
 };
 
 #define POSIX_FILE_EXEC_MAGIC 0x50464558u
-#define POSIX_FILE_EXEC_VERSION 4u
+#define POSIX_FILE_EXEC_VERSION 5u
 
 typedef struct PosixFileExecHeader {
     uint32_t magic;
@@ -260,7 +251,7 @@ astra_posix_file_fork_prepare(AstraProcessFileShare **shares, uint32_t *count)
         *shares = NULL;
         return fail(cwd_status);
     }
-    if (cwd_share.token != 0u) {
+    if (cwd_share.file.file != ASTRA_VFS_FILE_INVALID) {
         if (*shares == NULL)
             *shares = calloc(file_capacity + 1u, sizeof(**shares));
         if (*shares == NULL) {
@@ -279,7 +270,6 @@ int
 astra_posix_file_after_fork_child(const AstraProcessFileShare *shares,
                                   uint32_t count)
 {
-    file_mapping_lock = 0u;
     uint32_t status = astra_process_vfs_after_fork_child(
         astra_posix_startup(), count == file_capacity + 1u ? &shares[file_capacity] : NULL);
 
@@ -783,19 +773,37 @@ file_for_descriptor(int fd)
     return &file_slots[slot].file;
 }
 
+static int mapping_errno(uint32_t status)
+{
+    switch (status) {
+    case ASTRA_SYSCALL_OUT_OF_MEMORY:
+    case ASTRA_SYSCALL_RESOURCE_LIMIT:
+    case ASTRA_SYSCALL_BAD_ADDRESS: return ENOMEM;
+    case ASTRA_SYSCALL_INVALID_ARGUMENT: return EINVAL;
+    case ASTRA_SYSCALL_ACCESS_DENIED: return EACCES;
+    case ASTRA_SYSCALL_INVALID_HANDLE: return EBADF;
+    case ASTRA_SYSCALL_UNSUPPORTED: return ENOTSUP;
+    case ASTRA_SYSCALL_WOULD_BLOCK: return EBUSY;
+    case ASTRA_SYSCALL_CANCELLED: return EINTR;
+    case ASTRA_SYSCALL_TIMED_OUT: return ETIMEDOUT;
+    case ASTRA_SYSCALL_PEER_DEAD: return ESTALE;
+    default: return EIO;
+    }
+}
+
 void *
 mmap(void *address, size_t length, int protection, int flags, int fd,
      off_t offset)
 {
-    PosixFileMapping *entry;
-    AstraFile *file;
+    AstraFile *file = NULL;
     uint64_t file_size = 0u, first_size = 0u;
     uint64_t aligned, needed;
     uint32_t areas[2] = {0u, 0u}, views[2], span, lead;
     uint32_t source_offset, mapped_size = 0u, status = ASTRA_SYSCALL_OK;
-    uint32_t count, candidate;
+    uint32_t count, candidate, permissions = ASTRA_AREA_MAP_READ;
     void *mapped[2] = {NULL, NULL};
     int failure = EIO;
+    int anonymous = (flags & MAP_ANONYMOUS) != 0;
 
     (void)address;
     if (length == 0u || offset < 0 ||
@@ -805,28 +813,36 @@ mmap(void *address, size_t length, int protection, int flags, int fd,
         errno = EINVAL;
         return MAP_FAILED;
     }
-    if (protection != PROT_READ ||
-        (flags & ~(MAP_SHARED | MAP_PRIVATE)) != 0) {
-        /* shortcut: read-only file areas only, add other modes with native support. */
+    if (protection == PROT_NONE ||
+        (protection & ~(PROT_READ | PROT_WRITE)) != 0 ||
+        (flags & ~(MAP_SHARED | MAP_PRIVATE | MAP_ANONYMOUS)) != 0) {
         errno = ENOTSUP;
         return MAP_FAILED;
     }
-    file = file_for_descriptor(fd);
-    if (file == NULL) return MAP_FAILED;
-    lead = (uint32_t)((uint64_t)offset % ASTRA_SHARED_AREA_TABLE_SPAN);
-    aligned = (uint64_t)offset - lead;
+    if ((protection & PROT_WRITE) != 0) permissions |= ASTRA_AREA_MAP_WRITE;
+    if ((flags & MAP_PRIVATE) != 0) permissions |= ASTRA_AREA_MAP_PRIVATE;
+    if (!anonymous) {
+        file = file_for_descriptor(fd);
+        if (file == NULL) return MAP_FAILED;
+    }
+    lead = anonymous ? 0u : (uint32_t)((uint64_t)offset % ASTRA_SHARED_AREA_TABLE_SPAN);
+    aligned = anonymous ? 0u : (uint64_t)offset - lead;
     needed = (uint64_t)lead + length;
     if (needed > ASTRA_AREA_SIZE_MAX) { errno = ENOMEM; return MAP_FAILED; }
     span = (uint32_t)((needed + ASTRA_SHARED_AREA_TABLE_SPAN - 1u) &
                       ~(uint64_t)(ASTRA_SHARED_AREA_TABLE_SPAN - 1u));
     source_offset = (uint32_t)(aligned % ASTRA_AREA_SIZE_MAX);
-    views[0] = ASTRA_AREA_SIZE_MAX - source_offset;
-    if (views[0] > span) views[0] = span;
-    views[1] = span - views[0];
+    views[0] = anonymous ? ((uint32_t)length + ASTRA_MEMORY_PAGE_SIZE - 1u) &
+        ~(ASTRA_MEMORY_PAGE_SIZE - 1u) : ASTRA_AREA_SIZE_MAX - source_offset;
+    if (!anonymous && views[0] > span) views[0] = span;
+    views[1] = anonymous ? 0u : span - views[0];
     count = views[1] != 0u ? 2u : 1u;
-    entry = malloc(sizeof(*entry));
-    if (entry == NULL) { errno = ENOMEM; return MAP_FAILED; }
-    for (uint32_t i = 0u; i < count; ++i) {
+    if (anonymous) {
+        status = astra_rt_area_create_flagged((uint32_t)length,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP,
+            ASTRA_AREA_CREATE_RESERVED | ASTRA_AREA_CREATE_MAPPED_LIFETIME, &areas[0]);
+        if (status != ASTRA_SYSCALL_OK) goto native_failed;
+    } else for (uint32_t i = 0u; i < count; ++i) {
         status = astra_filesystem_file_area(file, aligned +
             (i == 0u ? 0u : views[0]), views[i], &areas[i], &file_size);
         if (status != ASTRA_VFS_OK) {
@@ -843,7 +859,7 @@ mmap(void *address, size_t length, int protection, int flags, int fd,
     for (candidate = ASTRA_SHARED_AREA_ADDRESS_START;
          candidate <= ASTRA_SHARED_AREA_ADDRESS_END - span;
          candidate += ASTRA_SHARED_AREA_TABLE_SPAN) {
-        status = astra_rt_area_map_range_at(areas[0], ASTRA_AREA_MAP_READ,
+        status = astra_rt_area_map_range_at(areas[0], permissions,
             source_offset, views[0], candidate, &mapped[0], &mapped_size);
         if (status == ASTRA_SYSCALL_INVALID_ARGUMENT) continue;
         if (status != ASTRA_SYSCALL_OK || mapped_size != views[0]) {
@@ -852,7 +868,7 @@ mmap(void *address, size_t length, int protection, int flags, int fd,
             break;
         }
         if (count == 2u) {
-            status = astra_rt_area_map_range_at(areas[1], ASTRA_AREA_MAP_READ,
+            status = astra_rt_area_map_range_at(areas[1], permissions,
                 0u, views[1], candidate + views[0], &mapped[1],
                 &mapped_size);
             if (status != ASTRA_SYSCALL_OK || mapped_size != views[1]) {
@@ -870,34 +886,33 @@ mmap(void *address, size_t length, int protection, int flags, int fd,
     }
     if (mapped[0] == NULL ||
         (count == 2u && mapped[1] == NULL)) {
-        failure = status == ASTRA_SYSCALL_OUT_OF_MEMORY ||
-                  status == ASTRA_SYSCALL_RESOURCE_LIMIT ||
-                  candidate > ASTRA_SHARED_AREA_ADDRESS_END - span ?
-                  ENOMEM : EIO;
-        goto failed;
+        if (candidate > ASTRA_SHARED_AREA_ADDRESS_END - span)
+            status = ASTRA_SYSCALL_OUT_OF_MEMORY;
+        goto native_failed;
+    }
+    if (lead != 0u) {
+        status = astra_rt_area_unmap_range(mapped[0], lead);
+        if (status != ASTRA_SYSCALL_OK) goto native_failed;
+    }
+    uint32_t logical_end = candidate + lead +
+        (((uint32_t)length + ASTRA_MEMORY_PAGE_SIZE - 1u) & ~(ASTRA_MEMORY_PAGE_SIZE - 1u));
+    uint32_t mapped_end = candidate + views[0] + views[1];
+    if (logical_end < mapped_end) {
+        status = astra_rt_area_unmap_range((void *)(uintptr_t)logical_end, mapped_end - logical_end);
+        if (status != ASTRA_SYSCALL_OK) goto native_failed;
     }
     for (uint32_t i = 0u; i < count; ++i) {
         if (astra_close(areas[i]) != ASTRA_SYSCALL_OK) goto failed;
         areas[i] = 0u;
     }
-    entry->address = (uint8_t *)mapped[0] + lead;
-    entry->span = ((uint32_t)length + ASTRA_MEMORY_PAGE_SIZE - 1u) &
-                  ~(ASTRA_MEMORY_PAGE_SIZE - 1u);
-    entry->views[0] = mapped[0];
-    entry->views[1] = mapped[1];
-    if (astra_mutex_lock(&file_mapping_lock) != ASTRA_SYSCALL_OK) {
-        goto failed;
-    }
-    entry->next = file_mappings;
-    file_mappings = entry;
-    (void)astra_mutex_unlock(&file_mapping_lock);
-    return entry->address;
+    return (uint8_t *)mapped[0] + lead;
+native_failed:
+    failure = mapping_errno(status);
 failed:
     for (uint32_t i = 0u; i < count; ++i) {
-        if (mapped[i] != NULL) (void)astra_rt_area_unmap(mapped[i]);
+        if (mapped[i] != NULL) (void)astra_rt_area_unmap_range(mapped[i], views[i]);
         if (areas[i] != 0u) (void)astra_close(areas[i]);
     }
-    free(entry);
     errno = failure;
     return MAP_FAILED;
 }
@@ -905,44 +920,50 @@ failed:
 int
 munmap(void *address, size_t length)
 {
-    PosixFileMapping **slot;
-    PosixFileMapping *entry;
-    uint32_t span;
+    uint32_t span, status;
 
     if (address == NULL || length == 0u ||
+        ((uintptr_t)address & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
         length > UINT32_MAX - (ASTRA_MEMORY_PAGE_SIZE - 1u)) {
         errno = EINVAL;
         return -1;
     }
     span = ((uint32_t)length + ASTRA_MEMORY_PAGE_SIZE - 1u) &
            ~(ASTRA_MEMORY_PAGE_SIZE - 1u);
-    if (astra_mutex_lock(&file_mapping_lock) != ASTRA_SYSCALL_OK) {
-        errno = EIO;
+    status = astra_rt_area_unmap_range(address, span);
+    if (status == ASTRA_SYSCALL_OK) return 0;
+    errno = mapping_errno(status);
+    return -1;
+}
+
+int
+msync(void *address, size_t length, int flags)
+{
+    int mode = flags & (MS_SYNC | MS_ASYNC);
+    if (((uintptr_t)address & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
+        (flags & ~(MS_SYNC | MS_ASYNC | MS_INVALIDATE)) != 0 ||
+        (mode != MS_SYNC && mode != MS_ASYNC)) {
+        errno = EINVAL;
         return -1;
     }
-    for (slot = &file_mappings; *slot != NULL; slot = &(*slot)->next)
-        if ((*slot)->address == address) break;
-    entry = *slot;
-    if (entry == NULL || entry->span != span) {
-        (void)astra_mutex_unlock(&file_mapping_lock);
-        /* shortcut: partial unmap unsupported, add native area range unmap. */
-        errno = entry == NULL ? EINVAL : ENOTSUP;
+    if (length == 0u) return 0;
+    if (address == NULL || length > UINT32_MAX - (ASTRA_MEMORY_PAGE_SIZE - 1u)) {
+        errno = ENOMEM;
         return -1;
     }
-    for (uint32_t i = 0u; i < 2u; ++i) {
-        if (entry->views[i] != NULL) {
-            if (astra_rt_area_unmap(entry->views[i]) != ASTRA_SYSCALL_OK) {
-                (void)astra_mutex_unlock(&file_mapping_lock);
-                errno = EIO;
-                return -1;
-            }
-            entry->views[i] = NULL;
-        }
+    uint32_t span = ((uint32_t)length + ASTRA_MEMORY_PAGE_SIZE - 1u) &
+        ~(ASTRA_MEMORY_PAGE_SIZE - 1u);
+    if ((uint64_t)(uintptr_t)address + span > UINT32_MAX) {
+        errno = ENOMEM;
+        return -1;
     }
-    *slot = entry->next;
-    (void)astra_mutex_unlock(&file_mapping_lock);
-    free(entry);
-    return 0;
+    uint32_t backing = 0u;
+    /* Native refresh/sync keeps shared aliases coherent; there is no POSIX cache. */
+    uint32_t status = astra_rt_area_sync_range(address, span,
+        mode == MS_ASYNC ? ASTRA_AREA_SYNC_ASYNC : 0u, &backing);
+    if (status == ASTRA_SYSCALL_OK && backing == ASTRA_VFS_OK) return 0;
+    errno = backing != ASTRA_VFS_OK ? posix_errno(backing) : mapping_errno(status);
+    return -1;
 }
 
 static int
@@ -1752,7 +1773,8 @@ directory_after_fork_child(void)
             return -1;
         uint32_t status = astra_filesystem_directory_from_file(
             file, &state->directory);
-        if (status != ASTRA_VFS_OK)
+        /* The copied native iterator already retains its LOST ownership epoch. */
+        if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_LOST)
             return fail(status);
     }
     return 0;

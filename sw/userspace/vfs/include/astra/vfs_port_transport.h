@@ -43,10 +43,9 @@ void astra_vfs_state_futex_wake(void *context,
                                 volatile uint32_t *sequence);
 
 /*
- * The client half. Use astra_vfs_port_connect(): version 20+ retains one reply
- * channel and transfer area per calling thread inside a shared session.
- * Versions 3 through 19 retain one channel per session; version 2 remains the
- * per-request fallback for a rolling update against an older service.
+ * The client half. astra_vfs_port_connect() authenticates one shared session
+ * with one retained reply channel and transfer area per calling thread.
+ * Both ends require the current native protocol; no raw-provider fallback.
  *
  * The return value is the transport's verdict, never the filesystem's: a peer
  * that has gone is ASTRA_VFS_ERR_PEER, and a request that was answered is
@@ -65,7 +64,7 @@ void astra_vfs_port_fail(AstraVfsClient *client);
 int astra_vfs_port_client_closed(const AstraVfsClient *client);
 /* Clear a sensitive Config Kit exchange from this thread's bound port area. */
 void astra_vfs_port_wipe_area(AstraVfsClient *client, uint32_t bytes);
-/* Drain data calls, refresh the scope, retain the grant's control session. */
+/* Drain data calls, refresh the backend binding, retain the native session. */
 uint32_t astra_vfs_port_refresh(AstraVfsClient *client);
 AstraVfsCallState *astra_vfs_port_call_acquire(AstraVfsClient *client);
 /*
@@ -79,13 +78,6 @@ int astra_vfs_port_set_thread_storage(
     AstraVfsClient *client, AstraVfsPortThreadState *states,
     uint32_t capacity);
 uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t service);
-uint32_t astra_vfs_port_connect_with_accelerator(
-    AstraVfsClient *client, uint32_t service,
-    const AstraVfsPortAcceleratorOps *accelerator);
-/* Defer HELLO until first use; complete paths use the bound transfer area. */
-uint32_t astra_vfs_port_connect_lazy_with_accelerator(
-    AstraVfsClient *client, uint32_t service,
-    const AstraVfsPortAcceleratorOps *accelerator);
 /* Drop this process's transport handles without sending BYE.  A fork child
  * inherited the handles, but not ownership of the parent's service session. */
 void astra_vfs_port_abandon(AstraVfsClient *client);
@@ -193,8 +185,6 @@ typedef struct AstraVfsPortGrant {
     uint32_t id;               /* nonzero, never reused by its service */
     uint32_t rights;           /* ASTRA_VFS_GRANT_* */
     uint32_t features;         /* provider capabilities, additional to GRANTS */
-    uint32_t scope;            /* the grant's scope, ADMINISTER; HELLO hands
-                                * out a duplicate without it */
     uint32_t lost;             /* provider root unavailable; answer LOST */
 } AstraVfsPortGrant;
 
@@ -229,10 +219,9 @@ typedef uint32_t (*AstraVfsPortConfigCrypt)(void *context,
 /* On success, return a transferable duplicate; cache owner keeps its area.
  * The port narrows the reply to READ|MAP and moves the duplicate. */
 typedef uint32_t (*AstraVfsPortFileArea)(void *context,
-    const AstraVfsPortGrant *grant, uint32_t requester, uint64_t token,
+    const AstraVfsPortGrant *grant, uint32_t requester, uint32_t session,
+    AstraVfsFile file,
     uint64_t base, uint32_t span, uint32_t *area, uint64_t *file_size);
-typedef uint32_t (*AstraVfsPortFileMutated)(void *context,
-    const AstraVfsPortGrant *grant, uint64_t token);
 
 typedef struct AstraVfsPortService {
     uint32_t receive;
@@ -253,8 +242,6 @@ typedef struct AstraVfsPortService {
     void *config_crypt_context;
     AstraVfsPortFileArea file_area;
     void *file_area_context;
-    AstraVfsPortFileMutated file_mutated;
-    void *file_mutated_context;
     uint32_t reply_sessions[ASTRA_VFS_SESSION_MAX];
     uint32_t reply_lanes[ASTRA_VFS_SESSION_MAX];
     uint32_t reply_handles[ASTRA_VFS_SESSION_MAX];
@@ -284,9 +271,7 @@ int astra_vfs_port_service_set_config_crypt(AstraVfsPortService *host,
     AstraVfsPortConfigCrypt crypt, void *context);
 int astra_vfs_port_service_set_file_area(AstraVfsPortService *host,
     AstraVfsPortFileArea file_area, void *context);
-int astra_vfs_port_service_set_file_mutated(AstraVfsPortService *host,
-    AstraVfsPortFileMutated file_mutated, void *context);
-uint32_t astra_vfs_file_mutated_node(AstraVfsClient *client, uintptr_t node);
+
 
 /* Handles at most `budget` requests and returns how many it answered. */
 uint32_t astra_vfs_port_service_pump(AstraVfsPortService *host,
@@ -295,11 +280,9 @@ uint32_t astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
                                             AstraVfsPortWorker *worker,
                                             uint32_t budget);
 /*
- * Serves `grant`'s port (storage protocol 29). HELLO opens a session bound
- * to the grant, answers ASTRA_VFS_FEATURE_GRANTS and attaches a duplicate of
- * its scope; a session is answered only on its own grant's port. The port is
- * control only: HELLO, BYE, lane/area binding and GRANT_DERIVE. Data is
- * answered ASTRA_VFS_ERR_UNSUPPORTED -- the data plane is the client's lane.
+ * Serves native control and data on `grant`'s port. HELLO binds a session to
+ * the grant without exposing provider capabilities. Every later request must
+ * arrive on that same grant's port from the session's authenticated owner.
  */
 uint32_t astra_vfs_port_service_grant_pump(AstraVfsPortService *host,
                                            AstraVfsPortWorker *worker,

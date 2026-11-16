@@ -28,18 +28,24 @@ typedef struct AstraProcessFileState {
     uint32_t flags; /**< Open flags. */
     uint16_t kind; /**< ASTRA_VFS_NODE_* kind. */
     uint16_t member; /**< Union-assign member index. */
+    uint32_t ownership; /**< Zero, or ASTRA_PROCESS_FILE_LOST for an unusable local copy. */
+    uint32_t reserved; /**< Zero; preserves the same layout on host and MC68040. */
 } AstraProcessFileState;
 
-/** One-use, session-bound receipt for inheriting an open description. */
+/** Preserve an unusable local owner without transferring native authority. */
+#define ASTRA_PROCESS_FILE_LOST 1u
+
+/** Receipt for inheriting a live description or preserving a LOST local copy. */
 typedef struct AstraProcessFileShare {
     AstraProcessFileState file; /**< Original service and file state. */
-    uint64_t token; /**< Provider-owned pending reference. */
+    uint64_t token; /**< Native pending reference; zero for a LOST local copy. */
 } AstraProcessFileShare;
 
 /**
  * Retain an open description for one child adoption.
  * @param file Open provider-backed file.
  * @param share Receives a one-use receipt bound to the original grant.
+ * A LOST source instead produces a flagged receipt with no token or authority.
  * @return ASTRA_VFS_* status; UNSUPPORTED without shared descriptions.
  */
 uint32_t astra_process_file_share(const AstraFile *file,
@@ -49,6 +55,8 @@ uint32_t astra_process_file_share(const AstraFile *file,
  * @param share Receipt produced by astra_process_file_share().
  * @param file Initialized closed file, or the inherited invalid owner to
  * replace. Success consumes its inherited local pin exactly once.
+ * A LOST receipt must match an already-LOST inherited owner and leaves it LOST;
+ * it cannot populate an empty file or replace a live owner.
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_process_file_adopt(const AstraProcessFileShare *share,
@@ -57,11 +65,12 @@ uint32_t astra_process_file_adopt(const AstraProcessFileShare *share,
  * Withdraw a pending receipt in the process that created it.
  * @param share Receipt produced by astra_process_file_share().
  * @return ASTRA_VFS_* status; BAD_HANDLE if already consumed or withdrawn.
+ * Releasing a LOST receipt succeeds without backend I/O.
  */
 uint32_t astra_process_file_unshare(const AstraProcessFileShare *share);
 
 /** Serialized byte size of AstraProcessFileState. */
-#define ASTRA_PROCESS_FILE_STATE_SIZE 32u
+#define ASTRA_PROCESS_FILE_STATE_SIZE 40u
 /** @cond ASTRA_INTERNAL */
 _Static_assert(sizeof(AstraProcessFileState) ==
                    ASTRA_PROCESS_FILE_STATE_SIZE,
@@ -85,8 +94,9 @@ void astra_process_vfs_close(void);
  * namespace iterators retain their snapshots. Only single-thread clones are
  * admitted by the kernel; finish all filesystem calls before cloning.
  * @param startup Child startup record.
- * @param cwd Current-directory receipt; NULL only if no directory identity was
- * retained. Omitting a receipt for a retained CWD returns INVALID.
+ * @param cwd Current-directory receipt, including flagged LOST identities;
+ * NULL only if no directory identity was retained. Omitting a receipt for a
+ * retained CWD returns INVALID.
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_process_vfs_after_fork_child(
@@ -102,7 +112,8 @@ uint32_t astra_process_vfs_set_current_directory(const char *path);
  * @return ASTRA_VFS_* status; NOT_FOUND for a removed directory. */
 uint32_t astra_process_vfs_current_directory(char *path, uint32_t capacity);
 /** Retain current directory identity for one child adoption.
- * @param share Receives a receipt, or zero token for the virtual namespace root.
+ * @param share Receives a live or LOST receipt, or an all-zero record for the
+ * virtual namespace root.
  * @return ASTRA_VFS_* status. */
 uint32_t astra_process_vfs_share_current_directory(AstraProcessFileShare *share);
 /** Open a process-relative source for a native loader.
@@ -227,7 +238,8 @@ AstraVfsClient *astra_process_vfs_client_handle_lookup(uint32_t handle);
 /**
  * Export an open file for an in-place personality exec.
  * @param file Open high-level file.
- * @param state Receives portable process file state.
+ * @param state Receives portable process file state, explicitly identifying
+ * LOST local copies without making them usable.
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_process_file_export(const AstraFile *file,

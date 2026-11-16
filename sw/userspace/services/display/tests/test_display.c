@@ -3161,6 +3161,16 @@ static void test_context_menu_transport(void)
     assert(state.overlay == DISPLAY_OVERLAY_NONE &&
            delivered.event.data.menu_result.selection == 0u &&
            (delivered.event.flags & ASTRA_WINDOW_EVENT_CONTINUED) == 0u);
+    for (uint32_t cookie = 1u; cookie <= 4u; ++cookie) {
+        command.action = ASTRA_GUI_WINDOW_MENU_OPEN;
+        command.flags = cookie;
+        assert(menu_open(&state, &theme, 0u, &command, area) == ASTRA_STATUS_OK);
+        delivered.event.type = 0u;
+        menu_end(&state, 1u, 9u, ASTRA_STATUS_OK);
+        assert(delivered.event.type == ASTRA_WINDOW_EVENT_MENU_RESULT &&
+            delivered.event.data.menu_result.request == cookie &&
+            delivered.event.data.menu_result.selection == 1u);
+    }
     command.action = ASTRA_GUI_WINDOW_MENU_OPEN;
     command.flags = 44u;
     command.x = 12u; command.y = 24u;
@@ -4116,6 +4126,8 @@ int main(void)
             assert(build_system_surfaces(&builder, &bar, &bar_theme));
             assert(astra_render_builder_finish(&builder) != 0u);
         }
+        bar.windows = NULL;
+        bar.count = 0u;
         bar.session_count = 1u;
         bar.sessions[0] = (DisplaySession){.id = 1u, .name_length = 4u,
             .app_id_length = 4u, .name = "Doom", .app_id = "doom"};
@@ -4124,8 +4136,6 @@ int main(void)
         assert(build_system_surfaces(&builder, &bar, &bar_theme));
         assert(astra_render_builder_finish(&builder) != 0u);
         bar.session_count = 0u;
-        bar.windows = NULL;
-        bar.count = 0u;
         assert(!batch_has_colored_fill_at(16, 17, color(bar_theme.accent)));
         assert(!batch_has_colored_fill_at(
             100, 14, color(bar_theme.title_inactive)));

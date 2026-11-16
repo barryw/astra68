@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "astra_storage_path.h"
+#include <astra/vfs_service.h>
 #include "astra68-resolve.h"
 
 #include <errno.h>
@@ -167,6 +168,23 @@ static int change_mode(int fd, mode_t mode)
     return chmod(path, mode) == 0 ? 0 : errno;
 }
 
+static int cache_backing_descriptor(int fd, uint32_t flags)
+{
+    struct stat info;
+    char path[64];
+
+    if ((flags & O_ACCMODE) != O_WRONLY || (flags & O_PATH) != 0u ||
+        fstat(fd, &info) != 0 || !S_ISREG(info.st_mode))
+        return fd;
+    /* This provider-owned descriptor already passed rooted resolution. */
+    (void)snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+    int readable = open(path, O_RDWR | O_CLOEXEC | (flags & O_NONBLOCK));
+    if (readable < 0)
+        return fd;
+    close(fd);
+    return readable;
+}
+
 int astra_storage_path_roots(int allowed_root,
                               const int fds[ASTRA_STORAGE_PROVIDER_FDS])
 {
@@ -261,7 +279,36 @@ void astra_storage_path_execute(int allowed_root, int readonly,
         error = -EINVAL;
         goto done;
     }
+    if (request->operation != ASTRA_STORAGE_PATH_SET_FILE_TIMES &&
+        memcmp(request->times, (AstraHostTime[2]){{0}, {0}}, sizeof(request->times)) != 0) {
+        error = -EINVAL;
+        goto done;
+    }
     switch (request->operation) {
+    case ASTRA_STORAGE_PATH_SET_FILE_TIMES: {
+        if (fds[1] < 0 || fds[2] >= 0 || path[0] != '\0' || request->path2[0] != '\0' ||
+            request->mode != 0u || request->resolve != 0u || request->capacity != 0u ||
+            !astra_vfs_file_times_valid(request->flags, request->times[0].nanoseconds,
+                request->times[1].nanoseconds)) {
+            error = -EINVAL;
+            break;
+        }
+        struct timespec times[2];
+        int flags = fcntl(base, F_GETFL);
+        if (flags < 0) { error = -errno; break; }
+        if ((flags & O_PATH) != 0u || (flags & O_ACCMODE) == O_RDONLY) {
+            error = -EACCES;
+            break;
+        }
+        for (unsigned at = 0u; at < 2u; ++at) {
+            times[at].tv_sec = (int64_t)(((uint64_t)(uint32_t)request->times[at].seconds_hi << 32) |
+                request->times[at].seconds_lo);
+            times[at].tv_nsec = request->flags & (at == 0u ? ASTRA_VFS_META_ATIME : ASTRA_VFS_META_MTIME) ?
+                request->times[at].nanoseconds : UTIME_OMIT;
+        }
+        error = futimens(base, times) == 0 ? 0 : -errno;
+        break;
+    }
     case ASTRA_STORAGE_PATH_OPEN:
         if (request->flags & ~(O_ACCMODE | O_CREAT | O_EXCL | O_TRUNC |
                               O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK | O_PATH |
@@ -273,7 +320,10 @@ void astra_storage_path_execute(int allowed_root, int readonly,
             request->flags | O_CLOEXEC, request->mode, request->resolve,
             request->links, &left);
         error = *result < 0 ? *result : 0;
-        if (error == 0) reply->parent_inode = left.parent_inode;
+        if (error == 0) {
+            *result = cache_backing_descriptor(*result, request->flags);
+            reply->parent_inode = left.parent_inode;
+        }
         break;
     case ASTRA_STORAGE_PATH_ROOTED:
         error = fds[1] < 0 ? -EINVAL : astra_resolve_rooted(root, base);

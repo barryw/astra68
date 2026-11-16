@@ -6,6 +6,7 @@
 
 #include <astra/vfs_service.h>
 #include <astra/vfs_client.h>
+#include <astra/vfs_reply.h>
 
 /* A transport's missing peer is a lost storage object for its caller. */
 static inline uint32_t astra_vfs_storage_status(uint32_t status)
@@ -47,6 +48,28 @@ static inline int astra_vfs_description_transfer_valid(uint32_t operation,
  */
 
 typedef struct AstraVfsBackend AstraVfsBackend;
+
+static inline uint32_t astra_vfs_seek_offset(uint64_t base, int64_t delta,
+    uint64_t maximum, uint64_t *result)
+{
+    if (base > maximum) return ASTRA_VFS_ERR_INVALID;
+    if (delta < 0) {
+        uint64_t amount = (uint64_t)(-(delta + 1)) + 1u;
+        if (amount > base) return ASTRA_VFS_ERR_INVALID;
+        *result = base - amount;
+    } else {
+        uint64_t amount = (uint64_t)delta;
+        if (amount > maximum - base) return ASTRA_VFS_ERR_INVALID;
+        *result = base + amount;
+    }
+    return ASTRA_VFS_OK;
+}
+
+/* A page fill is authorized either by a reader or by its cache writer. */
+static inline int astra_vfs_page_access_valid(uint32_t access)
+{
+    return access == ASTRA_VFS_OPEN_READ || access == ASTRA_VFS_OPEN_WRITE;
+}
 
 /*
  * What a listing has to show and an editor has to preserve. `kind` and `size`
@@ -112,7 +135,7 @@ static inline void astra_vfs_node_info_mode_links(AstraVfsNodeInfo *info,
     info->meta.valid |= ASTRA_VFS_META_MODE | ASTRA_VFS_META_NLINK;
 }
 
-/* Service and direct lane publish the same metadata contract. */
+/* Native service replies publish one metadata contract. */
 static inline void astra_vfs_node_info_publish(AstraVfsReply *reply,
                                                const AstraVfsNodeInfo *info)
 {
@@ -150,6 +173,9 @@ typedef struct AstraVfsBackendOps {
                       const void *buffer, uint32_t length,
                       uint32_t *moved, uint64_t *position);
     uint32_t (*sync)(void *context, uintptr_t node);
+    /** Optional descriptor timestamp update; unselected fields are preserved. */
+    uint32_t (*set_file_times)(void *context, uintptr_t node,
+        const AstraVfsNodeInfo *times, uint32_t fields);
     /** Optional nonblocking exclusive advisory lock; close releases it. */
     uint32_t (*try_lock)(void *context, uintptr_t node);
     uint32_t (*truncate)(void *context, uintptr_t node, uint64_t size);
@@ -192,7 +218,7 @@ typedef struct AstraVfsBackendOps {
     uint32_t (*filesystem_info)(void *context, uintptr_t node,
                                 const char *path,
                                 AstraVfsFilesystemInfo *info);
-    /** Read no-follow metadata beneath an already-open directory node. */
+    /** Read metadata with STAT_FOLLOW policy; zero directory means backend root. */
     uint32_t (*stat_at)(void *context, uintptr_t directory,
                         const char *path, uint32_t flags, AstraVfsNodeInfo *info);
     /** Read current metadata from an open node, independent of its path. */
@@ -236,6 +262,9 @@ typedef struct AstraVfsBackendOps {
         uint32_t length, uint64_t *position, uint32_t *advanced);
     /** Best-effort release of unused cache references for resource admission. */
     void (*cache_reclaim)(void *);
+    /** Optional positioned backing read for partial writes, never client READ. */
+    uint32_t (*read_for_write)(void *, uintptr_t, uint64_t,
+                               void *, uint32_t, uint32_t *);
 } AstraVfsBackendOps;
 
 struct AstraVfsBackend {
@@ -255,7 +284,7 @@ static inline int astra_vfs_position_advance_valid(uint64_t expected,
 /* Caller authenticates and pins node; the backend owns its cursor and flags. */
 uint32_t astra_vfs_backend_description_operation(const AstraVfsBackend *backend,
     uintptr_t node, uint32_t operation, const AstraVfsRequest *request,
-    AstraVfsReply *reply);
+    AstraVfsReply *reply, const uint64_t *logical_end);
 
 /* Both inline and area transfers obey the same description contract. */
 static inline uint32_t
@@ -279,16 +308,13 @@ astra_vfs_backend_read_position(const AstraVfsBackend *backend,
     } else {
         status = backend->ops->read(backend->context, node, offset,
                                      buffer, length, moved);
-        if (status == ASTRA_VFS_OK) {
+        if (status == ASTRA_VFS_OK || *moved != 0u) {
             if (offset > UINT64_MAX - *moved)
                 return ASTRA_VFS_ERR_PROTOCOL;
             *position = offset + *moved;
         }
     }
-    return status == ASTRA_VFS_OK &&
-        (*moved > length ||
-         ((flags & ASTRA_VFS_IO_SEQUENTIAL) != 0u &&
-          (*position < *moved || *position > INT64_MAX))) ?
+    return !astra_vfs_io_result_valid(status, flags, length, *moved, *position) ?
         ASTRA_VFS_ERR_PROTOCOL : status;
 }
 
@@ -298,7 +324,7 @@ uint32_t astra_vfs_backend_path_operation(const AstraVfsBackend *backend,
     const AstraVfsTransfer *transfer, uintptr_t base,
     uintptr_t second_base, AstraVfsReply *reply);
 
-/* Shared wire encoders used by both the service and the direct host adapter. */
+/* Shared wire encoder for service directory replies. */
 uint32_t astra_vfs_backend_readdir_into(
     const AstraVfsBackend *backend, uintptr_t directory, const char *path,
     uint64_t cursor, uint32_t entry_limit, uint8_t *buffer,

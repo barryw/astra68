@@ -126,6 +126,7 @@ ASTRA_RUNTIME_3.0 {
         astra_rt_area_create;
         astra_rt_area_create_flagged;
         astra_rt_area_decommit;
+        astra_rt_area_dirty_scan;
         astra_rt_area_map;
         astra_rt_area_map_range;
         astra_rt_area_map_range_at;
@@ -134,7 +135,13 @@ ASTRA_RUNTIME_3.0 {
         astra_rt_area_references;
         astra_rt_area_reclaim;
         astra_rt_area_unmap;
+        astra_rt_area_unmap_range;
+        astra_rt_area_sync_range;
+        astra_rt_area_next_process;
         astra_rt_area_write_pager;
+        astra_rt_area_publish_dirty_page;
+        astra_rt_area_publish_clean_page;
+        astra_rt_area_resize_backing;
         astra_rt_area_writeback_begin;
         astra_rt_area_writeback_complete;
         astra_rt_cancel_wait;

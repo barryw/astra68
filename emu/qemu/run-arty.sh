@@ -71,6 +71,7 @@ HOSTFS_MAX_DESCRIPTORS=${ASTRA_HOSTFS_MAX_DESCRIPTORS-2048}
 HOSTFS_MAX_DIRECTORIES=${ASTRA_HOSTFS_MAX_DIRECTORIES-1024}
 QMP_SOCKET=${ASTRA_QMP_SOCKET:-$RUN_ROOT/qemu/qmp.sock}
 REMOTE_DESKTOP_QMP_SOCKET=${ASTRA_REMOTE_DESKTOP_QMP_SOCKET:-$RUN_ROOT/qemu/remote-desktop-qmp.sock}
+WATCHDOG_QMP_SOCKET=${ASTRA_WATCHDOG_QMP_SOCKET:-$RUN_ROOT/qemu/watchdog-qmp.sock}
 CONSOLE_LOG=${ASTRA_CONSOLE_LOG:-$LOG_ROOT/qemu-console.log}
 PANIC_LOG=${ASTRA_PANIC_LOG:-$LOG_ROOT/panic-latest.log}
 MEMORY=${ASTRA_MEMORY:-512M}
@@ -162,6 +163,7 @@ for export in "$EXPORTS_ROOT/work" "$EXPORTS_ROOT/sound"; do
 done
 mkdir -p "$(dirname "$TEXT_PLANE")" "$(dirname "$QMP_SOCKET")" \
     "$(dirname "$REMOTE_DESKTOP_QMP_SOCKET")" \
+    "$(dirname "$WATCHDOG_QMP_SOCKET")" \
     "$(dirname "$PANIC_LOG")" "$STATE_ROOT"
 [ ! -L "$STATE_ROOT/config" ] || {
     echo "Astra config store must not be a symlink" >&2; exit 1;
@@ -204,7 +206,7 @@ EOF
 }
 sound_seed=none
 [ ! -d "$ASTRA_ROOT/soundfonts" ] || sound_seed=$ASTRA_ROOT/soundfonts
-rm -f "$QMP_SOCKET" "$REMOTE_DESKTOP_QMP_SOCKET"
+rm -f "$QMP_SOCKET" "$REMOTE_DESKTOP_QMP_SOCKET" "$WATCHDOG_QMP_SOCKET"
 dd if=/dev/zero of="$TEXT_PLANE" bs=4096 count=1 2>/dev/null
 dd if=/dev/zero of="$DISPLAY_MAILBOX" bs="$DISPLAY_MAILBOX_STORAGE_BYTES" \
     count=1 2>/dev/null
@@ -223,7 +225,8 @@ if [ "$(id -u)" -eq 0 ]; then
         chmod 0660 "$DISPLAY_PAYLOAD"
     fi
     install -d -o "$QEMU_UID" -g "$QEMU_GID" -m 0700 \
-        "$(dirname "$QMP_SOCKET")" "$(dirname "$REMOTE_DESKTOP_QMP_SOCKET")"
+        "$(dirname "$QMP_SOCKET")" "$(dirname "$REMOTE_DESKTOP_QMP_SOCKET")" \
+        "$(dirname "$WATCHDOG_QMP_SOCKET")"
 fi
 exec env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     ASTRA_STORAGE_NAME_STATE="$STATE_ROOT" \
@@ -240,7 +243,9 @@ exec env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     --display-splash "$DISPLAY_SPLASH" \
     --display-cpu "$DISPLAY_CPU" --input "$INPUT_HOTPLUG" --aux-cpu "$AUX_CPU" \
     --qmp "$QMP_SOCKET" --remote-qmp "$REMOTE_DESKTOP_QMP_SOCKET" \
+    --watchdog-qmp "$WATCHDOG_QMP_SOCKET" \
     --uid "$QEMU_UID" --gid "$QEMU_GID" \
+    --power-policy "${ASTRA_POWER_POLICY:-host}" \
     --console "$CONSOLE_LOG" --panic "$PANIC_LOG" -- \
     "$STORAGE_PROVIDER" --uid "$QEMU_UID" --gid "$QEMU_GID" \
     --system "$STORAGE" "$storage_offset" "$storage_length" "$storage_uuid" \
@@ -252,4 +257,5 @@ exec env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     -M astra68,memory-backend=astra-ram -m "$MEMORY" -bios "$ROM" \
     -display none -monitor none -serial stdio \
     -qmp "unix:$QMP_SOCKET,server=on,wait=off" \
-    -qmp "unix:$REMOTE_DESKTOP_QMP_SOCKET,server=on,wait=off" "$@"
+    -qmp "unix:$REMOTE_DESKTOP_QMP_SOCKET,server=on,wait=off" \
+    -qmp "unix:$WATCHDOG_QMP_SOCKET,server=on,wait=off" "$@"

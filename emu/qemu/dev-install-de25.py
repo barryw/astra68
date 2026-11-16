@@ -101,8 +101,8 @@ def validate(stage, guest, host, remove_guest):
     if not isinstance(guest, list) or not isinstance(host, list) or \
             not isinstance(remove_guest, list) or \
             not guest + host + remove_guest or \
-            len(guest) + len(host) + len(remove_guest) > 64:
-        raise ValueError("expected 1-64 file mappings")
+            len(guest) + len(host) + len(remove_guest) > 128:
+        raise ValueError("expected 1-128 file mappings")
     seen = set()
     validated_guest = []
     validated_host = []
@@ -130,12 +130,12 @@ def validate(stage, guest, host, remove_guest):
             (source, destination, file_hash(source)))
     for _, destination, _ in validated_guest:
         components = parts(destination, absolute=True)
-        if len(components) != 7 or components[0] != "libs" or \
+        if len(components) != 8 or components[0] != "libs" or \
                 not components[1].endswith(".kit") or \
                 components[2] != "libraries" or \
                 not components[4].startswith("abi-") or \
-                components[5] != "m68k-68040" or \
-                components[3] != components[6]:
+                components[6] != "m68k-68040" or \
+                components[3] != components[7]:
             continue
         provider = "/libs/.providers/%s.%s" % (
             components[3], components[4])

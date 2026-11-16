@@ -35,7 +35,6 @@
 #include <astra/status.h>
 #include <astra/syscall.h>
 #include <astra/vfs_path.h>
-#include <astra/vfs_host_direct.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_library_source.h>
 #include <astra/vfs_service_core.h>
@@ -1271,7 +1270,7 @@ static uint32_t launch_volume_open(SupervisorLaunchVolume *volume,
             status = ASTRA_STATUS_LIMIT;
             break;
         }
-        if (astra_vfs_host_port_connect(volume->lease.client,
+        if (astra_vfs_port_connect(volume->lease.client,
                                        volume->lease.root) != ASTRA_VFS_OK) {
             status = ASTRA_STATUS_IO;
             break;
@@ -1357,8 +1356,10 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
     if (status != ASTRA_STATUS_OK)
         return status;
     if (messaging_send != 0u) {
+        /* RPC clients wait for send credit when the bounded queue fills. */
         status = add_grant(out, count, ASTRA_CAPABILITY_MESSAGING,
-            messaging_send, ASTRA_RIGHT_SIGNAL | delegated, 0u, NULL);
+            messaging_send, ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT | delegated,
+            0u, NULL);
         if (status != ASTRA_STATUS_OK) return status;
     }
     for (uint32_t index = 0u; index < entry->grant_count; ++index) {
@@ -1370,7 +1371,7 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                 if (launch_send == 0u)
                     continue;
                 status = add_grant(out, count, wanted->name, launch_send,
-                                   ASTRA_RIGHT_SIGNAL | delegated,
+                                   ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT | delegated,
                                    0u, NULL);
                 if (status != ASTRA_STATUS_OK)
                     return status;
@@ -1381,7 +1382,7 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                     continue;
                 status = add_grant(out, count, wanted->name,
                                    event_control_handle,
-                                   ASTRA_RIGHT_SIGNAL | delegated,
+                                   ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT | delegated,
                                    0u, NULL);
                 if (status != ASTRA_STATUS_OK)
                     return status;
@@ -1850,7 +1851,7 @@ static uint32_t publish(const SupervisorManifestPublication *publication,
     client = astra_runtime_callocate(1u, sizeof(*client));
     if (client == NULL)
         return ASTRA_STATUS_LIMIT;
-    if (astra_vfs_host_port_connect(client,
+    if (astra_vfs_port_connect(client,
                                     service_handles[service_count]) !=
             ASTRA_VFS_OK ||
         supervisor_vfs_register(client, handle) == 0u ||
@@ -2004,6 +2005,41 @@ static uint32_t release_bootstrap_source(void *context)
     return ASTRA_VFS_OK;
 }
 
+/* Record received publications, including per-client GUI endpoints. */
+static uint32_t launch_dependencies(const SupervisorManifestEntry *entry,
+    const AstraLaunchGrant *grants, uint32_t count,
+    SupervisorDependency **names, uint32_t *used)
+{
+    *names = NULL;
+    *used = 0u;
+    if (service_count == 0u || count == 0u) return ASTRA_STATUS_OK;
+    *names = astra_runtime_callocate(service_count, sizeof(**names));
+    if (*names == NULL) return ASTRA_STATUS_LIMIT;
+    for (uint32_t index = 0u; index < count; ++index) {
+        uint32_t source = grants[index].handle;
+        int is_namespace = (grants[index].flags & ASTRA_CAPABILITY_FLAG_NAMESPACE) != 0u;
+        /* Implicit best-effort facilities such as LOG cannot hold up teardown. */
+        if (!is_namespace && !entry_grants(entry, grants[index].name)) continue;
+        if (is_namespace)
+            for (uint32_t at = 0u; at < narrowed_count; ++at)
+                if (narrowed[at].handle == source) {
+                    source = narrowed[at].source;
+                    break;
+                }
+        for (uint32_t at = 0u; at < service_count; ++at) {
+            uint32_t known;
+            if (is_namespace ? !service_is_vfs[at] || service_handles[at] != source :
+                strcmp(grants[index].name, service_names[at]) != 0)
+                continue;
+            for (known = 0u; known < *used; ++known)
+                if (strcmp((*names)[known].name, service_names[at]) == 0) break;
+            if (known == *used) strcpy((*names)[(*used)++].name, service_names[at]);
+            (*names)[known].is_namespace |= is_namespace;
+        }
+    }
+    return ASTRA_STATUS_OK;
+}
+
 static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
                                      const SupervisorManifestEntry *entry,
                                      const AstraServiceDefinition *service,
@@ -2023,8 +2059,8 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
     const AstraLaunchArguments *launch_arguments = arguments;
     AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX];
     uint32_t grant_count = 0u;
-    char (*namespace_names)[ASTRA_CAPABILITY_NAME_MAX] = NULL;
-    uint32_t namespace_count = 0u;
+    SupervisorDependency *dependencies = NULL;
+    uint32_t dependency_count = 0u;
     uint32_t receive = 0u;
     uint32_t send = 0u;
     uint32_t shutdown_send = 0u;
@@ -2083,34 +2119,9 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
     }
     status = build_grants(startup, entry, bundle_root, bundle_id, bundle_source, send, grants,
                           &grant_count);
-    if (status == ASTRA_STATUS_OK && service != NULL && grant_count != 0u) {
-        namespace_names = astra_runtime_callocate(grant_count,
-                                                   sizeof(*namespace_names));
-        if (namespace_names == NULL)
-            status = ASTRA_STATUS_LIMIT;
-        else for (uint32_t index = 0u; index < grant_count; ++index) {
-            uint32_t source = grants[index].handle;
-
-            if ((grants[index].flags & ASTRA_CAPABILITY_FLAG_NAMESPACE) == 0u)
-                continue;
-            for (uint32_t at = 0u; at < narrowed_count; ++at)
-                if (narrowed[at].handle == source) {
-                    source = narrowed[at].source;
-                    break;
-                }
-            for (uint32_t at = 0u; at < service_count; ++at) {
-                uint32_t known;
-
-                if (!service_is_vfs[at] || service_handles[at] != source)
-                    continue;
-                for (known = 0u; known < namespace_count; ++known)
-                    if (strcmp(namespace_names[known], service_names[at]) == 0)
-                        break;
-                if (known == namespace_count)
-                    strcpy(namespace_names[namespace_count++], service_names[at]);
-            }
-        }
-    }
+    if (status == ASTRA_STATUS_OK && service != NULL)
+        status = launch_dependencies(entry, grants, grant_count,
+                                      &dependencies, &dependency_count);
     uint64_t load_start = astra_clock_monotonic();
     uint32_t load_us;
     uint64_t ready_start;
@@ -2162,7 +2173,7 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
             (void)astra_close(child_wait);
         if (child != 0u)
             (void)astra_close(child);
-        astra_runtime_deallocate(namespace_names);
+        astra_runtime_deallocate(dependencies);
         return status;
     }
     ready_start = astra_clock_monotonic();
@@ -2191,7 +2202,7 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
         if (child_wait != 0u)
             (void)astra_close(child_wait);
         (void)astra_close(child);
-        astra_runtime_deallocate(namespace_names);
+        astra_runtime_deallocate(dependencies);
         return status;
     }
     for (uint32_t index = 0u;
@@ -2216,11 +2227,11 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
         if (child_wait != 0u)
             (void)astra_close(child_wait);
         (void)astra_close(child);
-        astra_runtime_deallocate(namespace_names);
+        astra_runtime_deallocate(dependencies);
         return status;
     }
-    process_table.records[process_count].namespace_names = namespace_names;
-    process_table.records[process_count].namespace_count = namespace_count;
+    process_table.records[process_count].dependencies = dependencies;
+    process_table.records[process_count].dependency_count = dependency_count;
     process_table.records[process_count].namespace_lost = 0u;
     process_table.records[process_count].resident = entry->resident;
     process_table.records[process_count].shutdown_send = shutdown_send;
@@ -2338,8 +2349,8 @@ static void unpublish_owner(const char *owner)
             for (uint32_t slot = 0u; slot < process_count; ++slot) {
                 SupervisorProcessRecord *record = &process_table.records[slot];
 
-                for (uint32_t at = 0u; at < record->namespace_count; ++at)
-                    if (strcmp(record->namespace_names[at], service_names[index]) == 0)
+                for (uint32_t at = 0u; at < record->dependency_count; ++at)
+                    if (strcmp(record->dependencies[at].name, service_names[index]) == 0)
                         record->namespace_lost = 1u;
             }
             (void)astra_assign_unbind(supervisor_assigns(),
@@ -2370,7 +2381,7 @@ static void remove_process_slot(uint32_t slot)
 {
     supervisor_messaging_remove(process_table.records[slot].id);
     volume_lease_close(&process_table.records[slot].volume);
-    astra_runtime_deallocate(process_table.records[slot].namespace_names);
+    astra_runtime_deallocate(process_table.records[slot].dependencies);
     if (process_table.records[slot].gui_session != 0u)
         (void)astra_close(process_table.records[slot].gui_session);
     (void)astra_close(process_table.records[slot].shutdown_send);
@@ -2397,6 +2408,8 @@ static uint32_t stop_process_slot(uint32_t slot, uint32_t action)
     process_table.records[slot].action = action;
     status = astra_process_terminate(process_table.records[slot].handle,
                                      ASTRA_SIGNAL_KILL);
+    /* An upstream loss can finish the target before its requested stop. */
+    if (status == ASTRA_SYSCALL_PEER_DEAD) return ASTRA_STATUS_OK;
     if (status != ASTRA_SYSCALL_OK) {
         process_table.records[slot].action = SUPERVISOR_PROCESS_ACTION_NONE;
         return status;
@@ -2413,10 +2426,11 @@ static void restart_namespace_holders(void)
 
         if (!record->namespace_lost || record->action != SUPERVISOR_PROCESS_ACTION_NONE)
             continue;
-        for (at = 0u; at < record->namespace_count; ++at)
-            if (astra_assign_lookup(supervisor_assigns(), record->namespace_names[at]) == NULL)
+        for (at = 0u; at < record->dependency_count; ++at)
+            if (record->dependencies[at].is_namespace &&
+                named_service(record->dependencies[at].name) == 0u)
                 break;
-        if (at == record->namespace_count) {
+        if (at == record->dependency_count) {
             uint32_t status = stop_process_slot(slot, SUPERVISOR_PROCESS_ACTION_RESTART);
 
             if (status != ASTRA_STATUS_OK)
@@ -2870,6 +2884,21 @@ static void manager_reply(uint32_t reply_send, uint32_t transaction,
     (void)astra_close(reply_send);
 }
 
+/* Shutdown diagnostics must survive allocation failure. */
+static void shutdown_failure(const char *name, uint32_t process,
+    const char *stage, uint32_t status, uint32_t reason)
+{
+    char line[ASTRA_SERVICE_NAME_MAX + 128u];
+    const SupervisorLaunchReportField fields[] = {
+        {" pid=", process}, {" status=", status}, {" reason=", reason}};
+    uint32_t length = supervisor_launch_report_format(line, sizeof(line),
+        stage, name, fields, 3u);
+
+    if (length != 0u)
+        (void)astra_log_line(ASTRA_EVENT_LEVEL_ERROR, ASTRA_LOG_STREAM_LOG,
+                             line, length);
+}
+
 static uint32_t shutdown_process(uint32_t slot)
 {
     SupervisorProcessRecord *record = &process_table.records[slot];
@@ -2878,24 +2907,34 @@ static uint32_t shutdown_process(uint32_t slot)
                                                &exit_status);
 
 
-    if (wait_status != ASTRA_SYSCALL_TIMED_OUT)
-        return (record->shutdown_managed == 0u &&
+    if (wait_status != ASTRA_SYSCALL_TIMED_OUT) {
+        uint32_t result = (record->shutdown_managed == 0u &&
                 (wait_status == ASTRA_SYSCALL_OK ||
                  wait_status == ASTRA_SYSCALL_PEER_DEAD)) ||
                (wait_status == ASTRA_SYSCALL_OK &&
                 exit_status == ASTRA_STATUS_OK) ?
             ASTRA_STATUS_OK : ASTRA_STATUS_PEER_DEAD;
+        if (result != ASTRA_STATUS_OK)
+            shutdown_failure(record->service_name, record->id,
+                "shutdown exit ", wait_status, exit_status);
+        return result;
+    }
     if (record->shutdown_managed == 0u) {
         uint32_t status = astra_process_terminate(record->handle,
                                                    ASTRA_SIGNAL_KILL);
 
-        if (status != ASTRA_SYSCALL_OK)
+        if (status != ASTRA_SYSCALL_OK) {
+            shutdown_failure(record->service_name, record->id,
+                "shutdown terminate ", status, 0u);
             return ASTRA_STATUS_IO;
+        }
         status = astra_process_wait(record->handle, ASTRA_DEADLINE_FOREVER,
                                      &exit_status);
-        return status == ASTRA_SYSCALL_OK ||
-               status == ASTRA_SYSCALL_PEER_DEAD ? ASTRA_STATUS_OK :
-                                                   ASTRA_STATUS_IO;
+        if (status == ASTRA_SYSCALL_OK || status == ASTRA_SYSCALL_PEER_DEAD)
+            return ASTRA_STATUS_OK;
+        shutdown_failure(record->service_name, record->id,
+            "shutdown wait ", status, exit_status);
+        return ASTRA_STATUS_IO;
     }
     {
         uint32_t reply_receive = 0u;
@@ -2907,8 +2946,11 @@ static uint32_t shutdown_process(uint32_t slot)
             transaction = ++shutdown_transaction;
         status = astra_shutdown_request(record->shutdown_send, transaction,
                                          &reply_receive);
-        if (status != ASTRA_SYSCALL_OK)
+        if (status != ASTRA_SYSCALL_OK) {
+            shutdown_failure(record->service_name, record->id,
+                "shutdown request ", status, 0u);
             return ASTRA_STATUS_PEER_DEAD;
+        }
         for (;;) {
             uint32_t waits[] = {reply_receive, record->handle};
             uint32_t ready = ASTRA_WAIT_INDEX_NONE;
@@ -2930,33 +2972,170 @@ static uint32_t shutdown_process(uint32_t slot)
         }
         (void)astra_close(reply_receive);
         if (status != ASTRA_SYSCALL_OK ||
-            reply.decision != ASTRA_SHUTDOWN_READY)
+            reply.decision != ASTRA_SHUTDOWN_READY) {
+            shutdown_failure(record->service_name, record->id,
+                status == ASTRA_SYSCALL_OK ?
+                "shutdown declined " : "shutdown reply ", status, reply.reason);
             return ASTRA_STATUS_BUSY;
+        }
         status = astra_process_wait(record->handle, ASTRA_DEADLINE_FOREVER,
                                      &exit_status);
-        return status == ASTRA_SYSCALL_OK && exit_status == ASTRA_STATUS_OK ?
-            ASTRA_STATUS_OK : ASTRA_STATUS_PEER_DEAD;
+        if (status == ASTRA_SYSCALL_OK && exit_status == ASTRA_STATUS_OK)
+            return ASTRA_STATUS_OK;
+        shutdown_failure(record->service_name, record->id,
+            "shutdown exit ", status, exit_status);
+        return ASTRA_STATUS_PEER_DEAD;
     }
 }
 
-static uint32_t shutdown_system(uint32_t operation)
+static uint32_t shutdown_next(uint32_t phase)
+{
+    uint32_t slot = process_count;
+    uint32_t blocked = UINT32_MAX;
+
+    while (slot != 0u) {
+        uint32_t needed = 0u;
+
+        --slot;
+        if (process_table.records[slot].resident != phase)
+            continue;
+        if (process_table.records[slot].service_name[0] == '\0')
+            return slot;
+        /* A restarted publisher can follow clients that still need it. */
+        for (uint32_t publication = 0u;
+             publication < service_count && !needed; ++publication) {
+            if (strcmp(service_owner_names[publication],
+                       process_table.records[slot].service_name) != 0)
+                continue;
+            for (uint32_t client = 0u; client < process_count && !needed;
+                 ++client) {
+                const SupervisorProcessRecord *record = &process_table.records[client];
+
+                if (client == slot)
+                    continue;
+                for (uint32_t at = 0u; at < record->dependency_count; ++at)
+                    if (strcmp(record->dependencies[at].name,
+                               service_names[publication]) == 0) {
+                        needed = 1u;
+                        break;
+                    }
+            }
+        }
+        if (!needed)
+            return slot;
+        blocked = slot;
+    }
+    if (blocked != UINT32_MAX)
+        shutdown_failure(process_table.records[blocked].service_name,
+            process_table.records[blocked].id,
+            "shutdown dependency ", ASTRA_STATUS_BUSY, 0u);
+    return UINT32_MAX;
+}
+
+static void shutdown_definitions_release(AstraServiceDefinition *definitions,
+    uint32_t count)
+{
+    for (uint32_t at = 0u; at < count; ++at)
+        astra_service_definition_destroy(&definitions[at]);
+    astra_runtime_deallocate(definitions);
+}
+
+/* Capture while configuration and its dependencies are still available. */
+static uint32_t shutdown_definitions_capture(const AstraStartupInfo *startup,
+    AstraServiceDefinition **definitions, uint32_t *count)
+{
+    uint32_t capacity = 0u;
+
+    *definitions = NULL;
+    *count = 0u;
+    for (uint32_t at = 0u; at < process_count; ++at)
+        if (process_table.records[at].service_name[0] != '\0')
+            ++capacity;
+    if (capacity == 0u) return ASTRA_STATUS_OK;
+    AstraServiceDefinition *saved = astra_runtime_callocate(capacity, sizeof(*saved));
+    if (saved == NULL) return ASTRA_STATUS_LIMIT;
+    for (uint32_t at = 0u; at < process_count; ++at) {
+        const SupervisorProcessRecord *record = &process_table.records[at];
+        uint32_t exit_status = 0u;
+
+        if (record->service_name[0] == '\0' || record->paused ||
+            record->action != SUPERVISOR_PROCESS_ACTION_NONE ||
+            astra_process_wait(record->handle, 0u, &exit_status) != ASTRA_SYSCALL_TIMED_OUT)
+            continue;
+        uint32_t status = configured_definition(startup, record->service_name,
+                                                 &saved[*count], NULL);
+        for (uint32_t dep = 0u; status == ASTRA_STATUS_OK && dep < record->dependency_count; ++dep) {
+            AstraServiceDefinition *definition = &saved[*count];
+            uint32_t known;
+            for (known = 0u; known < definition->dependency_count; ++known)
+                if (strcmp(definition->dependencies[known], record->dependencies[dep].name) == 0) break;
+            if (known == definition->dependency_count)
+                status = astra_status_from_result(astra_service_definition_add_dependency(
+                    definition, record->dependencies[dep].name));
+        }
+        if (status != ASTRA_STATUS_OK) {
+            shutdown_failure(record->service_name, record->id,
+                "shutdown prepare ", status, 0u);
+            shutdown_definitions_release(saved, *count + 1u);
+            *count = 0u;
+            return status;
+        }
+        ++*count;
+    }
+    *definitions = saved;
+    return ASTRA_STATUS_OK;
+}
+
+/* Restore exactly the previously running services, including manual ones. */
+static void shutdown_restore_services(const AstraStartupInfo *startup,
+    AstraServiceDefinition *definitions, uint32_t count)
+{
+    while (count != 0u) {
+        uint32_t before = count;
+        for (uint32_t at = 0u; at < count;) {
+            AstraServiceDefinition *definition = &definitions[at];
+            uint32_t status = service_process_slot(definition->name) != UINT32_MAX ?
+                ASTRA_STATUS_OK : launch_definition(startup, definition, 0u);
+
+            if (status == ASTRA_STATUS_NOT_FOUND) { ++at; continue; }
+            if (status != ASTRA_STATUS_OK)
+                shutdown_failure(definition->name, 0u, "shutdown restore ", status, 0u);
+            astra_service_definition_destroy(definition);
+            definitions[at] = definitions[--count];
+            definitions[count] = (AstraServiceDefinition)ASTRA_SERVICE_DEFINITION_INIT;
+        }
+        if (count == before) {
+            for (uint32_t at = 0u; at < count; ++at)
+                shutdown_failure(definitions[at].name, 0u,
+                    "shutdown restore ", ASTRA_STATUS_NOT_FOUND, 0u);
+            return;
+        }
+    }
+}
+
+static uint32_t shutdown_system(const AstraStartupInfo *startup, uint32_t operation)
 {
     AstraSyscallResult result = {0};
-    /* Reverse launch order preserves boot-time service dependencies. */
+    AstraServiceDefinition *definitions = NULL;
+    uint32_t count = 0u;
+    uint32_t status = shutdown_definitions_capture(startup, &definitions, &count);
+
+    if (status != ASTRA_STATUS_OK) return status;
+    /* Stop clients before their namespace publishers, including after restart. */
     for (uint32_t phase = 0u; phase < 2u; ++phase) {
         for (;;) {
-            uint32_t slot = process_count;
-            uint32_t status;
-
-            while (slot != 0u &&
-                   process_table.records[slot - 1u].resident != phase)
-                --slot;
-            if (slot == 0u)
+            uint32_t slot = shutdown_next(phase);
+            if (slot == UINT32_MAX) {
+                for (uint32_t at = 0u; at < process_count; ++at)
+                    if (process_table.records[at].resident == phase) {
+                        status = ASTRA_STATUS_BUSY;
+                        goto done;
+                    }
                 break;
-            --slot;
+            }
             status = shutdown_process(slot);
             if (status != ASTRA_STATUS_OK)
-                return status;
+                goto done;
             if (process_table.records[slot].service_name[0] != '\0')
                 unpublish_owner(process_table.records[slot].service_name);
             remove_process_slot(slot);
@@ -2967,8 +3146,14 @@ static uint32_t shutdown_system(uint32_t operation)
                        ASTRA_SYSCALL_SYSTEM_SHUTDOWN,
                    0u, 0u, 0u, 0u,
                     0u, &result);
-    return result.status == ASTRA_SYSCALL_OK ? ASTRA_STATUS_OK :
-                                               ASTRA_STATUS_BUSY;
+    status = result.status == ASTRA_SYSCALL_OK ? ASTRA_STATUS_OK : ASTRA_STATUS_BUSY;
+    if (status != ASTRA_STATUS_OK)
+        (void)astra_log_failure("shutdown system", result.status);
+done:
+    if (status != ASTRA_STATUS_OK)
+        shutdown_restore_services(startup, definitions, count);
+    shutdown_definitions_release(definitions, count);
+    return status;
 }
 
 static void pump_manager(const AstraStartupInfo *startup)
@@ -3076,7 +3261,7 @@ static void pump_manager(const AstraStartupInfo *startup)
     if (status == ASTRA_STATUS_OK &&
         (request.header.operation == ASTRA_SERVICE_MANAGER_SHUTDOWN ||
          request.header.operation == ASTRA_SERVICE_MANAGER_SYSTEM_RESTART)) {
-        status = shutdown_system(request.header.operation);
+        status = shutdown_system(startup, request.header.operation);
         if (status != ASTRA_STATUS_OK)
             (void)astra_log_failure("shutdown canceled", status);
     }

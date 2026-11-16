@@ -7,6 +7,7 @@ import importlib.util
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import time
 
@@ -18,10 +19,16 @@ desktop = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(desktop)
 terminal = desktop.terminal_gate
 image_tools = terminal.astra_image
-spec = importlib.util.spec_from_file_location(
-    "atlas_audio_fixture", os.path.join(HERE, "test-sdl-audio.py"))
-audio = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(audio)
+
+
+def prepare_oracle(image):
+    built = subprocess.run(image_tools._build_invocation([
+        "make", "-C", os.path.join(terminal.ROOT, "sw/userspace/commands"),
+        "build/m68k/fssem"]), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if built.returncode != 0:
+        raise RuntimeError("could not build native oracle sync: " +
+                           built.stdout[-400:].decode("utf-8", "replace"))
+    image_tools.install_test_command(str(image), "fssem")
 
 
 def fixture(image, work, overflow=False, atlas_bundle=None):
@@ -112,7 +119,9 @@ def command_output(machine, command, name, timeout):
         raise RuntimeError("terminal did not settle before native oracle: " +
                            command)
     before = machine.sequence()
+    # A shell prompt acknowledges cached writes, not visibility to host observers.
     machine.qmp.type_line("{ " + command + "; } > /work/" + name +
+                          " && fssem --sync-file /work/" + name +
                           "; print ATLAS-OUTPUT-$?")
     lines, _ = machine.wait_for_text("ATLAS-OUTPUT-0", timeout, before, exact=True)
     failure = "missing status-zero answer" if lines is None else None
@@ -160,6 +169,10 @@ def root_oracle(machine, timeout):
 
 
 def main():
+    spec = importlib.util.spec_from_file_location(
+        "atlas_audio_fixture", os.path.join(HERE, "test-sdl-audio.py"))
+    audio = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(audio)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("qemu")
     parser.add_argument("rom")
@@ -181,6 +194,7 @@ def main():
         shutil.copyfile(args.image, image)
         if not args.preinstalled:
             image_tools.install(image)
+        prepare_oracle(image)
         fixture(image, work, args.overflow, args.atlas_bundle)
         audio_socket = os.path.join(work, "audio.sock")
         host_audio = audio.AudioHost(audio_socket,

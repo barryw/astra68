@@ -52,6 +52,7 @@
 #define KERNEL_SELFTEST_USER_ADDRESS 0x10000000u
 #define KERNEL_SOAK_REPORT_INTERVAL 1000u
 #define KERNEL_AREA_PUBLISH_BUDGET_CYCLES 20000u
+#define KERNEL_AREA_PUBLISH_DIRTY_BUDGET_CYCLES 25000u
 #define KERNEL_SHARED_PROTECT_BUDGET_CYCLES 128u
 #define KERNEL_AREA_COPY_BUDGET_CYCLES 5000u
 #define KERNEL_AREA_DIRTY_BUDGET_CYCLES 5000u
@@ -59,6 +60,9 @@
 #define KERNEL_AREA_COMPLETE_BUDGET_CYCLES 256u
 #define KERNEL_AREA_WRITE_FAULT_BUDGET_CYCLES 10000u
 #define KERNEL_AREA_SPARSE_RECLAIM_BUDGET_CYCLES 125000u
+#define KERNEL_AREA_DIRTY_SCAN_BUDGET_CYCLES 25000u
+/* Cold owner operation: revoke a sparse private view across full 128 MiB. */
+#define KERNEL_AREA_RESIZE_BUDGET_CYCLES 2000000u
 #define PANIC_SCREEN_TRACE_RECORDS 6u
 #define PANIC_REPORT_TRACE_RECORDS 32u
 
@@ -112,6 +116,7 @@ static struct {
 #if ASTRA_KERNEL_K1_QUALIFICATION
 typedef struct KernelAreaQualification {
     uint32_t publish;
+    uint32_t publish_dirty;
     uint32_t reclaim;
     uint32_t copy;
     uint32_t dirty;
@@ -119,11 +124,22 @@ typedef struct KernelAreaQualification {
     uint32_t complete;
     uint32_t write_fault;
     uint32_t sparse_reclaim;
+    uint32_t dirty_scan;
+    uint32_t resize;
+    uint32_t pager_retire;
+    uint32_t sync_request;
+    uint32_t backing_access;
+    uint32_t unmap_check;
+    uint32_t holder_query;
 } KernelAreaQualification;
 
 static uint32_t qualification_survivor_process_id;
 static bool qualification_publish_page(KernelAreaQualification *cycles);
 static bool qualification_shared_protection(uint32_t *cycles);
+static bool qualification_private_views(uint32_t *read_cycles,
+                                         uint32_t *write_cycles);
+static bool qualification_mapping_lifetime(uint32_t *cycles);
+static bool qualification_range_unmap(uint32_t *cycles);
 #endif
 static KernelAddressSpace user_copy_selftest_space;
 static const KernelMonitorBuildInfo monitor_build_info = {
@@ -1844,6 +1860,13 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     if (area_cycles.publish > KERNEL_AREA_PUBLISH_BUDGET_CYCLES)
         kernel_panic("K1 page publication budget exceeded");
     console_puts(" PASS\n");
+    console_puts("K8 PAGE PUBLISH DIRTY cycles=");
+    console_dec32(area_cycles.publish_dirty);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_PUBLISH_DIRTY_BUDGET_CYCLES);
+    if (area_cycles.publish_dirty > KERNEL_AREA_PUBLISH_DIRTY_BUDGET_CYCLES)
+        kernel_panic("K1 dirty page publication budget exceeded");
+    console_puts(" PASS\n");
     console_puts("K8 PAGER PRESSURE cycles=");
     console_dec32(area_cycles.reclaim);
     console_putc('/');
@@ -1889,6 +1912,55 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     if (area_cycles.sparse_reclaim > KERNEL_AREA_SPARSE_RECLAIM_BUDGET_CYCLES)
         kernel_panic("K1 sparse reclaim budget exceeded");
     console_puts(" PASS\n");
+    console_puts("K8 DIRTY SCAN cycles=");
+    console_dec32(area_cycles.dirty_scan);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_DIRTY_SCAN_BUDGET_CYCLES);
+    if (area_cycles.dirty_scan > KERNEL_AREA_DIRTY_SCAN_BUDGET_CYCLES)
+        kernel_panic("K1 dirty scan budget exceeded");
+    console_puts(" PASS\n");
+    console_puts("K8 BACKING RESIZE cycles=");
+    console_dec32(area_cycles.resize);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_RESIZE_BUDGET_CYCLES);
+    if (area_cycles.resize > KERNEL_AREA_RESIZE_BUDGET_CYCLES)
+        kernel_panic("K1 backing resize budget exceeded");
+    console_puts(" PASS\n");
+    console_puts("K8 PAGER RETIRE cycles=");
+    console_dec32(area_cycles.pager_retire);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_PAGER_RETIRE_BUDGET_CYCLES);
+    if (area_cycles.pager_retire > KERNEL_AREA_PAGER_RETIRE_BUDGET_CYCLES)
+        kernel_panic("K1 pager retirement budget exceeded");
+    console_puts(" PASS\n");
+    console_puts("K8 RANGE SYNC cycles=");
+    console_dec32(area_cycles.sync_request);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_SYNC_REQUEST_BUDGET_CYCLES);
+    if (area_cycles.sync_request > KERNEL_AREA_SYNC_REQUEST_BUDGET_CYCLES)
+        kernel_panic("K1 range sync budget exceeded");
+    console_puts(" PASS\n");
+    console_puts("K8 BACKING ACCESS cycles=");
+    console_dec32(area_cycles.backing_access);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_BACKING_ACCESS_BUDGET_CYCLES);
+    if (area_cycles.backing_access > KERNEL_AREA_BACKING_ACCESS_BUDGET_CYCLES)
+        kernel_panic("K1 backing access classification budget exceeded");
+    console_puts(" PASS\n");
+    console_puts("K8 UNMAP CHECK cycles=");
+    console_dec32(area_cycles.unmap_check);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_UNMAP_CHECK_BUDGET_CYCLES);
+    if (area_cycles.unmap_check > KERNEL_AREA_UNMAP_CHECK_BUDGET_CYCLES)
+        kernel_panic("K1 unmap backing check budget exceeded");
+    console_puts(" PASS\n");
+    console_puts("K8 AREA HOLDERS cycles=");
+    console_dec32(area_cycles.holder_query);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_HOLDER_QUERY_BUDGET_CYCLES);
+    if (area_cycles.holder_query > KERNEL_AREA_HOLDER_QUERY_BUDGET_CYCLES)
+        kernel_panic("K1 area holder query budget exceeded");
+    console_puts(" PASS\n");
     uint32_t protect_cycles;
     if (!qualification_shared_protection(&protect_cycles))
         kernel_panic("K1 shared protection failed");
@@ -1901,7 +1973,43 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     console_puts(" PASS\n");
     console_puts("K8 PAGER GUEST PASS\n");
     console_puts("K8 PAGER OWNER IO PASS\n");
+    console_puts("K8 PAGER SYNC IO PASS\n");
+    console_puts("K8 PAGER CLEAN PUBLISH PASS\n");
     console_puts("K8 PAGER MAPPED WRITE PASS\n");
+    uint32_t private_read_cycles, private_write_cycles;
+    if (!qualification_private_views(&private_read_cycles, &private_write_cycles))
+        kernel_panic("K1 private area views failed");
+    console_puts("K8 PRIVATE VIEW read=");
+    console_dec32(private_read_cycles);
+    console_puts(" write=");
+    console_dec32(private_write_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_PRIVATE_FAULT_BUDGET_CYCLES);
+    if (private_read_cycles > KERNEL_AREA_PRIVATE_FAULT_BUDGET_CYCLES ||
+        private_write_cycles > KERNEL_AREA_PRIVATE_FAULT_BUDGET_CYCLES)
+        kernel_panic("K1 private area fault budget exceeded");
+    console_puts(" PASS\n");
+    console_puts("K8 PRIVATE AREA COW PASS\n");
+    uint32_t lifetime_cycles;
+    if (!qualification_mapping_lifetime(&lifetime_cycles))
+        kernel_panic("K1 mapping lifetime failed");
+    console_puts("K8 MAPPING LIFETIME cycles=");
+    console_dec32(lifetime_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_MAPPING_LIFETIME_BUDGET_CYCLES);
+    if (lifetime_cycles > KERNEL_AREA_MAPPING_LIFETIME_BUDGET_CYCLES)
+        kernel_panic("K1 mapping lifetime budget exceeded");
+    console_puts(" PASS\n");
+    uint32_t range_cycles;
+    if (!qualification_range_unmap(&range_cycles))
+        kernel_panic("K1 range unmap failed");
+    console_puts("K8 RANGE UNMAP cycles=");
+    console_dec32(range_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_AREA_RANGE_UNMAP_BUDGET_CYCLES);
+    if (range_cycles > KERNEL_AREA_RANGE_UNMAP_BUDGET_CYCLES)
+        kernel_panic("K1 range unmap budget exceeded");
+    console_puts(" PASS\n");
     if (performance_mask == KERNEL_PERFORMANCE_RELEASE_MASK)
         console_puts("K10 PERFORMANCE PASS\n");
     console_puts("K2 MEDIA BUDGET PASS\n");
@@ -2019,6 +2127,208 @@ static KernelWorkerServiceResult pressure_reclaim(uint32_t batch_limit,
 }
 
 #if ASTRA_KERNEL_K1_QUALIFICATION
+static bool qualification_private_views(uint32_t *read_cycles,
+                                         uint32_t *write_cycles)
+{
+    KernelAddressSpace parent = {0}, child = {0};
+    KernelArea *area = NULL;
+    uint32_t base, size, physical;
+    uint8_t value = 0x37u, observed = 0u;
+    bool passed = false;
+
+    *read_cycles = *write_cycles = 0u;
+    if (kernel_vm_create_address_space(KERNEL_SELFTEST_OWNER, &parent) !=
+            KERNEL_VM_OK ||
+        kernel_area_create(KERNEL_SELFTEST_OWNER, KERNEL_PAGE_SIZE,
+                            KERNEL_AREA_CREATE_RESERVED, &area) != KERNEL_AREA_OK ||
+        kernel_area_write(area, 0u, &value, 1u) != KERNEL_AREA_OK)
+        goto done;
+    for (uint32_t sample = 0u; sample < 32u; ++sample) {
+        if (kernel_area_map(area, KERNEL_SELFTEST_OWNER, &parent,
+                            ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE |
+                                ASTRA_AREA_MAP_PRIVATE,
+                            &base, &size) != KERNEL_AREA_OK)
+            goto done;
+        uint32_t started = kernel_platform_cpu_cycles_low();
+        if (!kernel_area_fault(KERNEL_SELFTEST_OWNER, &parent, base, false))
+            goto done;
+        uint32_t elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > *read_cycles) *read_cycles = elapsed;
+        started = kernel_platform_cpu_cycles_low();
+        if (!kernel_area_fault(KERNEL_SELFTEST_OWNER, &parent, base, true))
+            goto done;
+        elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > *write_cycles) *write_cycles = elapsed;
+        value = 0x91u;
+        if (kernel_vm_probe_address_space(&parent, base, &physical) !=
+                KERNEL_VM_MAPPING_READ_WRITE ||
+            kernel_vm_write(&parent, base, &value, 1u) != KERNEL_VM_OK ||
+            kernel_area_read(area, 0u, &observed, 1u) != KERNEL_AREA_OK ||
+            observed != 0x37u)
+            goto done;
+        if (sample != 31u && kernel_area_unmap(KERNEL_SELFTEST_OWNER,
+                                              &parent, base) != KERNEL_AREA_OK)
+            goto done;
+    }
+    if (kernel_vm_clone_address_space(&parent, KERNEL_SELFTEST_OWNER + 1u,
+                                      &child) != KERNEL_VM_OK ||
+        kernel_area_clone_process(KERNEL_SELFTEST_OWNER, &parent,
+            KERNEL_SELFTEST_OWNER + 1u, &child) != KERNEL_AREA_OK ||
+        kernel_vm_cow_fault(&child, base) != KERNEL_VM_OK)
+        goto done;
+    value = 0x52u;
+    if (kernel_vm_write(&child, base, &value, 1u) != KERNEL_VM_OK ||
+        kernel_vm_read(&parent, base, &observed, 1u) != KERNEL_VM_OK ||
+        observed != 0x91u)
+        goto done;
+    passed = true;
+done:
+    if (kernel_area_unmap_process(KERNEL_SELFTEST_OWNER, NULL) != KERNEL_AREA_OK ||
+        kernel_area_unmap_process(KERNEL_SELFTEST_OWNER + 1u, NULL) != KERNEL_AREA_OK)
+        passed = false;
+    if (area != NULL) kernel_area_handle_release(area, NULL);
+    if (parent.initialized && kernel_vm_destroy_address_space(&parent) != KERNEL_VM_OK)
+        passed = false;
+    if (child.initialized && kernel_vm_destroy_address_space(&child) != KERNEL_VM_OK)
+        passed = false;
+    return passed;
+}
+
+static bool qualification_mapping_lifetime(uint32_t *cycles)
+{
+    KernelAddressSpace parent = {0}, child = {0};
+    KernelAreaPoolStats before, after;
+    KernelArea *area = NULL;
+    uint32_t base, size;
+    uint8_t value = 0x37u, observed = 0u;
+    bool handle_owned = false, passed = false;
+
+    *cycles = 0u;
+    if (!kernel_area_pool_stats(&before) ||
+        kernel_vm_create_address_space(KERNEL_SELFTEST_OWNER, &parent) != KERNEL_VM_OK)
+        goto done;
+    for (uint32_t sample = 0u; sample < 32u; ++sample) {
+        if (kernel_area_create(KERNEL_SELFTEST_OWNER, KERNEL_PAGE_SIZE,
+                KERNEL_AREA_CREATE_RESERVED | KERNEL_AREA_CREATE_MAPPED_LIFETIME,
+                &area) != KERNEL_AREA_OK)
+            goto done;
+        handle_owned = true;
+        if (kernel_area_write(area, 0u, &value, 1u) != KERNEL_AREA_OK ||
+            kernel_area_map(area, KERNEL_SELFTEST_OWNER, &parent,
+                ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE | ASTRA_AREA_MAP_PRIVATE,
+                &base, &size) != KERNEL_AREA_OK ||
+            !kernel_area_fault(KERNEL_SELFTEST_OWNER, &parent, base, true))
+            goto done;
+        kernel_area_handle_release(area, NULL);
+        handle_owned = false;
+        if (!kernel_area_live(area) ||
+            kernel_vm_clone_address_space(&parent, KERNEL_SELFTEST_OWNER + 1u,
+                &child) != KERNEL_VM_OK ||
+            kernel_area_clone_process(KERNEL_SELFTEST_OWNER, &parent,
+                KERNEL_SELFTEST_OWNER + 1u, &child) != KERNEL_AREA_OK ||
+            kernel_vm_cow_fault(&child, base) != KERNEL_VM_OK ||
+            kernel_vm_read(&child, base, &observed, 1u) != KERNEL_VM_OK ||
+            observed != value)
+            goto done;
+        uint32_t started = kernel_platform_cpu_cycles_low();
+        if (kernel_area_unmap(KERNEL_SELFTEST_OWNER, &parent, base) != KERNEL_AREA_OK ||
+            !kernel_area_live(area) ||
+            kernel_area_unmap(KERNEL_SELFTEST_OWNER + 1u, &child, base) != KERNEL_AREA_OK ||
+            kernel_area_live(area))
+            goto done;
+        uint32_t elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > *cycles) *cycles = elapsed;
+        area = NULL;
+        if (kernel_vm_destroy_address_space(&child) != KERNEL_VM_OK) goto done;
+    }
+    passed = kernel_area_pool_stats(&after) &&
+        after.active_areas == before.active_areas &&
+        after.active_mappings == before.active_mappings &&
+        after.committed_pages == before.committed_pages;
+done:
+    if (kernel_area_unmap_process(KERNEL_SELFTEST_OWNER, NULL) != KERNEL_AREA_OK ||
+        kernel_area_unmap_process(KERNEL_SELFTEST_OWNER + 1u, NULL) != KERNEL_AREA_OK)
+        passed = false;
+    if (handle_owned) kernel_area_handle_release(area, NULL);
+    if (parent.initialized && kernel_vm_destroy_address_space(&parent) != KERNEL_VM_OK)
+        passed = false;
+    if (child.initialized && kernel_vm_destroy_address_space(&child) != KERNEL_VM_OK)
+        passed = false;
+    return passed;
+}
+
+static bool qualification_range_unmap(uint32_t *cycles)
+{
+    KernelAddressSpace parent = {0}, peer = {0};
+    KernelAreaPoolStats before, after;
+    KernelArea *area = NULL;
+    uint32_t base, alias, size, physical;
+    const uint32_t length = ASTRA_AREA_SIZE_MAX;
+    uint8_t value = 0x37u, observed;
+    bool handle_owned = false, passed = false;
+
+    *cycles = 0u;
+    if (!kernel_area_pool_stats(&before) ||
+        kernel_vm_create_address_space(KERNEL_SELFTEST_OWNER, &parent) != KERNEL_VM_OK ||
+        kernel_vm_create_address_space(KERNEL_SELFTEST_OWNER + 1u, &peer) != KERNEL_VM_OK)
+        goto done;
+    for (uint32_t sample = 0u; sample < 8u; ++sample) {
+        if (kernel_area_create(KERNEL_SELFTEST_OWNER, length,
+                KERNEL_AREA_CREATE_RESERVED | KERNEL_AREA_CREATE_MAPPED_LIFETIME,
+                &area) != KERNEL_AREA_OK)
+            goto done;
+        handle_owned = true;
+        if (kernel_area_write(area, 0u, &value, 1u) != KERNEL_AREA_OK ||
+            kernel_area_write(area, length - 1u, &value, 1u) != KERNEL_AREA_OK ||
+            kernel_area_map(area, KERNEL_SELFTEST_OWNER, &parent,
+                KERNEL_VM_READ | KERNEL_VM_WRITE |
+                    ((sample & 1u) ? ASTRA_AREA_MAP_PRIVATE : 0u),
+                &base, &size) != KERNEL_AREA_OK ||
+            kernel_area_map(area, KERNEL_SELFTEST_OWNER + 1u, &peer,
+                KERNEL_VM_READ | KERNEL_VM_WRITE, &alias, &size) != KERNEL_AREA_OK)
+            goto done;
+        kernel_area_handle_release(area, NULL);
+        handle_owned = false;
+        uint32_t started = kernel_platform_cpu_cycles_low();
+        if (kernel_area_unmap_range(KERNEL_SELFTEST_OWNER, &parent,
+                base + KERNEL_PAGE_SIZE, KERNEL_PAGE_SIZE) != KERNEL_AREA_OK)
+            goto done;
+        uint32_t elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > *cycles) *cycles = elapsed;
+        if (kernel_area_fault(KERNEL_SELFTEST_OWNER, &parent, base + KERNEL_PAGE_SIZE, false) ||
+            !kernel_area_fault(KERNEL_SELFTEST_OWNER, &parent, base, false) ||
+            kernel_vm_read(&parent, base, &observed, 1u) != KERNEL_VM_OK || observed != value ||
+            kernel_vm_probe_address_space(&peer, alias + KERNEL_PAGE_SIZE, &physical) !=
+                KERNEL_VM_MAPPING_READ_WRITE)
+            goto done;
+        started = kernel_platform_cpu_cycles_low();
+        if (kernel_area_unmap_range(KERNEL_SELFTEST_OWNER, &parent, base, length) != KERNEL_AREA_OK)
+            goto done;
+        elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > *cycles) *cycles = elapsed;
+        if (!kernel_area_live(area) ||
+            kernel_vm_read(&peer, alias + length - 1u, &observed, 1u) != KERNEL_VM_OK || observed != value)
+            goto done;
+        started = kernel_platform_cpu_cycles_low();
+        if (kernel_area_unmap_range(KERNEL_SELFTEST_OWNER + 1u, &peer, alias, length) != KERNEL_AREA_OK)
+            goto done;
+        elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > *cycles) *cycles = elapsed;
+        if (kernel_area_live(area)) goto done;
+        area = NULL;
+    }
+    passed = kernel_area_pool_stats(&after) && after.active_areas == before.active_areas &&
+        after.active_mappings == before.active_mappings && after.committed_pages == before.committed_pages;
+done:
+    if (kernel_area_unmap_process(KERNEL_SELFTEST_OWNER, NULL) != KERNEL_AREA_OK ||
+        kernel_area_unmap_process(KERNEL_SELFTEST_OWNER + 1u, NULL) != KERNEL_AREA_OK)
+        passed = false;
+    if (handle_owned) kernel_area_handle_release(area, NULL);
+    if (parent.initialized && kernel_vm_destroy_address_space(&parent) != KERNEL_VM_OK) passed = false;
+    if (peer.initialized && kernel_vm_destroy_address_space(&peer) != KERNEL_VM_OK) passed = false;
+    return passed;
+}
+
 static bool qualification_shared_protection(uint32_t *cycles)
 {
     const uint32_t owner = KERNEL_SELFTEST_OWNER + 1u;
@@ -2095,6 +2405,10 @@ static bool qualification_publish_page(KernelAreaQualification *cycles)
     uint32_t reclaimed = 0u;
     uint32_t token = 0u;
     uint32_t newer = 0u;
+    uint32_t scan_cursor = 0u, scan_state = 0u;
+    uint32_t private_base = 0u, truncated_physical = 0u;
+    uint32_t closed_ports, woken_threads;
+    const char *failure = "existing publication";
     const uint32_t far = (KERNEL_AREA_PAGE_MAX - 1u) * KERNEL_PAGE_SIZE;
     bool mapped = false;
     bool passed = false;
@@ -2112,7 +2426,7 @@ static bool qualification_publish_page(KernelAreaQualification *cycles)
                            KERNEL_AREA_PAGE_MAX * KERNEL_PAGE_SIZE,
                            KERNEL_AREA_CREATE_RESERVED, &area) !=
             KERNEL_AREA_OK ||
-        kernel_port_create(KERNEL_SELFTEST_OWNER, 1u,
+        kernel_port_create(KERNEL_SELFTEST_OWNER + 9u, 1u,
                            KERNEL_PORT_MESSAGE_SIZE_MIN, &pager) !=
             KERNEL_PORT_OK ||
         !kernel_port_handle_retain(
@@ -2131,6 +2445,46 @@ static bool qualification_publish_page(KernelAreaQualification *cycles)
                         &size) != KERNEL_AREA_OK)
         goto done;
     mapped = true;
+    for (uint32_t sample = 0u; sample < 32u; ++sample) {
+        started = kernel_platform_cpu_cycles_low();
+        if (!kernel_area_backing_access(KERNEL_SELFTEST_OWNER, &space, base, true))
+            goto done;
+        uint32_t classification = kernel_platform_cpu_cycles_low() - started;
+        if (classification > cycles->backing_access) cycles->backing_access = classification;
+        started = kernel_platform_cpu_cycles_low();
+        if (kernel_area_sync_request(KERNEL_SELFTEST_OWNER, &space, base,
+                size, false, &request) != KERNEL_AREA_OK)
+            goto done;
+        request_valid = request.area == area && request.port == pager &&
+            request.cookie == 1u && request.offset == 0u && request.byte_size == size;
+        if (kernel_area_child_release(request.area) != KERNEL_AREA_OK || !request_valid)
+            goto done;
+        uint32_t elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > cycles->sync_request) cycles->sync_request = elapsed;
+        started = kernel_platform_cpu_cycles_low();
+        uint32_t span = 0u;
+        if (kernel_area_unmap_span(KERNEL_SELFTEST_OWNER, &space, base, &span) != KERNEL_AREA_OK ||
+            span != size || kernel_area_sync_request(KERNEL_SELFTEST_OWNER,
+                &space, base, span, true, &request) != KERNEL_AREA_OK)
+            goto done;
+        request_valid = request.area == area && request.cookie == 1u &&
+            request.offset == 0u && request.byte_size == size;
+        if (kernel_area_child_release(request.area) != KERNEL_AREA_OK || !request_valid)
+            goto done;
+        elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > cycles->unmap_check) cycles->unmap_check = elapsed;
+        started = kernel_platform_cpu_cycles_low();
+        uint64_t sequence = 0u;
+        uint32_t holder = 0u;
+        if (kernel_area_next_process(area, 0u, &sequence, &holder) != KERNEL_AREA_OK ||
+            holder != KERNEL_SELFTEST_OWNER || sequence == 0u ||
+            kernel_area_next_process(area, holder, &sequence, &holder) != KERNEL_AREA_OK ||
+            holder != 0u || kernel_area_next_process(area, UINT32_MAX,
+                &sequence, &holder) != KERNEL_AREA_OK || holder != 0u)
+            goto done;
+        elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > cycles->holder_query) cycles->holder_query = elapsed;
+    }
     bytes[0] = 0x7eu;
     if (kernel_area_pager_request(KERNEL_SELFTEST_OWNER, &space, base, false,
                                   &request) != KERNEL_AREA_OK)
@@ -2144,6 +2498,22 @@ static bool qualification_publish_page(KernelAreaQualification *cycles)
             KERNEL_AREA_INVALID_STATE ||
         bytes[0] != 0x7eu)
         goto done;
+    for (uint32_t sample = 0u; sample < 32u; ++sample) {
+        uint32_t offset = (sample + 2u) * KERNEL_PAGE_SIZE;
+        started = kernel_platform_cpu_cycles_low();
+        if (kernel_area_publish_dirty_page(area, offset, source) != KERNEL_AREA_OK)
+            goto done;
+        uint32_t elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > cycles->publish_dirty) cycles->publish_dirty = elapsed;
+        if (kernel_area_writeback_begin(area, offset, snapshot, &token) !=
+                KERNEL_AREA_OK ||
+            !kernel_bytes_equal(source, snapshot, sizeof(source)) ||
+            kernel_area_writeback_complete(area, offset, token, true) !=
+                KERNEL_AREA_OK ||
+            kernel_area_reclaim(area, offset, KERNEL_PAGE_SIZE, &released) !=
+                KERNEL_AREA_OK || released != 1u)
+            goto done;
+    }
     started = kernel_platform_cpu_cycles_low();
     if (kernel_area_publish_page(area, 0u, source, sizeof(source)) !=
             KERNEL_AREA_OK)
@@ -2272,8 +2642,27 @@ static bool qualification_publish_page(KernelAreaQualification *cycles)
             passed = false;
 
     if (kernel_area_publish_page(area, far, source, sizeof(source)) != KERNEL_AREA_OK ||
-        kernel_area_mark_dirty(area, far) != KERNEL_AREA_OK ||
-        kernel_area_reclaim(area, 0u, far + KERNEL_PAGE_SIZE, &released) != KERNEL_AREA_BUSY ||
+        kernel_area_mark_dirty(area, far) != KERNEL_AREA_OK)
+        passed = false;
+    do {
+        uint32_t previous = scan_cursor;
+        started = kernel_platform_cpu_cycles_low();
+        if (kernel_area_dirty_scan(area, scan_cursor, &scan_cursor, &scan_state) !=
+                KERNEL_AREA_OK) {
+            passed = false;
+            break;
+        }
+        uint32_t elapsed = kernel_platform_cpu_cycles_low() - started;
+        if (elapsed > cycles->dirty_scan) cycles->dirty_scan = elapsed;
+        if (scan_state != 0u) break;
+        if (scan_cursor <= previous) {
+            passed = false;
+            break;
+        }
+    } while (scan_cursor < far + KERNEL_PAGE_SIZE);
+    if (scan_cursor != far || scan_state != ASTRA_AREA_DIRTY_MODIFIED)
+        passed = false;
+    if (kernel_area_reclaim(area, 0u, far + KERNEL_PAGE_SIZE, &released) != KERNEL_AREA_BUSY ||
         released != 0u || !kernel_area_page_resident(area, 0u) ||
         kernel_area_writeback_begin(area, far, snapshot, &token) != KERNEL_AREA_OK ||
         kernel_area_writeback_complete(area, far, token, true) != KERNEL_AREA_OK)
@@ -2286,10 +2675,88 @@ static bool qualification_publish_page(KernelAreaQualification *cycles)
         uint32_t elapsed = kernel_platform_cpu_cycles_low() - started;
         if (elapsed > cycles->sparse_reclaim) cycles->sparse_reclaim = elapsed;
     }
+    if (!passed) goto done;
+    passed = false;
+    failure = "partial pager snapshot and reclaim";
+    if (kernel_area_publish_page(area, 0u, source, sizeof(source)) != KERNEL_AREA_OK ||
+        kernel_area_unmap_range(KERNEL_SELFTEST_OWNER, &space,
+            base + KERNEL_PAGE_SIZE, KERNEL_PAGE_SIZE) != KERNEL_AREA_OK ||
+        !kernel_area_fault(KERNEL_SELFTEST_OWNER, &space, base, false) ||
+        !kernel_area_fault(KERNEL_SELFTEST_OWNER, &space, base, true) ||
+        kernel_area_writeback_begin(area, 0u, snapshot, &token) != KERNEL_AREA_OK ||
+        !kernel_area_fault(KERNEL_SELFTEST_OWNER, &space, base, true) ||
+        kernel_area_writeback_complete(area, 0u, token, true) != KERNEL_AREA_OK ||
+        kernel_area_writeback_begin(area, 0u, snapshot, &newer) != KERNEL_AREA_OK ||
+        newer == token ||
+        kernel_area_writeback_complete(area, 0u, newer, true) != KERNEL_AREA_OK ||
+        !kernel_area_fault(KERNEL_SELFTEST_OWNER, &space, base, false) ||
+        kernel_area_reclaim(area, 0u, KERNEL_PAGE_SIZE, &released) != KERNEL_AREA_OK || released != 1u ||
+        kernel_area_fault(KERNEL_SELFTEST_OWNER, &space, base, false))
+        goto done;
+    failure = "resize release split shared view";
+    if (kernel_area_unmap_range(KERNEL_SELFTEST_OWNER, &space,
+            base, KERNEL_VM_SHARED_TABLE_SPAN) != KERNEL_AREA_OK)
+        goto done;
+    mapped = false;
+    failure = "resize private view";
+    if (kernel_area_map(area, KERNEL_SELFTEST_OWNER, &space,
+            KERNEL_VM_READ | KERNEL_VM_WRITE | ASTRA_AREA_MAP_PRIVATE,
+            &private_base, &size) != KERNEL_AREA_OK)
+        goto done;
+    failure = "resize source page";
+    if (kernel_area_publish_page(area, far, source, sizeof(source)) != KERNEL_AREA_OK)
+        goto done;
+    failure = "resize private copy";
+    if (!kernel_area_fault(KERNEL_SELFTEST_OWNER, &space, private_base + far, true))
+        goto done;
+    failure = "resize source reclaim";
+    if (kernel_area_reclaim(area, far, KERNEL_PAGE_SIZE, &released) != KERNEL_AREA_OK)
+        goto done;
+    failure = "resize revocation";
+    started = kernel_platform_cpu_cycles_low();
+    if (kernel_area_resize_backing(area, KERNEL_PAGE_SIZE + 9u) != KERNEL_AREA_OK)
+        goto done;
+    cycles->resize = kernel_platform_cpu_cycles_low() - started;
+    if (kernel_vm_probe_address_space(&space, private_base + far, &truncated_physical) !=
+            KERNEL_VM_MAPPING_UNMAPPED ||
+        kernel_area_backing_bytes(area) != KERNEL_PAGE_SIZE + 9u ||
+        kernel_area_fault(KERNEL_SELFTEST_OWNER, &space, private_base + far, false))
+        goto done;
+    failure = "pager death publication";
+    if (kernel_area_publish_dirty_page(area, 0u, source) != KERNEL_AREA_OK)
+        goto done;
+    failure = "pager death snapshot";
+    if (kernel_area_writeback_begin(area, 0u, snapshot, &token) != KERNEL_AREA_OK)
+        goto done;
+    started = kernel_platform_cpu_cycles_low();
+    failure = "pager endpoint death";
+    if (kernel_port_owner_died(KERNEL_SELFTEST_OWNER + 9u, &closed_ports,
+            &woken_threads) != KERNEL_PORT_OK || closed_ports != 1u || woken_threads != 0u)
+        goto done;
+    failure = "pager area death";
+    if (kernel_area_process_died(KERNEL_SELFTEST_OWNER + 9u, NULL, NULL) != KERNEL_AREA_OK)
+        goto done;
+    cycles->pager_retire = kernel_platform_cpu_cycles_low() - started;
+    private_base = 0u;
+    failure = "pager death tombstone";
+    if (kernel_area_live(area) || !kernel_area_pool_valid())
+        goto done;
+    failure = "pager stale snapshot";
+    if (kernel_area_writeback_complete(area, 0u, token, true) != KERNEL_AREA_PEER_DEAD)
+        goto done;
+    passed = true;
 
 done:
-    if (mapped && kernel_area_unmap(KERNEL_SELFTEST_OWNER, &space, base) !=
-                      KERNEL_AREA_OK)
+    if (!passed) {
+        console_puts("K8 PUBLICATION FAILURE: ");
+        console_puts(failure);
+        console_putc('\n');
+    }
+    if (private_base != 0u && kernel_area_unmap(KERNEL_SELFTEST_OWNER, &space,
+                                               private_base) != KERNEL_AREA_OK)
+        passed = false;
+    if (mapped && kernel_area_unmap_range(KERNEL_SELFTEST_OWNER, &space, base,
+                      KERNEL_VM_SHARED_TABLE_SPAN) != KERNEL_AREA_OK)
         passed = false;
     if (area != NULL)
         kernel_area_handle_release(area, NULL);

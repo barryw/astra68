@@ -1,6 +1,2885 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-11-11
+Status: active continuation map, 2026-11-15
+
+Current running development checkpoint:
+`/var/lib/astra/dev/current` selects
+`3b22ae6485b2f57f4f4d2191ce19407df4588e23fddc3ed7e6caf5ec1cac3286`.
+The stopped persistent user image received 89 guest updates and two obsolete
+ABI removals; five host components changed. HOME/settings were not installer
+targets. Initial install reached required boot readiness in 3m45s. A later
+two-host-file watchdog fix reached readiness in 1m57s without a rebuild.
+The first live observer held the normal QMP socket and starved the runtime
+watchdog's probes, causing a false 60-second guest-stall restart. The old panic
+file is dated November 8; this failure is a host watchdog decision, not evidence
+of a new kernel panic. A dedicated third QMP monitor now serves only watchdog
+observations. Hang detection and its deadlines stay enabled. Haiku launch
+`src/servers/launch/Job.cpp:680` creates dedicated named job ports; Astra reuses
+its existing separate-QMP-monitor pattern for the liveness boundary. Old launcher
+fails the three-monitor regression; launcher/privilege, watchdog and input tests
+pass after correction. A live diagnostic connection then survives 114 seconds.
+The preserved Terminal session responds to commands but lacks fixture banner
+and prompt markers; its hardware harness uses exact command completion tokens
+without changing user configuration. Live native/USB/menu/Atlas checks continue
+in Beast `cache-mapped-users-20261115/board-active80-v3.log`.
+Common shutdown consent/status UI and final physical-media/closeout gates remain.
+
+Current DE25 evidence now passes all seven focused native cases on QEMU PID
+338996: volume roots, mapped ownership, saved unmap errors, file mappings,
+publication, basic I/O and cache pressure. SanDisk CLIEXFAT `/usb0` and CLIFAT
+`/usb2` both pass write/read, copy, rename, unmount/remount, same-path retention,
+exact reread and Atlas root browsing. Three repeated mapped-file busy dialogs
+match the exact PID/path CRC; release permits real context-menu unmount and icon
+removal. Only the test's own USB directories are deleted; the existing Doom
+bundle stays intact. Evidence: `board-active80-v3.log` and `board-usb80.log`.
+Those observer jobs retain their harness failures: the first USB parser expected
+12 columns instead of the actual 11, and the final app launch typed into Atlas
+after an assumed focus change. A separate explicit Terminal-title activation
+launches AstraZ and observes `AstraZ startup ready` in `astraz-active80.log`.
+No user configuration is changed to satisfy fixture banner/prompt assumptions.
+
+Mapped-file user attribution80 (in progress; not yet native/DE25 qualified):
+an ADMINISTER-only native area query enumerates canonical holder PIDs under a
+mapping generation. HostFS merges them with existing description ownership in
+the shared volume-usage stream; paths, row kinds and wire layouts stay unchanged.
+Kernel and Runtime host tests pass, as do HostFS closed-handle/fork-style holder,
+multi-area deduplication, pagination and concurrent-change tests. Initial RED
+reproduces the former provider-PID-zero result. A fixture's inaccurate BUSY
+conversion is corrected to match the existing real transport adapter. Sanitizers,
+normal-ROM verification, all 36 MC68040 markers and NDK distribution consumers
+and documentation pass. Holder enumeration measures 1095/100000 cycles;
+ordinary unmap is 730/100000 and pager request/reply/handoff are 1601/2786/85.
+
+The first native integration passes all 46 cases, then a repeated all-volume
+ownership snapshot returns BUSY.
+The focused probe now resolves its file's exact volume through native metadata
+and the shared catalog. HostFS brackets only that volume's mapping generations
+for a filtered query; the all-volume query still covers every area and retains
+its BUSY consistency contract. A failing host regression proves the former
+cross-volume observation, then passes with the scoped collection. No retry
+limit is raised. The old failure and partially captured kernel snapshot remain;
+the diagnostic's obsolete pager_syscall field is updated to pager_operation.
+Only HostFS and the test command are rebuilt; normal ROM, kernel and the other
+five qualified products remain identical. All three pressure/holder/publication
+rounds pass. The post-provider-reset holder check still refuses a snapshot.
+Stopping the hosted QEMU's unavailable media/RFB services does not cure that
+failure, and the first shared UI gate also refuses its /dh0 holder snapshot.
+
+Focused native and QEMU diagnostics locate self-invalidation: the catalog stays
+at sequence 17 while the resource sequence changes between pages. Aggregated
+call-site counts identify six notification-bookkeeping jobs (12 start/end
+changes) between successive pages, even without file opens or description
+changes. CHANGE_SNAPSHOT/CHANGE_NEXT already avoid filesystem I/O and namespace
+I/O locking. Their existing local session reference still protects lifetime;
+only their borrowed job.session usage advertisement is omitted, so notification
+polls no longer invalidate usage observers. Actual filesystem jobs remain
+advertised and invalidate changed snapshots. No new job state or wire format is
+added. Haiku src/kits/storage/NodeMonitor.cpp separates observation from
+src/system/kernel/fs/node_monitor.cpp:1255 notify_stat_changed; Astra adapts that
+read-side separation. Temporary diagnostics are removed; failed evidence stays.
+An exact asynchronous transport regression checks both observation operations
+against one admitted usage sequence, then requires a real file open to
+invalidate it. The old QEMU fails that exact notification assertion with BUSY;
+the fixed QEMU passes the full provider scenario, including authority, loss,
+native lifecycle/identity, ISO, cleanup and read-only fsck. Two invalid controls
+are retained: the metrics fixture first omitted the already existing opcode 28,
+and the first observation control used synchronous HOST_EXECUTE, which has no
+asynchronous job. The fixture now sizes metrics for the current maximum opcode
+and exercises the actual channel path.
+
+Hosted native/UI fixtures disable only their unavailable optional HDMI-audio
+and RFB services through the existing service policy commands; their repeated
+intentional launch failures otherwise cause real resource churn. Hardware keeps
+both services enabled. The repeated native/recovery gate passes all 46 cases,
+provider/HostFS recovery, clean shutdown and fsck. The full shared UI gate still
+exposes background I/O starving its two-record live-page collector. Complete
+usage now uses one additive native request and caller-owned output area.
+HostFS counts and fills through the same ownership stream under its state lock;
+generation checks still reject actual concurrent changes. No second inventory,
+worker, cache or retry increase is introduced. Haiku registrar
+`src/servers/registrar/TRoster.cpp:725` collects GetAppList under `fLock`;
+Astra adapts that capture boundary to its existing capability protocol.
+The old paged collector fails the interleaved-writer regression. Current client,
+server and HostFS tests plus ASan/UBSan pass, including capacity hints, exact
+holder order, permission/malformed-output rejection and cleanup failures.
+Current target builds and NDK distribution checks pass. Full shared UI replay
+passes exact delegated ownership, 33 long/escaped holder rows, modal updates,
+mapped-only refusal/release, actual Unmount and ISO-source retirement. The replay
+also exposes a distinct Display defect: caller context-menu cookie 3 collides
+with its internal application-menu cookie. Display now records menu origin
+explicitly instead of interpreting client correlation IDs as server actions.
+The old code fails a host regression across cookies 1 through 4; the fix passes
+Display tests, ASan/UBSan and target build. An existing rendering-test fixture
+retained an out-of-scope stack window; its lifetime cleanup is corrected and the
+failed sanitizer log retained. Haiku `src/kits/interface/Menu.cpp:522-632`
+dispatches through the selected menu object; Astra preserves that separation in
+its server-owned menu origin. No caller IDs are reserved or remapped.
+All 46 native cases, publication/pressure repetition, external EOF, provider
+reset, HostFS replacement, clean shutdown 88 and offline fsck pass together.
+Evidence is `cache-mapped-users-20261115/{volume-ui80e,native80e}.log` on Beast.
+DE25 qualification and coherent development installation remain pending; the
+next installation must update actual stopped persistent state, preserving user
+data, rather than replacing only a private release seed.
+
+The inactive selected seed and current candidate are compared only outside the
+live provider image. The coherent delta contains 89 guest files, including Kit
+manifests/provider records, and retires the two obsolete Filesystem 16 files.
+The installer now admits a bounded 128-file transaction and checks the actual
+eight-component Kit library path; its former seven-component check skipped
+companion validation. Boundary/incomplete-Kit tests and both installer suites
+pass. The candidate also retained an AstraZ executable linked to Filesystem 16
+despite its updated manifest. Rebuilding its bundle against the checked NDK
+fixes the final consumer; its Makefile now depends on itself so ABI contract
+edits cannot skip the CMake validation/build step. AstraZ host tests, target
+link validation and bundle checks pass. The eight previously qualified runtime
+products remain byte-identical. Input80f is
+`d9b8026a8b4a713737e117838101f2592f8f065d1a018cb53f94dcd5eee35c25`.
+The matching AArch64 QEMU notification fix is built on Beast. Integrated
+development installation and DE25 checks are next; shutdown UI remains open.
+
+Explicit-unmap saved errors79 (DE25 qualified; integrated deployment pending):
+native exact/range unmap checks existing retained pager ASYNC state before
+removing shared views. Backing errors leave the requested range intact; native
+dirty owners retain pending work. This is not a durability barrier. A blocked
+check revalidates canonical views after mapping changes under the same deadline.
+Provider-owned/private/anonymous views and holes need no provider call.
+Process-death cleanup remains nonblocking. Public signatures, library majors
+and pager wire layouts are unchanged. Native D3 preserves exact backing status;
+existing wrappers return IO_ERROR and POSIX munmap reports EIO.
+
+Haiku `src/system/kernel/vm/vm.cpp:5971-6001` holds its address-space write lock
+through unmap; `:6228-6318` retains backing across unlocked I/O. Astra adapts
+those patterns through a nonwrapping canonical mapping sequence and the existing
+bounded pager continuation, with no second cache/error ledger/worker or POSIX
+mapping inventory. Kernel host tests reproduce the old silent success, then
+cover second-view failure without partial removal, holes, timeout, abandoned
+reply, provider self-call avoidance and an actual concurrent client mapping.
+
+Sanitizers, normal-ROM verification, NDK consumers/docs and all 35 MC68040
+markers pass. New backing check measures 130/100000 cycles. Ordinary unmap is
+727/100000 versus 589 before; pager request/reply/handoff are 1602/2786/86 within
+unchanged budgets. No performance improvement is claimed. Old qualified ROM
+misses only the new marker. All 45 native cases, pressure/publication repetitions,
+provider/HostFS recovery, exact backing bytes, shutdown 88 and fsck pass.
+
+The first integration probe incorrectly expected a receive endpoint to survive
+fork. Its child exits during setup, so that first old-kernel control is invalid.
+Corrected probe checks the native noncloneable-receiver contract; the tightened
+old control requires the specific exit caused by silent unmap success. Both
+failed logs/images remain. Only fssem is rebuilt; the six other NDK products and
+kernel/ROM remain identical. Native/POSIX clients close handles, receive saved
+errors without losing mapped bytes, retry, and retain dirty backing after unmap.
+
+DE25 reaches stage 8 at 72.4 seconds with QEMU UID/GID 999. The new probe and
+existing storage/mapping checks pass; private run shuts down 88 at 530/600
+seconds. All four observers return zero. Archive
+`d18b166c83f961aec4449d2d1e4ab01b6a25acbc8ead4ac1954f8ce04f85edef`
+verifies 577 hashes, exact release manifest, paired settings/key, unchanged
+Linux boot/selector and read-only fsck before disposable board cleanup. Fresh
+selected stage 8, three active services with zero restarts, only loop0 and
+8.6 GiB free pass. Selected release and personal data are unchanged.
+
+Candidate: `540184c2911702d5aca8ae2decba2a8ee934628ec9d168df8e1736463256bee7`.
+Normal ROM: `82fd37ae8d68e777838b936810b225d66f12f319f13543c88db4109d19beabb4`.
+Input79b: `bd2083f6e1e81bfc0c797cf5649bc7c5496074ea076b2028027ab395c35d32ac`.
+Product source79b: `64cb80a6bd46d22213555f6fc16a0b2b45bc015e5cd703732315ef0a170b4c7d`.
+Evidence: `/home/barry/astra-evidence/cache-unmap-errors-20261115/`.
+
+Remaining list is fixed: exact mapped-user PID/path attribution for shared
+volume usage, common shutdown consent/status UI, and final physical-media /
+integrated deployment gates. Literal USB reattachment remains unperformed.
+Network mounts and broad performance qualification remain excluded.
+
+Mapped-file EOF and fault termination 78 (DE25 qualified, unreleased):
+empty files and initially beyond-EOF ranges can reserve native/POSIX views.
+Actual access still follows the canonical native mapping, permissions and
+pager length. Authorized accesses that cannot obtain backing terminate with
+the additive native ASTRA_STATUS_BACKING_FAULTED verdict. Unmapped addresses
+and denied writes retain the ordinary fault verdict. POSIX death waits map
+these to SIGBUS and SIGSEGV respectively. No in-process hardware-exception
+handler or POSIX kernel policy is introduced.
+
+Haiku `src/system/kernel/vm/vm.cpp:2248-2419` supplies vnode/cache ownership and
+descriptor access checks; its shared-beyond-EOF admission restriction is
+deliberately adapted. The new side-effect-free query reuses reserved_mapping
+and its PID/space/permission checks. The common fault-report/retirement path
+supplies the verdict for direct and deferred pager failures, without new
+thread state, mapping inventory, cache or writeback worker. The shared
+MC68040 access-status helper also restores write direction on pager retry.
+Public library majors and wire layouts are unchanged; the status is additive.
+
+Three regressions fail before correction: empty/beyond-EOF admission, native
+backing-fault verdict and POSIX SIGBUS wait status. Kernel/VFS/POSIX host tests
+then pass, including closed-handle views, private/read-only/unmapped cases,
+fork authorization, pager timeout and receiver loss. VFS/HostFS and kernel
+area/process/exception ASan/UBSan pass. All 34 K1 markers pass; an old ROM misses
+only the new classification marker. The query measures 32/100000 cycles.
+Existing pager request/reply/handoff measure 1598/2786/85 within unchanged
+50000/75000/25000 budgets; unmap remains 589/100000. Normal ROM and NDK
+dist-check pass, including headers, exports, native/POSIX C/C++/SDL and HTML/PDF.
+No performance improvement is claimed.
+
+Retained test corrections: the first host fixture did not reset its diagnostic
+counter between cases; only the fixture is corrected. First integration then
+overreaches by expecting file growth to erase private COW edits. Diagnostics
+show shared tail 0, private tail 'u' and private prefix 'p'. Haiku
+`src/system/kernel/vm/VMCache.cpp:1188-1234` clears tails on shrink, preserving
+copies across growth. The probe now asserts shared/file zeroes and preserved
+private edits. Its next run passes internally but a long marker spans two
+terminal rows. Raw trace contains every byte, and AstraTerminalEcho explicitly
+reports newline or display-width boundaries. A compact gate marker fixes that
+test assumption; every filesystem assertion remains. No terminal, observer,
+kernel or library change is made for those test corrections. Their logs,
+source snapshots and retired images remain in the evidence directory.
+
+Final native 78c passes all 44 cases, three pressure/session rounds, 48
+publication races, external EOF, provider/HostFS recoveries, exact backing
+bytes, and shutdown 88/fsck. The new mapped-faults case passes before and after
+recovery: initial empty/past-EOF views, cross-owner growth, shrink after private
+copies, shared/file zero tails, close/unlink lifetime and exact SIGBUS versus
+SIGSEGV. The same final probe on old 77d kernel fails at the first backing-fault
+verdict, then shuts down 88 with clean fsck. Incremental probe changes rebuild
+only fssem; the six other NDK products and kernel/ROM stay byte-identical.
+
+DE25 preflight takes 36.123 seconds and startup reaches stage 8 at 72.4 seconds,
+with QEMU UID/GID 999. The new fault probe passes on hardware alongside native
+and POSIX shared mappings, external EOF, writeback/prefix, eight pressure/session
+cases, private/anonymous/partial mappings and final publication/root checks.
+Shutdown 88 completes at 510/600 seconds; all four components return zero.
+Archive `64a4b0997c540544828aa3ec4741cdf1dfde59e8869c88aa87af32b22560d15e`
+verifies 577 hashes, exact release manifest, paired settings/key, unchanged
+Linux boot/selector and read-only fsck 0 before disposable board cleanup.
+Fresh selected stage 8, three active services with zero restarts, selected
+loop0 only and 8.6 GiB free pass. User data and selected release are unchanged.
+
+Release: `1ac58bcee75cfefdf4cd0bbeaa4e0af04289cff1721ddefa91a8a45121d19833`.
+Normal ROM: `89f6d1684ecf1ea762d366dd41ebc58b2e38f4198d2df1100f28a69a0963a41a`.
+Input78c: `4db7f05120459e5391b6a3724aa641f1de5bb96e209a8be96b643a786b6fdd4b`.
+Product source78c: `53d552aab497f6a3b86cac4c3be3ee090132d8cd57b145c60a14f225c643cab1`.
+Evidence: `/home/barry/astra-evidence/cache-mapped-eof-20261115/`.
+
+The full filesystem goal remains active: exact mapped-user attribution,
+shutdown UI and final physical-media/coherent
+release gates remain open. Literal USB reattachment is still unperformed.
+Network mounts and broad performance qualification remain excluded.
+
+Native mapped-range sync77 (DE25 qualified, unreleased): native and POSIX
+shared writable mappings, synchronous/asynchronous range sync and retained
+writeback pass the gates below. The full filesystem correctness goal remains
+active: exact mapped-user attribution,
+shutdown UI and final physical-media/release gates remain open. Mapped-file
+EOF/fault termination is now qualified by checkpoint 78 above. Network mounts and broad performance qualification are
+excluded. Literal USB cable reattachment is still unperformed.
+
+Haiku `src/system/kernel/vm/vm.cpp:6228-6318` resolves existing views, retains
+their backing and releases the address-space lock before I/O. Astra reuses
+native view records, area references, bounded pager calls, retained node I/O,
+the canonical cache writer and dirty-generation worker. There is no POSIX
+mapping inventory, second cache or extra writeback queue. Additive syscall130
+and Runtime export resolve closed-handle mappings across views. Typed40-byte
+SYNC/SYNC_REPLY requests leave PAGE wire fields unchanged. Private/anonymous
+views need no backing I/O; holes return BAD_ADDRESS. Synchronous sync waits for
+backing completion; ASYNC refreshes existing owner metadata, reports saved
+hard errors and acknowledges already owned dirty work. The same30-second
+deadline covers range advancement/retries. Exact backing errors survive in
+D3; dirty state is retained. POSIX mmap/msync adapt these native mechanisms.
+
+HostFS moves sync reply capabilities through its private control port so the
+page-fill thread stays live. Shutdown drains that port before cache retirement.
+Public library majors and existing PAGE messages are unchanged. NDK dist-check
+passes headers, exports, native/POSIX C/C++/SDL consumers and HTML/PDF. All seven
+userspace products remain byte-identical after subsequent kernel/test changes.
+
+The predeclared view-resolution budget is100000 cycles; measured83. Existing
+request/reply/handoff budgets remain50000/75000/25000; final measurements are
+1598/2786/86 versus baseline1365/2782/84. Ordinary unmap remains589/100000.
+All33 K1 markers and normal-ROM verification pass, with zero overruns. Old ROM
+controls miss only the new markers; the old76 kernel rejects the new sync
+call, then shuts down88 with clean fsck. These are budgets, not speed claims.
+
+Saturation regressions expose an existing panic risk: the16-bit area child
+count classified legitimate capacity as CORRUPT. The canonical retain now
+returns NO_SLOT without changing references. Rings roll back unpublished
+admission and account allocation failure; display attachment, prefetch and
+sync report RESOURCE_LIMIT. Haiku `headers/private/kernel/vm/VMCache.h:311-344`
+and `headers/os/support/Referenceable.h` provide the owner-held reference
+pattern; Astra retains its compact counter and explicit capacity error.
+Area/ring tests fail before correction. Kernel host tests, area/ring/process
+ASan/UBSan and a real closed-handle sync syscall at capacity pass afterward.
+
+Full native77d passes all43 cases, three pressure/session rounds,48 publication
+races, external EOF, provider/HostFS recovery, independent backing bytes before
+and after recovery, shutdown88 and fsck. Native/POSIX shared checks cover
+descriptor close/fork, permissions, private isolation, partial holes, EOF/tail
+zeros,128MiB owner boundaries and actual ASYNC persistence after final unmap.
+The host observation bound is30 seconds, not a performance target.
+
+Retained failed DE25 trial77d reaches stage8 and passes both shared-sync paths
+plus external EOF, then stops at a strict writeback marker. The command returns
+success but its captured line is `FSSEM CLEAN PAGE readonl`; the kernel snapshot
+is idle, not panicked. A failing regression reproduces TraceReader advancing
+past an unfinished continuation. The shared reader now commits only complete
+lines and rereads partial prefixes. Readiness and focused native checks pass.
+No binary, NDK or image rebuild is needed. Failed archive
+`142dd2850b0bd872359e3995c40954f267b434a5525853bdd405ebc3e483304b`
+verifies59 hashes, manifest, paired settings/key, boot/selector and fsck0 before
+failed board state is removed. Intermediate source/test failures remain in
+the component logs and earlier source snapshots in the same evidence directory.
+
+Corrected DE25 observer77e reuses the same binary release and image, reaches
+stage8 at69.2 seconds and runs QEMU as UID/GID999. Native/POSIX shared backing
+checks pass twice around pressure, along with external EOF, writeback, byte
+prefix, eight pressure/session cases, private/anonymous/partial mappings and
+final publication/root checks. Shutdown88 completes at464/600 seconds; all four
+gate components return zero. Archive
+`d80f777115d2c84dc650f02c60657713d4075e55cd7dd8b80c1314b6fe0ac0c3`
+verifies577 hashes, exact release manifest, paired settings/key, unchanged Linux
+boot/selector and read-only fsck0. Only then are disposable board files removed.
+Fresh selected stage8, three active services with zero restarts, selected loop0
+only and8.6GiB free pass. Selected release and user data are unchanged.
+
+Binary release: `5547cf1b26d4a5821158e56016bd4d9ae648916e132e9c38cb644455d76a425d`.
+Normal ROM: `3bffc2d5e0a91c3d87f843cb854c4821113e432086aad09e80d969e00f2fba73`.
+Never-booted input77c: `e9089d20fa4bfac515e1829f8d219ecab0475752dfa3887331eee1b4d1586614`.
+Product-source77d: `ec6dedde9a19eb2db9aa74fc7dbcd053a166726f7663938ee8e5b61afd708677`.
+Corrected observer-source77e: `7b1f08f10c87c4c54751eb3e9a6e739d8cd5fb78c9d26563d2a264aca3f6e7e8`.
+Evidence: `/home/barry/astra-evidence/cache-range-sync-20261115/`.
+
+Native shared-write authority76 (DE25 qualified, unreleased):
+reviewed Haiku `src/system/kernel/vm/vm.cpp:2248-2334` and `:6228-6318`.
+HostFS prepares the existing native cache writer before exposing WRITE on an
+area from a read/write description. Read-only descriptions keep READ/MAP even
+when another description has already exposed shared writes. Writer preparation
+failure publishes no area. Cache metadata retains an exposure policy until
+retirement, including across external revision refresh; mapped stores can
+outlive their originating descriptions. Backing writeback supplies timestamps
+for that policy, so an older ordinary-write timestamp cannot overwrite a later
+mapped modification. Existing ordinary-write timestamp persistence remains
+unchanged when no shared WRITE authority has been exposed. Native node I/O,
+retained descriptions, VM dirty/snapshot generations and worker retirement
+remain the only owners; no new mapping inventory, pager or byte cache exists.
+Private cache preparation gains one checked policy flag; public ABI majors,
+wire formats and kernel mechanisms are unchanged. Host regressions reproduce
+both the old read-only capability and timestamp clobber before fixes.
+The common VFS reply also intersects prepared rights with READ/MAP and the
+grant's WRITE ceiling; a read-only source or grant cannot receive WRITE.
+A native failure and transport regression expose the former reply narrowing
+that stripped WRITE even after HostFS prepared its writer. Host/sanitizer/
+target, Supervisor, normal-ROM and NDK dist-check gates pass after correction.
+NDK checks headers, exports, C/C++/SDL consumers, static/shared and HTML/PDF.
+The probe's independent read alias uses the existing explicit-address API;
+the idempotent map API correctly refuses different permissions on one view.
+Final native76d passes all 42 cases, three additional pressure/session rounds,
+48 publication races, external EOF, provider/HostFS recovery, exact shared
+backing bytes before and after recovery, shutdown 88 and fsck. The identical
+final probe on the old provider refuses WRITE, then shuts down 88 with clean
+fsck. Normal ROM is
+`13b3e77bcac1570c62d5231c368c655bb2fbe28fc6bf89fad903c7cb88dd8c0d`;
+never-booted input76d is
+`94a5f6bb7309c9f6445f6989acf18de72e09cc89891162e04789c56fcca57f1f`.
+All seven image products match immutable snapshot
+`ac8eedc3bc3781f32c31370465966db1223cb6303d51546ac2392ca62f2d456c`.
+No kernel or RTL code changes in this checkpoint.
+
+Retained failed attempts: initial staging encounters root-owned generated
+private fixtures before boot; scoped ownership correction preserves key mode
+0600 and release content, and subsequent fixtures are created as the caller.
+The first physical trial passes shared writes but its external-EOF host
+mutator expires before the second marker: directory/data birth1794759367,
+ready9388, partial9404, deadline9397. Data stays4105 bytes because the intended
+truncate-to-one never runs. No kernel panic occurs. Archive
+`5c588cc5db064dccbb9c4df34634cf156fd1c02264943fc0199c6ee27d1e99c4`
+verifies61 hashes, manifest/key/boot/selector and read-only fsck status0 before
+failed state cleanup. Corrected test uses per-stage deadlines and host
+completion markers after actual fsync, without reopening the target in the
+guest. Existing four-second EOF-fault/growth checks remain; command bound is
+120 seconds. A proposed900 overall guard is rejected before boot by the
+helper's600 limit; its waiting observers are stopped and logs preserved.
+The supported600 guard reuses the staged image without rebuild or transfer.
+
+Final DE25 preflight takes36.174s; startup reaches stage8 at72.3s with QEMU
+UID/GID999. Shared writes survive description/area-handle close and fork,
+remain coherent with ordinary I/O, preserve exact EOF/tail zeros and cross
+128MiB owner windows. Independent host reads verify actual backing bytes
+twice. External EOF, writeback/timestamps/prefix, eight packed pressure/session
+cases, private/anonymous/partial mappings, final publication/root checks and
+shutdown88 pass at436/600 seconds. All four gate components return zero.
+Existing READ1543326/4000000 and WRITEBACK8555241/12500000 cycle budgets pass;
+these samples are acceptance evidence, not a speed claim.
+Archive
+`66bdd3207b79826aaadb1812613bdd72b5601daefb86dc28a9a49c624dacbc0f`
+verifies573 member hashes, exact release manifest, paired settings/key,
+unchanged Linux boot and release selector, and read-only fsck status0.
+Only after verification are the disposable release, image, state and board
+archive removed. Fresh selected stage8, three active services with zero
+restarts, selected loop0 only and8.6GiB free pass. Selected release and user
+data are unchanged. Beast has no remaining Astra build/test process; fresh
+SSH and zero memory pressure pass. Its full historical swap shows no current
+swap traffic; unrelated Kubernetes, desktop and agent processes are preserved.
+POSIX shared writable mappings stay guarded until native address-range
+sync/msync is implemented. Complete POSIX fault/EOF, mapped-user attribution,
+shutdown UI and final media/release gates remain open. No network mounts or
+broad performance qualification are included.
+Evidence: `/home/barry/astra-evidence/cache-shared-map-20261115/`.
+
+Native range unmap75 (DE25 qualified, unreleased):
+reviewed Haiku `src/system/kernel/vm/vm.cpp:762-926`/`:1095-1130` and
+`headers/private/kernel/vm/VMCache.h:242`. Existing native view records now
+trim/split at page boundaries; one possible split is reserved before mutation.
+Removing part of a shared-table span detaches only that client's table.
+Surviving edge fragments fault ordinary shared-frame aliases through the
+existing VM. Canonical tables and other clients remain intact. Reclaim,
+snapshot protection and EOF use the same alias-withdrawal helper. No new VM
+table type, bitmap or backing cache is introduced. Mapping references become
+32-bit because fragmented views can exceed16 bits across fork. Measured
+MC68040 record size is330 bytes; eight still fit the existing metadata frame.
+Additive syscall129 and Runtime export expose native range unmap without
+changing public majors. POSIX trims mapping padding and delegates munmap to
+that owner, deleting its mapping list, allocation and mutex/fork reset.
+Host tests cover shared/private and committed/reserved splits, allocation
+rollback, neighbor isolation, fork, dirty snapshots/redirty, reclaim/refault,
+EOF and terminal retirement. Kernel/Runtime/POSIX, sanitizers and31-marker K1
+pass. Predeclared range budget passes at519549/2000000 cycles for sparse128MiB
+removal. Existing budgets pass: ordinary unmap589/100000 versus582 baseline,
+private faults539/443 against25000, dirty marking724/5000 versus205 baseline.
+Correct alias withdrawal adds work; no speed improvement is claimed.
+Old74 ROM fails only the new range marker. Identical final fssem on old libc
+fails the interior cut, then shuts down88 with clean fsck. Its first helper
+attempt accidentally changes a numeric memory-limit expectation; corrected
+control verifies actual2GiB/swap0/CPU200%/Tasks96 limits. New partial-map probe
+passes before an old file-map assertion still expects ENOTSUP; that obsolete
+assertion is replaced with surviving-tail verification. Final native75c passes
+all41 cases, three pressure/session rounds,48 publication races, external EOF,
+provider/HostFS recovery, post-recovery private/anonymous/partial probes,
+shutdown88 and fsck. Normal75b ROM is
+`f2d7896178704e55a5d5841d81ee6baac897ca28aef742c2f772df9c5a4aaeff`;
+never-booted input75c is
+`47db1aecef07b5610b176d6ec9ffccd63a43c485a9be3ab9c0559ddea6c087f3`.
+NDK packaging first exposes Doxygen's automatic graph worker fanout hitting
+the96-task cap. DOT_NUM_THREADS now matches the two-CPU container. The next
+run reports incomplete new API parameter/return documentation; those comments
+are completed. Final NDK dist-check passes headers/exports, C/C++/SDL CMake
+consumers, static/shared builds and HTML/PDF docs. Snapshot verification first
+refuses the libc rebuilt by NDK because it differs from tested input75b.
+Refreshed input75c repeats the complete native gate successfully; all seven
+image products then match their built files. Immutable snapshot is
+`c4453b49e6632401d9df02722ebfcd8acca5f9ddcf42578a96fdf53c2dc36217`.
+DE25 preflight passes in 36.6 seconds. Startup observation reaches stage 8 at
+81.2 seconds with QEMU UID/GID 999. Anonymous and partial-unmap probes pass
+before and after external EOF, writeback/timestamps/prefix, eight packed
+pressure/session cases and private mappings/fork/cross-owner copies. Final
+publication/root checks and shutdown 88 pass at 501 of 600 guard iterations;
+all four gate components return zero. Existing target budgets pass:
+READ 2223138/4000000 cycles and WRITEBACK 3366926/12500000. These small samples
+are budget acceptance, not a speed claim or broad performance qualification.
+Archive
+`16677665355f55851ba9dad682a358ea13f3ee1400bdf95a7f921427e390954a`
+verifies 571 hashes, exact manifest, paired settings/key, unchanged Linux boot
+and release selector, and read-only fsck before disposable board release,
+image, state and archive removal. Fresh selected stage 8, three active services
+with zero restarts, only selected loop0 and 8.6 GiB free pass. Beast has no
+leftover Astra build/test process; fresh SSH and zero memory pressure pass.
+Selected release/user data are unchanged; no live selected-image read or
+release promotion occurs. Evidence:
+`/home/barry/astra-evidence/cache-range-unmap-20261114/`.
+After75, shared writable mappings/msync, complete POSIX EOF/fault behavior,
+exact mapped-user attribution, shutdown UI and final media/release gates remain.
+Network mounts and broad performance qualification remain excluded.
+
+Native mapping lifetime74 (DE25 qualified, unreleased): reviewed Haiku
+`src/system/kernel/vm/VMCache.cpp:1002-1034`, `vm/vm.cpp:1328-1362` and
+`kernel/port.cpp:850-886`. The additive MAPPED_LIFETIME area-create flag lets
+views own backing after their temporary handle closes. Existing area references,
+unmap, COW, fork and exec teardown own retirement; no userspace handle cache,
+new syscall or ABI major is added. The MC68040 area record remains328 bytes.
+POSIX anonymous private/shared maps use this native policy and existing view
+registry. Tests cover zero fill, page-rounded tail, ignored descriptor,
+private/shared fork behavior, failed/successful exec and repeated final unmap.
+A real process-exit RED also exposes dirty areas retaining dead pager ports.
+Pager-owner death now revokes every view, cancels the existing dirty pin and
+releases backing while retained references keep only a terminal record.
+Creator death preserves areas served by another live pager; ordinary owner
+close still retains dirty pages. Closing truncated-area validation and late
+writeback PEER_DEAD status share the existing area lifecycle checks.
+Kernel host and Area/VM/Process ASan/UBSan, Runtime host/sanitizer, normal ROM
+verification and30-marker K1 pass. Before measuring, pager retirement receives
+a2000000-cycle budget; sparse128MiB retirement takes681096 cycles. Mapping
+close/final unmap takes2351/100000 cycles; existing budgets have zero overruns.
+The first new K1 attempt passes null required port-death outputs and fails;
+the fixture is corrected without changing port policy. Old74 ROM fails only
+the new retirement marker. Normal ROM is
+`24d5912a5cf64ea145f85770f55ae58dbe3586ca60eb10c88562e4827411112f`.
+Final native integration passes all40 cases, three additional pressure/scoped/
+owner-session rounds,48 publication races, external EOF, provider and HostFS
+replacement, post-replacement anonymous/private probes, shutdown88 and fsck.
+Sealed source
+`4db09bf95390e92d10db68236141f3a041cdfe6757755c0d484f775b8ad10fc9`
+preserves110 unrelated change blocks. All seven immutable image products match
+built files. Snapshot is
+`4e034ce8c8d5f4d85a2a9c325c8aee12e31365571ff0f6ab8a8c8e39d5f6ba81`;
+never-booted input74 is
+`1ddc47a3a7a97415bfec84fca3919f499dc0667b06508d75181004a0f358cc25`.
+DE25 preflight passes in36.2s and stage8 arrives at75.6s with QEMU UID/GID999.
+Anonymous zero-fill/private/shared fork/retirement passes before and after
+external EOF, writeback/timestamps/prefix, eight packed pressure/session cases
+and native/POSIX private-map/fork/cross-owner checks. Final publication/root
+checks and shutdown88 pass at462/600 guard iterations; all four observers
+return zero. Existing target budgets pass: READ2571215/4000000 cycles and
+WRITEBACK3580049/12500000. Prior values1810211/7080661 are small samples;
+this is budget acceptance, not a speed claim. Archive
+`733280837274967b08b93dd5a7607ad9da88d1967f2120aec102b4a6755f698f`
+verifies571 hashes, exact manifest, paired settings/key, unchanged boot/selector
+and read-only fsck before disposable board release/image/state/archive removal.
+Fresh selected stage8, three active services with zero restarts, only selected
+loop0 and8.6GiB free pass. Beast has no leftover74 unit or Astra job; load0.46,
+about25GiB available and zero memory pressure at01:31UTC November15.
+Selected release and user data remain unchanged; no live selected-image read
+or release promotion occurs. Evidence is under
+`/home/barry/astra-evidence/cache-mapping-life-20261114/`.
+NDK dist-check passes before the final kernel-only fix; updated documentation
+also passes HTML/PDF checks. That check exposes an unbounded Docker runtime
+outside the parent unit. The existing docs command now sets2GiB RAM, zero swap,
+two CPUs and96 tasks directly; a real container cgroup check verifies all four.
+Remaining correctness work: native range trim/split and POSIX partial unmap,
+shared writable mappings/msync, complete POSIX fault/EOF behavior, exact
+mapped-user attribution, shutdown UI and final physical-media/release gates.
+Network mounts and broad performance qualification remain excluded.
+
+POSIX private file maps73 (DE25 qualified, unreleased): reviewed Haiku
+`src/system/libroot/posix/sys/mman.cpp:109-181` and native view cuts in
+`src/system/kernel/vm/vm.cpp:762-926`/`:1095-1130`. POSIX now passes private
+mapping mode and requested write permission to the existing native COW owner
+for both source windows. Read-only descriptors may create writable private
+copies; write-only descriptors still lack required read authority. MC68040
+write access also permits reads. Shared writable mappings remain refused until
+their retained writeback authority/fencing is integrated. No new VM, page
+cache, kernel state or public ABI is added. The old libc control fails the
+new writable-private probe, then shuts down88 with clean fsck. POSIX host/API/
+target checks pass. Focused native tests pass descriptor-close/fork isolation,
+canonical-file preservation and a private mapping crossing128MiB owner windows.
+Final native all39, three pressure/scoped/owner-session rounds,48 publication
+races, provider/HostFS recovery, post-recovery private copies, shutdown88 and
+fsck pass in149.8s. Qualified72 ROM/kernel, Runtime and provider are reused;
+only libc and fssem change in the image. Source
+`cca5180d9d66b4652bac352f925b728222be630d377e8972e5bf7c9e14c2dcda`
+preserves123 unrelated blocks, including unchanged kernel/Runtime/provider.
+Snapshot is `9931859daa79ad0b9dd129f1ad2d2df69458d39f7bf0d1f083734307f294fefa`;
+never-booted input73 is
+`b4dd6a40049faf242e7b3393c93a640da7d8f4a5aba0162f0a3bde87202b338b`.
+DE25 staging takes213.7s including37.9s preflight, without an OS/FPGA rebuild.
+Stage8 arrives at72.2s with QEMU UID/GID999. External idle-map EOF, writeback/
+timestamp/prefix probes, all eight packed pressure/session cases, native and
+POSIX private mapping/fork/descriptor-close/isolation, cross-owner copies,
+final publication/root checks and clean shutdown88 pass at448/600 guard
+iterations. All four observers return zero; controller runtime502.9s includes
+restoration. Existing target budgets pass: READ1810211/4000000 cycles and
+WRITEBACK7080661/12500000, compared with1122089/9914750 at72. These small
+samples establish budget acceptance, not a performance improvement.
+Archive `1d80448e4c769ea59f7392b11ea6e484dcc8f8717b4285e8d48e67a4f54532d6`
+verifies571 hashes, exact manifest, paired settings/key, unchanged boot/selector
+and read-only fsck before disposable board release/image/state and archive
+are removed. Fresh selected stage8, three services with zero restarts, only
+selected loop0 and8.6GiB free pass. Beast has no stale private73 unit or Astra
+job; load1.44 and zero memory pressure at23:06UTC. Evidence is under
+`/home/barry/astra-evidence/cache-posix-private-20261114/`. Final documentation
+is separately sealed without changing tested product/test source. No live
+selected-image read, user-data change or release promotion occurs.
+The remaining native range-unmap work must trim/split existing view records
+and retain backing as Haiku does; it cannot edit a shared table for one client.
+The actual shared-table span is256KiB, distinct from the4MiB area/private slot.
+Anonymous mapping also requires correct lifetime through fork/exec: current
+areas revoke views when the final owner handle/child reference closes, and
+private-reserve supports decommit but not reservation release. Do not hide
+either gap with a POSIX backing cache, leaked area handle or bitmap.
+Shared writable mappings/msync, exact mapped-user attribution, shutdown UI and
+final physical-media/release gates also remain open. Network mounts and broad
+performance qualification remain excluded from this correctness goal.
+
+HostFS EOF integration72 (DE25 qualified, unreleased): reviewed
+Haiku `cache/file_cache.cpp:1387-1401`, `vm/VMCache.cpp:1188-1228`, and
+`fs/vfs.cpp:4074+`/`:6835-6870`. The private native VFS cache callbacks now
+include metadata refresh under the existing node-I/O owner, with the state
+mutex released. Open, descriptor stat, retained stat and truncate use that
+one seam. HostFS publishes each existing window's backing length at creation,
+accepted logical growth, truncate and external metadata refresh. Its separate
+truncate invalidator is deleted. No public API, protocol, library major,
+second size ledger or generation is added. Revision refresh first reclaims
+all matching canonical windows, then resizes them: a later dirty conflict
+cannot truncate an earlier window's private copies. Three controlled REDs
+cover bypassed metadata ownership, unbounded initial extent and this ordering
+error. Host/sanitizer/target gates pass; the old71 provider fails the strengthened
+native owned-truncate/fork probe with the identical new client. The initial
+native all39/recovery/shutdown/fsck gate passes before the final ordering fix.
+The final candidate also passes an external Linux truncation/growth probe:
+the guest closes its target descriptor, retains private copies, observes a
+zeroed partial tail, faults only its child beyond full-page EOF, and receives
+fresh regrown bytes without target file I/O. The parent remains alive. This
+is native area fault evidence, not a claim of POSIX SIGBUS semantics. Final
+native all39, three extra pressure/scoped/owner-session rounds,48 publication
+races, provider/HostFS recovery, post-recovery private maps, shutdown88 and
+fsck pass in156.3s with512.5MiB peak and zero swap. All seven immutable image
+products match built files. Sealed source
+`e77f799d8bac5019aa623b2969af2bbaa199a9ce3f46c344c2620b918de5ba7d`
+preserves118 unrelated blocks. Snapshot is
+`f859d388baa5c6f26dfcabf04137cf82d89eacffd9c9a146d37cd014f8e72d8b`;
+never-booted input72b is
+`fb5ae7f36d7d8b0d4f5a24d9b22a83db4466aa1dcf4a9e3df2e303022f31f043`.
+The board-preparation helper first reads a gate from the wrong evidence path;
+that retained failure occurs before board mutation. It resumes from the checked
+partial fixture using the actual board-stage path. Board staging takes250.2s,
+including36.2s preflight; SD transfer/copy is the delay, with SSH responsive.
+DE25 reaches stage8 at78.1s with QEMU UID/GID999, passes the external idle-map
+EOF test, native resize/writeback/timestamp/prefix probes, all eight packed
+pressure/session cases, private mapping/fork/reclaim and owned EOF tests,
+final publication/root checks and clean shutdown88 at441/600 guard iterations.
+All four observers return zero; controller runtime is498.7s including restoration.
+Predeclared target budgets pass: READ1122089/4000000 cycles, WRITEBACK9914750/
+12500000. Baselines were1905081 and6341015 respectively; the two-sample
+writeback result is higher, so no speed improvement or broad performance
+qualification is claimed. The transferred archive
+`0d2c0290e96b688249ecdd46eeb8a1163a42ec12c17f7399e5b1b6eafe09a3bd`
+verifies571 hashes, exact manifest, paired settings/key, unchanged boot/selector
+and read-only fsck before disposable board release/image/state and archive are
+removed. Fresh selected stage8, three active services with zero restarts, only
+selected loop0 and8.6GiB free pass. All eof72 Beast units are collected; load0.34
+and zero memory pressure at22:35UTC. Evidence is under
+`/home/barry/astra-evidence/cache-eof-20261114/`. Final documentation is sealed
+separately without changing product/test source. No live selected-image read,
+user-data change or release promotion occurs. Next adapt POSIX writable/private/
+anonymous mappings and partial unmap onto native VM facilities, then complete
+shared-write fencing/msync, exact mapped-user attribution, shutdown UI and
+final physical-media/release gates. Network mounts and broad performance
+qualification remain excluded from this correctness goal.
+
+Native backing extent71 (DE25 qualified, unreleased): reviewed Haiku
+`cache/file_cache.cpp:1387-1401` and `vm/VMCache.cpp:1188-1228`. A pager area's
+backing byte length is now separate from its reserved capacity. The additive
+ADMINISTER syscall and Runtime export resize that length, revoke private copies
+beyond a shrunken EOF, clear the last page's unused tail and advance the existing
+pager epoch. Affected in-flight writeback refuses the whole operation before
+mutation; discarded dirty pages release their existing pin. Owners can stage
+pages while invisible to mappings, then publish growth through existing shared
+tables. Owner copy-in checks physical residency; client reads and faults check
+the published extent. No second cache, generation, dirty ledger or ABI major is
+introduced. The opaque MC68040 record grows from324 to328 bytes; eight still
+fit one metadata frame. Host area/process and Runtime tests pass, including
+forked copies, a reclaimed source, partial tails, zero EOF, staged publication,
+owner permissions and stale pager replies. A separate behavioral RED catches
+the staged-page publication/owner-write admission error before its shared fix.
+Kernel host suites and ASan/UBSan pass. The initial MC68040 build catches the
+record-budget assertion and a shadowed local; both are corrected. The first
+full-window K1 probe incorrectly keeps another shared view in the128MiB region;
+its retained failure is a harness error, corrected by unmapping the earlier
+view. K1 then passes all28 markers and zero overruns: sparse full128MiB shrink
+470770/2000000 cycles, private faults537/441 against25000 each. Old69 ROM is
+rejected only for the new resize marker. Normal ROM/Runtime gates and NDK
+dist-check pass. Final owner-staging correction also passes kernel host,
+ASan/UBSan, Runtime host/sanitizer, all28 K1 markers and normal ROM verification.
+The existing page-writeback probe now exercises staged growth, private
+revocation after source reclaim, tail zeroing and in-flight refusal through
+Runtime. Evidence is under `/home/barry/astra-evidence/cache-extent-20261114/`.
+Full native integration passes all39, three extra pressure/scoped/owner rounds,
+48 publication races, provider restart, HostFS restart, private maps after
+replacement, clean shutdown88 and read-only fsck in144.9s. All seven image
+products match built files; the immutable template passes fsck. Sealed source
+is `a48213c777bd05866d32b5240c527b62ffe991d8e66ebf835bad5c24a5e07fe6`,
+preserving111 unrelated source blocks. Snapshot is
+`c8bf59c678306454428f8b4fff4c5fa81234d746aa593dc9c71ac76697f7a8fc`;
+never-booted input71 is
+`f1192d156a1bff4b08c00cfd142b29424eede6e4ca2d3d781ee9f6e06c6f58d2`.
+DE25 preflight passes in36.6s. Fresh stage8 arrives at78.2s with QEMU UID/GID999.
+Native resize/owner-staging, timestamps/cache/writeback and byte-prefix probes
+pass, followed by all eight packed pressure/session cases, private-map source
+isolation/fork/reclaim, final publication/root checks and clean shutdown88 at
+400/600 guard iterations. All four observers return zero; controller runtime
+is456.1s including restoration. The transferred archive
+`be1f1d54bd20f8febd38c0b86954d7905195ee83446176fbd34e46fcbc5dde2c`
+verifies572 hashes, exact release manifest, paired settings/key, unchanged Linux
+boot identity/selector and read-only fsck. Only after verification are the
+disposable board release/image/state and archive removed. Fresh selected stage8,
+three active services with zero restarts, only selected loop0 and8.6GiB free
+pass. No stale extent71 unit remains on Beast. Final documentation changes are
+separately sealed; qualified product/test source remains identical.
+At checkpoint71 HostFS had not yet adopted this length operation; complete EOF integration,
+POSIX writable/anonymous/partial mappings, mapped-user attribution, shutdown UI
+and final media/release gates remained open. Checkpoint72 joins existing HostFS window
+owners to this operation at initial publication, accepted write growth,
+truncate and external metadata refresh under native node I/O. Mapping past EOF
+must not be admitted before that coherence and its fault tests pass. No live
+selected-image read, user-data change or release promotion has occurred.
+
+Channel authority and receive pressure70 (DE25 qualified, unreleased): stricter
+transport mocks reproduce provider-control ACCESS on a scoped channel, rejected
+scope attachment on a device channel, failed-reopen DMA retention, and the
+batch path bypassing authority selection. The existing scope ledger now owns
+both authority transitions. A zero binding count denotes a device channel;
+scoped channels retain their bindings/tombstones until closed. Direct and batch
+paths reopen the drained channel when crossing that boundary, and one existing
+lane cleanup operation releases DMA on failed admission. No second authority
+flag, wire format, kernel change or public ABI change is needed. VFS, HostFS
+and Supervisor host/sanitizer/target builds and normal ROM pass. Haiku
+`fs/vfs.cpp:1173-1290` and `vm/vm.cpp:2248-2330` guide retained-owner publication
+and mapping authority. The earlier derived-session ACCESS trace may include
+an intentional security probe; it does not alone identify an integration fault.
+
+Two native attempts still stalled after page writeback. Captured live state
+shows queued filesystem requests and a full broker inbox during maintenance.
+HostFS now schedules its next maintenance period after work completes, so a
+missed period cannot immediately reenter housekeeping ahead of queued control
+requests. Haiku `kernel/timer.cpp:261-299` similarly skips missed periodic ticks.
+This does not change reliable notification delivery or add a client BUSY retry.
+The first corrected full native gate passes all39, private mappings, provider
+restart, HostFS restart, repeated publication/root checks, shutdown88 and fsck
+in74.9s. The final repeat stalls again at cache pressure, so that single pass
+does not qualify integration. Read-only kernel and HostFS stacks establish the
+concrete failure: all255 HostFS handles are occupied,169 by areas. A queued
+volume request needs two imported handles; receive returns RESOURCE_LIMIT and
+leaves it queued. The volume pump silently retries its readable endpoint while
+filesystem requests wait. The filesystem pump already has bounded receive
+reclamation. Both pumps now share that policy in a private header; the volume
+provider supplies the existing writeback/idle-owner reclaimer. No kernel queue
+or public Runtime API is added. The new volume test fails on old code and covers
+successful reclamation, ineffective bounded retry with the message retained,
+and WOULD_BLOCK without reclaim. Haiku `kernel/port.cpp:1436-1515` supplies the
+readiness/wait lifecycle reference; Astra retains its atomic handle-import
+reservation and never consumes the request on resource refusal. The failed
+native run and stacks are retained as evidence. This fix passes all39. The
+stronger repeat then reaches49 raw owner sessions before HostFS exits IO(11)
+and its clients become stale. The pager treated temporary receive-handle
+exhaustion as fatal. Its existing atomic failure word now also hands RESOURCE_LIMIT
+to the control thread: the pager waits on that word, the control thread runs
+the existing cache reclaimer, and a futex wake resumes admission. Cache-owner
+retirement stays on the control thread; no concurrent cache walker is added.
+Other pager failures retain their fatal diagnostic. A controlled RED reproduces
+the premature pager exit; the corrected fixture resumes the request and checks
+dirty-owner persistence before wake. HostFS host/sanitizer/target gates pass
+in9.2s. The original fixture attempt had a duplicate pager mock symbol; the
+test-only included-main seam is corrected before accepting the behavioral RED.
+The first pager-recovery run passes37/39 but fails parent-exit description close
+and file-quota cleanup; no pager-recovery notice is present in that run.
+The probe now separates wait/exit from descriptor close and reports native
+close statuses. Two fresh native runs then pass all39, three extra pressure/
+scoped-I/O/owner-session rounds,48 publication cases, both recoveries, private
+maps, shutdown88 and fsck in169.2s and142.9s. The first exercises pager admission
+reclaim five times. These passes do not explain away the earlier close errors.
+A separate deterministic RED proves bounded sync BUSY is saved as a file
+error even when it only defers work. The shared core now leaves that defer
+status with the bounded caller, while the actual backing writer still records
+real revision conflicts and I/O failures. Tests require clean close after
+deferral, preserve a real BUSY conflict, and retain the existing EIO precedence
+checks. Haiku `cache/file_cache.cpp:990-1015` distinguishes transient cache BUSY
+from an I/O failure. Final coherent host/sanitizer/target gates pass in70.2s;
+the final native all39, three pressure/session rounds,48 publication cases,
+both recoveries, private maps, shutdown88 and fsck pass in139.3s. Dirty VM pins still prevent area
+retirement; this does not discard pending bytes or suppress backing errors.
+The verified snapshot is
+`fba339d856f3c7019a87d3a65f7f3ed8c30f91ce0f7aa4ec5549995e9a833264`;
+never-booted input70k is
+`ae7396a6e835974f3eec70720d20a4edb141962673bff87d2a29ade3a146ced9`.
+Sealed product/test source is
+`117ced2d72b150025c3c22eab09541cf1467c7a94017e5a348bce40192b19a7a`;
+111 unrelated prior source blocks are preserved. All seven replaced image
+products match their built files; the snapshot's immutable template passes fsck.
+DE25 staging initially refuses root-owned0700 fixture copies; ownership is
+corrected only on disposable local gate/settings copies, keeping the key0600.
+An initial resume-helper string assertion catches a line-continuation mistake
+before any reset; the checked resume then passes preflight in37.9s.
+Trial A reaches stage8 at78.8s with QEMU UID/GID999. Timestamp/cache/prefix and
+generation probes, pressure before scoped I/O, shared descriptions, private
+map/fork/reclaim and both recovery checks pass. Its600-iteration guard expires
+before final publication/shutdown, so the run is a retained failure, not clean
+shutdown qualification. The diagnostic watcher then finds its GDB socket gone;
+no kernel panic/degraded marker is present. Selected services restore normally.
+Failure archive
+`0f9e5e0e7e0c32aa32d0aa47529467bbb19621e128e726a61fbd2aeedb2cf722`
+verifies hashes, exact manifest, paired settings/key, unchanged boot/selector
+and read-only fsck before resetting disposable image/state. Trial B uses the
+same immutable snapshot, passes fresh36.1s preflight and stage8 at78.3s, and
+adds direct owner-session pressure. Repeated legacy/setup probes and recovery
+checks already observed in A are omitted from B's shorter packing; individual
+case assertions are unchanged. B passes cache/prefix handling, all eight packed
+cases including real owner-session/handle pressure, private maps, final
+publication/root/root and clean shutdown88 at402/600 guard iterations. All four
+observers return zero; total controller runtime is455.5s including verification
+and restoration. The transferred success archive
+`4a429c2a3ad132f4a9f79784caaf4d52b5d27ecaf50917ecda90e2a6cc899b52`
+verifies574 hashes, exact manifest, paired settings/key, unchanged boot/selector
+and read-only fsck. Failed A separately verifies576 hashes. Neither hardware
+syslog records pager-admission reclaim; that exact branch is exercised five
+times in native70i, while B verifies hardware behavior under owner pressure.
+Both verified archives remain on Beast before disposable release/image/state
+and both board archives are removed. Fresh selected stage8, three services
+with zero restarts, only selected loop0 and8.6GiB free pass. Beast has no stale
+Astra test/build, load0.44 at20:19UTC. No selected live-image read or release
+promotion occurs. The69 private-view prerequisite is now hardware qualified;
+the complete filesystem release remains open.
+Failed attempts and diagnostic captures remain under
+`/home/barry/astra-evidence/cache-admission-20261114/`. Beast has fresh SSH,
+load0.86,27GiB available and zero current memory/I/O pressure at17:37UTC;
+full swap is idle and no stale Astra job was present. Exactly one capped
+source-consuming job runs at a time. Selected DE25 release/user data have not
+been changed. Mapping completion, shutdown UI and final media/release gates
+below remain open; this is not filesystem release certification.
+
+Next mapping mechanism review: Haiku `cache/file_cache.cpp:1387-1401` resizes
+the VM cache separately from a view's reserved address range. Astra's existing
+area byte_size is capacity; its pager_epoch already rejects stale page replies.
+Clean area reclaim intentionally preserves copied private pages, so it cannot
+stand in for EOF/truncate invalidation. Extend the native owner/VM boundary
+before enabling POSIX writable mappings. Haiku `vm/vm.cpp:762-926` splits views
+for partial unmap. Astra's shared L3 tables cannot accept a per-view page clear;
+the existing ordinary/private page-table and view-record mechanisms must supply
+that operation. Reuse those owners and generations rather than a POSIX cache,
+new byte store or hole bitmap. New fault-path work still needs a fresh measured
+baseline and explicit K1 regression budgets before higher-layer admission.
+
+Private area views69 (host/K1; integration and DE25 completed by70 above): Haiku
+`vm/vm.cpp:2248-2330` requires read access for every file mapping and additional
+write access only for shared writes. Astra now adds ASTRA_AREA_MAP_PRIVATE to
+the existing native area map calls. One shared permission/rights policy admits
+private writable views through READ and MAP authority. Private views reserve
+their existing mapping record, fault read-only aliases of canonical VM pages,
+and reuse the ordinary process-page copy/replace path on first write. Fork uses
+the existing VM COW machinery, including owner rehoming; no second cache, byte
+pool or per-view dirty ledger exists. Shared L3 tables reject private replacement.
+Source clean reclaim withdraws unchanged private aliases before releasing the
+frame while preserving process-owned copies. Normal unmap and process teardown
+release every alias/copy through VM. Private views cannot decommit their shared
+source. Public records and ABI majors are unchanged; Runtime forwards the flag
+through existing exports, and NDK docs describe its authority/lifetime rules.
+
+The old kernel fails the new private-view behavioral test at admission. Full
+kernel host tests and area/VM/process ASan/UBSan pass. Tests cover allocation
+rollback, shared-L3 denial, read-only denial, private/source isolation, mixed
+views, fork, creator exit/owner transfer, source reclaim/refault and zero private
+allocation residue. The verified before-baseline proves kernel mechanisms match
+qualified66 exactly. The updated K1 gate rejects old66 solely for the new
+marker and passes all27 markers: private read535 and write439 cycles against
+25000 each; ordinary user-fault/map/reclaim budgets stay unchanged and pass.
+The first coherent normal-ROM/NDK distribution gate passes in303.1s under
+2GiB/no-swap/two CPUs with612MiB peak. A second gate includes the final decommit
+guard and stronger lifecycle tests. One native attempt was started before that
+build's NDK tail exited; it was stopped after14.8s, with no surviving QEMU,
+provider or loop lease. Its input/log/temp state are retained as interrupted
+evidence, not qualification. Await the original build session before retrying.
+Product/test source patch is
+`7554955b8742593855ed93ae109b3f0f4b9547f584060ffb5797a43294883127`;
+105 unrelated prior source blocks are preserved. Evidence is under
+`/home/barry/astra-evidence/cache-private-20261114/`.
+Final mixed-view fix preserves idempotence within a mapping mode but permits
+automatic shared and private views of the same source to coexist. Its unit RED
+reproduces the prior ACCESS refusal. The first native report mislabels that
+later shared-map refusal as fork isolation; added failure diagnostics and an
+accurate stage name resolve the ambiguity. Fork COW itself needed no change.
+Final host/sanitizer/K1/normal-ROM/native-probe rebuild passes in42.1s. K1 still
+reports private read535/write439, all27 markers and zero budget overruns. Normal
+ROM is `2dfdb4af37723e4febf245ec5de885792a47008d50286eb0ab8be72cf4ec52fc`;
+fssem is `71de51f8c34b7d87a8caaf18062647b90ddc3b7f40a396878473293d0a982d8c`.
+The focused native file-map case passes real read-grant/private stores,
+descriptor-close lifetime, fork, mixed views, source mutation/refault, clean
+shutdown88 and read-only fsck in19.8s, with unprivileged QEMU and caps asserted.
+
+The69 integration attempts expose a real blocker. The new client passes private
+maps and cache pressure, then fails scoped-I/O setup; HostFS logs derived
+session ACCESS(6), loses its volume generation and later cases become stale
+(28 passed/11 failed). A controlled original68 client is extracted from its
+immutable release and verified as `673eace5e9748baa6e99d5204a99aa950bee15cf1c4332eccb57e33cb7702a9e`.
+It also fails with kernel69, later at owner-session pressure (35/4). Repeating
+with original kernel68 and current image fails at exec inheritance (30/9).
+That does not identify the cause, but the new private mapping feature alone
+cannot explain the failure. An exact original-image/kernel/client control
+then passes all39, shutdown88 and fsck in51.3s (`old-image-control69.log`).
+The original68 and rebuilt Runtime/POSIX library file hashes differ, but
+objcopy confirms identical allocated bytes; HostFS, Filesystem, Events and
+catalog files match exactly. ELF metadata and image replacement/pressure remain
+variables, not an established cause. The original-image/new-kernel control then
+passes38 cases but fails concurrent map-publication round7 with
+main=0/worker-open=0/worker-map=BUSY(14), without retiring the volume. This is
+another concrete native correctness failure, not a successful integration gate.
+At that checkpoint, first FILE_AREA publication ordering and scoped/session
+admission under pressure required investigation before DE25 deployment. All owned sessions are terminal
+and no Astra test QEMU/provider remains on Beast at16:56UTC.
+`native69b.log`, `control69-original68-client.log`,
+`old-kernel-control69.log` and their trace/kernel captures retain the failures.
+An older67 binary accepts37 supported cases but lacks the two newest case names;
+it is not a full39 pass. One temporary comparison wrapper also renamed a literal
+`native-pages` marker incorrectly, corrected before accepting any control result.
+The private-view failure run is stopped only after state capture; no result
+from interrupted runs qualifies hardware. DE25 has not been changed this turn;
+selected services remain active, only selected loop0 and8.6GiB free.
+Sealed source after the mixed-view fix is
+`49c62fcb4e87744f0d90a3be5f31318c8ba5e332f152c558bf3e72c3d32ba72b`;
+103 unrelated prior blocks are preserved. DE25/archive were pending at69 and
+are completed for this native prerequisite by70. POSIX writable/private/anonymous mapping completion, shared-write
+fencing, complete EOF/truncate semantics, msync/partial-unmap, exact mapped-user
+attribution, shutdown UI and final physical media/release gates remain open.
+No release promotion or live selected-image read has occurred.
+
+Beast recheck at16:07UTC passes fresh SSH, load0.39,26GiB available and zero
+memory/I/O pressure or current swap traffic. Swap remains full. No stale Astra
+job was present; Kubernetes/storage and unrelated tools account for most listed
+processes. One capped source-consuming Astra job at a time remains mandatory.
+
+Timestamp/error correctness68 (DE25 qualified, unreleased): controlled RED proves
+that a BUSY backing conflict overwrites a saved writeback EIO, and that cached
+mtime disappears after retirement. HostFS now preserves the earlier real error
+while recording an initial BUSY conflict; its retry/data-retention fixture and
+sanitizers pass. Native descriptor timestamp updates reuse metadata records,
+node I/O ownership and retained WRITE authority. The optional backend callback
+and additive native/host operations persist accepted write time before fsync;
+failed metadata writes retain dirty snapshots. Full successful cache flush
+clears the logical timestamp overlay and exposes filesystem precision. Explicit
+futimens requires inode ownership despite a writable FD: the root/non-root
+lending test proves raw QEMU receives EPERM. Timestamp updates therefore extend
+the existing confined provider descriptor operation, with private protocol16
+and existing HostTime fields. Provider checks private mount identity, writable
+FD, read-only state and selected nanoseconds before futimens; retained unlinked
+files work without a path reopen. QEMU stays unprivileged. Haiku
+`bfs/kernel_interface.cpp:873-955` supplies permission validation and inode
+transaction ordering. Tests cover malformed nanoseconds/masks, read-only denial,
+signed times, unselected fields, unlinked descriptors, failed timestamps and
+retirement. Scope reaches native clients, Filesystem Kit exports/docs, backend,
+HostFS, QEMU and native fssem; public record sizes/ABI major stay unchanged.
+Host compilation first caught the request body's explicit union qualification;
+later full-suite runs caught an outdated backend-call-count fixture and missing
+timestamp metric name. Ordinary HostFS test now depends on shared headers so
+it cannot reuse a stale binary. Shared VFS writeback also reproduced error
+loss after EIO followed by BUSY; one private cache-status helper now owns that
+precedence across all callers. The first coherent build passed host/sanitizer,
+apps and normal ROM, then failed public documentation coverage; missing macro
+and validation-helper documentation is supplied. Provider root/non-root tests
+pass. These
+failed attempts are retained under
+`/home/barry/astra-evidence/cache-metadata-20261114/`.
+The corrected coherent host/sanitizer, application, normal-ROM and NDK
+distribution/CMake/documentation gate passes. Both QEMU profiles then pass in
+181.9s under2GiB/no-swap/two CPUs. The first QEMU build's static assertion catches
+the second metric-name table; that failed source is retained, and only QEMU
+is rebuilt after fixing it. Host/DE25 QEMU hashes are in `qemu68.sha256`;
+provider binaries are `254a3f260f9350a7d6423211bb359b924e42d5f08b0c32955599b88f01bbd2f7`
+and `c81cb566d1d38f8e484050025779569703cb4a95ea9d56c39e7cfb8acf369130`.
+Final explicit dirty-cache timestamp failure/retry tests also pass host/sanitizer
+in37.5s. Product/test patch `889f601258698cd435695320046f9029c10989a80842aeb341e655a4c28671bf`
+is verified on both hosts;90 unrelated prior source blocks are preserved.
+Native's first non-root observer cannot write the deliberately protected WORK
+export. Retrying with the existing root-observer pattern and QEMU UID/GID1000
+passes all39 cases, the old client control, new timestamp/cache/exhaustion/
+prefix probes, both recoveries, repeated publication/root/root, shutdown88
+and read-only fsck in84.0s. Resource limits and peer credentials are asserted.
+Its exact immutable snapshot is
+`01cd212a6105c42754a3de0b4d9e389c485827c3945298f81d9f65aee3a653a7`;
+never-booted input68 is
+`1045dcf16e59451a56e1f5022357ac4f013e8b7c494efab6b87a83b807887236`.
+The target-provider build initially omitted CROSS_COMPILE and is corrected
+before accepting an AArch64 artifact. One read-only checksum observer also ran
+from the wrong directory; the native runner's explicit repository cwd verifies
+all actual artifacts. Failed attempts remain evidence, not qualification.
+DE25 staging/preflight passes, including36.4s release/image/key validation.
+The controlled600s trial reaches fresh stage8 at81.5s with forward progress
+and QEMU UID/GID999. Its old client control, new timestamp/cache/exhaustion/
+prefix probes, all nine cases with pressure preceding scoped-I/O, both
+recoveries, repeated publication/root/root and shutdown88 pass in583/600s.
+Trial, startup observer, native runner and diagnostic watcher all return zero.
+The transferred archive
+`2bf4b8a7ddec21f9e40a13e51b9824eba2ac3c0286dd40b791d2ac167c1073a0`
+verifies576 hashes, exact manifest, paired private settings/key, unchanged Linux
+boot/selector and read-only fsck. Private release/image/state/archive are removed
+only afterward. Fresh selected stage8, three services with zero restarts, only
+selected loop0 and8.5GiB free pass. Selected release/user data remain unchanged;
+the live production image is never opened or hashed. No stale Astra test/build
+remains on Beast; load0.44 with26GiB available at15:37UTC, swap still full.
+The remaining mapping, UI and final media/release gates still block promotion.
+
+Mapping investigation while that gate runs: Haiku `vm/vm.cpp:2248-2330`
+validates read access for every file map and additional write access for shared
+writable maps, and uses the same VM facility for anonymous areas. Astra's
+`area.c:1282-1335` clones mappings onto the original KernelArea, so it is shared
+mapping inheritance, not private copy-on-write support. The POSIX adapter still
+rejects every protection except PROT_READ and supports whole-view unmap only.
+Native file-area admission also rejects a base at/beyond EOF. Implement these
+semantics in the native VM/VFS owners first; do not emulate them with a second
+POSIX mapping backend. Check existing private-page clone code before adding a
+copy-on-write mechanism. Timestamp68 does not change these paths.
+Beast is responsive at14:23UTC, load0.91 with27GiB available, full swap and no
+stale Astra jobs. One capped job at a time remains mandatory.
+
+Production cache integration67 (DE25 qualified, unreleased): HostFS ordinary reads and
+writes now use VM-owned pages, with the existing native node metadata and
+bounded writeback worker. The private active-description retention contract
+supports cold reads without reopening paths. No second byte store or dirty
+ledger is introduced. Ordinary byte I/O and bounded writeback gates pass;
+the remaining filesystem correctness gates are listed below.
+
+Experiment A starved older dirty owners because new owners entered at the head
+of the shared list. Inserting at the tail restores worker fairness; experiment
+B then exposes dirty temporary files whose unlink/rename/chmod changes ctime
+or link count before writeback. The checked cache correctly refuses to discard
+those bytes. Native metadata operations need the same node I/O ordering as
+reads, writes and truncate. Haiku `fs/vfs.cpp:6785-6823` and
+`bfs/kernel_interface.cpp:1131-1280` use retained vnode/transaction ownership
+through namespace mutation. Astra adapts that to its existing native node I/O
+owners, ordered directory owners first and regular-file pairs by address, with
+checked flushing before mutation. Root and relative metadata dispatch share
+validation and backend calls. Backend stat_at accepts zero as its own root,
+preserving follow/no-follow flags without opening a more privileged handle.
+
+The nine-operation metadata regression fails before the change. All nine,
+replacement of a dirty cached target, three concurrent namespace admission
+cases and the million-operation forced-switch core model now pass. One
+cache-aware namespace transaction reuses the existing native I/O cell and
+wait/wake implementation; directory owners precede regular-file owners.
+Existing uncached descriptions are fenced too, so first cached writes cannot
+slip into a metadata operation. Host backend and RAM root-stat fixtures pass.
+The HostFS fixture now checks canonical bytes, write-only preparation, sparse
+partial pages, accepted error prefixes, failed writeback retention, pressure
+retry and full shutdown drain. Temporary diagnostic logging is removed.
+Evidence is under
+`/home/barry/astra-evidence/cache-production-20261114/`.
+Source A: `774157ad537629163d1bf564491661bb85841db0c56e3744bc77b59d2bdef388`;
+source B: `fe446d586b6a6b8376c9b284f4c4dd0972bc4aa1569128565a73843b47754966`.
+Native B hit its 600-second cap at the first volume-root command. Matching
+kernel/userspace state is captured in `stall67b.log`; wrapper exit1 is confirmed,
+with no surviving test QEMU/provider or loop lease. No DE25 changes were made.
+
+Native C passes volume-root, byte-prefix/cursor, shutdown88 and fsck in19.1s.
+Native D reaches cache pressure and fails at file125: clean-only reclaim cannot
+retire dirty cache owners. The failed run is interrupted after248.4s and its
+state/image are retained. E passes all512 pressure files but shutdown cancels
+with BUSY because retirement did not first flush every pending owner. F adds
+full shutdown drain, passes pressure/description I/O/exec/append, then finds a
+two-handle grant-port allocation failure after pressure; it is stopped after
+155.8s with captured state. G accidentally uses F's binary because its preceding
+unit failure prevented rebuilding. That identified run is stopped and supplies
+no new source qualification; its source patch is not its executable identity.
+
+The final unit failure exposes duplicated budget accounting: a clean scan that
+consumed the last step was changed back to BUSY by its HostFS wrapper. Private
+cache-sync/retained-sync now pass one shared remaining-scan pointer (NULL means
+full flush) through node owners, chunks and the existing VM writer. Pressure
+can retire several small owners within its16-step bound; admission that makes
+no progress still consumes a turn. Exhausted bounded sync never waits on an
+active node. Every private producer, consumer and native probe is updated;
+public ABI/wire formats are unchanged. Core, HostFS and coherent native-probe
+build pass in23.8s. Full host/sanitizer, fresh native and DE25 gates remain open.
+Source H (`0b7e5296897d95fc5433d0794b74d6d01f82093ccfaccd66986cb4635481e865`)
+is verified on both hosts. Its coherent four-artifact native retry passes
+cache-pressure (all512 files), scoped-I/O, file-size-limit, shutdown88 and
+read-only fsck in33.3s. This is a scoped pass, not the full native/DE25 gate.
+The full VFS/HostFS/Supervisor sanitizer, coherent application/normal-ROM and
+NDK distribution/CMake build passes in244.3s. The final fixture-only check
+models VM's dirty child pin and asserts that an overwrite within existing EOF
+survives idle maintenance; its host/sanitizer rerun passes in4.4s.
+Kernel `area.c:2352` and existing dirty-pin tests confirm that ownership rule;
+no kernel change is needed. Source I
+`44849b79c67c40e4e40a2d69c66036be2e32cbc5f0c0b737d2d9c3bd21226fc6`
+is verified on both hosts. Its coherent native retry passes the old control,
+new probes, all39 cases, both recovery checks, repeated publication/root/root,
+shutdown88 and fsck in73.3s. QEMU UID/GID1000 and unchanged2GiB/no-swap/two-CPU
+limits are verified. HostFS/command/normal-ROM hashes are in `coherent67.sha256`.
+DE25 reaches stage8 at75.1s with forward progress and QEMU UID/GID999. Its old
+control and new cache/exhaustion/prefix probes pass. All nine cases, explicitly
+placing cache pressure before scoped-I/O, both recoveries, repeated
+publication/root/root and shutdown88 pass in528/600s. Trial, startup observer,
+native runner and diagnostic watcher all return zero. The transferred archive
+`715112dbb2891fe84b9ace2b06917dbd7023615fbc921f75812154e445ee00dd`
+verifies576 hashes, exact release manifest, paired private settings/key,
+unchanged Linux boot/selector and read-only fsck. The private release, image,
+state and archive are removed only afterward. Fresh selected stage8, three
+services with zero restarts, only selected loop0 and8.5GiB free pass. Selected
+release/user data remain unchanged; the live image is never opened or hashed.
+Snapshot: `e343440e521b67be76d189471ef7be88fd99e7be62116c99bff7f3eeeab0ddae`;
+input67i: `1cf97837009110a50a367e2ead46de0d07ac2eb91c3c9ac1ce40b4fb54db56c9`.
+Sealed product/test+native-state patch:
+`4969a2d0edaec573f123fce4216a5930c984d0e59bfa7a5487c8e4bc5e6b7a08`.
+One independent SSH health observer times out during staging; the original
+owned staging job completes, including35.7s preflight, before the trial starts.
+The first snapshot helper points to the wrong prior release filename and is
+corrected before creating any snapshot. A post-cleanup observer is initially
+run on the board instead of Beast and fails without changing state; the
+Beast retry using verified archive inputs passes. These are retained harness
+failures, not successful qualification results.
+
+Timestamp68 resolves67's logical modification-time persistence and saved-error
+precedence gaps on the qualified ext4 path. Pending pages are never discarded
+to resolve conflicts. Next implement writable/private/anonymous mappings,
+msync/partial-unmap/full EOF semantics, exact mapped-user lsof/removal
+attribution and shutdown consent/status UI before the final release/media gate.
+Requalify FAT32/exFAT and physical removable media against the new cache/timestamp
+path before claiming full media acceptance; only internal SD is attached now.
+Haiku `vm/vm.cpp:2248-2416` has been reviewed: descriptor access is validated,
+vnode/cache retained, shared-write authority distinguished from private COW,
+and anonymous areas use the same VM facility. Inspect Astra's existing clone,
+range mapping and mapping inventories before adding any mechanism. Literal
+USB replug remains deferred; only internal SD is currently attached. DE25's actual
+three units (`astra.service`, `astra-audio-host.service`,
+`astra-remote-desktop.service`) remain active with8.5GiB free; only internal SD
+is attached. Do not confuse the absent `astra-audio.service` or
+`astra-storage.service` names with failed production services.
+
+Beast recovered: load0.54 and about28GiB available at09:13UTC; SSH is responsive.
+Swap remains full but the previously identified Astra trial has exited. Check
+live jobs before another run and keep one capped Astra job at a time. Earlier
+CI containment records below are historical; recheck before acting on that job.
+Memory recall still returns503. Selected release and user data are unchanged.
+
+Checkpoint66 (DE25 qualified, unreleased):
+Runtime Kit exposes the existing VM clean-page publication operation through
+AREA_PUBLISH_CLEAN_PAGE127. READ|ADMINISTER owners can populate an absent
+pager-bound page without faulting their own pager while holding native node
+I/O. VM copies the valid prefix and zeroes the tail before publication. A
+resident page returns WOULD_BLOCK unchanged; failed copying publishes nothing.
+No dirty generation, pager request, byte store, lock or queue is added.
+The syscall shares resident-copy/dirty-publication validation and scratch;
+Runtime ABI 3 is unchanged; the export is additive. Haiku
+`cache/file_cache.cpp:340-410` supplies
+the checked-read and partial-page zero-tail pattern.
+
+The sealed60 and65 source patches prove the pre-change kernel baseline is
+identical across ten affected kernel/header blocks. Clean publication remains
+4,394/20,000 cycles; dirty publication is 7,201/25,000, with the existing 50,000
+syscall ceiling unchanged. Controlled RED fails against the old dispatcher.
+Focused kernel tests pass; Runtime's first check finds a missing new syscall
+in its mock argument whitelist. Correcting that fixture yields a 6.1-second
+focused pass. Full host/sanitizer, coherent service/normal-ROM and NDK
+distribution/CMake/documentation checks pass in 535.0 seconds under the unchanged
+2 GiB/no-swap/two-CPU cap. All 26 K1 markers pass. The old 25-marker ROM is rejected
+only for the new clean-publication marker. The native probe checks read-only
+owner authority, no overwrite, the complete zero tail, no dirty state and
+reclaim. All 39 native cases, both recovery checks, repeated publication/root
+checks, clean shutdown88 and read-only fsck pass in 144.5 seconds. QEMU
+UID/GID1000 and the unchanged resource limits are checked. Seven installed
+artifacts and fsck are verified before sealing the immutable snapshot.
+Evidence: `/home/barry/astra-evidence/cache-clean-publication-20261114/`.
+Product/test patch: `cf576dbd359bbd734a2a3ae425903e286f79d7952410c57abce2aebb57b84e01`.
+Snapshot: `78ffe7fc0272b77a6d13d3d24787bda573007051272e495fcd311a56528177cb`;
+input66: `11e24f2410cf7ddf9a39a812048b6138944b983d32561d5a6bb23c7f9d4e1215`.
+
+DE25 staging takes 210.4 seconds, including a 37.3-second verified preflight.
+Two separate SSH health observers time out before their banner during transfer;
+the original owned staging session is retained through completion and its
+successful exit and expected markers are checked before starting the trial.
+The candidate reaches stage8 after 69.1 seconds with startup forward progress
+and QEMU UID/GID999. The old control and new clean-page/cache/exhaustion/prefix
+probes, all nine filesystem cases including pressure, both recovery checks,
+another publication/root/root check and shutdown88 pass in 405/600 seconds.
+Trial, startup observer, native runner and diagnostic watcher all return zero.
+The transferred archive
+`41813c6b2c1988f52871860ae000728364fd12270a6130fff5e6906540388b81`
+verifies 576 hashes, the exact release manifest, paired private settings/key,
+unchanged Linux boot/selector and read-only fsck. The completed runner log is
+renamed to the archive script's expected `board-run66.log` before verification.
+Only then are the private release, image, state, work files and archive removed
+from DE25. Fresh selected stage8, all three services with zero restarts, only
+the selected loop0 lease and 8.5 GiB free pass after cleanup. Selected release
+and user data are unchanged; the live image is never opened or hashed.
+
+Next implement the actual production HostFS read/write/sync callbacks and
+bounded worker together, using the existing area list, native I/O/cache metadata
+and VM bytes. Avoid another standalone prerequisite checkpoint unless that
+integration demonstrates a missing contract. Cold preparation already has
+WRITE-only `read_for_write` support in `astra_vfs_backend_read_page`; no new
+backend read primitive is needed. Cache misses need rooted source retention
+while node I/O remains held; the current read callback lacks the owned reference
+available to write/FILE_AREA callbacks. Resolve that in the shared native
+retention contract rather than reopen paths or add a second byte store.
+Existing pager replies already retry BUSY/stale epochs and accept a concurrent
+successful publication; explicit reclaim advances the pager epoch. Reuse those
+guards. Writable/private/anonymous mappings, msync/partial-unmap/EOF semantics,
+exact mapped-holder lsof/removal attribution, shutdown consent/status UI and
+final release/media gates remain open. Network and broad performance work
+remain excluded.
+
+Beast SSH is responsive again, but the same CI job remains active, swap is full
+and memory pressure persists. Active CI cancellation still awaits approval;
+only one capped Astra job runs at a time. Memory recall and the checkpoint66
+note save return503; repository records and verified source backups remain
+authoritative.
+
+Build-host incident after checkpoint65: all Astra jobs had exited when Beast
+developed severe memory pressure. The active Woodpecker `danpanv2` test pod
+`woodpecker/wp-01m7ca9r59cyyhv27ks1cadbf0` had 32 Python workers, 1,122 tasks
+and about 21 GiB of anonymous memory without CPU/memory limits. Its container
+scope `cri-containerd-3e97b70bfa49a15195af684426d3bcd15e11e4731695753c17969973cce39e4d.scope`
+now has runtime CPUQuota400%, MemoryHigh22G/Max24G, TasksMax1280 and IOWeight10.
+The Kubernetes parent was thrashing at its 28 GiB soft ceiling despite about
+10 GiB host-available memory; its runtime soft ceiling is now30G while the
+existing32G hard ceiling remains unchanged. SSH remains responsive and the
+host reserve is preserved, but shared-service pressure remains unresolved.
+These are temporary containment settings, not persistent CI policy. Automatic
+cleanup is limited to stale jobs by AGENTS.md; approval to stop this active
+CI run is pending. Revalidate live process/cgroup state before another heavy
+job. Checkpoint65 source and evidence are safe on both hosts. The memory-note
+endpoint returned502; a second save did not return and its observer was
+terminated, so that note's persistence is unconfirmed. Repository continuation
+records and verified source backups remain authoritative.
+
+Checkpoint65 (DE25 qualified, unreleased): production
+HostFS FILE_AREA now enters through the native service's existing node I/O
+owner. It checks READ authority, pins the description, refreshes metadata
+after any wait and keeps that owner through view publication. A private typed
+creation callback runs outside the state mutex; the port still authenticates
+requester/session/grant. Its pager source duplicates the retained description,
+so close/session death does not revoke the source or reopen a path under a
+different root. Cache entries keep the backing description's grant and a
+borrowed native I/O pointer whose lifetime that retained source protects.
+
+Pressure maintenance skips active nodes before retirement or link-stat work,
+preventing a cache callback from waiting on its own I/O owner. Invalidated
+exact owners are reclaimed/revalidated under that fence rather than skipped
+in favor of a competing area. Haiku `fs/fd.cpp:141-202,283-321` and
+`cache/file_cache.cpp:760-825` guide reference acquisition under the context
+lock and common node/cache serialization. No new lock, byte store, table,
+kernel operation, public ABI or wire format is added.
+
+The host regression restores the prior reclaim policy and fails at active-node
+retirement, then passes with the guard. Real core tests cover contended EOF,
+READ/WRITE-only authorization, stat/callback/empty-view failures, output
+clearing, retained cloning, close/session death, and the original backend
+after rebinding. The initial focused check exposes a stale-area reuse
+regression from moving maintenance outside node I/O; reclaiming the same
+owner under its fence fixes it without weakening the existing assertions.
+The focused retry and million-operation forced-switch model pass in 7.6
+seconds. Full VFS/HostFS/Supervisor host/sanitizer, coherent services/ROM and
+NDK distribution/CMake checks pass in 232.1 seconds. Native control/probes,
+all 39 cases, both recovery checks, repeated publication/root/root,
+shutdown88 and read-only fsck pass in 61.3 seconds. QEMU UID/GID1000 and the
+unchanged 2 GiB/no-swap/two-CPU cgroup are verified. Seven installed artifacts
+and fsck are checked before sealing the snapshot.
+Evidence: `/home/barry/astra-evidence/cache-area-ownership-20261114/`.
+Product/test patch:
+`01b4a1ba232c9758e0dccbed1e5a43b67404c956fea1fbc62749c8133b1afcb3`;
+snapshot: `6add34d5f8e497a87647a366790ca378d4cc78031a064196c9077d4c36dde6d7`;
+input65: `1b22f569c821b1601890d0b70440a964b601944e02cbb932ca7399a7261eeeab`.
+DE25 reaches stage8 at 66.1 seconds with startup forward progress and QEMU
+UID/GID999. Its old control and new cache/exhaustion/prefix probes pass.
+All nine cases, including physical cache pressure, both recovery checks,
+another publication/root/root check and clean shutdown88 pass in 393/600
+seconds. Trial, startup observer, native runner and diagnostic watcher all
+return zero. The transferred archive
+`9fdc04e1be876218cb3563c6841db0d133bee140a54330c0f3c64d311e34e9d2`
+verifies all 576 hashes, exact release manifest, paired private settings/key,
+unchanged boot/selector and read-only fsck. The private release, image, state,
+work files and archive are removed only after verification. Fresh selected
+stage8, all three services with zero restarts, only the selected loop0 lease
+and 8.5 GiB free pass after cleanup. Selected release/user data are unchanged;
+the live image is never opened or hashed. Production cached reads/writes and
+bounded worker integration remain open, followed by shared/private/anonymous mapping,
+msync/partial-unmap/EOF semantics, exact mapped-holder lsof/removal explanations,
+shutdown consent/status UI and final coherent release/media gates. Network
+mounts and broad performance qualification remain excluded.
+
+Checkpoint64 (DE25 qualified, unreleased): bounded
+writeback now lives in the shared file-pager module. It consumes the existing
+VM dirty scan and snapshot lifecycle while the native node I/O owner remains
+held through backing write/sync/stat and snapshot completion. Each scan
+consumes one step from the caller's remaining budget; no byte cache, dirty
+ledger, lock, queue or node index is added. A continuation reaching the end
+cannot certify earlier pages clean. Success requires a complete clean scan
+from zero. Verification detects redirty and returns BUSY rather than spinning
+or discarding the newer generation. Failed and short backing writes complete
+the snapshot unsuccessfully so VM retains dirty data; every page uses the
+latest checked backing revision and trims its last write to logical EOF.
+
+The private cache-sync callback and retained-sync entry now accept the same
+budget contract: zero means full sync, nonzero bounds scan calls. All in-tree
+callers are updated together. Incomplete work returns BUSY and preserves the
+last actual writeback error. Public sync and truncate still require a full
+flush; close reports saved errors while retained owners keep pending data.
+The native probe reuses this shared writer instead of its one-page
+implementation and checks that a one-step background flush cannot claim full
+sync. Haiku `vm/vm_page_writer.cpp:176-282` supplies the retained snapshot,
+failure and redirty patterns; Astra uses its existing native I/O and VM owners.
+No public ABI, wire, kernel or RTL change is made.
+
+Focused pager/core tests pass in 6.5 seconds, including the million-operation
+forced-switch model. Shared-writer regressions cover multiple/sparse leaves,
+resumed scans, bounded work, a >4 GiB base, partial EOF, old/new revisions,
+in-flight pages, redirty, scan/snapshot/begin/write/complete errors, short writes
+and invalid authority. Full VFS/HostFS/Supervisor host and sanitizer gates,
+coherent services/ROM and NDK distribution/CMake checks pass in 237.2 seconds.
+The native shared-writer marker, all 39 cases, both recovery checks, repeated
+publication/root/root, shutdown88 and read-only fsck pass in 62.5 seconds.
+QEMU UID/GID1000 and the unchanged 2 GiB/no-swap/two-CPU cgroup are verified.
+Seven installed artifacts and fsck are checked before sealing the snapshot.
+Evidence: `/home/barry/astra-evidence/cache-bounded-writeback-20261114/`.
+Product/test patch:
+`c94375492db2590aa3fd8d25243842616b9433dc6d6e78458cc74b1bb0cbe8e2`;
+snapshot: `b397ef16c7d90be626f27158d2f2076130a2716ec1adf7733c9e10491778d8d5`;
+input64: `89ff496803927baf0f4108a7f9d0d404eec00cdd54bcab274f0d89c41d9d840d`.
+DE25 reaches stage8 after 66.2 seconds with startup forward progress and
+QEMU UID/GID999. The old control, native read/shared-writer and exhaustion/
+prefix probes, eight filesystem cases, both recovery checks and another
+publication/root/root check pass. Clean shutdown88 completes at 339/600
+seconds; trial, startup observer, native runner and diagnostic watcher all
+return zero. This also supplies hardware coverage for checkpoint63.
+The transferred archive
+`1ac4393d23b861f2f57570478c147e5f07b27cd0d89e1b39cfa146e6a0ff9fbc`
+verifies all 64 hashes, the exact release manifest, paired private settings/
+key, unchanged Linux boot and selector, and read-only fsck. Private release,
+image, state and archive are removed only after verification. The redundant
+post-cleanup observer is first invoked under an incorrectly renamed filename;
+the corrected invocation passes fresh selected stage8, all three services
+with zero restarts, only the selected loop0 lease and 8.5 GiB free. The failed
+invocation is retained in the evidence. Selected release and live user data
+remain unchanged; the live image is never opened or hashed.
+Production HostFS still needs canonical read/write and worker integration,
+followed by writable mappings and the final filesystem/UI/release gates.
+Network and broad performance qualification remain excluded.
+
+Checkpoint63 (host/native/NDK verified; hardware coverage in64): raw native READ,
+retained reads and READ_PATH now share the configured canonical byte owner.
+The private read callback runs outside the state mutex with native node I/O
+held. Its confirmed byte prefixes and sequential positions use the same
+validator as backend reads and wire replies. Attached cache metadata without
+a read callback refuses instead of exposing stale backing bytes. Backing-page
+preparation remains an explicit raw operation, so it cannot recurse through
+the cache front end.
+
+READ_PATH uses the existing native open/retain/read/close lifecycle, charging
+its temporary descriptor to the caller and retaining rooted authority through
+session death. It keeps node I/O through all short reads. A regression first
+finds that a writer completing during the wait could pair new bytes with the
+old EOF. Size is now refreshed after acquiring node I/O; ordinary file stat,
+retained stat and whole-file reads share that metadata operation. Haiku
+`src/system/kernel/cache/file_cache.cpp:515-713,760-825` guides the common
+byte owner, node serialization and confirmed-prefix behavior. No byte store,
+dirty ledger, lock, table, kernel mechanism, public ABI or wire format is added.
+
+Three host REDs reproduce stale READ bytes, stale whole-file bytes/EOF and
+the contended EOF snapshot. Host regressions cover missing read owners,
+read-only authorization, retained readers, short/error prefixes, cursor state,
+invalid counts/positions, failed stat/close cleanup, capacity, invalid output
+clearing and session death during a whole-file read. The refreshed stat exposes
+a transport fixture whose small-file open reported eight bytes while stat_node
+refused; a distinct small-file mock node now reports coherent metadata. The
+failed check is retained; no production fallback or resource limit is changed.
+The final VFS/HostFS/Supervisor host and sanitizer gates, coherent service/ROM
+build and NDK distribution/CMake checks pass in 226.9 seconds.
+
+The native probe reads actual dirty VM bytes and logical EOF38 through ordinary,
+whole-file and sequential reads while raw backing EOF remains23. That new
+marker, old control, all 39 cases, both recovery checks, repeated publication/
+root/root, shutdown88 and read-only fsck pass in 60.7 seconds. QEMU UID/GID1000
+and the unchanged 2 GiB/no-swap/two-CPU cgroup are verified. The earlier native
+pass precedes the additional EOF regression and is not substituted for this
+final run. Seven installed artifacts and read-only fsck are checked before
+creating the immutable snapshot.
+Evidence: `/home/barry/astra-evidence/cache-native-read-20261113/`.
+Product/test patch:
+`dc7f686ca55f0fb932a66eaa9680593bcd634fc479cada3d69a68f206fffb36c`;
+snapshot: `701566dc08dc5f02f941977cca67be281cbc714a9df0679b9b2e5e20cab12086`;
+input63b: `12077df92991d575065a9843695619270df4604315d91508ee5a0ae719b1571b`.
+Checkpoint63 made no board change; checkpoint64 supplies hardware coverage.
+Production HostFS still writes backing bytes and invalidates pages: connect
+its read/write callbacks and bounded writeback worker to the same canonical
+VM owner next. Writable mappings and final filesystem/UI/release gates remain
+open; network mounts and broad performance qualification remain excluded.
+
+Checkpoint62 (DE25 qualified, unreleased): native file
+tokens and session IDs now refuse exhaustion instead of wrapping into old
+identifiers. A zero file generation retires only its descriptor slot; the
+same storage's shared I/O cell remains usable. The existing capacity error
+reports exhaustion. Live sessions, existing files and HELLO refresh still
+work after the session ID namespace is exhausted. No table, wire format,
+public ABI, limit increase or fallback is added. Public-client regressions
+first reproduce both aliases, then pass through ordinary and retained close,
+shared-node I/O, capacity refusal and continued access by an existing session.
+Haiku `src/system/kernel/fs/fd.cpp:141-202,283-355` guides reference retention
+and removal under the context lock. Astra keeps its native stale-token
+contract rather than adopting POSIX descriptor-number reuse.
+
+The coherent61 VFS/HostFS/Supervisor host and sanitizer gates, services,
+normal ROM and NDK distribution pass in 231.6 seconds. Native exhaustion,
+cache sync/scan/retry, prefix and root probes pass, but the complete suite
+then stalls during concurrent file-area publication. That run is rejected.
+Its preserved thread snapshot shows the main thread joining a worker blocked
+on a mutex it still owns. A physical page-table walk finds the native mutex
+word naming that main thread while POSIX owner and depth are zero.
+The shared pthread adapter cleared its metadata after releasing the native
+mutex, allowing the previous owner to erase a newly acquired owner's data.
+Evidence: `/home/barry/astra-evidence/file-token-exhaustion-20261113/`,
+including `stall-kernel61.log`, `stall-mutex61.log` and the failed image.
+The identified stalled runner is interrupted only after capture; systemd's
+successful INT disposition is not a successful filesystem gate.
+
+The minimal62 fix clears POSIX owner/depth before native release and restores
+them if release fails without transferring ownership. Haiku
+`src/system/libroot/posix/pthread/pthread_mutex.cpp:156-184` supplies this
+ordering. The existing syscall fixture deterministically schedules a new
+owner before unlock returns: it fails against the old implementation and
+passes against the fix, including failed-unlock ownership retention.
+MC68040 disassembly confirms both stores precede the syscall. No kernel or
+filesystem-specific synchronization mechanism is added; libc ABI4 is unchanged.
+
+All POSIX tests and existing sanitizers pass. Direct pthread ASan initially
+fails during sanitizer initialization because Astra's fixture replaces host
+pthreads. Namespacing only the host fixture's 50 exports exposes a mock
+launch-record leak; the successful-start mock now consumes the record normally
+freed by the real thread entry. ASan/UBSan then pass without leak suppression.
+The complete NDK distribution retry, including CMake examples, passes in
+166.4 seconds. These initial harness failures remain in the evidence.
+
+Native62 copies the rejected run's unmutated input and replaces only
+`libc.library.4`. All 39 cases, 64 additional concurrent publication rounds,
+both recovery checks, shutdown88 and read-only fsck pass in 62.9 seconds.
+QEMU UID/GID1000 and the unchanged 2 GiB/no-swap/two-CPU cgroup are verified.
+Seven installed artifacts are checked before creating the immutable snapshot.
+Evidence: `/home/barry/astra-evidence/mutex-handoff-20261113/`.
+Product/test patch:
+`d4a20ee174819e1abf5a388f679601474dc1189b3f3fa12096923f74b6dec2d5`;
+snapshot: `96c4c4089b643c99fe85633dafb0d3237b5139d52b3ddd8ee1c1bffc4615883b`;
+input: `46f9a9af929e8718fe867e4f9c567c38b9c38ddbbfe887f800dd741b39d99eb9`.
+The first snapshot attempt refuses a missing source-patch filename before
+creating a release; transferring the already sealed patch under the required
+name resolves it. The fresh board trial uses new startup markers and explicit
+QMP-socket readiness. It reaches stage8 after 72.3 seconds with startup forward
+progress; QEMU UID/GID999 is verified. The old control, exhaustion/prefix and
+cache sync/scan/metadata/write probes pass. Eight filesystem cases, both
+recovery checks and another publication/root/root check pass, followed by
+shutdown88 after 342/600 seconds. Trial, startup observer, native runner and
+diagnostic watcher all return zero. This supplies hardware proof for the
+previously software-only59/60 prerequisites as well as61/62.
+
+The transferred board archive
+`0bdf60101f93264365bd820123e176c119a4c0b561d81352b3c2d088bbbbb8a0`
+verifies all 64 hashes, the exact release manifest, paired settings/key,
+unchanged Linux boot and selector, and read-only fsck. Only after verification
+are the private release, state, image and archive removed from the board.
+The redundant post-cleanup health observer initially tries to read the deleted
+trial's baseline files; it is corrected to use those same values from the
+verified archive. The complete retry proves fresh selected stage8, all three
+services active with zero restarts, only the selected loop0 lease and 8.5 GiB
+free. The rejected61 image separately passes read-only fsck. These harness
+failures remain recorded and do not count as successful checks.
+Selected release `a46dffcb6efa575f16f1ef074f8389f27c6f46faf1b58ca0aa9d335d48e3c6d1`
+is unchanged. Its live user image is never opened, hashed or modified by these
+trials; the qualified candidate has not been promoted.
+
+Production canonical cached writes, bounded worker integration, writable
+mappings and final filesystem/UI/release gates remain unfinished. Network
+mounts and broad performance qualification remain excluded. Earlier records
+below retain their results and qualification status at the time they ran.
+
+Work in progress60 (host/K1/native/NDK verified; DE25 pending): ADMINISTER
+owners can inspect pending pager pages with the additive AREA_DIRTY_SCAN
+syscall126 and Runtime Kit function. Modified and in-flight state are distinct,
+including redirty during a snapshot. State zero returns a continuation cursor;
+the area size marks the end of that scan. Each call examines at most one
+allocated dirty metadata leaf and skips absent leaves. It allocates nothing
+and does not change page state or lifetime. Reclaim uses the same sparse
+pending-page traversal and retains its complete preflight before eviction.
+No second dirty list, accounting store, lock or portability layer is added.
+Haiku `vm/VMCache.cpp:1287-1335` and
+`headers/private/kernel/vm/VMCache.h` guide iteration of owned pages and
+retention of busy/modified pages; Astra keeps its existing sparse directories.
+
+Kernel/Runtime host and sanitizer gates pass. The new K1 marker measures
+worst scan at 2,947/25,000 cycles; all 25 markers pass with zero overruns.
+User-mode assembly exercises the new syscall under the existing 50,000-cycle
+dispatch budget. Sparse reclaim is 20,053/125,000 against the preceding
+19,633-cycle baseline; its budget is unchanged. The old checksum-verified
+24-marker ROM is rejected only for its missing scan marker. An initial NDK
+distribution check finds missing documentation on the two state macros;
+those comments are added and the complete retry, including CMake examples,
+passes. The coherent retry takes 353.7 seconds. Normal ROM mode is restored
+after K1 and separately archived. No FPGA/RTL change is made.
+
+The installed Runtime library and native probe now exercise dirty discovery,
+in-flight visibility, an intentionally failed snapshot, retained dirty data,
+retry and clean end. That new marker, prior sync/metadata/prefix probes, old
+control, repeated root checks, all 38 cases, both recovery checks, shutdown88
+and read-only fsck pass in 60.7 seconds. QEMU UID/GID1000 and the unchanged
+2 GiB/no-swap/two-CPU cgroup are verified. Final area tests and sanitizers
+also cover successful completion of an older snapshot retaining a newer write.
+Evidence: `/home/barry/astra-evidence/dirty-page-scan-20261113/`.
+K1 first-source patch is
+`123a457e1d417416203ea059c8d5476b5f3844703cc09562a894abd6f7d0f45f`;
+its ROM is `7ba59d946efee30b63eedb35ffa76a2993128b6291edb10423c4b12d00656abd`.
+Current product/test patch is
+`550a2fc5e8777b845c9002989ae7f6a8232fd5b8ce1bb96c90dc9252c4833d12`.
+Native snapshot is
+`123a6ae89d7ef54196b9db4ca468f434ccc1fcfed6d8cc636a091da1a3eb0403`;
+input is `b20585407e6a790d7935c242ef6816790b60bb094d8fcd07a3d8dcaa51d37a52`;
+normal ROM is `99cdc34824e3aa1340dd30e8919b99a288986721bada894677692d05a6d42e3a`.
+Six installed artifacts and read-only fsck are checked before snapshot creation.
+Runtime ABI3 remains additive; no obsolete API or fallback is retained.
+
+Production cached writes, bounded writeback integration, writable mappings and
+final filesystem/UI/release gates remain unfinished. Last hardware-qualified
+checkpoint remains58; neither59 nor60 is deployed and selected user data is
+untouched. Source review additionally finds the existing 16-bit native file
+generation wraps back to1 in finish_file_close. Add a rollover regression and
+prevent stale-handle aliasing before enabling the production cache owner.
+
+Work in progress59 (host/native verified; DE25 not yet run): the private cache
+owner now supplies write and flush operations through one configured ops table.
+SYNC and TRUNCATE invoke the flush outside the state mutex while retaining the
+existing node I/O owner. The positioned page writer accepts that explicitly
+held owner, checks that its retained WRITE description shares it, and leaves
+it held. It cannot use a read-only writer or another node's operation. This
+avoids reacquiring the same owner during flush, without a second lock, backend
+writer or public API. Every private producer, consumer and fixture is updated;
+the superseded write-only setter is removed.
+
+Successful sync includes backing sync. Failed flush/backing sync preserves the
+cache writer and error; closing either the retained description or another
+handle reports that error while consuming the client handle. Dirty data remains
+owned. Retry can clear the error after success. Truncate flushes first, refuses
+on error and publishes checked backing EOF/metadata after successful resize.
+Haiku `cache/file_cache.cpp:760-940` and `vm/vm_page_writer.cpp:176-282` guide
+node serialization and failed-page retention; Astra keeps its VM snapshot
+tokens and existing native authority.
+
+The new public-client regression first fails at independent read-only SYNC
+(BUSY). Host/sanitizer VFS, HostFS and Supervisor gates and coherent private
+service/library/ROM/catalog builds pass; final build takes 80.5 seconds. Tests
+cover callback and backing-sync failures, read-only and wrong-owner refusal,
+retained root authority after binding replacement, error reporting on both
+close paths, retry and truncate ordering. A native read-only client flushes
+real VM dirty pages through the orphaned cache-held writer, preserving bytes
+and cursor. That marker, old control, metadata/prefix probes, repeated root
+checks, all 38 cases, both recovery checks, shutdown 88 and read-only fsck pass
+in 62.2 seconds as verified QEMU UID/GID 1000 in the unchanged bounded cgroup.
+Evidence: `/home/barry/astra-evidence/cache-flush-owner-20261113/`.
+Product source patch:
+`ca70d55d4c0d584338962c2994d851bf1cb0f95af02440f26ea1151c77a845bc`.
+Coherent native snapshot:
+`995dc7f423550849addf8b9fcd1ba09d7733a0f0033c4353d2901ffcf30a812a`;
+input image: `3ac5bf4b0cd21acd08dab1af43bad6dc2400cdaa1892018981fec39afaec497d`.
+This is unfinished production-cache integration, not a hardware qualification
+or release. Production HostFS still writes backing bytes and invalidates pages.
+
+Next dependency is bounded dirty-page discovery using existing VM metadata,
+including pages with snapshots in flight. The current exact-page snapshot
+API conflates a clean page with invalid state; a worker must not infer
+cleanliness from that error or keep another dirty-page ledger. Before kernel
+changes, a strict source-patch comparison proves current kernel/common/syscall
+blocks identical to checkpoint50. Its checksum-verified K1 ROM rerun on the
+current host passes all 24 markers with unchanged cycle budgets and zero
+overruns: sparse reclaim 19,633/125,000, dirty publication 7,201/25,000 and
+snapshot 3,465/6,000 cycles. Baseline evidence:
+`/home/barry/astra-evidence/dirty-page-scan-20261113/baseline60.log`.
+No dirty-scan kernel/API change has been implemented yet. Last DE25-qualified
+checkpoint remains58 below; selected board data/runtime are untouched by59.
+
+Checkpoint58 (DE25 qualified, unreleased): one optional
+cache-metadata object attaches to the existing native node I/O owner. It keeps
+the backing revision, logical EOF, mutation time, writeback error and retained
+rooted writer together. Public path/file stat, lookup, independent open and
+SEEK_END see the logical view; permissions and externally changed metadata
+remain fresh. Exact identity and backend incarnation are required. Sparse
+backing reads use the checked revision and logical EOF, and failed writeback
+retains ownership and error state. Pending SYNC/TRUNCATE refuse rather than
+claiming durability or discarding cached bytes. Before retirement the caller
+must prove VM pages clean and exclude external writable mappings; the core
+checks the native I/O sequence, backing EOF and saved writeback error.
+
+The allocation-free core accepts caller-owned cache storage and detaches and
+clears it before releasing its writer. No extra byte store, node index, lock,
+public ABI, wire or kernel mechanism is added. Haiku
+`src/system/kernel/fs/vfs.cpp:4796-4866` supplies the optional cache attachment
+pattern; `src/system/kernel/cache/file_cache.cpp:515-713,760-940` supplies
+backing revision, page preparation and writer lifetime patterns. All private
+structure consumers (Supervisor, HostFS, Events and fssem) are rebuilt together.
+
+The initial embedded metadata enlarged every MC68040 file record from its
+previous layout to 276 bytes, even for unused slots. Three native attempts
+retain the root-grant resource refusal, including a standalone first-case
+failure with result -7. Their evidence remains under `root-refusal58`,
+`root-limit58` and `root-reserve58`. Optional attachment reduces the measured
+file record to 144 bytes and the I/O cell from 240 to 108 bytes; the 138-byte
+metadata object is supplied only for an active cache. The same root gate now
+passes before and after cache tests. Limits are unchanged.
+
+Host/sanitizer VFS, HostFS and Supervisor suites, coherent target services,
+installed File library, ROM and catalog pass in 93.4 seconds. Tests cover
+unavailable/busy cache storage without consuming ownership, shared attachment,
+logical metadata, sparse holes, stale revisions, failed writeback and cleanup.
+The disposable native image passes the old control, new shared-metadata probe,
+partial-I/O probe, repeated root checks, all 38 cases, provider reset, HostFS
+replacement/fresh I/O, shutdown 88 and read-only fsck in 65.8 seconds. QEMU
+UID/GID 1000 and its 2 GiB/no-swap/two-CPU cgroup are verified. Evidence:
+`/home/barry/astra-evidence/cache-node-metadata-20261113/`.
+Candidate is `835052066e6f7d1cc1bb940a881f6447801c11c764ffb871cfc09195ce4a0365`;
+qualified product-source patch is
+`40025dcfa90aef27aa2f3df2be9650d923b9a3815056bdaad9e2aabcb6c37978`.
+DE25 staging/preflight passes in 3m32 seconds. The candidate reaches stage 8
+in 66.7 seconds as verified QEMU UID/GID 999. The old control, metadata/prefix
+probes, eight filesystem cases, provider reset, HostFS replacement/fresh I/O,
+repeated publication and clean shutdown 88 pass in 325/600 seconds. All four
+observers return zero. The initial archive verifies 65 hashes, paired private
+settings/key, unchanged Linux boot/selector and read-only fsck; it is retained
+under `initial-board58/`, SHA256
+`e467dc494ef465f2be069f3671cfdc4e06ff9dc8e756143dfa3d9fb9a392403c`.
+
+An additional hardware run passes explicit root grant, cached page writeback
+and root grant again, then clean shutdown 88 in 259/600 seconds. Its startup
+observer connected before QMP existed because the reused trial directory
+still held the prior console. That observer failure remains recorded;
+trial/native/capture results are zero and observer is one. A separate attach
+checks the active private candidate, stage 8, QEMU UID/GID 999, service cgroup
+and positive heartbeat before allowing the root-only probe. This is not a
+second startup qualification. A redundant later QMP check was reset while
+the native runner owned QMP; its source and failure are also retained.
+For future reuse, retire archived console/ready state and wait for QMP
+readiness; an old console's existence cannot establish a new startup.
+The follow-up archive explicitly retains these harness results and verifies
+76 hashes, paired settings/key, unchanged Linux boot/selector and read-only
+fsck; SHA256 is
+`f96f51c851d8af31306c29fd9bb67fe72d11746b4043cd8d1dfce9bd5faa8db8`.
+Fresh selected runtime reaches stage 8 after both runs with all three services
+active, zero restarts and loop0 only. No live selected image is read or hashed.
+Private trial release/state/archive spool are removed only after verification,
+leaving 8.5 GiB free. Input image is
+`c7d13dad86a81f1b91a89b532b2975a87f808cacecd1965d1c9e982d29eec7b2`;
+ROM is `a2523d00c63ff6fd4221376aa4a10a03273791b1e0e3556713f3379458ae3e52`.
+Source remains uncommitted and backed up on Beast.
+
+Production HostFS still writes ordinary bytes to backing storage and invalidates
+resident pages. Only the native probe attaches the new cache metadata and
+writes canonical VM pages. Production cached-write/sync integration, writable
+mapping semantics and final filesystem/UI/release gates remain open. Network
+mounts and broad performance qualification remain excluded.
+
+Checkpoint57 (DE25 qualified, unreleased): HostFS now
+places ordinary-write invalidation on the existing native cache-writer hook.
+The shared VFS core pins the original rooted WRITE reference and holds the
+node I/O owner across that callback; HostFS leaves the reference unadopted for
+the normal release path. Backing operations retain their direct provider
+writer, so positioned cache-page writeback no longer enters the front-end
+invalidation wrapper. Truncate and resource-reclaim policy are unchanged.
+One small private initializer supplies the same backend operations to service
+construction and its behavior tests. No new backend API, ABI, wire, kernel,
+lock, byte store or descriptor owner is introduced.
+
+Haiku `src/system/kernel/cache/file_cache.cpp:515-713` writes cache pages via
+`vfs_write_pages`, beneath the cache front end. Astra adapts that separation
+using its existing native write hook. A host regression first proves that
+writing through the production backend operations unexpectedly reclaims a
+resident cache area. After the fix, backing writes leave it alone while
+ordinary writes still invalidate before replying. Tests cover failed
+prefixes, simultaneous provider/invalidation errors, zero-length writes and
+unchanged ownership of the callback reference. HostFS host/ASan/UBSan gates
+pass; its target rebuild takes 7.7 seconds and the final host/catalog gate
+3.8 seconds. HostFS and the current event catalog are restaged in the previously
+qualified image; the ROM, installed library and other services remain matched.
+The coherent native run passes the old control, cache-owner/prefix probes,
+all 38 cases, provider reset, HostFS replacement/fresh I/O, shutdown 88 and
+read-only fsck in 54.1 seconds. QEMU UID/GID 1000 and the existing
+2 GiB/no-swap/two-CPU cgroup are verified. Evidence:
+`/home/barry/astra-evidence/hostfs-write-boundary-20261113/`.
+DE25 preflight passes after a 3m14-second bounded transfer/staging run.
+Candidate `1c7237c181011eb76de545fb5e0a0f036c10e7695f3cf08c0fbe682448d873df`
+reaches stage 8 in 66.1 seconds as verified QEMU UID/GID 999. It passes the
+old control, cache-owner and partial-I/O probes, eight filesystem cases,
+provider reset, HostFS replacement/fresh I/O, repeated map publication and
+clean shutdown 88 within the unchanged guard (341/600 seconds). All four
+observers return zero. Selected runtime reaches a fresh stage 8 with all three
+services active, zero restarts and loop0 only. Fresh before/after Linux boot
+and selector receipts match; no live selected image is opened or hashed.
+The sealed archive verifies its transfer checksum, all 65 file hashes, paired
+private settings/key and read-only fsck. Archive SHA256 is
+`254e71542f8e9c367f670fdda980d66be5f091cedc2e846a7d8444dd207a7910`.
+Private trial release/state/archive spool are removed only after verified
+transfer. The board has 8.5 GiB free and selected services remain healthy with
+zero restarts and loop0 only. Input image SHA256 is
+`4f4e6452a82c58060bf7e2de06591801b51a21f4cff5e5650939ae5e73fc6adb`;
+qualified source patch is
+`479286a10bc350ebcf51fc55f05c9f4382efc2f05795ae965127b3ff619d1e93`.
+Source remains uncommitted and backed up on Beast.
+Ordinary HostFS bytes still go directly to backing storage and invalidate
+resident pages. This fixes writeback self-invalidation; it does not yet copy
+ordinary writes into canonical VM pages, add shared logical metadata or
+enable dirty writeback. Provider change observation still invalidates clean
+read-only cache pages; dirty-owner integration must distinguish its own
+backing updates from external conflicts. Those integrations, writable mappings
+and final filesystem/UI/release gates remain open. Network mounts and broad
+performance qualification remain excluded.
+
+Checkpoint56 (DE25 qualified, unreleased): confirmed
+read/write prefixes now survive an operation error through inline and shared
+transfer-area replies, client validation and native File cursor bookkeeping.
+The original error remains visible. Failed transports and malformed replies
+clear reusable reply state, confirm zero bytes and never publish stale data.
+Counts and sequential positions are validated even on error. Borrowed reads
+expose a confirmed error prefix without caching it as a later successful read;
+closed bulk clients and detached native Files reset their output counts.
+POSIX already returns a nonzero completed count from this native result.
+A lost reply still cannot prove that a backing write had no effects.
+
+The existing port service pump and its native lock adapters now occupy
+`vfs_port_service.c`; the client transport remains the installed canonical
+implementation. Static service users link both modules; the public DSO omits
+the private service object. Reply initialization and I/O result validation are
+shared in the existing private `vfs_reply.h`. This introduces no public ABI,
+wire, kernel or RTL change. The native failure probe runs the actual private
+service pump against rooted backing files and calls the installed inline and
+shared-area client paths, without copying a second client into the probe.
+
+Haiku `src/system/kernel/cache/file_cache.cpp:810-825` preserves completed
+bytes on partial I/O. Astra retains its native count-plus-error contract;
+POSIX supplies the conventional successful short-count adaptation. Host tests
+cover zero/nonzero error prefixes, read-buffer guards, cursor advancement,
+transport failure after a plausible reply, stale replies, malformed headers,
+overreports and invalid sequential positions. The original public-client RED
+and an old-port implementation with the corrected new fixture both reproduce
+lost prefixes. The initial port fixture lacked sequential-read support and
+failed with UNSUPPORTED; that attempt is not prefix evidence. Host/sanitizer
+VFS, HostFS and Supervisor suites, Events and library contracts pass. Target
+link attempts exposed the required service-module linkage and hidden private
+client adapters; the probe now uses the installed filesystem binding's
+existing adapters. The final targeted fssem/ROM/catalog build passes.
+
+The coherent native run passes the old control, cache-write probe, new
+`byte-prefix` case, all 38 cases, provider reset, HostFS replacement/fresh I/O,
+clean shutdown 88 and read-only fsck in 66.3 seconds. QEMU UID/GID 1000 and the
+2 GiB/no-swap/two-CPU cgroup are verified. Evidence:
+`/home/barry/astra-evidence/write-prefix-20261113/`.
+DE25 staging/preflight passes with the same qualified image and matched
+provider/QEMU pair. Candidate release is
+`64860624f79637215cd090c95fa8691b3645f109aac39c2ae5d4147bf0918274`;
+input image is
+`e7e8eed0c43e9d018f8cf56b0cbf90927212abaebd24e14a442c8c0e0d55acab`.
+The board reaches stage 8 in 63.3 seconds as verified QEMU UID/GID 999. The
+old control, cache-owner probe, new inline/shared-area prefix probe, eight
+filesystem cases, provider reset, HostFS replacement/fresh I/O, repeated map
+publication and clean shutdown 88 pass within the unchanged guard (326/600
+seconds). All four observers return zero. The selected runtime reaches a fresh
+stage 8 with all three services active, zero restarts and loop0 only. Fresh
+before/after Linux boot and selector receipts match; no live selected image is
+opened or hashed. The sealed archive verifies its transfer checksum, all 65
+file hashes, paired private settings/key and read-only fsck. Archive SHA256 is
+`7338429b7120ac446b5c0a8bdccd3ef80e94dc11976019bc169470d9a81c38cf`.
+Only after verified transfer are the private trial release/state/archive spool
+removed. The board has 8.5 GiB free; selected services remain healthy with
+zero restarts and loop0 only. Source remains uncommitted and backed up on
+Beast. Qualified source patch SHA256 is
+`5338ce9944b05d5b360593e0a35ff95172a19154e57dba94115dccdcd47f73ce`.
+Beast is responsive with no stale Astra build/QEMU jobs, zero measured memory
+pressure and no active swap traffic. Its existing Kubernetes 28/32 GiB soft/
+hard runtime cap remains active; persistent kubelet-policy alignment remains
+separate host work.
+Production HostFS cached writes, shared logical metadata, bounded writeback,
+writable mappings and final filesystem/UI/release gates remain unfinished.
+Network mounts and broad performance qualification remain excluded.
+
+Checkpoint55 (DE25 qualified, unreleased): ordinary and
+retained VFS writes can hand their existing WRITE reference to the cache owner.
+VFS checks authority, acquires the one node I/O owner and retains the original
+rooted description before invoking the private cache writer outside its state
+lock. Adoption consumes the in/out reference; an unadopted reference follows
+the same final-release path as existing retained files. Close during a write,
+partial failure, impossible counts and cleanup errors preserve ownership and
+report their status. Positioned page writeback bypasses this front-end hook.
+No second descriptor table, lock, byte store, public ABI, wire or kernel
+mechanism is introduced. All private service-structure consumers are rebuilt.
+
+Haiku `src/system/kernel/cache/file_cache.cpp:760-940` retains one cache owner
+and marks pages busy during ordinary I/O; `src/system/kernel/fs/fd.cpp:188-240`
+retains descriptions across their use. Astra composes its existing native I/O
+cell, retained counter and VM dirty-page operations. Host tests cover rooted
+binding replacement, write-only authority, adoption/borrowing, close during
+callback, retained quota, failed prefixes, conservative invalidation after an
+overreport, and final-close errors. Disabling the owner handoff fails the new
+behavioral assertion. VFS, HostFS and Supervisor host/ASan/UBSan gates, Events
+and targeted fssem/ROM/catalog builds pass in 62.6 seconds. Additional final
+VFS host/sanitizer coverage passes in 28.2 seconds. An initial attempted change
+to overreport invalidation failed the existing regression; its conservative
+generation rule is retained. Failed harness starts are preserved: a missing
+staging script and an unprivileged observer unable to write root-owned WORK.
+The corrected root observer still runs QEMU as verified UID/GID 1000 under
+the 2 GiB/no-swap/two-CPU cgroup; confinement permissions are unchanged.
+
+The native probe writes into existing VM-owned pages through this shared VFS
+path, closes its prior reference, then flushes using only cache-held authority.
+It checks untouched bytes, EOF growth, backing/cache separation and unchanged
+cursor, and proves that backing writeback does not recurse into the cache.
+The coherent native image passes the old control, expanded page-writeback,
+all 37 cases, both recovery checks, clean shutdown 88 and read-only fsck in
+62.4 seconds. Candidate is
+`93bc1155a934a5e76a9e83c2d009c0676fc74f76706be482227da0bda1b4b19b`.
+DE25 staging/preflight passes, then the candidate reaches stage 8 in 72.4
+seconds as verified QEMU UID/GID 999. It passes the old control, new cache-page
+probe, eight filesystem cases, both recovery checks, repeated map publication
+and clean shutdown 88 within the unchanged guard (314/600 seconds). All four
+observers return zero. Selected runtime reaches a fresh stage 8, all three
+services active with zero restarts and loop0 only. The Linux boot identity and
+selector match fresh pretrial receipts; no live selected image is opened or
+hashed. The sealed archive verifies 65 hashes, paired private settings/key and
+read-only fsck. SHA256 is
+`481005eeb555717fa122fd7f26aa398705bb892d34c4d23df285e2940dc120a8`.
+After verified transfer, private trial release/state/archive spool are removed.
+The board has 8.5 GiB free; selected services remain healthy with zero restarts
+and loop0 only. Source remains uncommitted and backed up on Beast.
+Evidence: `/home/barry/astra-evidence/cache-write-owner-20261113/`.
+The native writer handoff is qualified; production HostFS writes remain raw.
+Production HostFS still needs its existing HostfsFileArea owner joined to this
+path, with node-wide logical metadata, bounded writeback and sync/close error
+retention. First fix the accepted-prefix boundary below. Writable mappings
+and final filesystem/UI/release gates remain unfinished. Network mounts and
+broad performance qualification remain excluded.
+A public-client regression separately reproduces an accepted
+prefix disappearing across the reply boundary: the owner reports one byte
+and IO, but `astra_vfs_write()` reports zero bytes. The private core preserves
+the count; inline/shared-area reply construction and client result handling
+discard it on error. Fix that shared boundary before enabling multi-page
+cached writes. The existing POSIX adapter already accepts a nonzero prefix
+alongside an error. Evidence: `write-prefix-20261113/client-prefix-red.log`.
+
+Checkpoint54 (DE25 qualified, unreleased): the existing positioned page
+writeback helper now takes logical EOF separately from the expected backing
+revision. It can extend an empty file, grow a partial last page, or write a
+sparse later page without weakening revision/identity validation or changing
+the description cursor. A smaller logical EOF never truncates backing data.
+Validated short-write prefixes and post-error metadata remain available for
+retry. All 31 in-tree callers use the coherent private contract; no public
+export, library ABI, wire, kernel or RTL change is required.
+
+Haiku `src/system/kernel/cache/file_cache.cpp:515-713,760-910` supplies boundary
+page preparation, EOF zero-fill and cache-owned short I/O; the snapshot and
+failure rules in `vm/vm_page_writer.cpp:176-282` preserve edits made during
+writeback and retain failed dirty pages. Astra reuses its existing retained
+description, one node I/O owner and VM snapshot machinery. Host regression
+tests reproduce refusal to grow an empty backing file before the change, then
+cover partial/sparse growth, no truncation, short-write and sync failures,
+stale revisions, aliased metadata arguments and unchanged cursor state.
+VFS, HostFS and Supervisor host/ASan/UBSan gates, Events and targeted fssem,
+ROM and catalog builds pass. The first expanded native readback expected one
+304-byte scalar read, exceeding the existing 208-byte transfer limit. Its
+diagnostics prove a valid short read; the corrected probe reuses the existing
+page reader to join reads. Failed attempts and images remain archived.
+
+The coherent native run passes the preserved old executable as a control,
+expanded EOF writeback, all 37 cases, provider reset, HostFS replacement/fresh
+I/O, clean shutdown 88 and read-only fsck in 71.7 seconds. QEMU UID/GID 1000
+and the 2 GiB/no-swap/two-CPU cgroup are verified. The two-write timing samples
+are retained as a narrow baseline, without a performance-gain claim.
+Candidate is
+`f1506e1268c49ec1ad426c3557b1a7527aa8b26a37350d27104f1b7caca6fa3e`.
+DE25 staging/preflight passes; the candidate reaches stage 8 in 63.8 seconds,
+then passes the old control, expanded EOF writeback, eight filesystem cases,
+provider reset, HostFS replacement/fresh I/O, repeated map publication and
+shutdown 88 within the unchanged 600-second guard (314 seconds). Candidate
+QEMU runs as UID/GID 999. All four observers return zero.
+The sealed archive verifies 65 hashes, paired private settings/key, fresh
+before/after Linux boot and selector receipts, and read-only fsck. SHA256 is
+`50972d3feb133e777ccc8361689174b6ee75933f26553c841cb4fb21f2b446e5`.
+Selected runtime is restored with a fresh stage-8 console, all three services
+active, zero restarts and loop0 only. No live selected image is opened or
+hashed. Private trial release/state/archive spool are removed only after
+verified transfer; the board has 8.5 GiB free and selected services remain
+healthy. No owned Astra build/test jobs remain on Beast; fresh SSH, zero
+memory pressure and zero swap traffic are verified before further work.
+Evidence: `/home/barry/astra-evidence/writeback-eof-20261113/`.
+This qualifies the backing writeback prerequisite; ordinary cached writes,
+cache-owned logical EOF, dirty writeback integration and writable mappings
+remain unfinished. Network mounts and broad performance qualification remain
+outside the current correctness task.
+
+Checkpoint53 (DE25 qualified, unreleased): early shutdown
+observation reproduces the checkpoint52 symptom: all 37 filesystem cases and
+both recovery checks pass, then HostFS declines shutdown with IO (11). The
+supervisor cancels shutdown and restores services; this is not a kernel panic
+or a lost shutdown keystroke. The original checkpoint52 failure did not retain
+its early cleanup state, so its exact failing branch remains unavailable.
+
+A deterministic VFS regression identifies a concrete matching defect: draining
+a receive port after its last sender exits latches PEER_DEAD into the shared
+service's fatal `stalled` state. HostFS checks that state during shutdown and
+refuses with IO. The shared receive pump now treats a drained peer as an
+ordinary end of input, preserving real receive failures. Tests cover queued
+messages before peer closure, both grant and ordinary service ports, another
+live grant, and a genuine IO failure. HostFS cleanup diagnostics name the
+failing drain, grant, volume or claim stage. The shutdown observer captures
+state at five seconds and at the original deadline; QMP closure/JSON errors
+during provider cleanup do not turn a successful exit into a test failure.
+
+Haiku `src/system/kernel/port.cpp:1435-1495` drains queued messages before
+reporting a closed port. Astra preserves its native distinction between
+PEER_DEAD and an invalid/failed receive endpoint rather than treating client
+departure as service corruption. Registrar `ShutdownProcess.cpp::_Worker`
+preserves the failure status; Astra's cleanup diagnostics preserve its stage
+and native status. No kernel mechanism, protocol, ABI or RTL
+changes. VFS, HostFS and Supervisor host/ASan/UBSan gates pass. An accidentally
+broad commands target started a Vim rebuild and hit its five-minute limit;
+the corrected fssem/ROM/catalog targets finish in 18.6 seconds. Three coherent
+native runs pass all 37 cases, provider reset, HostFS replacement/fresh IO,
+shutdown 88 and read-only fsck in 54.8, 53.1 and 53.3 seconds. Shutdown completes
+in about half a second. QEMU UID 1000 and the 2 GiB/no-swap/two-CPU cgroup are
+verified for every run.
+
+Candidate is `d0b1cf0315f49f0c231d87f7bae7603635c185cb9d7b8990f185361e5530a283`.
+DE25 transfer completed, but the outer three-minute staging limit interrupted
+its verifier's output connection (exit 120). No trial started on that attempt;
+selected services stayed active. Resuming only the streamed verifier passes
+in 35.5 seconds under 48 MiB. DE25 reaches stage 8 in 54.4 seconds and passes
+eight filesystem cases, provider reset, HostFS replacement/fresh IO, repeat
+map publication and clean shutdown 88 within the 278/600-second guarded run.
+All four observers return zero; candidate QEMU is observed as UID 999.
+The sealed archive verifies 67 hashes, paired private settings/key and
+read-only fsck. SHA256 is
+`3cda12963034c1503d01cdc016a73fdad6dfb88bf81b752c9c6b95f69148f63a`.
+Reused harness code initially expected missing pretrial receipt files. The
+corrected health/archive checks explicitly reference original, hash-verified
+checkpoint52 boot/selector receipts with provenance; they do not manufacture
+new pretrial measurements. Those earlier receipts match the post-trial state.
+The restored selected console is newer than its current service start, has
+fresh stage 8, all three services active with zero restarts, and loop0 only.
+No live selected image is opened or hashed. After verified transfer to Beast,
+the private release/state/archive spool are removed. The board has 8.5 GiB
+free; selected services remain active with zero restarts and loop0 only.
+No owned Astra build/test jobs remain on Beast. Source remains uncommitted
+and backed up there.
+Evidence: `/home/barry/astra-evidence/vfs-peer-drain-20261113/`; original failure,
+deterministic RED, host gates and three corrected runs are also retained under
+`native-node-io-20261113/shutdown-followup/`.
+Ordinary cached writes, logical EOF, dirty writeback and writable mappings
+remain unfinished. Network mounts and broad performance qualification remain
+outside the current correctness task.
+
+Checkpoint52 (DE25 qualified, unreleased): independent opens of one exact node
+now join the existing native file-I/O owner. Aliases and node peers reuse one
+active-operation/sequence cell, charged to the existing file-storage budget;
+provider cursors, flags, rooted descriptions and authority stay independent.
+Unknown identities/incarnations remain description-scoped. Rooted bindings
+supply an immutable mount-incarnation key. HostFS captures its existing
+filesystem-claim epoch in each backend, including recovery before the global
+bound epoch is committed; transport generation is not the claim incarnation.
+
+A deterministic host regression reproduces a page fill accepted while another
+independent open is inside a write. Joining the existing owner fixes both that
+race and a sync overlapping a fill through another open, without a second
+mutex, owner pool or byte cache. Native OPEN/OPEN_AT strip the backend's early
+TRUNCATE flag, join node ownership, then perform the ordinary locked truncate
+and refresh metadata before publishing the new handle. Failed metadata refresh
+still records the completed mutation and closes the unpublished description.
+TRUNCATE requires WRITE. Redundant HostFS open wrappers are removed.
+
+Haiku `src/system/kernel/cache/file_cache.cpp:760-850` serializes cache I/O on
+one vnode cache, and `src/system/kernel/fs/vfs.cpp:4796-4866` shares that cache
+through vnode ownership. Astra extends its existing I/O cell rather than add
+separate node and description locks. Host/sanitizer suites and ThreadSanitizer
+pass after fixing new shared fixture counters; Supervisor host/sanitizer suites
+also pass. The native scoped-I/O probe now runs both independent-open and
+same-description fill races and checks independent cursor/append state.
+The final claim-epoch target rebuild and HostFS host/sanitizer checks pass in
+7.8 seconds after the 30.1-second coherent rebuild. Native run A passes all
+37 filesystem cases and both recovery checks, but times out during shutdown.
+Its image/logs remain preserved. The media/remote-desktop PEER_DEAD messages
+also occur in checkpoint51's passing host fixture, which lacks their providers;
+they are not established as this timeout's cause. A new harness regression
+proves filesystem commands returned their status marker before shell readiness.
+The command helper now reuses the shared answer-plus-prompt checker, and
+shutdown timeout diagnostics include the complete trace and host syslog.
+Native run B passes all 37 cases, provider reset, HostFS replacement/fresh I/O,
+clean shutdown 88 and read-only fsck in 52.2 seconds, with verified QEMU UID
+1000 and cgroup limits. That pass does not establish run A's timeout cause.
+Candidate is `d58b1f7b57158b35a64f6f4c6520e7287e7e3303dc89e41d0e598c4928388c72`.
+DE25 passes eight initial cases, provider reset, HostFS replacement/fresh I/O,
+repeat map publication and clean shutdown 88. All four observers return zero.
+Startup reaches stage 8 in 63.2 seconds; the native phase reports 287/600
+seconds. QEMU/provider binaries are byte-identical to checkpoint51's qualified
+pair. The sealed archive verifies all 64 hashes, paired private settings/key,
+unchanged Linux boot identity/selector and read-only fsck. Archive SHA256 is
+`e56e1f4b1e3e7a85c2527050a4f819077cb9c605365c90a81b96650795d711b9`.
+The selected image has a fresh stage-8 console newer than its service start,
+all three services active with zero restarts, and loop0 only. No live selected
+image is opened or hashed. Verified evidence precedes private-state cleanup;
+the private release/state/spool are removed and the board has 8.5 GiB free.
+Source remains uncommitted and is backed up on Beast. Evidence:
+`/home/barry/astra-evidence/native-node-io-20261113/`.
+Ordinary writes still use backing I/O plus invalidation; cached writes, logical
+EOF, dirty writeback and writable mappings remain unfinished. This supersedes
+the earlier plan for a separate node mutex: use the one native I/O owner.
+The unexplained native run-A shutdown timeout is still an open correctness
+investigation; a later passing run is not its root-cause diagnosis.
+
+Checkpoint51 (DE25 qualified, unreleased): partial-write
+preparation can read an existing backing page through a WRITE-only native
+description without granting application READ access. The existing page
+reader and pager source now carry explicit READ or WRITE access; WRITE selects
+the backend's private `read_for_write` operation. RAM and ext4 reuse their
+existing readers. HostFS sends a positioned, single-page internal backing-read
+flag. QEMU requires WRITE, rejects read-only sessions, sequential or cross-page
+requests, and leaves ordinary READ checks and cursor state unchanged.
+
+The rooted provider upgrades its already-confined regular-file descriptor to
+read/write through its existing procfd mechanism, without reopening a path or
+reapplying create/truncate flags. Rename, unlink and replacement therefore keep
+the pinned original inode. If host permissions prevent the upgrade, the valid
+write-only descriptor remains usable; internal cache preparation reports
+UNSUPPORTED. No new descriptor table, cursor, provider wire layout, public
+filesystem API or ABI is introduced. Haiku
+`src/system/kernel/cache/file_cache.cpp:515-713` prepares partial boundary pages
+through vnode page I/O; `src/system/kernel/fs/vfs.cpp:4735-4760` separates that
+backing operation from caller descriptor READ checks. Astra adapts both through
+its existing native retained-description and backend contracts.
+
+VFS/HostFS host and ASan/UBSan suites, rooted-path tests, RAM, native ext4
+open-at and all five real-provider protocol scenarios pass. The final coherent
+native image passes all 37 filesystem cases, provider reset, HostFS replacement,
+fresh I/O, clean shutdown 88 and read-only fsck in 49.6 seconds. QEMU runs as
+UID 1000 in the verified bounded root systemd unit. The native page-writeback
+case also exercises checkpoint50's runtime wrapper through the installed DSO,
+closing its normal-service wrapper coverage gap. Candidate is
+`180321dbb13f07662e4f1782f32d3094eb0f119c755e02bcdfb6b52323b4bb62`.
+Evidence: `/home/barry/astra-evidence/cache-backing-read-20261113/`.
+
+The first DE25 preflight allocated the whole private image for hashing and
+triggered global Linux OOM, which killed the selected runtime. This is a
+qualification-tool failure, not evidence of a guest panic. Kernel OOM records
+and the failed attempt are preserved. The checksum now streams and preflight
+passes within a 48 MiB systemd limit in 38.9 seconds. A subsequent protocol
+attempt stopped before product launch because its staged harness omitted
+`astra-input-hotplug.py`; that dependency is restored. The corrected protocol
+gate runs under a 256 MiB limit only after the restoration guard stops Astra,
+then the coherent native DE25 gate runs alone.
+
+DE25 passes all five provider protocol scenarios in 62.3 seconds, including
+write-only backing reads, read-only refusal, cursor preservation and retained
+inode reads after unlink/replacement. The rooted-path test also passes as the
+unprivileged Astra user, covering the failed read-capability upgrade. Native
+startup reaches stage 8 in 66.7 seconds. Eight initial cases, provider reset,
+HostFS death/replacement, fresh I/O, another map-publication case and clean
+shutdown 88 pass. Trial, startup observer, native gate and diagnostic watcher
+all return zero. The native phase reports 292 seconds within its unchanged
+600-second guard; QEMU runs as UID 999.
+
+After the staging OOM, the selected user-data image is checked offline under
+an exclusive lock using a read-only loop device and `e2fsck -fn`. It passes;
+streamed checksums before/after prove the check changed no bytes. Its normal
+service then has a fresh stage-8 console newer than the current service start,
+all three services active with zero restarts, and only the selected loop0.
+No selected image is opened or hashed while Astra is running. The sealed
+private-trial archive verifies all 76 hashes, paired private settings/key,
+unchanged Linux boot identity/selector and read-only fsck. Archive SHA256 is
+`c10b3397d7a4050d7cf412cc2425bc946ae46b9565582ef705cbb61ba3c51252`.
+Private release/state and archive spool are removed only after verified
+transfer to Beast; the board has 8.5 GiB free. Source remains uncommitted and
+is backed up there.
+Ordinary writes still bypass canonical cached pages; this checkpoint supplies
+backing-read authority, not ordinary cache-write integration.
+
+Checkpoint50 (kernel K1 qualified, write integration unfinished): the native
+area owner can publish one complete absent pager page as dirty through
+`AREA_PUBLISH_DIRTY_PAGE` / `astra_rt_area_publish_dirty_page`. WRITE plus
+ADMINISTER authority is required. Source copying, range/access validation and
+fallible dirty-metadata allocation precede publication. Resident pages return
+WOULD_BLOCK unchanged. Existing page publication, dirty pin, snapshot and
+completion machinery remain the sole lifetime and writeback path; no new
+cache, lock or ownership ledger is introduced. This supplies missing-page
+creation for full writes and EOF growth; partial-page backing reads and
+ordinary cached writes are still unimplemented.
+
+Haiku `src/system/kernel/cache/file_cache.cpp:515-713` reserves pages and
+prepares complete contents before making writes visible. Astra adapts that
+ordering to its uninterrupted single-CPU kernel operation. Shared dirty-state
+preparation is extracted from the existing mark operation. The public runtime
+export is additive in `ASTRA_RUNTIME_3.0`; existing resident-write semantics and
+public filesystem wire/ABI remain unchanged.
+
+The new syscall regression fails before implementation. Kernel area/process
+and runtime host suites plus ASan/UBSan pass afterward, covering denied
+narrowed handles, invalid/full-page source ranges, allocation failures before
+publication, unchanged resident pages, dirty retention after failed completion,
+and exact final release. Two-reader races already pass with the existing wait
+completion: a published page survives an older successful or failed fill.
+No additional pager-reply policy is retained. The initial new test fixture
+omitted TRANSFER authority needed to duplicate its handle; corrected fixture
+checks duplication before testing narrowed rights.
+
+The existing publish-plus-mark baseline peaks at 7,128 MC68040 cycles. New
+operation peaks at 7,201 against the explicit 25,000-cycle K1 gate. Native
+QEMU passes all 24 markers in 0.5 seconds. An initial harness variant displaced
+its required refault and failed; the corrected variant preserves all three
+pager replies and tests new publication separately. Failed ROM/log remain in
+evidence. Normal kernel build/verification, runtime export contract and NDK
+`dist-check` pass. The postcheck initially used the wrong library output path;
+corrected artifact verification reuses successful tests instead of rerunning.
+
+DE25 passes all 24 K1 markers in 38.9 seconds using the exact qualified ROM,
+with 63 observed QEMU UID-999 samples. The test is direct native syscall
+qualification; the new runtime wrapper and ordinary cache-write integration
+still require the subsequent coherent normal-service hardware gate. Qualified
+ROM SHA256 is
+`3c64809c378ec282d0ca8dde1712a2ea98baa7df7f935e5dc47fca7b2d980047`.
+Evidence: `/home/barry/astra-evidence/cache-page-publication-20261113/`.
+The first restore snapshot was too early: it matched the previous console
+before the new provider acquired loop0. Its archive verifier rejected that
+empty loop inventory. A supplemental check requires the current console newer
+than the K1 log, fresh stage 8, active services with zero restarts, loop0 only,
+and unchanged boot identity/selector. The sealed final archive verifies all
+23 hashes and has SHA256
+`cbed3df08a43cbe6c1a2b72b88ef2b95908e88450e2f48bea4ee21ccaf397a28`.
+Private board state, seed and spool are removed after verified transfer. No
+live selected image is opened or hashed; selected user data is preserved.
+Source remains uncommitted and backed up on Beast. This is an unfinished
+filesystem integration step, not a new selected production release.
+
+Checkpoint49 (DE25 qualified, unreleased): native shared/adopted handles
+now share one I/O owner and sequence. The existing caller-funded file table
+also supplies these small cells; handle slots and cells retire independently,
+so reusing a closed handle cannot replace another alias's live lock. Existing
+state mutex/futex waiting, backend bindings and retained-file references remain
+the lifetime machinery. Closing a different alias does not clear an active
+operation. Page-fill fencing observes I/O through every alias. HostFS reports
+ACTIVE for the handle that owns the operation, rather than every alias.
+
+Two-anchor operations acquire distinct description owners in stable order,
+revalidate handles after waits and acquire a cloned directory only once.
+The locked representative supplies both anchors for aliases of one object,
+so closing another alias cannot invalidate the in-flight backend operation.
+Haiku `src/system/kernel/fs/fd.cpp:182-244,364-393` separates shared descriptor
+references from handle slots. `vm/VMAddressSpaceLocking.cpp:362-369,445-471`
+sorts owners before acquiring multiple locks. Astra adapts those patterns to
+its existing fixed storage and state-wait contracts, without a new allocation
+pool, public ABI, native wire format or FPGA change.
+
+A host regression reproduces sync entering through an adopted handle while
+a sibling write owns its description. Tests now cover shared exclusion,
+page-fill sequencing, handle-slot reuse during alias I/O, exact retirement,
+cloned-directory recursion and both orders of two-directory locking. All VFS
+and HostFS host suites, ASan/UBSan and ThreadSanitizer pass. The native scoped
+probe checks alias exclusion during backing I/O and renames through cloned
+directory anchors using real rooted native clients. Final native QEMU passes
+all 37 filesystem cases, provider reset, HostFS replacement/fresh I/O, clean
+shutdown 88 and read-only fsck in 51.3 seconds. Actual QEMU UID/cgroup and
+2 GiB/zero-swap/two-CPU/96-task limits are verified. Supervisor, HostFS,
+Events, fssem and the shared event catalog are rebuilt coherently. The ROM
+rebuild refreshes the kernel build identity; no kernel mechanism is changed.
+Candidate is `680c51690acd7494036fd1455713a4bf39559c65709a42525ec6c9d9a6ff3baf`.
+Evidence: `/home/barry/astra-evidence/native-description-io-20261113/`.
+DE25 passes all eight initial cases, provider reset, HostFS replacement/fresh
+I/O and a second map-publication case after replacement. Trial, startup
+observer, native gate and diagnostic capture all return zero. Startup reaches
+stage 8 in 60.1 seconds; private runtime takes 274 seconds within the unchanged
+600-second guard. QEMU runs as UID 999. The optional second scoped-I/O probe
+was not installed because its harness-copy command failed; only the initial
+hardware scoped-I/O probe and the post-replacement map-publication probe ran.
+The sealed archive verifies all 59 hashes, paired private settings/key, unchanged
+Linux boot identity/selector, clean shutdown 88 and read-only fsck. Archive
+SHA256 is
+`95890c2f2c77824a69870501fb80d7d2cb69fd6b53e17e781f7ef49ae9d63828`.
+Private board release/state and archive spool are removed after verification.
+The unchanged selected release reaches stage 8 with all three services active,
+zero restarts, loop0 only and 8.6 GiB free. No live selected image is opened or
+hashed; user data is preserved. Source remains uncommitted and backed up on
+Beast. Ordinary cached writes/writeback and the other remaining integration
+gates are still open.
+
+Checkpoint48 (DE25 qualified, unreleased): file-area construction rechecks
+the existing owner table after allocation and pager binding, then duplicates
+the client handle and publishes the prepared source under the same state lock.
+Concurrent losers reuse the winner and retire their unused area/native reference.
+Resource-pressure retries repeat selection; no second cache, ownership ledger,
+wire format, library ABI, kernel or ROM change is introduced.
+
+A deterministic host interleaving reproduces two owners before the fix. Host,
+ASan/UBSan and target builds pass afterward, including same-grant and
+cross-grant sharing, unknown-identity isolation, distinct chunks and distinct
+volumes. The native `map-publication` case races independent clients on eight
+cold files, fills only one returned area and requires resident bytes from the
+other without another fill. Native QEMU passes that case, seven existing
+cases, provider reset, HostFS replacement/fresh I/O and clean shutdown 88.
+Its saved image passes offline read-only fsck. Two observer defects remain
+recorded: a trace read after QMP closed, then a redundant exit-zero assertion
+after the shared shutdown checker had correctly accepted 88. Corrected
+postcheck verifies the saved image without repeating the product run.
+Haiku reference: `src/system/kernel/fs/vfs.cpp:4796-4866` rechecks vnode cache
+creation under its vnode lock; Astra uses its existing userspace state lock.
+Candidate is `03a8ca6ca533391eb444ad24fdc056996ae9c628cf5409ecd8810e48273510ec`.
+Evidence: `/home/barry/astra-evidence/cache-owner-publication-20261113/`.
+DE25 passes all eight cases, provider reset, HostFS replacement/fresh I/O and
+another eight-file concurrent-publication case after replacement. Trial,
+startup observer, native gate and diagnostic watcher all return zero. Startup
+reaches stage 8 in 58.1 seconds; private runtime takes 281 seconds within the
+unchanged 600-second guard. QEMU runs as UID 999, never root. The selected
+release is restored unchanged. The sealed archive verifies all 59 file hashes,
+paired private settings/key, unchanged Linux boot identity/selector and read-only
+fsck. Archive SHA256 is
+`4d1e3f36c1e4578a9b4eda262625fb291ad70be3792282d3736fd9bce2514a7f`;
+pristine candidate image SHA256 is
+`c0f493c24cb88d4a3f3ad5e2fdf4e349dbf0680805d0839c65395ed7a73c0c41`.
+Private release/state and archive spool are removed after verified transfer.
+The unchanged selected release reaches stage 8 with all three services active,
+zero restarts, loop0 only and 8.6 GiB free. No live selected image is opened or
+hashed; user data is preserved. All source remains uncommitted and backed up
+on Beast. Checkpoint48 supersedes checkpoint47 for this scoped publication work.
+Ordinary readers already consume canonical pages; ordinary cached writes,
+writeback and writable mappings remain unfinished. This host-forced
+construction interleaving does not establish the cause of any earlier panic.
+
+Checkpoint47 (DE25 qualified, unreleased): HostFS failed-shutdown recovery keeps
+public endpoints and native session IDs, checks cached areas after draining
+queued requests, retains failed-close ownership and reuses provider rebind.
+Failed READY delivery keeps the service alive. Pager, transport and local
+capability teardown follow a successfully sent READY and canonical process exit.
+Supervisor records actually received service publications, including private
+GUI endpoints, in its existing dependency list. Saved shutdown definitions
+inherit those dependencies; optional ungranted capabilities remain optional.
+Namespace recovery waits for filesystem bindings, while shutdown ordering uses
+the full list. Implicit best-effort LOG access creates no teardown dependency.
+
+The shared stop path also fixes a reproduced panic race: a requested restart
+receives `PEER_DEAD` because its target has already exited, clears its pending
+action, and is then misclassified as an unexpected critical death. A host
+regression reproduces the lost RESTART action. That specific syscall result
+now completes the requested stop while preserving its action; other errors
+still fail. This does not change shutdown consent or suppress unrelated deaths.
+Haiku references: `src/system/kernel/fs/vfs.cpp:7888-8013`,
+`src/servers/launch/Job.cpp:235-287`, and registrar shutdown's asynchronous
+team-exit handling. Astra retains its native provider and consent contracts.
+
+HostFS and Supervisor host/ASan/UBSan tests pass. Incremental HostFS build
+takes 4.2 seconds; Supervisor tests and incremental ROM/catalog build take
+18.7 seconds. Final native QEMU passes seven filesystem cases, two injected
+lost-close acknowledgements, preserved Supervisor sessions, unchanged HostFS
+PID after refusal, restored Desktop and fresh Terminal, three follow-up cases,
+provider reset, two HostFS replacements/fresh I/O, clean shutdown 88 and
+read-only fsck in 61.4 seconds. QEMU UID 1000 and actual provider/QEMU membership
+in the root systemd unit are verified with 2 GiB RAM, zero swap, two CPUs and
+96 tasks.
+
+Qualified candidate is
+`427506f03b33d657d16a4444077730917040a28b4ab64ab29c02ab18933041cf`;
+its pristine image SHA256 is
+`f1e8f0219395472db81ada4d356c996e1828104d17ed199102962e719f841d32`.
+DE25 passes the seven cases, both close-error injections, five preserved
+Supervisor sessions, same-PID HostFS cancellation recovery, fresh Terminal/I/O,
+provider reset, HostFS death/replacement and final clean shutdown 88. Trial,
+startup observer, native gate and debugger all return zero. Startup reaches
+stage 8 in 60.6 seconds; private runtime takes 365 seconds within the unchanged
+600-second guard. The sealed archive verifies all 66 file hashes, paired
+private settings/key, read-only fsck and unchanged Linux boot identity. Its
+SHA256 is
+`009e473a22a635c1e5bfe3d1bebdad5fbc011162ddc990abc5aed38c4504080e`.
+Private release/state and all four board archive spools are removed after
+verified transfer. The unchanged selected release reaches stage 8 with all
+three services active, zero restarts, loop0 only and 8.6 GiB free. No live
+selected image is opened or hashed; production user data is preserved.
+Source remains uncommitted and is backed up with the candidate on Beast.
+Evidence: `/home/barry/astra-evidence/hostfs-shutdown-retry-20261113/`.
+
+Failed experiments remain in that evidence directory. Earlier native variants
+reproduce `critical service display exited: status 34`, expose a LOG dependency
+cycle, or complete guest shutdown before an observer's socket-close error.
+The first hardware observer races its debugger's final log write; the second
+clicks before the new Desktop is ready. The third passes deep cancellation
+and provider reset, then exposes a shared readiness false positive:
+`remote desktop ready` matches a search for `desktop ready`, 45 seconds before
+the actual Desktop launch. Shared readiness now requires the exact successful
+Desktop launch report; regressions reject remote-desktop, similarly named
+services and failed launches. All three failed hardware images/settings/logs
+are sealed and verified before reset; the fourth passes the complete gate.
+Do not deploy the failed native variants. Checkpoint47 supersedes checkpoint46
+for this scoped recovery work. Trial31's original refusal remains unexplained;
+cached mutation/writeback, writable mappings, exact mapped-user attribution,
+shutdown consent/status UI and final release gates remain unfinished.
+
+Beast SSH responds normally again. A global OOM storm came from Kubernetes
+workloads under a roughly 58 GiB pod limit on the 62 GiB host. Runtime
+`kubepods.slice` limits are now MemoryHigh=28G and MemoryMax=32G, applied while
+usage was below both without killing jobs. Later load hits the soft limit
+without a local OOM kill; SSH remains responsive. Current memory PSI averages
+return to zero. Swap remains full. Permanent kubelet/resource-policy alignment
+is still open: runtime limits can be reset at restart. A fresh 07:01 UTC
+check on November 13 finds load 1.48, about 29 GiB available, zero memory PSI,
+three logind sessions and no remaining Astra QEMU/build/filesystem jobs.
+Kubernetes still advertises about 58 GiB allocatable with 36 GiB of existing
+pod memory requests, despite the runtime 32 GiB cap. Reducing allocatable
+without workload planning could force eviction; persistent alignment remains
+separate host work. No unrelated workload is killed during this check. All owned qualification
+jobs and temporary SSH control connections are retired. Basic-memory storage
+recovers after a temporary HTTP 503; durable continuation notes are saved.
+
+Checkpoint46 (DE25 qualified, unreleased): Supervisor captures running service
+definitions before teardown and uses its existing dependency-checked launcher to restore
+stopped services when shutdown is canceled. Manual/never-restart service
+policy remains unchanged; never-started services and closed applications are
+not relaunched. Allocation or configuration failure refuses preparation
+before closing anything. The enhanced native service-policy regression
+reproduces the old defect in 27.3 seconds: a stopped manual service remains
+at PID zero after another service refuses shutdown. Host and ASan/UBSan
+suites, including preparation-error cleanup, pass in 6.9 seconds. The coherent
+boot-payload rebuild takes 6.7 seconds. Full native QEMU passes seven
+filesystem cases, provider reset, both a broken lifecycle endpoint and an
+explicit CANCEL response, restored manual service/new PID, unchanged
+manual/never-restart settings, a never-started service remaining stopped,
+HostFS death/replacement and fresh I/O, clean shutdown 88 and fsck in
+83.5 seconds. Supervisor's diagnostic descriptor contents changed while its
+catalog layout stayed fixed; the existing merge tool refreshes the shared
+catalog without rebuilding applications or libraries. An initial staging
+assertion catches that metadata dependency; another staging run exposes a
+list/dict mistake in the private helper. Corrected staging verifies exact
+replacement bytes and produces candidate
+`90e68fd54c30920c678d26eb04fdd4d4cb99b1eac491ba262f3f8c81a3ed36c0`.
+Its image changes only fault-probe and the catalog relative to checkpoint45;
+the boot ROM carries the rebuilt Supervisor. DE25 staging and preflight pass
+in 203 seconds. DE25 passes all seven cases, provider reset, both cancellation
+types and manual-service restoration, HostFS death/replacement, fresh I/O
+and clean shutdown 88. Trial, observer, native gate and debugger all return
+zero. Startup reaches stage 8 in 75.6 seconds; private runtime takes 527
+seconds within its unchanged 600-second guard. Its image is a separate inode
+from the immutable release seed, with paired private settings/key and
+unchanged selected user data. The sealed hardware archive verifies all 57
+hashes, paired private settings/key, read-only fsck and unchanged Linux boot
+identity. Its SHA256 is
+`d2c7efbb89a9a5c073f13adf225f1a7f2ec09d89adcb0cd58e9b9d98a48eea23`.
+Private board release, trial state and archive spool are removed after verified
+transfer. The unchanged selected release reaches stage 8 with all three
+services active, zero restarts, loop0 only and 8.4 GiB free. The live selected
+image is never opened or hashed. Current source remains uncommitted; the
+candidate and complete source patch are backed up on Beast.
+Haiku `src/servers/registrar/ShutdownProcess.cpp:650-730` restores admission
+after cancellation; Astra must also recover services already stopped.
+Evidence: `/home/barry/astra-evidence/shutdown-restore-20261112/`.
+Checkpoint46 supersedes checkpoint45 for these scoped gates. Trial31's original
+shutdown refusal remains unexplained; this is a separate recovery defect.
+At this checkpoint HostFS's later `finish_hostfs()` error path can still send
+CANCEL and exit after partial teardown. Checkpoint47 above repairs that
+separate participant contract; consent/status UI remains open alongside
+canonical writeback and mapping work.
+
+Checkpoint45 (DE25 qualified, unreleased): page-read I/O now borrows an
+existing retained reference instead of taking the description's exclusive
+cursor/I/O lock.
+Descriptor close detaches retained files before waiting for active I/O; final
+retained release still waits before closing the backing description. Page
+reads retry overlapping description I/O using its existing activity/sequence
+instead of waiting behind the operation that requested the fill. Cache
+preparation must precede the exclusive write phase. Shared
+retain admission keeps permissions and reference limits in one place. Host
+regression fails before the fix; VFS/HostFS host, ASan/UBSan and ThreadSanitizer
+pass afterward. Independent page I/O survives descriptor/session close and
+source retirement, with exactly one backing close and error propagation.
+Haiku `src/system/kernel/fs/fd.cpp:188-240` separates descriptor closure from
+retained object lifetime; `cache/file_cache.cpp:760-925` releases its cache
+lock around pinned I/O. Astra uses its existing file slot/refcount, adding no
+public ABI, wire, kernel or VM state.
+
+The first native probe compile misses the write-limit argument; corrected
+build and host red are retained. An unchanged native page-read baseline is
+69,179 emulated cycles/op across 16 reads, clean shutdown and fsck pass.
+Native candidates45a/45b fail a fixture assertion while six other cases pass.
+A same-client nested call originally reuses request storage; the outer probe
+now uses the existing service write seam. Exact diagnostics then show close=0,
+read=0, valid=4: the immediate failure is an invented zero-tail assertion on
+the raw page reader. Kernel publication owns EOF-tail zeroing. Poisoned buffers
+now verify the actual valid-byte boundary; the focused native scoped-io gate
+and fsck pass in 15.3 seconds. Host/ASan/UBSan rerun passes in 29.9 seconds;
+the product fix is unchanged through that fixture repair. That variant passes
+the seven native cases, provider reset, HostFS replacement, clean shutdown and
+fsck in 45.4 seconds. Review then adds the description activity/sequence fence
+to prevent overlapping I/O publishing a partial page; a new sync-during-fill
+test proves rejection even without a byte-mutation generation change. Final
+host, ASan/UBSan and ThreadSanitizer suites pass in 45.8 seconds; incremental
+target build takes 11.2 seconds. The fenced variant passes all seven native
+cases, provider reset, HostFS death/replacement and fresh I/O, exact shutdown
+error reporting, clean shutdown 88 and offline fsck in 50.2 seconds. The
+16-read observation is 62,132 emulated cycles/op; this is not a paired
+performance qualification. Final candidate is
+`7eadaee22eccd05238fe611ad681f3168c200cf16cb2503629f2f6d769e0b258`.
+Its private DE25 trial passes the same seven cases, provider reset, HostFS
+death/replacement and fresh I/O, exact shutdown diagnostics and clean exit 88.
+Trial, startup observer, native gate and debugger all return zero. Startup
+reaches stage 8 in 63.5 seconds; runtime is 363 seconds within its unchanged
+600-second guard. The rebuilt HostFS cancellation address is `0x108fb6`;
+Supervisor remains `0x101164`. Kernel, ROM, shared Filesystem library and
+event catalog remain unchanged. The sealed hardware archive verifies all
+57 file hashes, paired private settings/key and read-only fsck. Its SHA256 is
+`ed38bceaf349b0ef30a5d8c806bb26ceec3ccc5971e79a7195b1319a962b53fc`.
+Linux boot identity is unchanged across clean guest shutdown. Private board
+release, test state and archive spool are removed after verified transfer.
+The unchanged selected release reaches stage 8; all three services are active
+with zero restarts, loop0 only and 8.4 GiB free. No live selected image is
+opened or hashed. Current source remains uncommitted; candidate and complete
+source patch are retained on Beast.
+Do not deploy the failed or unfenced candidates.
+Evidence:
+`/home/barry/astra-evidence/vfs-page-lifetime-20261112/`.
+Checkpoint45 supersedes checkpoint44 for this retained-lifetime prerequisite.
+Cached mutation and writeback are still unfinished. Trial31 shutdown refusal
+and recovery after partial service teardown remain unresolved.
+
+Retained-access checkpoint44 (DE25 qualified, unreleased): native retained-file
+admission now takes explicit READ/WRITE access, allowing write-only
+descriptions to retain writeback ownership without
+granting reads. Existing acquisition checks permissions before backend I/O;
+HostFS FILE_AREA still explicitly requires READ and publishes only READ|MAP.
+No new token table, backend, public wire version or library ABI is introduced.
+Host tests cover invalid masks, read-only/write-only admission, no backend I/O
+on denied reads, lifetime after close/session teardown and positioned snapshot
+writeback. The existing native scoped-io case additionally checks write-only
+retention through backend rebind/session reuse, read refusal, scalar/snapshot
+writeback, preserved append/cursor and exact backing bytes. The completed
+source mirror passes full VFS/HostFS host and ASan/UBSan suites in 35.7 seconds.
+The job verifies its actual cgroup limits before compilation: 1 GiB memory,
+zero swap, two CPUs and 96 tasks. A first executed run exposes a test-fixture
+backend-context mismatch; correcting the fixture to the installed backend
+context produces the pass. The earlier premature launcher never executes a
+test because evidence-directory setup has not finished; it is not a test
+result. All launcher and mirror sessions are terminal. Logs, original fixture
+failure and exact source hashes are retained in
+`/home/barry/astra-evidence/vfs-write-access-20261112/`. Qualified native
+runtime advances to candidate44 below for this access prerequisite.
+Haiku `src/system/kernel/fs/fd.cpp:188-240` separates retained object lifetime
+from open descriptors; Astra keeps its existing native file slot and validates
+operation access separately. Cached mutation/writeback remains unfinished.
+
+Candidate44 is
+`946e144a4d3b043ed340579008cfd176758fe868194384012262bd96682f4d91`.
+The incremental MC68040 build takes 12.5 seconds. Its disposable image changes
+only HostFS and fssem; shared Filesystem library, event catalog, ROM and kernel
+are byte-identical to candidate41. Native QEMU passes seven filesystem cases,
+provider loss/reset and fresh I/O, exact shutdown-error reporting, HostFS death
+and replacement/fresh I/O, clean shutdown 88 and offline fsck in 56.2 seconds.
+DE25 passes the same cases and recovery/shutdown sequence: trial, startup
+observer, native gate and debugger all return zero. Startup reaches stage 8
+in 60.9 seconds; the private runtime takes 344 seconds within its unchanged
+600-second guard. The debugger uses the rebuilt HostFS cancellation address
+`0x108eba` and unchanged Supervisor address `0x101164`, and observes normal
+guest exit. This qualifies retained access, not canonical cached writes or
+recovery after partial service teardown. Trial31 remains unexplained.
+The sealed hardware archive verifies all 57 file hashes, paired private
+settings/key and read-only fsck. Its SHA256 is
+`610afc142ff36915019939535b5493f9c47b421317770abe6450c556e749e26a`.
+Linux boot identity is unchanged across the final clean guest shutdown.
+Private board releases, test state and archive spool are removed after that
+verification. The unchanged selected release is at stage 8; all three services
+are active with zero restarts, loop0 only and 8.4 GiB free. Trial tooling never
+opens the live selected provider image. Current source remains uncommitted;
+the candidate and complete source patch are retained on Beast.
+
+During Beast incident44, new SSH sessions and Kubernetes API time out during a
+global OOM storm. Recovered tool-owned SSH session67402 provides the control
+channel; it is intentionally closed after fresh SSH/session retirement is
+verified and the bounded host/native gates complete. Kernel evidence records
+four `vtb` simulations (20,851.6 MiB RSS) and
+23 Bitwuzla solvers (17,963.6 MiB RSS) in one OOM snapshot; cluster workers are
+repeatedly killed and virtual storage reports I/O errors. No new Astra test
+started during this incident. A later Lumen simulation is observed at 17 GiB
+anonymous RSS without an isolated workload cgroup; it subsequently exits.
+Do not attribute every failed service or I/O error to an Astra filesystem bug.
+
+Separately, logind holds 8,192 sessions (its exact limit), 8,190 closing, with
+8,185 recorded scopes already absent. Normal termination of a verified dead
+October 5 record returns success but cannot collect it. The running daemon's
+executable has been replaced on disk. After backing up runtime session state,
+restart of logind through its normal service reload/startup path reduces the
+count from 8,192 to 10. The SSH daemon PID and surviving interactive scope/PID
+remain unchanged and active. Fresh SSH now receives a session ID, enters its
+proper user-slice scope and reaches the active user service manager. No session
+limit is raised and no runtime state file is manually removed. This recovery
+does not establish why the old session garbage-collection events were missed;
+check subsequent session retirement rather than call recurrence impossible.
+Four orphaned local Astra polling groups (34–37 days old) and their two
+surviving remote polling groups are identified and terminated; active
+interactive shells and unrelated jobs are preserved. One stale wait matches
+its own parent command with `pgrep -f` and cannot complete. Evidence, state
+backup and recovery scripts are in
+`/home/barry/astra-evidence/vfs-write-access-20261112/`.
+Resume with one bounded user unit; aggregate admission for other projects'
+direct simulation/formal jobs remains a host resource-policy gap.
+
+Current gate: connect ordinary writes to the canonical page owner and complete
+bounded writeback with dirty-data/error retention. Writable mappings, exact
+mapped-user attribution, shutdown consent/status UI and final coherent
+release/removable-media gates follow. Network mounts and broad performance
+qualification remain outside this correctness task.
+
+Earlier ownership integration baseline: candidate
+b33220d8adbdf08f53799141afe96a0549ba9aa6debe2f2da0027e8323248e28
+passes all 36 native filesystem cases, ISO/UDF desktop/Atlas and exact busy
+holder checks, plus provider-reset recovery on DE25. Boot reaches stage 8 at
+66.2 seconds after the shared reply-reaper fix, versus 264–295 seconds before.
+The combined run reaches its unchanged 600-second guard during the final
+HostFS-death check. Separate recovery/shutdown trials reuse those unchanged
+binaries. Trial26 stopped at an observer setup error; trial27 accepted stale
+syslog readiness and clicked before the replacement desktop was ready. Two
+complete debugger captures show healthy idle services, not a kernel panic.
+Shared Terminal readiness now captures both trace sequence and syslog history;
+sampler recovery requires a subsequent file timestamp change. Deterministic
+regressions and the focused host recovery gate pass. The diagnostic watcher
+starts its 620-second budget only when the private service is active, with a
+separate bounded setup interval and tested safe refusal/cleanup.
+
+Beast SSH subsequently recovered. No stale filesystem jobs remained; the exact
+source mirror completed. Readiness regression and full host optical lifecycle
+now pass, including ISO/UDF, exact file/CWD busy/lsof, desktop/Atlas, image
+retirement, RAM remount/HostFS restart and durable shutdown/fsck. The bounded
+unit took 1m49s, peak 867.8 MiB, zero swap. Prior optical failure with
+`VFS cached page prefetch:7: failed` (ASTRA_SYSCALL_TIMED_OUT) remains recorded;
+its cause is unproven. Original Terminal launch pacing is restored and the
+unused 256 MiB fixture intermediate is removed; no deadline/quota is raised.
+
+DE25 trial29 boots stage 8 in 57.7 seconds and passes basic/file-map, old-handle
+loss after 141 iterations, fresh Terminal and read/write after HostFS death.
+During requested guest shutdown all SSH connections close and DE25 goes
+unreachable. The harness wrongly expected QEMU status 88 alone: the existing
+production launcher forwards that status to host poweroff. The user power-cycles
+DE25. Selected services recover at stage 8 with zero restarts and loop0 only.
+Private console confirms `CLEAN SHUTDOWN` and `ASTRA68-QEMU SHUTDOWN`; the
+previous host journal is unavailable. Trial29's sealed tar, all 45 archived
+hashes, paired settings/key and read-only fsck pass. Its SHA256 is
+`6bb4a5dc884bfd93f1bce83db2a10f9d4440efc5bd4f926f035e5c93f7f14380`.
+Never open the live selected production image.
+
+The shared launcher now accepts trusted host/guest power policy. Default host
+mode retains poweroff/reboot; guest mode returns 88/89 only after identical
+provider/helper cleanup. Private-trial configuration selects guest mode.
+The existing launcher test fails before the fix and passes afterward for both
+clean statuses, unchanged default host actions, invalid-policy refusal and
+the privilege boundary. Runtime watchdog tests pass. Haiku
+`src/system/kernel/shutdown.cpp:13-33` guides separation of teardown/sync from
+architecture power control; no guest shutdown or filesystem path changes.
+Candidate `f12d0147a02fe408893c426deed3cb36f7ca08e3983e8854ceebf2ed8cd06067`
+changes only `bin/run-arty.sh` and `bin/runtime-supervisor.py`; all 2,651 other
+existing artifacts are unchanged. Corrected DE25 trial31 again passes basic,
+file-map and HostFS-death recovery/fresh I/O, but fails final shutdown. Tool
+session 62768 is terminal 1 (trial=1, observer=0, native=1, capture=0). Both
+complete debugger samples show only Supervisor and HostFS (three threads),
+all idle. Supervisor is back in its normal seven-source control wait, rather
+than its two-source shutdown-reply wait. HostFS's lifecycle port writable
+sequence remains at its initial value 1; receive commit always advances it.
+A completed shutdown receive is therefore not established. No cache-area
+ADMINISTER handles remain by capture time. The cache-refusal hypothesis is
+unproven; the targeted probe now also catches Supervisor's failure return
+and records its process/publication tables. Do not add a blind retry or raise
+the deadline.
+Trial31's sealed archive is verified on Beast: all 49 file hashes, paired
+settings/key and read-only fsck pass. Its SHA256 is
+`62a96ac5b74ead4fb5c08934754fca64fd1d5bb6c12d7f352c1e4deac9e25e45`.
+Host probe35 passes the full optical/recovery/shutdown lifecycle with both
+early refusal breakpoints armed. Debugger pauses exposed QEMU's explicit
+`VM not running` input rejection; the shared harness now defers only that
+whole-batch rejection within the original deadline. Other input failures
+propagate. Paused-input and terminal-provider cleanup regressions pass.
+QEMU `ui/input.c:145-174` rejects paused batches before dispatch, permitting
+safe replay. No guest runtime changes or rebuilt debug ELFs are involved.
+DE25 trial36 reuses F12 and passes basic/file-map. Its HostFS-death probe
+observes the stale write, then receives SIGHUP during Terminal restart before
+the remaining identity checks complete. Trace records PID 0x14 exiting with
+`0x80000101`; Terminal's `console_session.c:407-424` explicitly hangs up its
+session/jobs. The gate times out before requesting shutdown; no shutdown
+refusal breakpoint fires. Preserve this separate probe-lifetime failure rather
+than count it as either a shutdown failure or pass. Its archive verifies all
+50 hashes, paired settings/key and read-only fsck; sealed SHA256 is
+`7e57095af408fd74c64fa853df4d9266221e9d116eac1786580f86405163b568`.
+Trial37 isolates restart/fresh I/O/shutdown, but mistakenly starts the former
+60-second recovery observation immediately at death; the previous check starts
+it only after loss-probe completion. It stops before shutdown while restarted
+services are still progressing. Existing Linux-first lifecycle uses 90 seconds
+from death. The shared check now uses that same budget. The 600-second guard
+and native shutdown budget remain unchanged.
+The test-only fssem probe now ignores Terminal SIGHUP and emits its outcomes
+through the existing native debug log, independently of the destroyed console.
+The shared observer uses fresh trace/syslog cursors. Its regression fails with
+the old observer and passes for native PASS/FAIL/none with no Terminal output.
+Only fssem is rebuilt; input38 replaces just that integration-test command in
+the pristine fixture and passes offline fsck. Its SHA256 is
+`054409f1e86e4d3c03b9af16e6ca65aec18f48db767abb05a546f02a409079cd`.
+Host loss38 passes basic, independent stale-handle checks, fresh I/O and fsck.
+DE25 trial38 then passes basic/file-map, the full independent old-handle death
+check, fresh Terminal/I/O and clean shutdown 88 with all three refusal
+breakpoints armed. Trial/observer/native/capture all return zero; private run
+takes 249 seconds within the unchanged 600-second guard. Selected services
+restore active with zero restarts, loop0 only and unchanged Linux boot ID.
+No HostFS, Supervisor, kernel, ROM or installed library changes are involved.
+This successful run does not explain trial31's refusal. Preserve that open
+failure and repeat the focused recovery/shutdown workload before declaring
+ownership migration certified. Archive38 verifies all 55 hashes, paired
+settings/key and read-only fsck; its sealed SHA256 is
+`7ab25260757fe52094b3923fc7bbe68e371acce12aca7a4a71d18264cb6c8f35`.
+Trial39 reuses that clean private image and paired settings. All three complete
+HostFS-death/recovery checks and clean shutdown pass; the root guard returns
+zero after 456 seconds. The diagnostic watcher alone returns one: it checks
+the removed systemd override before the retained success marker, and has a
+five-second guess between guest exit and provider retirement. Native/observer/
+trial return zero. Trial40 removes both guesses: read the exact retained 88
+outcome even after restoration, but reject a stale marker before observing
+private activation; after an explicit normal GDB guest exit, wait for actual
+provider/root outcome within the existing trial deadline. The root guard
+publishes its marker by rename. GDB exits cleanly when the guest exits instead
+of attempting a post-exit snapshot. Host self-checks pass delayed provider
+retirement, stale-marker refusal and confirmed exit after override removal.
+No runtime or shutdown policy changes are made. Trial31's shutdown failure is
+still open; trials38/39 do not reproduce it. Trial40 now passes with all four
+results zero, including normal GDB exit and retained root outcome after real
+provider cleanup. Basic/file-map, independent stale-handle checks, fresh
+Terminal/I/O and clean shutdown pass in 265 seconds within the 600-second
+guard, reusing the clean stress image/settings. The latest three trials total
+five HostFS-death/recovery cycles and three successful clean shutdowns. This
+does not prove the earlier failure fixed. Archive40 now verifies all 62 hashes,
+paired settings/key and read-only fsck; sealed SHA256 is
+`e7a0e9602242c16a3bf8d5e8a030b9842e33615fd31d9c07924b28714376bc34`.
+Private board releases and disposable state are removed; selected services
+remain active with zero restarts, loop0 only and 8.4 GiB free.
+Selected services recover at stage 8, zero restarts, loop0 only; Linux boot ID
+matches the pretrial record, proving guest power policy keeps the host up.
+The verified Mac staging tree is `/private/tmp/astra-native-owner-board30/release`;
+`board-run40`, `capture40`, private-trial40 and board-gate40 helpers
+are in the existing Beast evidence directory. The gate refuses a private unit
+without explicit guest power policy before issuing any guest commands. Trial31
+input and release-manifest hashes pass. The Linux boot ID before trial31 is
+retained to prove no host reboot. Do not rerun the old host-power trial driver.
+All 59 runtime source sections matched the frozen B33 build before the fssem
+probe-only update38. HostFS debug ELF remains frozen; diagnostics41 replace
+Supervisor's ELF and retain the earlier copy as `supervisor-before41.elf` in
+the evidence directory. The untracked native backend header retains its
+recorded checksum.
+
+Supervisor diagnostics41 now report the failing shutdown stage, service, PID,
+native status and opaque reason using the existing launch-report formatter.
+The bounded stack buffer also works during allocation failure. Request, reply,
+decline, exit, terminate, wait and dependency-cycle cases pass host tests and
+ASan/UBSan. The existing test-only fault-probe can publish managed shutdown
+then close its receiver. The native service-policy gate proves exact
+`PEER_DEAD` context, a fresh usable Terminal, removal of the faulty service and
+subsequent clean shutdown. Frozen F12 fails the context assertion; the new ROM
+passes the full native gate and offline fsck in 26.1 seconds. This diagnostic
+does not establish trial31's cause or solve partial-teardown cancellation.
+Haiku `src/system/kernel/shutdown.cpp:13-33` remains the teardown/power-policy
+reference; Astra preserves managed consent and native error status.
+
+Candidate41 is
+`77a0d058265ffbb4f8934f02891444e30ffc49e15a66adb49ab30a56a9a1e56f`.
+It changes only the existing ROM and its merged event catalog in the seed
+image; 2,652 other existing artifacts match F12. Supervisor text grows 498
+bytes, data/BSS unchanged. The kernel is byte-for-byte F12, including its
+2026-11-12T03:17:48Z build timestamp; standard SOURCE_DATE_EPOCH prevents the
+boot Makefile's forced timestamp regeneration from changing that baseline.
+Initial timestamp-mismatch experiments remain archived, not release evidence.
+The coherent catalog and both offline images pass fsck. Input41 SHA256 is
+`093abe235456d956aaed4213a4eb41365ce0dcef2226bb07252c4c2ec07a8b12`.
+DE25 trial43 passes basic/file-map, exact shutdown transport-error reporting,
+fresh-Terminal recovery and faulty-service removal, independent stale-handle
+loss after HostFS death, new service/Terminal/read-write recovery and final
+clean shutdown 88. Trial/observer/native/capture all return zero in 326 seconds
+within the unchanged 600-second guard; debugger observes normal guest exit.
+Selected services restore successfully without changing the release selector.
+Archive43 verifies all 54 hashes, paired settings/key and read-only fsck;
+its sealed SHA256 is
+`7ff3b7c5d4b2b115f3a1250e18824d8640117f0ece804b1c2791f8c4de6538c2`.
+Private releases, test state and board archive spool are removed. Selected
+services are active with zero restarts, stage 8, loop0 only and 8.4 GiB free;
+Linux boot ID is unchanged. The selected log directory retains its historical
+November 7 panic report (mtime November 8 05:33 +0800). A cleanup assertion
+that demanded an empty historical report incorrectly returns one after doing
+the cleanup. The separate post-cleanup check passes absence of trial state,
+active services, stage 8 and no panic/degraded marker in the current console.
+The historical report is preserved and copied to Beast, not erased or counted
+as a new panic. Trial42 never boots a guest:
+its restored private key has archive-extraction ownership rather than required
+root ownership, and the staged test filter omits protocol headers. Both setup
+errors are retained. The retry restores the known private key/state ownership,
+copies the complete gate support files and checks imports and input checksum
+before starting. No security check, runtime or deadline is relaxed.
+Transient SSH banner delays during artifact staging clear when transfer ends;
+Linux boot ID remains unchanged. These passes qualify the new diagnostics,
+not a root-cause repair for trial31's intermittent shutdown failure.
+Trial25's standard tar archive preserves Linux's 4,095-byte symlink fixture,
+which the Mac rsync receiver refused. Its sealed hash, all 611 archived file
+hashes, paired private settings/key and read-only fsck pass. Trial27 archive
+also verifies all 45 files, paired settings/key and read-only fsck. Before
+trial29, selected services were at stage 8, zero restarts, loop0 only. Remaining filesystem
+scope includes canonical cached mutation/writeback, complete writable/private
+mapping semantics and exact kernel mapped-holder attribution. Network mounts
+remain excluded; broad performance qualification remains deferred.
+
+Unreleased native file-area ownership migration is in qualification. Wire 42,
+Filesystem Kit ABI 18 and private process-exec wire 14 replace the provider
+bypass with authenticated native sessions for every client. The raw direct
+adapter is deleted; FILE_AREA retains a native description, and retained
+release reports consumption through its in/out handle. Grant retirement cuts
+admission without invalidating retained cache backing; provider loss still
+invalidates that captured incarnation. Existing holder notifications and native
+file/session tables now attribute open descriptions to clients. Exact kernel
+mapping holders remain unfinished. Native ISO image requests borrow their
+authenticated pending native share before creating the provider-owned lease.
+Recovered roots rebind native sessions; old open descriptions stay lost.
+
+Haiku src/system/kernel/fs/fd.cpp:190-240,704-775 and
+cache/file_cache.cpp:1273-1335 guide descriptor pins and independent cache
+lifetime. Astra reuses its existing tables, request guards and rooted backend
+references. Host fixtures and fssem now use native clients, not raw provider
+capabilities. VFS/HostFS/Supervisor suites, ASan/UBSan, ThreadSanitizer,
+the million-operation concurrency model, userspace boundary audit and coherent
+ABI-18 userspace/ROM build pass. NDK distribution and CMake smoke checks pass.
+The feature-probe admission change exposed borrowed-read reuse invalidation;
+its existing failing test is retained, and reuse now precedes the probe.
+Capability replies perform connection/feature checks under one admission
+guard. Concurrent first-use metadata and bulk-path reads share one session
+and retain separate buffers. fssem no longer reads private AstraFile fields.
+The lane gate now measures native WORK requests, keeping its 500-stat workload
+and background-subtracted 400-request floor. Image publication refused one
+stale service after Kit refresh; focused executable relinking fixed that
+dependency. First native QEMU run reached desktop, Atlas and Terminal, but
+shell fork failed with errno 88 (ENOSYS): the newly lazy child client rejected
+ADOPT before HELLO had negotiated its features. The existing port test now
+reproduces first-operation adoption. Description support is validated by the
+canonical service/backend, removing premature client feature checks rather
+than another connection path. Full VFS, sanitizer and TSan suites pass after
+the fix. The first stalled run was interrupted after archiving its guest ring
+and exported WORK syslog; QEMU/provider cleanup completed. Existing image
+transaction and Kit companion validation refreshed only 22 seed artifacts.
+The focused native basic/fork-exec gate and read-only fsck pass. The full
+36-case native run reached many-lanes, then stalled in owner-sessions.
+An offline guest RAM snapshot and the existing kernel debugger show HostFS
+using all 255 handle slots, including 114 cached areas, with a HELLO reply
+capability queued for admission. The receive-pressure retry reaped dead peers
+but never reclaimed idle cache areas. It now invokes the existing backend
+cache reclaimer before its one bounded retry; pinned cache entries remain
+protected. Port regressions cover dead peers, live-peer cache pressure and
+ineffective reclamation without consuming the queued request. Haiku
+port.cpp:977-1007 and cache/file_cache.cpp:294-335 guide admission accounting
+and reclaiming only unused clean cache. Quotas and stress workloads are
+unchanged. VFS host, ASan/UBSan and TSan gates pass after the fix, including
+the million-operation forced-switch model. The first completed native pressure
+run exposed old fixture assumptions: CWD now owns a native session and file.
+Session pressure explicitly establishes and accounts for distinct WORK/CWD
+clients within the same 64-session limit. File pressure uses the virtual root
+so all 1,024 opens remain explicit; create/truncate refusal and cross-owner
+checks are retained. Both focused native quota cases and read-only fsck pass.
+NDK archive and Make/CMake consumers pass. The subsequent full run completed
+30/36 cases, exposing a second handle-admission gap: area creation could take
+the last handle, then duplicating the reply capability returned LIMIT without
+reclaiming idle areas. Cached and new sources now share one bounded duplicate
+retry using the existing reclaimer; the cached source is pinned across it.
+HostFS tests first fail, then pass with ASan/UBSan for transient pressure,
+exhaustion, hard I/O errors and source lifetime. Focused native diagnostics
+confirm READ_ONLY from rooted read-only data operations (the fixture expected
+ACCESS), and E2BIG when the deep-CWD test passed a nearly full-budget path
+along with the shell environment. That fixture now uses an explicit empty
+environment within the unchanged combined 4 KiB budget. Failure diagnostics
+retain exact read counts/bytes and relevant syslog lines. The native rerun
+passes all 36 cases and native lane accounting (552 requests for 500 stats,
+50 idle requests). Provider-reset recovery then refuses fork with ESTALE
+because the old description's backend incarnation cannot issue a live share.
+The native process-file receipt now explicitly represents a LOST local copy
+with no token. Existing ownership epochs preserve only the matching inherited
+owner; adoption cannot create a file, revive it or replace a live owner.
+Native CWD and POSIX descriptors/iterators use that same lifecycle. The old
+client retry and CWD catalog-based error guessing are removed; backend errors
+retain their exact meaning. Native process tests first fail, then pass for
+malformed receipts, repeated fork, local close and LOST CWD recovery. Haiku
+fs/fd.cpp:184-213 keeps disconnected identity until close, while
+fs/vfs.cpp:5057-5087 omits disconnected descriptors during clone. Astra adapts
+that separation by preserving its existing LOST local copies, as required by
+its native recovery gate, without relaxing grant/incarnation checks.
+Full VFS/sanitizer/TSan, POSIX and NDK gates pass, and the coherent native
+rerun again passes all 36 cases plus lane accounting. The LOST fork/recovery
+probe now passes. Its next absolute command exposes the remaining exec
+handoff gap: it did not serialize LOST ownership or inherited local pins.
+The LOST tag is now consolidated in the existing portable file state, shared
+by receipts and exec. The fixed record is 40 bytes; native exec wire 14 and
+private POSIX file/console exec versions 5/6 replace the prior layouts.
+Imports preserve LOST epochs and inherited pin counts without opening a
+backend; malformed ownership and reserved fields are refused. Full VFS,
+ASan/UBSan, TSan, POSIX and NDK/Make/CMake gates pass. Coherent products pass
+all 36 native filesystem cases, native lane accounting (553 requests for
+500 stats, 47 idle requests), LOST fork/exec provider-reset recovery, fresh
+post-reset I/O and read-only fsck. Descriptor budgets (1,000 files, 200
+directories, 16 sessions), acknowledged-byte durability through reset and
+HostFS death, full 1,024-file quota reset, desktop/shell recovery and final
+service-death recovery also pass, followed by fsck. The fault manifest fixture
+now follows the existing Linux-first gate: preserve all grants and remove only
+HostFS's critical designation. Its first refusal and an incorrect unprivileged
+observer invocation are retained; the successful observer keeps every QEMU
+thread at UID/GID 1000 with no capabilities.
+ISO/UDF, exact file/CWD busy/lsof, desktop/Atlas, image retirement and RAM
+remount/restart checks pass, but their final shutdown exposes reverse launch
+ordering: restarted HostFS appears after its still-running native clients and
+is stopped first. Shutdown selection now uses the existing namespace-holder
+records and publication owners to stop clients before filesystem publishers;
+independent processes retain reverse order, and a cycle refuses shutdown.
+No new dependency ledger, record field or ABI is added. Haiku
+servers/registrar/ShutdownProcess.cpp:1371-1405 separates application/service
+termination, and system/kernel/shutdown.cpp:13-33 syncs after service teardown;
+Astra keeps its userspace filesystem publisher alive through native client
+teardown. The existing loader recovery fixture first fails the restarted
+publisher case, then passes with full Supervisor and ASan/UBSan suites,
+including phases, self references, unnamed supervisor publications and cycles.
+The full optical lifecycle plus durable shutdown rerun and DE25 qualification
+remain pending. The next optical rerun (native-optical-lifecycle-15.log)
+refuses its second ISO unmount before reaching shutdown: opening the lifecycle
+notification watch returns permission denied (-6). This is not a busy-media
+refusal and must not be bypassed or retried into a pass. Hardware boot was held.
+The diagnostic rerun uses the existing QEMU GDB socket and breakpoints only at
+actual handle lookup/transfer denial instructions, recording rights and stacks
+without changing kernel code; native-optical-lifecycle-17.log and
+handle-denial-probe-17.log retain the repeated watch refusal. Review then finds
+the missing authority at the shared grant producer: bounded PORT_CALL retries
+wait for send credit, but built-in MESSAGING, APP_LAUNCH and EVENT_CONTROL
+grants omitted WAIT. A deterministic native catalog regression refuses the old
+MESSAGING grant with syscall status 4 before opening a watch. Those three
+request ports now receive WAIT, matching existing generic published request
+ports; the native regression checks all three and SERVICE_MANAGER. No queue
+limit, timeout, syscall check or retry policy changes. Haiku
+system/kernel/port.cpp:1593-1624 waits for a free message slot with the same
+deadline and revalidates the port after wake; Astra retains its native wait
+capability and shared port-call adapter. The corrected grants pass all four
+native wait-credit checks, catalog/watch churn, fork/exec, basic I/O and fsck.
+The full native lifecycle rerun then passes ISO/UDF, exact file/CWD busy/lsof,
+desktop/Atlas, image retirement, RAM remount/service restart and stale
+incarnation refusal. Clean shutdown returns the required exit 88 and fsck
+passes. Supervisor/ROM and fssem are rebuilt; the existing image transaction
+refreshes 26 coherent products including the combined event catalog. DE25
+candidate
+831e53a0ff80a2e4d707a0e84d49c4b0e0c3fe71705797e6c6788e31aa00c827
+reaches stage 8 at 264 seconds with zero restarts. Atlas and Terminal both
+report successful launches, but Terminal's zsh loader remains after its VFS
+initialization marker and misses the 90-second banner gate. No filesystem
+cases run and no panic is observed. This is not hardware certification.
+The bounded trial restores selected release a46dffcb... with all three
+services active and loop0 only. Failed evidence (board-failed19) verifies all
+42 hashes, its paired private settings/key and read-only fsck before disposable
+state is reset. The next diagnostic reuses the exact binaries and fresh trial
+input, enabling a private GDB socket and automatic two-sample kernel capture
+at the failure. Determine progress versus resource/admission stall before
+changing startup deadlines or continuing integration.
+The same-binary diagnostic repeats the Terminal failure at stage 8 (274.5
+seconds). Its first debugger capture times out after 781 lines, before thread
+and port state; HostFS has 216 of 255 handles, so exhaustion is not established.
+The selected services recover with zero restarts and loop0 only. All 44
+archived private-trial hashes, paired settings/key and read-only fsck pass
+in board-failed20. The debugger now fetches sparse directories and populated
+tables in bounded batches; a frozen-RAM oracle preserves all 1,179 original
+snapshot lines exactly. Library base/span records and the existing user-stack
+walker supply symbol attribution without changing runtime binaries. The next
+bounded diagnostic uses those reads for two complete samples. Failed captures
+remain evidence; no timeout or resource limit is raised.
+Both diagnostic22 snapshots complete. HostFS's main thread accounts for 29.5
+million syscalls and another 545,170 over the next sample interval, repeatedly
+releasing its state mutex while ordinary clients remain ready. Native request
+dispatch reaps reply lanes before and after each request; the shared reaper
+formerly acquired that mutex separately for all 255 reply slots, including empty
+ones. It now snapshots the existing session/handle keys under one lock,
+probes eligible lanes unlocked, and retains the same locked identity/reference
+revalidation before retirement. No owner table, quota, retry, deadline or ABI
+changes. Haiku fs/fd.cpp:280-326 guides locked identity lookup and retained
+lifetime; Astra preserves its generation-checked reply keys and active leases.
+An empty/sparse-table work-bound regression fails the old implementation,
+then passes alongside active-lease and dead-session checks. Full VFS,
+ASan/UBSan, ThreadSanitizer and HostFS suites pass. Hardware acceptance remains
+pending. Diagnostic23 uses corrected full service pathnames and bounded stack
+reads; original HostFS return PC 0x00111222 resolves to reply_reap_dead in the
+preserved pre-fix ELF. Both samples complete. The rebuilt native rerun passes
+all 36 cases, lane accounting (518 requests for 500 stats, 15 idle), provider
+reset, fresh basic/file-map I/O and fsck. Product refresh first refuses
+stale network-service dependencies, then succeeds after the existing service
+relink step; the seed is updated transactionally, not rebuilt.
+The Atlas oracle's audio fixture import now lives in its standalone main,
+so reusable filesystem/UI checks do not require unused NumPy on the board.
+Logs: broker-products-19.log, broker-wait-rights-red-18b.log,
+broker-wait-rights-green-19.log, native-optical-lifecycle-19.log,
+lost-exec-suites-14b.log, ndk-lost-exec-14.log,
+native-full-14.log, native-failures-14c.log, native-optical-lifecycle-14.log,
+shutdown-order-red-15.log and shutdown-order-green-15.log below.
+Do not deploy this unqualified worktree as a selected release. Evidence so far:
+/home/barry/astra-evidence/vfs-native-area-owner-20261111/.
+The qualified checkpoint below remains the last passing hardware evidence.
+This migration uses disposable private board state; production user data is
+preserved and the selected release remains unchanged.
 
 Retained native snapshot writeback qualified on DE25, 2026-11-11. The existing backend page
 writer now has a service-private retained-description entry point. One file

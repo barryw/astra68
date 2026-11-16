@@ -10,28 +10,40 @@ def number(value):
 def entries(name):
     values = gdb.parse_and_eval(name)
     first, last = values.type.range()
-    for index in range(first, last + 1):
-        value = values[index]
-        if value.type.code == gdb.TYPE_CODE_PTR:
-            if number(value) == 0:
-                continue
-            value = value.dereference()
-        yield index, value
+    # Sparse process directories exceed GDB's value-size limit as one array.
+    for start in range(first, last + 1, 1024):
+        count = min(1024, last - start + 1)
+        chunk_type = values.type.target().array(0, count - 1)
+        chunk = values[start].address.cast(chunk_type.pointer()).dereference()
+        chunk.fetch_lazy()
+        for offset in range(count):
+            value = chunk[offset]
+            if value.type.code == gdb.TYPE_CODE_PTR:
+                if number(value) == 0:
+                    continue
+                value = value.dereference()
+            value.fetch_lazy()
+            yield start + offset, value
 
 
 def pool_entries(name, leaf_entries, field=None):
     directory = gdb.parse_and_eval(name)
+    directory.fetch_lazy()
     first, last = directory.type.range()
     for leaf in range(first, last + 1):
         if number(directory[leaf]) == 0:
             continue
+        leaf_type = directory[leaf].type.target().array(0, leaf_entries - 1)
+        values = directory[leaf].cast(leaf_type.pointer()).dereference()
+        values.fetch_lazy()
         for slot in range(leaf_entries):
-            value = directory[leaf][slot]
+            value = values[slot]
             if field is not None:
                 value = value[field]
                 if number(value) == 0:
                     continue
                 value = value.dereference()
+                value.fetch_lazy()
             yield leaf * leaf_entries + slot, value
 
 
@@ -76,6 +88,7 @@ class AstraKernelSnapshot(gdb.Command):
 
     def snapshot(self):
         stats = gdb.parse_and_eval("scheduler_stats")
+        stats.fetch_lazy()
         gdb.write(
             "scheduler current=%08x/%08x live=%u/%u switches=%u "
             "syscalls=%08x%08x\n" % (
@@ -93,6 +106,17 @@ class AstraKernelSnapshot(gdb.Command):
                 number(gdb.parse_and_eval("deadline_count")),
                 number(gdb.parse_and_eval("wait_registration_count"))))
 
+        physical = number(gdb.parse_and_eval("library_cache_head"))
+        library_type = gdb.lookup_type("KernelLibraryCacheEntry").pointer()
+        while physical != 0:
+            library = gdb.Value(physical).cast(library_type).dereference()
+            library.fetch_lazy()
+            gdb.write("D base=%08x span=%08x abi=%u name=%s\n" % (
+                number(library["base"]), number(library["span"]),
+                number(library["reference"]["abi_major"]),
+                library["reference"]["name"].string()))
+            physical = number(library["next_physical"])
+
         for index, process in entries("processes"):
             if number(process["process_state"]) == 0:
                 continue
@@ -107,6 +131,7 @@ class AstraKernelSnapshot(gdb.Command):
                     number(process["entry_base"])))
             table = process["handles"].dereference()
             handle_entries = table["entries"]
+            handle_entries.fetch_lazy()
             first, last = handle_entries.type.range()
             for slot in range(first, last + 1):
                 entry = handle_entries[slot]
@@ -137,11 +162,11 @@ class AstraKernelSnapshot(gdb.Command):
                     number(thread["run_count"]), used, capacity))
             gdb.write(
                 "  call=%u owner=%08x pager=%08x offset=%08x "
-                "epoch=%u retry=%u syscall=%u data=%s\n" % (
+                "epoch=%u retry=%u operation=%u data=%s\n" % (
                     number(thread["call"]), number(thread["wait_owner_id"]),
                     number(thread["pager_area"]), number(thread["pager_offset"]),
                     number(thread["pager_epoch"]), number(thread["pager_retry"]),
-                    number(thread["pager_syscall"]),
+                    number(thread["pager_operation"]),
                     "/".join("%08x" % number(context["data"][register])
                              for register in range(5))))
 
@@ -190,6 +215,7 @@ class AstraKernelSnapshot(gdb.Command):
         index = 0
         while number(load_pointer) != 0:
             load = load_pointer.dereference()
+            load.fetch_lazy()
             process = load["process"]
             process_id = 0 if number(process) == 0 else number(
                 process.dereference()["id"])

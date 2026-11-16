@@ -13,7 +13,8 @@ static union { AstraVolumeRequest metadata; AstraVolumeRootRequest root;
     AstraVolumeNetworkRequest network;
     AstraVolumeAuthRequest auth;
     AstraVolumePartitionRequest partition;
-    AstraVolumeUsageRequest usage; } incoming_request;
+    AstraVolumeUsageRequest usage;
+    AstraVolumeUsageSnapshotRequest usage_snapshot; } incoming_request;
 #define request incoming_request.metadata
 static AstraVolumeReply reply;
 static uint32_t closed[64];
@@ -22,7 +23,8 @@ static uint32_t incoming_size;
 static int pending, malformed_page;
 static uint32_t catalog_status;
 static uint64_t epoch = 51u, sequence = 1u;
-static union { AstraVolumeCatalogPage catalog; AstraVolumeUsagePage usage; } output_storage;
+static union { AstraVolumeCatalogPage catalog; AstraVolumeUsagePage usage;
+    AstraVolumeUsageRecord records[4]; } output_storage;
 #define output output_storage.catalog
 static uint32_t area_bytes = sizeof(output), area_rights = 1u;
 static uint32_t root_calls, root_sent, root_send_failure;
@@ -34,6 +36,10 @@ static AstraVolumeReference admitted;
 static AstraVolumeBrokerInfo broker_info;
 static const AstraVolumeReference *expected_source;
 static int expected_delegates;
+static uint32_t receive_status, receive_calls, reclaims;
+static int reclaim_ineffective;
+static AstraVolumeUsageSnapshotInfo snapshot_info;
+static uint32_t snapshot_count = 3u, snapshot_calls, unmap_status;
 
 uint32_t astra_close(uint32_t handle) { assert(handle < 64u); ++closed[handle]; return ASTRA_SYSCALL_OK; }
 uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
@@ -42,7 +48,8 @@ uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
     assert(handles == NULL && count == 0u);
     if (handle == 2u) {
         assert(size == sizeof(reply) || size == sizeof(AstraVolumeControlReply) ||
-            size == sizeof(AstraVolumeBrokerInfoReply) || size == sizeof(AstraVolumeFormatReply));
+            size == sizeof(AstraVolumeBrokerInfoReply) || size == sizeof(AstraVolumeFormatReply) ||
+            size == sizeof(AstraVolumeUsageSnapshotReply));
         memcpy(&reply, message, sizeof(reply));
         if (size == sizeof(AstraVolumeControlReply))
             admitted = ((const AstraVolumeControlReply *)message)->reference;
@@ -50,6 +57,8 @@ uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
             broker_info = ((const AstraVolumeBrokerInfoReply *)message)->info;
         if (size == sizeof(AstraVolumeFormatReply))
             format_outcome = ((const AstraVolumeFormatReply *)message)->outcome;
+        if (size == sizeof(AstraVolumeUsageSnapshotReply))
+            snapshot_info = ((const AstraVolumeUsageSnapshotReply *)message)->info;
         return ASTRA_SYSCALL_OK;
     }
     return ASTRA_SYSCALL_INVALID_HANDLE;
@@ -69,7 +78,9 @@ uint32_t astra_port_receive_from(uint32_t handle, void *message, uint32_t capaci
     uint32_t *handles, uint32_t handle_capacity, uint32_t *size, uint32_t *count, uint32_t *owner)
 {
     assert((handle == 1u || handle == 5u) && capacity >= incoming_size && handle_capacity >= sent_count);
+    ++receive_calls;
     if (!pending) return ASTRA_SYSCALL_WOULD_BLOCK;
+    if (receive_status != ASTRA_SYSCALL_OK) return receive_status;
     memcpy(message, &request, incoming_size);
     memcpy(handles, sent_handles, sent_count * sizeof(*handles));
     *size = incoming_size; *count = sent_count; *owner = sender; pending = 0;
@@ -83,7 +94,7 @@ uint32_t astra_rt_area_map(uint32_t handle, uint32_t flags, void **mapping, uint
     *mapping = &output_storage; *size = area_bytes; return ASTRA_SYSCALL_OK;
 }
 uint32_t astra_rt_area_unmap(void *mapping)
-{ assert(mapping == &output_storage); return ASTRA_SYSCALL_OK; }
+{ assert(mapping == &output_storage); return unmap_status; }
 
 static uint32_t catalog(void *context, const AstraVolumeCatalogQuery *query, AstraVolumeCatalogPage *page)
 {
@@ -116,6 +127,25 @@ static uint32_t usage(void *context, const AstraVolumeUsageQuery *query, AstraVo
         .handle = 27u, .process = 17u, .inode = 99u, .kind = ASTRA_VOLUME_USAGE_FILE,
         .rights = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, .path = "/usb0/file", .path_length = 10u};
     if (malformed_page) page->records[0].path_length = ASTRA_VOLUME_USAGE_PATH_MAX;
+    return ASTRA_STATUS_OK;
+}
+static uint32_t usage_snapshot(void *context, const AstraVolumeReference *volume,
+    AstraVolumeUsageRecord *records, uint32_t capacity, AstraVolumeUsageSnapshotInfo *info)
+{
+    AstraVolumeUsageQuery query = {.version = ASTRA_VOLUME_USAGE_VERSION,
+        .size = sizeof(query), .volume = *volume};
+    AstraVolumeUsagePage page;
+    ++snapshot_calls;
+    uint32_t status = usage(context, &query, &page);
+    if (status != ASTRA_STATUS_OK) return status;
+    *info = (AstraVolumeUsageSnapshotInfo){.volume = page.volume,
+        .sequence = page.sequence, .catalog_sequence = page.catalog_sequence,
+        .count = snapshot_count};
+    if (snapshot_count > capacity) return ASTRA_STATUS_BUFFER_TOO_SMALL;
+    for (uint32_t at = 0u; at < snapshot_count; ++at) {
+        records[at] = page.records[0];
+        records[at].handle += at;
+    }
     return ASTRA_STATUS_OK;
 }
 static void enqueue(uint32_t operation, uint32_t second)
@@ -261,6 +291,47 @@ static void usage_request(void)
     incoming_request.usage.query = (AstraVolumeUsageQuery){ASTRA_VOLUME_USAGE_VERSION,
         sizeof(AstraVolumeUsageQuery), {0}, 0u, 0u, 0u, 0u, 0u};
 }
+static void snapshot_request(void)
+{
+    enqueue(ASTRA_VOLUME_USAGE_SNAPSHOT, 3u);
+    incoming_size = sizeof(AstraVolumeUsageSnapshotRequest);
+    request.header.total_size = incoming_size;
+    memset(&snapshot_info, 0xff, sizeof(snapshot_info));
+}
+static void snapshot_requests(void)
+{
+    snapshot_request(); pump(ASTRA_STATUS_ACCESS);
+    assert(snapshot_calls == 0u && snapshot_info.count == 0u);
+    snapshot_request();
+    assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u && reply.status == ASTRA_STATUS_ACCESS);
+    snapshot_request(); incoming_request.usage_snapshot.volume.id = 5u;
+    assert(astra_volume_port_usage_pump(&port, 5u, 1u) == 1u && reply.status == ASTRA_STATUS_INVALID);
+    area_bytes = sizeof(AstraVolumeUsageRecord);
+    snapshot_request();
+    assert(astra_volume_port_usage_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_BUFFER_TOO_SMALL && snapshot_info.count == 3u);
+    area_bytes = sizeof(output_storage.records);
+    snapshot_request();
+    assert(astra_volume_port_usage_pump(&port, 5u, 1u) == 1u && reply.status == ASTRA_STATUS_OK &&
+        snapshot_info.count == 3u && snapshot_info.sequence == sequence &&
+        output_storage.records[2].handle == 29u && output_storage.records[2].process == 17u);
+    snapshot_request(); malformed_page = 1;
+    assert(astra_volume_port_usage_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_PROTOCOL && snapshot_info.count == 0u);
+    malformed_page = 0;
+    snapshot_request(); area_rights = 0u;
+    assert(astra_volume_port_usage_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_ACCESS && snapshot_info.count == 0u);
+    area_rights = 1u;
+    snapshot_request(); unmap_status = ASTRA_SYSCALL_IO_ERROR;
+    assert(astra_volume_port_usage_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_IO && snapshot_info.count == 0u);
+    unmap_status = ASTRA_SYSCALL_OK;
+    snapshot_request(); catalog_status = ASTRA_STATUS_BUSY;
+    assert(astra_volume_port_usage_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_BUSY && snapshot_info.count == 0u);
+    catalog_status = 0u; area_bytes = sizeof(output);
+}
 static void usage_validation(void)
 {
     AstraVolumeUsageQuery query = {ASTRA_VOLUME_USAGE_VERSION, sizeof(query), {0}, 0u, 0u, 0u, 0u, 0u};
@@ -361,10 +432,47 @@ static void query_validation(void)
     page.records[0].origin = ASTRA_VOLUME_ORIGIN_RAM;
     assert(!astra_volume_page_valid(&query, &page));
 }
+static void reclaim(void *context)
+{
+    assert(context == &epoch);
+    ++reclaims;
+    if (!reclaim_ineffective) receive_status = ASTRA_SYSCALL_OK;
+}
+
+static void receive_pressure(void)
+{
+    port.reclaim = reclaim;
+    usage_request();
+    receive_status = ASTRA_SYSCALL_RESOURCE_LIMIT;
+    receive_calls = reclaims = 0u;
+    pump(ASTRA_STATUS_ACCESS);
+    assert(receive_calls == 2u && reclaims == 1u);
+
+    usage_request();
+    receive_status = ASTRA_SYSCALL_RESOURCE_LIMIT;
+    receive_calls = reclaims = 0u;
+    reclaim_ineffective = 1;
+    assert(astra_volume_port_pump(&port, 1u) == 0u && pending);
+    assert(receive_calls == 2u && reclaims == 1u);
+    reclaim_ineffective = 0;
+    receive_status = ASTRA_SYSCALL_OK;
+    pump(ASTRA_STATUS_ACCESS);
+
+    usage_request();
+    receive_status = ASTRA_SYSCALL_WOULD_BLOCK;
+    receive_calls = reclaims = 0u;
+    assert(astra_volume_port_pump(&port, 1u) == 0u && pending);
+    assert(receive_calls == 1u && reclaims == 0u);
+    receive_status = ASTRA_SYSCALL_OK;
+    pump(ASTRA_STATUS_ACCESS);
+    port.reclaim = NULL;
+}
+
 int main(void)
 {
     query_validation(); usage_validation();
     assert(astra_volume_port_init(&port, 1u, catalog, &epoch));
+    receive_pressure();
     port.root = root_grant;
     port.control = apply_control;
     port.network_source = apply_network;
@@ -372,6 +480,8 @@ int main(void)
     port.format = apply_format;
     port.partition = apply_partition;
     port.usage = usage;
+    port.usage_snapshot = usage_snapshot;
+    snapshot_requests();
     usage_request(); pump(ASTRA_STATUS_ACCESS);
     usage_request();
     assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, NULL, 0, 1u) == 1u && reply.status == ASTRA_STATUS_ACCESS);

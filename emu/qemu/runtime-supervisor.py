@@ -114,10 +114,12 @@ def main():
     parser.add_argument("--aux-cpu", required=True)
     parser.add_argument("--qmp", required=True)
     parser.add_argument("--remote-qmp", required=True)
+    parser.add_argument("--watchdog-qmp", required=True)
     parser.add_argument("--uid", type=int, required=True)
     parser.add_argument("--gid", type=int, required=True)
     parser.add_argument("--console", type=Path, required=True)
     parser.add_argument("--panic", type=Path, required=True)
+    parser.add_argument("--power-policy", choices=("host", "guest"), default="host")
     parser.add_argument("provider", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if os.geteuid() != 0 or args.uid <= 0 or args.gid <= 0:
@@ -144,7 +146,7 @@ def main():
         "--qmp", args.qmp]
     stopping = threading.Event()
     service_stop = threading.Event()
-    watchdog = GuestWatchdog(Path(args.qmp), Path(args.input))
+    watchdog = GuestWatchdog(Path(args.watchdog_qmp), Path(args.input))
     def request_stop(number, frame):
         del frame
         if number == signal.SIGUSR1:
@@ -224,6 +226,8 @@ def main():
     if stopping.is_set() or console_error:
         return 0 if service_stop.is_set() and status == 0 and not console_error and not panicked else 1
     if status in (88, 89):
+        if args.power_policy == "guest":
+            return status
         action = "poweroff" if status == 88 else "reboot"
         if subprocess.run(["systemctl", action, "--no-block"], check=False).returncode == 0:
             print(f"Astra guest stopped cleanly; DE25 {action} requested")

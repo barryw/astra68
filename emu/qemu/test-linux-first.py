@@ -41,6 +41,7 @@ def lifecycle_fixture(image, work):
     astra_image._debugfs(volume, "write %s /home/disc.iso" % iso, "native ISO fixture")
     astra_image._debugfs(volume, "write %s /home/disc.udf" % udf, "native UDF fixture")
     astra_image._splice(image, offset, volume)
+    volume.unlink()
 
 
 def lifecycle_gate(machine, optical_only=False):
@@ -146,10 +147,10 @@ def lifecycle_gate(machine, optical_only=False):
         assert any("unmounted" in line for line in command("unmount /ram0"))
         desktop_has("/ram0", False)
         if cycle == 1:
-            before = machine.sequence()
+            before = machine.trace_cursor()
             machine.qmp.type_line("ps | while read -r id rest; do "
                 "[[ $rest == *' /services/hostfs' ]] && print kill > /proc/$id/ctl; done")
-            assert machine.wait_for_trace_text("desktop ready", 90, before), "HostFS restart failed with RAM unmounted"
+            assert machine.wait_for_trace_text(terminal.DESKTOP_READY, 90, before), "HostFS restart failed with RAM unmounted"
             desktop_has("/apps", True)
             atlas.desktop.wait_quiet(machine, "desktop after HostFS restart")
             assert terminal.open_terminal_window(machine, 90), "fresh Terminal failed after HostFS restart"
@@ -179,6 +180,8 @@ def main():
     parser.add_argument("--gid", type=int, required=True)
     parser.add_argument("--lifecycle", action="store_true")
     parser.add_argument("--optical-only", action="store_true")
+    parser.add_argument("--prepared", action="store_true",
+                        help="IMAGE already contains coherent current system products")
     args = parser.parse_args()
     if os.geteuid() != 0 or args.uid <= 0 or args.gid <= 0:
         parser.error("root observer and explicit non-root QEMU UID/GID required")
@@ -196,8 +199,18 @@ def main():
             assert lines[0].startswith("service /services/hostfs ")
             lines[0] = lines[0].replace(" critical priority=20", " priority=20")
             manifest = "\n".join(lines) + "\n"
-        astra_image.install(image, manifest_text=manifest)
+        if args.prepared:
+            if args.lifecycle:
+                policy = work / "startup-system"
+                policy.write_text(manifest)
+                astra_image._replace_volume_file(str(image), str(policy), "/startup/system")
+        else:
+            astra_image.install(image, manifest_text=manifest)
         if args.lifecycle or args.optical_only:
+            spec = importlib.util.spec_from_file_location("lifecycle_oracle", Path(__file__).with_name("test-atlas.py"))
+            oracle = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(oracle)
+            oracle.prepare_oracle(image)
             lifecycle_fixture(image, work)
         offset, length = astra_image.ext4_partition(image)
         exports = work / "exports"

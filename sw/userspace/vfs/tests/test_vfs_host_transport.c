@@ -12,6 +12,7 @@
 static uint8_t dma_storage[DMA_SLOT_COUNT][16384];
 static uint32_t dma_slot_count;
 static uint32_t channel_thread[DMA_SLOT_COUNT];
+static uint32_t channel_device[DMA_SLOT_COUNT];
 static uint8_t channel_opened[DMA_SLOT_COUNT];
 static _Thread_local uint32_t current_thread = 1u;
 static uint32_t capabilities;
@@ -141,6 +142,7 @@ uint32_t astra_host_channel_open(uint32_t device,
     channel->host_generation = 9u;
     channel_opened[slot] = 1u;
     channel_thread[slot] = current_thread;
+    channel_device[slot] = device;
     ++channel_opens;
     return ASTRA_SYSCALL_OK;
 }
@@ -206,6 +208,11 @@ static void complete_channel(uint32_t slot, uint32_t producer)
 
         check_operands(slot, command);
         command->status = mock_command_status;
+        if (command->operation == ASTRA_HOST_FS_SESSION_OPEN &&
+            channel_device[slot] != 41u) {
+            command->status = ASTRA_VFS_ERR_ACCESS;
+            continue;
+        }
         command->handle = 0x5678u + position;
         if (command->service == ASTRA_HOST_SERVICE_METRICS) {
             AstraHostMetricsSnapshot *snapshot = (void *)(
@@ -334,6 +341,10 @@ uint32_t astra_close(uint32_t handle)
 uint32_t astra_host_scope_attach(uint32_t scope, uint32_t address)
 {
     assert(address >= 0x4ff00000u && address < 0x50000000u);
+    uint32_t slot = (address - 0x4ff00000u) / 0x1000u;
+    assert(slot < dma_slot_count && channel_opened[slot] != 0u);
+    if (channel_device[slot] == 41u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
     ++scope_attaches;
     last_attached = scope;
     return ASTRA_SYSCALL_OK;
@@ -433,7 +444,43 @@ static void test_lane_carries_scopes(void)
     request.command->generation = transport.generation;
     assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
                                            NULL, 0u) == ASTRA_VFS_OK);
+    assert(astra_vfs_host_transport_begin(&transport, 0u, 0u, &request) == ASTRA_VFS_OK);
+    request.command->generation = transport.generation;
+    request.command->operation = ASTRA_HOST_FS_SESSION_OPEN;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    assert(last_open_device == 41u);
+    assert(astra_vfs_host_transport_begin(&transport, 78u, 0u, &request) == ASTRA_VFS_OK);
+    request.command->generation = transport.generation;
+    request.command->operation = ASTRA_HOST_FS_CHANGE_SNAPSHOT;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    assert(last_attached == 78u);
     astra_vfs_host_transport_destroy(&transport);
+}
+
+static void test_failed_control_reopen_releases_dma(void)
+{
+    AstraVfsHostTransport transport;
+    AstraVfsHostRequest request;
+    uint32_t before = closes;
+
+    assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release, &lock_depth));
+    assert(astra_vfs_host_transport_begin(&transport, 77u, 0u, &request) == ASTRA_VFS_OK);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    channel_open_status = ASTRA_SYSCALL_RESOURCE_LIMIT;
+    assert(astra_vfs_host_transport_begin(&transport, 0u, 0u, &request) == ASTRA_VFS_ERR_LIMIT);
+    assert(closes == before + 1u);
+    channel_open_status = ASTRA_SYSCALL_OK;
+    assert(astra_vfs_host_transport_begin(&transport, 0u, 0u, &request) == ASTRA_VFS_OK);
+    request.command->generation = transport.generation;
+    request.command->operation = ASTRA_HOST_FS_SESSION_OPEN;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    astra_vfs_host_transport_destroy(&transport);
+    assert(closes == before + 2u);
 }
 
 static void test_sensitive_input_is_retired(void)
@@ -545,6 +592,18 @@ static void test_scope_cache_rotation(void)
     }
     assert(channel_opens == opened + 2u && channel_closes == closed + 1u);
     assert(last_open_device == 77u + ASTRA_HOST_CHANNEL_SCOPE_MAX);
+    AstraHostCommand control = {.generation = transport.generation,
+        .service = ASTRA_HOST_SERVICE_FILESYSTEM,
+        .operation = ASTRA_HOST_FS_SESSION_OPEN};
+    AstraVfsHostTransfer transfer = {.command = &control};
+    assert(astra_vfs_host_transport_execute_batch(&transport, &transfer, 1u) == ASTRA_VFS_OK);
+    /* A scoped replacement has no authority for the next provider command. */
+    assert(astra_vfs_host_transport_begin(&transport, 0u, 0u, &request) == ASTRA_VFS_OK);
+    request.command->generation = transport.generation;
+    request.command->operation = ASTRA_HOST_FS_SESSION_OPEN;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    assert(last_open_device == 41u && channel_opens == opened + 3u);
     astra_vfs_host_transport_destroy(&transport);
     current_thread = previous_thread;
 }
@@ -790,6 +849,7 @@ int main(void)
     test_sensitive_input_is_retired();
     test_a_forgotten_scope_is_attached_again();
     test_scope_cache_rotation();
+    test_failed_control_reopen_releases_dma();
     {
         AstraVfsHostTransfer escaped[2] = {0};
         AstraHostCommand commands[2] = {0};

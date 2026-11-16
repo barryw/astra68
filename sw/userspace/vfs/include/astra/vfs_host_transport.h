@@ -20,7 +20,8 @@ typedef struct AstraVfsHostLane {
     uint8_t scope_count;
     uint8_t reserved[2];
     /* The scope handles this lane's channel was opened on or has attached
-     * (ASTRA_SYSCALL_HOST_SCOPE_ATTACH). */
+     * (ASTRA_SYSCALL_HOST_SCOPE_ATTACH). A device channel has no bindings;
+     * a scoped channel starts with one, and forgotten handles keep tombstones. */
     uint32_t scopes[ASTRA_HOST_CHANNEL_SCOPE_MAX];
 } AstraVfsHostLane;
 

@@ -7,7 +7,6 @@
 
 #include <astra/endian.h>
 #include <astra/utf8.h>
-#include <astra/vfs_backend.h>
 #include <astra/vfs_path_payload.h>
 #include <astra/vfs_reply.h>
 #include <astra/vfs_call_storage.h>
@@ -16,33 +15,6 @@
 
 #include <stddef.h>
 #include <string.h>
-
-static uint32_t
-backend_enter(AstraVfsClient *client, const AstraVfsBackendOps **ops,
-              void **context)
-{
-    uint32_t status;
-
-    if (client->direct_backend_enter == NULL ||
-        client->direct_backend_leave == NULL)
-        return ASTRA_VFS_ERR_INVALID;
-    status = astra_vfs_storage_status(client->direct_backend_enter(client));
-    if (status != ASTRA_VFS_OK)
-        return status;
-    *ops = client->direct_backend_ops;
-    *context = client->direct_backend_context;
-    if (*ops == NULL || *context == NULL) {
-        client->direct_backend_leave(client);
-        return ASTRA_VFS_ERR_INVALID;
-    }
-    return ASTRA_VFS_OK;
-}
-
-static void
-backend_leave(AstraVfsClient *client)
-{
-    client->direct_backend_leave(client);
-}
 
 static AstraVfsCallState *
 call_state(AstraVfsClient *client)
@@ -69,40 +41,6 @@ begin_request(AstraVfsClient *client, AstraVfsRequest *request, uint16_t size)
      * rather than at every call.
      */
     request->activity = client->activity;
-}
-
-uint32_t astra_vfs_file_mutated_node(AstraVfsClient *client, uintptr_t node)
-{
-    AstraVfsRequest request;
-    AstraVfsReply reply = {0};
-    uint64_t token = 0u;
-    uint32_t status;
-
-    if (client == NULL || client->direct_backend_ops == NULL ||
-        client->direct_backend_context == NULL || client->transport == NULL)
-        return ASTRA_VFS_ERR_INVALID;
-    if ((client->features & ASTRA_VFS_FEATURE_FILE_AREAS) == 0u)
-        return ASTRA_VFS_OK;
-    if (client->direct_backend_ops->share == NULL ||
-        client->direct_backend_ops->adopt == NULL)
-        return ASTRA_VFS_ERR_UNSUPPORTED;
-    status = client->direct_backend_ops->share(
-        client->direct_backend_context, node, &token);
-    if (status != ASTRA_VFS_OK) return status;
-    if (token == 0u) return ASTRA_VFS_ERR_PROTOCOL;
-    begin_request(client, &request, ASTRA_VFS_REQUEST_SIZE);
-    request.file = ASTRA_VFS_FILE_INVALID;
-    request.offset = token;
-    status = client->transport(client, ASTRA_VFS_OP_FILE_MUTATED,
-                               &request, NULL, &reply);
-    if (status == ASTRA_VFS_OK)
-        status = reply.status;
-    if (status != ASTRA_VFS_OK) {
-        uintptr_t discarded = 0u;
-        (void)client->direct_backend_ops->adopt(client->direct_backend_context,
-            token, ASTRA_VFS_ADOPT_DISCARD, &discarded);
-    }
-    return status;
 }
 
 static AstraVfsCallState *
@@ -174,6 +112,7 @@ exchange_request(AstraVfsClient *client, uint32_t operation,
     AstraVfsReply *reply = &call->reply;
     uint32_t status;
 
+    memset(reply, 0, sizeof(*reply));
     if (client == NULL || client->transport == NULL) {
         return ASTRA_VFS_ERR_INVALID;
     }
@@ -181,6 +120,7 @@ exchange_request(AstraVfsClient *client, uint32_t operation,
         client->transport(client->context, operation, request, &call->transfer,
                            reply));
     if (status != ASTRA_VFS_OK) {
+        memset(reply, 0, sizeof(*reply));
         return status;
     }
     /*
@@ -189,6 +129,7 @@ exchange_request(AstraVfsClient *client, uint32_t operation,
      * reading whatever now lives at those offsets.
      */
     if (!astra_vfs_reply_valid(reply)) {
+        memset(reply, 0, sizeof(*reply));
         return ASTRA_VFS_ERR_PROTOCOL;
     }
     return reply->status;
@@ -228,10 +169,6 @@ astra_vfs_connect(AstraVfsClient *client, AstraVfsTransport transport,
     client->version = ASTRA_VFS_VERSION;
     client->features = 0u;
     client->port_area_capable = 0u;
-    client->direct_backend_ops = NULL;
-    client->direct_backend_context = NULL;
-    client->direct_backend_enter = NULL;
-    client->direct_backend_leave = NULL;
 
     call = begin(client);
     status = exchange(client, call, ASTRA_VFS_OP_HELLO);
@@ -294,11 +231,7 @@ open_mode_at(AstraVfsClient *client, AstraVfsFile directory, const char *path,
             return path_status;
     }
 
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
-    AstraVfsNodeInfo info = {0};
-    uintptr_t node = 0u;
     uint32_t status;
 
     if (client == NULL || file == NULL) {
@@ -313,42 +246,6 @@ open_mode_at(AstraVfsClient *client, AstraVfsFile directory, const char *path,
          (flags & ASTRA_VFS_OPEN_CREATE) == 0u))
         return ASTRA_VFS_ERR_INVALID;
     *file = ASTRA_VFS_FILE_INVALID;
-    if (client->direct_backend_ops != NULL) {
-        const uint32_t allowed =
-            ASTRA_VFS_OPEN_MASK;
-
-        if (!path_text_valid(path, NULL) || (flags & ~allowed) != 0u ||
-            (flags & (ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE)) == 0u ||
-            ((flags & ASTRA_VFS_OPEN_EXCLUSIVE) != 0u &&
-             (flags & ASTRA_VFS_OPEN_CREATE) == 0u))
-            return ASTRA_VFS_ERR_INVALID;
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = directory == ASTRA_VFS_FILE_INVALID ?
-            ops->open(context, path, flags, create_mode, &node, &info) :
-            ops->open_at(context, directory, path, flags, create_mode, &node,
-                         &info);
-        if (status == ASTRA_VFS_OK &&
-            (flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u)
-            status = astra_vfs_file_mutated_node(client, node);
-        if (status == ASTRA_VFS_OK && node > (uintptr_t)UINT32_MAX) {
-            status = ASTRA_VFS_ERR_PROTOCOL;
-        }
-        if (status != ASTRA_VFS_OK && node != 0u)
-            (void)ops->close(context, node);
-        backend_leave(client);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        *file = (AstraVfsFile)node;
-        if (size != NULL)
-            *size = info.size;
-        if (kind != NULL)
-            *kind = info.kind;
-        if (client->description_acquire != NULL)
-            client->description_acquire(client);
-        return ASTRA_VFS_OK;
-    }
     call = begin(client);
     {
         uint32_t path_status = set_path(call, path);
@@ -427,25 +324,16 @@ astra_vfs_open_at_mode(AstraVfsClient *client, AstraVfsFile directory,
 uint32_t
 astra_vfs_close(AstraVfsClient *client, AstraVfsFile file)
 {
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
     uint32_t status;
 
     if (client == NULL) {
         return ASTRA_VFS_ERR_INVALID;
     }
-    if (client->direct_backend_ops != NULL) {
-        status = backend_enter(client, &ops, &context);
-        if (status == ASTRA_VFS_OK) {
-            status = ops->close(context, file);
-            backend_leave(client);
-        }
-    } else {
-        call = begin(client);
-        call->request.file = file;
-        status = exchange(client, call, ASTRA_VFS_OP_CLOSE);
-    }
+    call = begin(client);
+    call->request.file = file;
+    status = exchange(client, call, ASTRA_VFS_OP_CLOSE);
+
     /* Close consumes the caller's local description even after peer loss. */
     if (file != ASTRA_VFS_FILE_INVALID && client->description_release != NULL &&
         status != ASTRA_VFS_ERR_BAD_HANDLE && status != ASTRA_VFS_ERR_INVALID)
@@ -458,8 +346,6 @@ astra_vfs_read_position(AstraVfsClient *client, AstraVfsFile file,
                         uint64_t offset, uint32_t flags, void *buffer,
                         uint32_t length, uint32_t *moved, uint64_t *position)
 {
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
     uint32_t status;
     uint32_t index;
@@ -471,9 +357,6 @@ astra_vfs_read_position(AstraVfsClient *client, AstraVfsFile file,
     }
     *moved = 0u;
     *position = offset;
-    if ((flags & ASTRA_VFS_IO_SEQUENTIAL) != 0u &&
-        (client->features & ASTRA_VFS_FEATURE_DESCRIPTIONS) == 0u)
-        return ASTRA_VFS_ERR_UNSUPPORTED;
     if (length > ASTRA_VFS_IO_MAX) {
         length = ASTRA_VFS_IO_MAX;
     }
@@ -482,40 +365,17 @@ astra_vfs_read_position(AstraVfsClient *client, AstraVfsFile file,
                                                      buffer, length, moved, position);
         if (status != ASTRA_VFS_ERR_UNSUPPORTED) return status;
     }
-    if (client->direct_backend_ops != NULL) {
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        {
-            AstraVfsBackend backend = {ops, context};
-
-            status = astra_vfs_backend_read_position(&backend, file,
-                offset, flags, buffer, length, moved, position);
-        }
-        backend_leave(client);
-        return status;
-    }
     call = begin(client);
     call->request.file = file;
     call->request.flags = flags;
     call->request.offset = offset;
     call->request.length = length;
     status = exchange(client, call, ASTRA_VFS_OP_READ);
-    if (status != ASTRA_VFS_OK) {
-        return status;
-    }
-    if (call->reply.count > length ||
-        ((flags & ASTRA_VFS_IO_SEQUENTIAL) != 0u &&
-         (call->reply.position < call->reply.count ||
-          call->reply.position > INT64_MAX))) {
-        return ASTRA_VFS_ERR_PROTOCOL; /* a service claiming more than it sent */
-    }
-    for (index = 0u; index < call->reply.count; ++index) {
+    status = astra_vfs_reply_io_result(&call->reply, status, flags, length, moved, position);
+    for (index = 0u; index < *moved; ++index) {
         out[index] = call->reply.payload[index];
     }
-    *moved = call->reply.count;
-    *position = call->reply.position;
-    return ASTRA_VFS_OK;
+    return status;
 }
 
 uint32_t
@@ -538,8 +398,6 @@ astra_vfs_seek(AstraVfsClient *client, AstraVfsFile file, int64_t delta,
     if (client == NULL || position == NULL || file == ASTRA_VFS_FILE_INVALID ||
         origin > 2u)
         return ASTRA_VFS_ERR_INVALID;
-    if (!(client->features & ASTRA_VFS_FEATURE_DESCRIPTIONS))
-        return ASTRA_VFS_ERR_UNSUPPORTED;
     call = begin(client);
     call->request.file = file;
     call->request.offset = (uint64_t)delta;
@@ -562,8 +420,6 @@ astra_vfs_share(AstraVfsClient *client, AstraVfsFile file, uint64_t *token)
     if (client == NULL || token == NULL || file == ASTRA_VFS_FILE_INVALID)
         return ASTRA_VFS_ERR_INVALID;
     *token = 0u;
-    if (!(client->features & ASTRA_VFS_FEATURE_DESCRIPTIONS))
-        return ASTRA_VFS_ERR_UNSUPPORTED;
     call = begin(client);
     call->request.file = file;
     status = exchange(client, call, ASTRA_VFS_OP_SHARE);
@@ -584,8 +440,6 @@ adopt_share(AstraVfsClient *client, uint64_t token, uint32_t flags,
 
     if (client == NULL || token == 0u)
         return ASTRA_VFS_ERR_INVALID;
-    if (!(client->features & ASTRA_VFS_FEATURE_DESCRIPTIONS))
-        return ASTRA_VFS_ERR_UNSUPPORTED;
     call = begin(client);
     call->request.offset = token;
     call->request.flags = flags;
@@ -626,8 +480,6 @@ astra_vfs_file_flags(AstraVfsClient *client, AstraVfsFile file,
     if (client == NULL || result == NULL || file == ASTRA_VFS_FILE_INVALID ||
         mask & ~ASTRA_VFS_FILE_STATUS_MASK || flags & ~mask)
         return ASTRA_VFS_ERR_INVALID;
-    if (!(client->features & ASTRA_VFS_FEATURE_DESCRIPTIONS))
-        return ASTRA_VFS_ERR_UNSUPPORTED;
     call = begin(client);
     call->request.file = file;
     call->request.flags = mask;
@@ -648,8 +500,6 @@ astra_vfs_write_position(AstraVfsClient *client, AstraVfsFile file,
                          uint32_t length, uint32_t *moved,
                          uint64_t *position)
 {
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
     const uint8_t *in = buffer;
     uint32_t status;
@@ -660,24 +510,9 @@ astra_vfs_write_position(AstraVfsClient *client, AstraVfsFile file,
         return ASTRA_VFS_ERR_INVALID;
     }
     *moved = 0u;
-    if ((flags & ASTRA_VFS_IO_SEQUENTIAL) != 0u &&
-        (client->features & ASTRA_VFS_FEATURE_DESCRIPTIONS) == 0u)
-        return ASTRA_VFS_ERR_UNSUPPORTED;
     *position = offset;
     if (length > ASTRA_VFS_IO_MAX) {
         length = ASTRA_VFS_IO_MAX;
-    }
-    if (client->direct_backend_ops != NULL) {
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = ops->write(context, file, offset, flags, max_end, buffer, length,
-                            moved, position);
-        if (status == ASTRA_VFS_OK && *moved != 0u)
-            status = astra_vfs_file_mutated_node(client, file);
-        backend_leave(client);
-        return status == ASTRA_VFS_OK && *moved > length ?
-            ASTRA_VFS_ERR_PROTOCOL : status;
     }
     call = begin(client);
     call->request.file = file;
@@ -689,15 +524,7 @@ astra_vfs_write_position(AstraVfsClient *client, AstraVfsFile file,
         call->request.body.payload[index] = in[index];
     }
     status = exchange(client, call, ASTRA_VFS_OP_WRITE);
-    if (status != ASTRA_VFS_OK) {
-        return status;
-    }
-    if (call->reply.count > length) {
-        return ASTRA_VFS_ERR_PROTOCOL;
-    }
-    *moved = call->reply.count;
-    *position = call->reply.position;
-    return ASTRA_VFS_OK;
+    return astra_vfs_reply_io_result(&call->reply, status, flags, length, moved, position);
 }
 
 uint32_t
@@ -713,21 +540,10 @@ astra_vfs_write(AstraVfsClient *client, AstraVfsFile file, uint64_t offset, uint
 uint32_t
 astra_vfs_sync(AstraVfsClient *client, AstraVfsFile file)
 {
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
-    uint32_t status;
 
     if (client == NULL)
         return ASTRA_VFS_ERR_INVALID;
-    if (client->direct_backend_ops != NULL) {
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = ops->sync(context, file);
-        backend_leave(client);
-        return status;
-    }
     call = begin(client);
     call->request.file = file;
     return exchange(client, call, ASTRA_VFS_OP_SYNC);
@@ -735,22 +551,10 @@ astra_vfs_sync(AstraVfsClient *client, AstraVfsFile file)
 
 uint32_t astra_vfs_try_lock(AstraVfsClient *client, AstraVfsFile file)
 {
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
-    uint32_t status;
 
     if (client == NULL || file == ASTRA_VFS_FILE_INVALID)
         return ASTRA_VFS_ERR_INVALID;
-    if (client->direct_backend_ops != NULL) {
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = ops->try_lock != NULL ? ops->try_lock(context, file) :
-                                         ASTRA_VFS_ERR_UNSUPPORTED;
-        backend_leave(client);
-        return status;
-    }
     call = begin(client);
     call->request.file = file;
     return exchange(client, call, ASTRA_VFS_OP_TRY_LOCK);
@@ -759,23 +563,10 @@ uint32_t astra_vfs_try_lock(AstraVfsClient *client, AstraVfsFile file)
 uint32_t
 astra_vfs_truncate(AstraVfsClient *client, AstraVfsFile file, uint64_t size)
 {
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
-    uint32_t status;
 
     if (client == NULL)
         return ASTRA_VFS_ERR_INVALID;
-    if (client->direct_backend_ops != NULL) {
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = ops->truncate(context, file, size);
-        if (status == ASTRA_VFS_OK)
-            status = astra_vfs_file_mutated_node(client, file);
-        backend_leave(client);
-        return status;
-    }
     call = begin(client);
     call->request.file = file;
     call->request.offset = size;
@@ -797,36 +588,11 @@ astra_vfs_stat_meta(AstraVfsClient *client, const char *path,
             return path_status;
     }
 
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
-    AstraVfsNodeInfo info = {0};
     uint32_t status;
 
     if (client == NULL || meta == NULL)
         return ASTRA_VFS_ERR_INVALID;
-    if (client->direct_backend_ops != NULL) {
-        if (!path_text_valid(path, NULL))
-            return ASTRA_VFS_ERR_INVALID;
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = ops->stat(context, path, &info);
-        backend_leave(client);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        meta->name[0] = '\0';
-        meta->size = info.size;
-        meta->mtime = info.mtime;
-        meta->uid = info.uid;
-        meta->gid = info.gid;
-        meta->kind = info.kind;
-        meta->mode = info.mode;
-        meta->nlink = info.nlink;
-        meta->meta = info.meta;
-        meta->reserved = 0u;
-        return ASTRA_VFS_OK;
-    }
     call = begin(client);
     {
         uint32_t path_status = set_path(call, path);
@@ -859,10 +625,7 @@ astra_vfs_stat_at_meta(AstraVfsClient *client, AstraVfsFile directory,
             return path_status;
     }
 
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
-    AstraVfsNodeInfo info = {0};
     uint32_t status;
 
     if (client == NULL || meta == NULL ||
@@ -871,26 +634,6 @@ astra_vfs_stat_at_meta(AstraVfsClient *client, AstraVfsFile directory,
     if (!path_text_valid(path, NULL) || path[0] == '\0' || path[0] == '/' ||
         (flags & ~ASTRA_VFS_STAT_FOLLOW) != 0u)
         return ASTRA_VFS_ERR_INVALID;
-    if (client->direct_backend_ops != NULL) {
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = ops->stat_at(context, directory, path, flags, &info);
-        backend_leave(client);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        meta->name[0] = '\0';
-        meta->size = info.size;
-        meta->mtime = info.mtime;
-        meta->uid = info.uid;
-        meta->gid = info.gid;
-        meta->kind = info.kind;
-        meta->mode = info.mode;
-        meta->nlink = info.nlink;
-        meta->meta = info.meta;
-        meta->reserved = 0u;
-        return ASTRA_VFS_OK;
-    }
     call = begin(client);
     {
         uint32_t path_status = set_path(call, path);
@@ -919,34 +662,11 @@ uint32_t
 astra_vfs_stat_file_meta(AstraVfsClient *client, AstraVfsFile file,
                          AstraVfsDirEntry *meta)
 {
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
-    AstraVfsNodeInfo info = {0};
     uint32_t status;
 
     if (client == NULL || meta == NULL || file == ASTRA_VFS_FILE_INVALID)
         return ASTRA_VFS_ERR_INVALID;
-    if (client->direct_backend_ops != NULL) {
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = ops->stat_node(context, file, &info);
-        backend_leave(client);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        meta->name[0] = '\0';
-        meta->size = info.size;
-        meta->mtime = info.mtime;
-        meta->uid = info.uid;
-        meta->gid = info.gid;
-        meta->kind = info.kind;
-        meta->mode = info.mode;
-        meta->nlink = info.nlink;
-        meta->meta = info.meta;
-        meta->reserved = 0u;
-        return ASTRA_VFS_OK;
-    }
     call = begin(client);
     call->request.file = file;
     status = exchange(client, call, ASTRA_VFS_OP_STAT_FILE);
@@ -975,30 +695,11 @@ astra_vfs_stat(AstraVfsClient *client, const char *path, uint64_t *size,
             return path_status;
     }
 
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
-    AstraVfsNodeInfo info = {0};
     uint32_t status;
 
     if (client == NULL) {
         return ASTRA_VFS_ERR_INVALID;
-    }
-    if (client->direct_backend_ops != NULL) {
-        if (!path_text_valid(path, NULL))
-            return ASTRA_VFS_ERR_INVALID;
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = ops->stat(context, path, &info);
-        backend_leave(client);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        if (size != NULL)
-            *size = info.size;
-        if (kind != NULL)
-            *kind = info.kind;
-        return ASTRA_VFS_OK;
     }
     call = begin(client);
     {
@@ -1223,8 +924,6 @@ static uint32_t path_operation(AstraVfsClient *client, uint32_t operation,
 
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
     AstraVfsRequest *request;
-    const AstraVfsBackendOps *ops;
-    void *context;
     uint32_t status;
     int two = operation == ASTRA_VFS_OP_RENAME || operation == ASTRA_VFS_OP_LINK ||
               operation == ASTRA_VFS_OP_SYMLINK;
@@ -1253,17 +952,6 @@ static uint32_t path_operation(AstraVfsClient *client, uint32_t operation,
     request->flags = flags;
     request->offset = value;
     request->length = capacity;
-    if (client->direct_backend_ops != NULL) {
-        AstraVfsBackend backend;
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        backend = (AstraVfsBackend){ops, context};
-        memset(&call->reply, 0, sizeof(call->reply));
-        status = astra_vfs_backend_path_operation(&backend, operation, request,
-            &call->transfer, base, second_base, &call->reply);
-        backend_leave(client);
-    } else
         status = exchange_request(client, operation, request, call);
     if (status == ASTRA_VFS_OK && length != NULL) {
         if (call->reply.count > capacity ||
@@ -1309,23 +997,10 @@ astra_vfs_unlink(AstraVfsClient *client, const char *path, uint32_t flags)
             return path_status;
     }
 
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
-    uint32_t status;
 
     if (client == NULL || (flags & ~ASTRA_VFS_UNLINK_DIRECTORY) != 0u) {
         return ASTRA_VFS_ERR_INVALID;
-    }
-    if (client->direct_backend_ops != NULL) {
-        if (!path_text_valid(path, NULL))
-            return ASTRA_VFS_ERR_INVALID;
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = ops->unlink(context, path, flags);
-        backend_leave(client);
-        return status;
     }
     call = begin(client);
     {
@@ -1347,10 +1022,7 @@ astra_vfs_unlink_at(AstraVfsClient *client, AstraVfsFile directory,
             return path_status;
     }
 
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
-    uint32_t status;
 
     if (client == NULL || directory == ASTRA_VFS_FILE_INVALID)
         return client == NULL ? ASTRA_VFS_ERR_INVALID :
@@ -1358,14 +1030,6 @@ astra_vfs_unlink_at(AstraVfsClient *client, AstraVfsFile directory,
     if (!path_text_valid(path, NULL) || path[0] == '\0' || path[0] == '/' ||
         (flags & ~ASTRA_VFS_UNLINK_DIRECTORY) != 0u)
         return ASTRA_VFS_ERR_INVALID;
-    if (client->direct_backend_ops != NULL) {
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = ops->unlink_at(context, directory, path, flags);
-        backend_leave(client);
-        return status;
-    }
     call = begin(client);
     {
         uint32_t path_status = set_path(call, path);
@@ -1398,23 +1062,10 @@ astra_vfs_chmod(AstraVfsClient *client, const char *path, uint16_t mode)
             return path_status;
     }
 
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
-    uint32_t status;
 
     if (client == NULL || (mode & (uint16_t)~ASTRA_VFS_MODE_MASK) != 0u)
         return ASTRA_VFS_ERR_INVALID;
-    if (client->direct_backend_ops != NULL) {
-        if (!path_text_valid(path, NULL))
-            return ASTRA_VFS_ERR_INVALID;
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = ops->chmod(context, path, mode);
-        backend_leave(client);
-        return status;
-    }
     call = begin(client);
     {
         uint32_t path_status = set_path(call, path);
@@ -1429,27 +1080,37 @@ uint32_t
 astra_vfs_chmod_file(AstraVfsClient *client, AstraVfsFile file,
                      uint16_t mode)
 {
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
-    uint32_t status;
 
     if (client == NULL || (mode & (uint16_t)~ASTRA_VFS_MODE_MASK) != 0u)
         return ASTRA_VFS_ERR_INVALID;
     if (file == ASTRA_VFS_FILE_INVALID)
         return ASTRA_VFS_ERR_BAD_HANDLE;
-    if (client->direct_backend_ops != NULL) {
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = ops->chmod_node(context, file, mode);
-        backend_leave(client);
-        return status;
-    }
     call = begin(client);
     call->request.file = file;
     call->request.offset = mode;
     return exchange(client, call, ASTRA_VFS_OP_CHMOD_FILE);
+}
+
+uint32_t astra_vfs_set_file_times(AstraVfsClient *client, AstraVfsFile file,
+    const AstraVfsDirEntry *times, uint32_t fields)
+{
+    AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
+
+    if (client == NULL || times == NULL || !astra_vfs_file_times_valid(fields,
+            times->meta.atime_nsec, times->meta.mtime_nsec))
+        return ASTRA_VFS_ERR_INVALID;
+    if (file == ASTRA_VFS_FILE_INVALID) return ASTRA_VFS_ERR_BAD_HANDLE;
+    call = begin(client);
+    call->request.file = file;
+    call->request.flags = fields;
+    call->request.length = ASTRA_VFS_FILE_TIMES_SIZE;
+    uint8_t *wire = call->request.body.payload;
+    astra_store_be64(wire, fields & ASTRA_VFS_META_ATIME ? (uint64_t)times->meta.atime : 0u);
+    astra_store_be32(wire + 8u, fields & ASTRA_VFS_META_ATIME ? times->meta.atime_nsec : 0u);
+    astra_store_be64(wire + 12u, fields & ASTRA_VFS_META_MTIME ? (uint64_t)times->mtime : 0u);
+    astra_store_be32(wire + 20u, fields & ASTRA_VFS_META_MTIME ? times->meta.mtime_nsec : 0u);
+    return exchange(client, call, ASTRA_VFS_OP_SET_FILE_TIMES);
 }
 
 uint32_t
@@ -1462,10 +1123,7 @@ astra_vfs_chmod_at(AstraVfsClient *client, AstraVfsFile directory,
             return path_status;
     }
 
-    const AstraVfsBackendOps *ops;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
-    uint32_t status;
 
     if (client == NULL || (mode & (uint16_t)~ASTRA_VFS_MODE_MASK) != 0u)
         return ASTRA_VFS_ERR_INVALID;
@@ -1474,14 +1132,6 @@ astra_vfs_chmod_at(AstraVfsClient *client, AstraVfsFile directory,
     if (!path_text_valid(path, NULL) || path[0] == '\0' || path[0] == '/' ||
         (flags & ~ASTRA_VFS_AT_SYMLINK_NOFOLLOW) != 0u)
         return ASTRA_VFS_ERR_INVALID;
-    if (client->direct_backend_ops != NULL) {
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = ops->chmod_at(context, directory, path, mode, flags);
-        backend_leave(client);
-        return status;
-    }
     call = begin(client);
     {
         uint32_t path_status = set_path(call, path);
@@ -1536,9 +1186,7 @@ filesystem_info(AstraVfsClient *client, AstraVfsFile file, const char *path,
             return path_status;
     }
 
-    const AstraVfsBackendOps *ops;
     const uint8_t *payload;
-    void *context;
     AstraVfsCallState *call ASTRA_AUTO_VFS_CALL_STORAGE = NULL;
     uint32_t status;
 
@@ -1547,14 +1195,6 @@ filesystem_info(AstraVfsClient *client, AstraVfsFile file, const char *path,
         return ASTRA_VFS_ERR_INVALID;
     if (path != NULL && !path_text_valid(path, NULL))
         return ASTRA_VFS_ERR_INVALID;
-    if (client->direct_backend_ops != NULL) {
-        status = backend_enter(client, &ops, &context);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        status = ops->filesystem_info(context, file, path, info);
-        backend_leave(client);
-        return status;
-    }
     call = begin(client);
     call->request.file = file;
     if (path != NULL) {

@@ -1,4 +1,5 @@
 #include <astra/volume_port.h>
+#include <astra/vfs_port_receive.h>
 #include <astra/runtime.h>
 #include <astra/limits.h>
 #include <astra/status.h>
@@ -54,17 +55,20 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
         AstraVolumeFormatRequest format;
         AstraVolumePartitionRequest partition;
         AstraVolumeUsageRequest usage;
+        AstraVolumeUsageSnapshotRequest usage_snapshot;
         uint8_t bytes[ASTRA_MESSAGE_SIZE_MAX]; } incoming;
     uint32_t handles[ASTRA_MESSAGE_HANDLES_MAX];
     uint32_t served = 0u;
     while (served < budget) {
         uint32_t size = 0u, count = 0u, owner = 0u;
-        uint32_t result = astra_port_receive_from(receive, &incoming, sizeof(incoming),
-            handles, ASTRA_MESSAGE_HANDLES_MAX, &size, &count, &owner);
+        uint32_t result = astra_vfs_port_receive_reclaim(receive, &incoming, sizeof(incoming),
+            handles, ASTRA_MESSAGE_HANDLES_MAX, &size, &count, &owner,
+            port->reclaim, port->context);
         if (result != ASTRA_SYSCALL_OK) break;
         ++served;
         union { AstraVolumeControlReply control; AstraVolumeBrokerInfoReply broker;
-            AstraVolumeFormatReply format; AstraVolumePartitionReply partition; } response = {0};
+            AstraVolumeFormatReply format; AstraVolumePartitionReply partition;
+            AstraVolumeUsageSnapshotReply usage_snapshot; } response = {0};
         AstraVolumeReply reply = {0};
         uint32_t reply_size = (incoming.header.operation == ASTRA_VOLUME_CONTROL ||
             incoming.header.operation == ASTRA_VOLUME_NETWORK_SOURCE ||
@@ -77,7 +81,8 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
             sizeof(response.format) :
             (incoming.header.operation == ASTRA_VOLUME_PARTITION ||
              incoming.header.operation == ASTRA_VOLUME_PARTITION_STATUS) ?
-            sizeof(response.partition) : sizeof(reply);
+            sizeof(response.partition) : incoming.header.operation == ASTRA_VOLUME_USAGE_SNAPSHOT ?
+            sizeof(response.usage_snapshot) : sizeof(reply);
         astra_message_header_set(&reply.header, sizeof(reply), ASTRA_VOLUME_PROTOCOL,
             ASTRA_VOLUME_PROTOCOL_VERSION, ASTRA_VOLUME_REPLY, incoming.header.transaction_id);
         reply.status = ASTRA_STATUS_PROTOCOL;
@@ -181,6 +186,36 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
                         &incoming.partition, &response.partition.outcome);
                 if (reply.status != ASTRA_STATUS_OK)
                     response.partition.outcome = 0u;
+            } else if (incoming.header.operation == ASTRA_VOLUME_USAGE_SNAPSHOT &&
+                size == sizeof(incoming.usage_snapshot) && count == 2u) {
+                AstraVolumeUsageQuery query = {.version = ASTRA_VOLUME_USAGE_VERSION,
+                    .size = sizeof(query), .volume = incoming.usage_snapshot.volume};
+                if (!astra_volume_usage_query_valid(&query))
+                    reply.status = ASTRA_STATUS_INVALID;
+                else if (role != 2 || port->usage_snapshot == NULL)
+                    reply.status = ASTRA_STATUS_ACCESS;
+                else {
+                    void *mapped = NULL;
+                    uint32_t bytes = 0u;
+                    if (astra_rt_area_map(handles[1], ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                        &mapped, &bytes) != ASTRA_SYSCALL_OK) reply.status = ASTRA_STATUS_ACCESS;
+                    else {
+                        uint32_t capacity = bytes / sizeof(AstraVolumeUsageRecord);
+                        AstraVolumeUsageSnapshotInfo *info = &response.usage_snapshot.info;
+                        reply.status = port->usage_snapshot(port->context, &query.volume,
+                            mapped, capacity, info);
+                        if (reply.status == ASTRA_STATUS_OK || reply.status == ASTRA_STATUS_BUFFER_TOO_SMALL) {
+                            if (!astra_volume_usage_snapshot_info_valid(&query.volume, info) ||
+                                (reply.status == ASTRA_STATUS_OK ? info->count > capacity ||
+                                    !astra_volume_usage_records_valid(&query, &info->volume, mapped, info->count) :
+                                    info->count <= capacity)) reply.status = ASTRA_STATUS_PROTOCOL;
+                        }
+                    }
+                    if (mapped != NULL && astra_rt_area_unmap(mapped) != ASTRA_SYSCALL_OK)
+                        reply.status = ASTRA_STATUS_IO;
+                }
+                if (reply.status != ASTRA_STATUS_OK && reply.status != ASTRA_STATUS_BUFFER_TOO_SMALL)
+                    memset(&response.usage_snapshot.info, 0, sizeof(response.usage_snapshot.info));
             } else if (incoming.header.operation == ASTRA_VOLUME_USAGE &&
                 size == sizeof(incoming.usage) && count == 2u) {
                 if (!astra_volume_usage_query_valid(&incoming.usage.query))

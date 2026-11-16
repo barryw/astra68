@@ -101,6 +101,6 @@ XML_OUTPUT             = xml
 XML_PROGRAMLISTING     = YES
 
 HAVE_DOT               = YES
-DOT_NUM_THREADS        = 0
+DOT_NUM_THREADS        = 2
 CALL_GRAPH             = NO
 CALLER_GRAPH           = NO

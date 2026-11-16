@@ -247,6 +247,8 @@ uint32_t astra_rt_area_create(uint32_t byte_size, uint32_t rights,
                            uint32_t *handle);
 /**
  * Create an area with explicit ASTRA_AREA_CREATE_* policy.
+ * MAPPED_LIFETIME lets mappings retain backing after the final handle closes;
+ * otherwise closing the final handle/child revokes all remaining mappings.
  * @param byte_size Requested bytes, rounded to pages.
  * @param rights Rights for the returned handle.
  * @param flags ASTRA_AREA_CREATE_* flags.
@@ -265,6 +267,16 @@ uint32_t astra_rt_area_create_flagged(uint32_t byte_size, uint32_t rights,
 uint32_t astra_rt_area_bind_pager(uint32_t area, uint32_t port,
                                  uint32_t cookie);
 /**
+ * Publish a pager area's backing length without changing view reservations.
+ * Shrinking revokes pages beyond EOF, including private copies, and clears
+ * the last page's unused tail. Affected in-flight writeback returns WOULD_BLOCK
+ * without changing the area. Owners can stage pages before publishing growth.
+ * @param area Pager-bound reserved area with ASTRA_RIGHT_ADMINISTER.
+ * @param byte_size New backing length, including zero, within area capacity.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_area_resize_backing(uint32_t area, uint32_t byte_size);
+/**
  * Read live owner counts through an ADMINISTER area handle.
  * @param area Area handle with ASTRA_RIGHT_ADMINISTER.
  * @param handles Receives handle reference count, including this handle.
@@ -274,6 +286,17 @@ uint32_t astra_rt_area_bind_pager(uint32_t area, uint32_t port,
  */
 uint32_t astra_rt_area_references(uint32_t area, uint32_t *handles,
                                   uint32_t *mappings, uint32_t *children);
+/** Enumerate unique native processes mapping an area, in ascending PID order.
+ * Uses the canonical views, including private/forked views after handle close.
+ * @param area Area handle with ADMINISTER authority.
+ * @param after Exclusive PID cursor; UINT32_MAX requests only the sequence.
+ * @param sequence Zero starts a snapshot; preserve returned value across calls.
+ * @param process Receives the next PID, or zero at the end; cleared on failure.
+ * @return ASTRA_SYSCALL_* status. WOULD_BLOCK means mappings changed: restart
+ * with sequence and cursor zero. Failed calls leave sequence unchanged.
+ */
+uint32_t astra_rt_area_next_process(uint32_t area, uint32_t after,
+    uint64_t *sequence, uint32_t *process);
 /**
  * Copy bytes from an already resident page without raising a pager fault.
  * @param area Area handle with READ authority.
@@ -295,6 +318,42 @@ uint32_t astra_rt_area_read_resident(uint32_t area, uint32_t offset,
  */
 uint32_t astra_rt_area_write_pager(uint32_t area, uint32_t offset,
                                   const void *source, uint32_t length);
+/** Publish a complete absent pager page as dirty through WRITE | ADMINISTER.
+ * Source copying precedes publication. An existing page returns WOULD_BLOCK
+ * unchanged; failure never publishes a partial page. Uses the same dirty
+ * pin and snapshot completion lifecycle as writes to resident pages.
+ * @param area Pager-bound area with WRITE | ADMINISTER rights.
+ * @param offset Page-aligned byte offset within the area.
+ * @param source Readable buffer containing ASTRA_MEMORY_PAGE_SIZE bytes.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_area_publish_dirty_page(uint32_t area, uint32_t offset,
+                                         const void *source);
+/** Populate an absent pager page without faulting or marking it dirty.
+ * VM copies valid bytes and zeroes the tail before any mapping can see it.
+ * A resident page returns WOULD_BLOCK unchanged; failed copying publishes
+ * nothing. Uses the same page publication as an ordinary pager reply.
+ * @param area Pager-bound area with READ | ADMINISTER authority.
+ * @param offset Page-aligned byte offset within the area.
+ * @param source Readable buffer containing valid_bytes bytes.
+ * @param valid_bytes Nonzero byte count no greater than ASTRA_MEMORY_PAGE_SIZE.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_area_publish_clean_page(uint32_t area, uint32_t offset,
+    const void *source, uint32_t valid_bytes);
+/** Inspect pending pager pages using the existing VM dirty state.
+ * Each call performs bounded work. With nonzero state, offset identifies a
+ * pending page and ASTRA_AREA_DIRTY_* distinguishes modified/in-flight data.
+ * With zero state, offset is the next scan cursor; the area's size means end.
+ * This query does not pin or snapshot a page. Call writeback_begin separately.
+ * @param area Pager-bound area with ADMINISTER authority.
+ * @param start Page-aligned cursor, no greater than the area's size.
+ * @param offset Receives pending-page offset or continuation/end cursor.
+ * @param state Receives pending state flags or zero.
+ * @return ASTRA_SYSCALL_* status; failed calls clear both outputs.
+ */
+uint32_t astra_rt_area_dirty_scan(uint32_t area, uint32_t start,
+                                 uint32_t *offset, uint32_t *state);
 /** Snapshot a complete dirty page through READ | ADMINISTER authority.
  * Offset must be page-aligned; destination must hold ASTRA_MEMORY_PAGE_SIZE
  * bytes. On success token identifies this snapshot until completed exactly
@@ -338,7 +397,8 @@ uint32_t astra_rt_area_prefetch(uint32_t area, uint32_t offset);
 uint32_t astra_rt_area_reclaim(uint32_t area, uint32_t offset,
                                uint32_t byte_size, uint32_t *released_pages);
 /**
- * Decommit mapped pages while preserving the virtual reservation.
+ * Decommit shared anonymous pages while preserving the virtual reservation.
+ * Pager-backed and private views cannot decommit their shared source.
  * @param address Page-aligned address within a reserved area.
  * @param byte_size Page-aligned span.
  * @param released_pages Receives pages returned to the system.
@@ -348,8 +408,11 @@ uint32_t astra_rt_area_decommit(void *address, uint32_t byte_size,
                              uint32_t *released_pages);
 /**
  * Map an area capability into the current process.
- * Pager-backed writable views require WRITE as well as READ and MAP rights.
- * Their pages start protected; first writes mark shared pages dirty, and
+ * Shared writable views require WRITE as well as READ and MAP rights.
+ * ASTRA_AREA_MAP_PRIVATE requires only READ and MAP, including writable views.
+ * Private writes copy into process-owned pages and never dirty the source;
+ * fork inherits those pages through the ordinary VM copy-on-write mechanism.
+ * Shared pager pages start protected; first writes mark them dirty, and
  * writeback snapshots protect them again so later writes remain pending.
  * The pager service remains responsible for backing I/O and completion.
  * @param handle Area capability.
@@ -389,11 +452,37 @@ uint32_t astra_rt_area_map_range_at(uint32_t handle, uint32_t permissions,
                                    uint32_t requested_base, void **address,
                                    uint32_t *byte_size);
 /**
- * Remove an area mapping from the current process.
+ * Remove an area mapping from the current process after shared backing checks.
+ * Saved provider errors leave the mapping intact for retry. Pending dirty work
+ * stays with its native owner; use sync_range for a durability barrier.
  * @param address Exact mapping base.
  * @return ASTRA_SYSCALL_* status.
  */
 uint32_t astra_rt_area_unmap(void *address);
+/**
+ * Unmap a page-aligned range in this process; unmapped holes are ignored.
+ * Surviving views and other processes retain their backing and permissions.
+ * Shared provider errors leave the range intact. Concurrent view changes are
+ * revalidated within the same bounded pager deadline before removal.
+ * @param address Page-aligned start in the shared-area address window.
+ * @param byte_size Nonzero length in whole pages.
+ * @return ASTRA_SYSCALL_* status; split allocation failure leaves views unchanged.
+ */
+uint32_t astra_rt_area_unmap_range(void *address, uint32_t byte_size);
+/**
+ * Synchronize shared backing for this process's mapped range.
+ * Views keep their source alive after descriptors and temporary handles close.
+ * Private and anonymous views need no backing write. Providers may synchronize
+ * a larger native cache extent. Failed writeback retains dirty data for retry.
+ * @param address Page-aligned mapped address.
+ * @param byte_size Nonzero length in whole pages; holes return BAD_ADDRESS.
+ * @param flags Zero to await backing sync, or ASTRA_AREA_SYNC_ASYNC to await
+ * native writeback admission. Dirty generations retain pending backing work.
+ * @param backing_status Receives exact ASTRA_STATUS_* error, or zero when none.
+ * @return ASTRA_SYSCALL_* status; IO_ERROR can carry a backing_status error.
+ */
+uint32_t astra_rt_area_sync_range(void *address, uint32_t byte_size,
+                                 uint32_t flags, uint32_t *backing_status);
 /**
  * Reserve private virtual memory for demand commitment.
  * @param byte_size Requested bytes, rounded to pages.

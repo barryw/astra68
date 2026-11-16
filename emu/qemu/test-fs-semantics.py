@@ -28,6 +28,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -53,8 +54,8 @@ CASES = ["basic", "durable-save", "volume-catalog", "volume-root", "raw-lane", "
          "raw-onward", "raw-orphans", "raw-orphans-death",
          "symlink-in-volume", "symlink-cross-volume", "dotdot-at-root",
          "escape-relative", "link-edges", "alias-identity", "continuation-limit", "path-boundaries",
-         "shared-description", "file-map", "page-writeback", "cache-pressure", "description-io", "scoped-io", "area-range", "exec-inherit", "append-race", "file-size-limit", "cwd-identity",
-         "many-lanes", "owner-sessions", "owner-files"]
+         "shared-description", "anonymous-map", "partial-map", "shared-map", "shared-posix", "mapped-faults", "unmap-errors", "mapped-usage", "file-map", "map-publication", "page-writeback", "cache-pressure", "description-io", "scoped-io", "area-range", "exec-inherit", "append-race", "file-size-limit", "cwd-identity",
+         "many-lanes", "owner-sessions", "owner-files", "byte-prefix", "generation-exhaustion"]
 # Orchestrated checks: name -> function(machine, provider_mount). Later tasks
 # add entries; each prints "PASS <name>" or calls fail().
 CHECKS = {}
@@ -68,8 +69,10 @@ def fail(text):
 def command(machine, text, timeout, number):
     """Types `text` and returns (lines printed, exit status)."""
     marker = "FSSEM-GATE-%u-" % number
+    print("RUN %s" % text, flush=True)
     machine.settle()
     before = machine.sequence()
+    started = before
     machine.qmp.type_line(text + "; print -r -- " + marker + "$?")
     deadline = time.monotonic() + timeout
     output = []
@@ -77,7 +80,13 @@ def command(machine, text, timeout, number):
         lines, before = machine.said(before)
         output.extend(lines)
         for line in lines:
+            if line.startswith("FSSEM "):
+                print(line, flush=True)
             if line.startswith(marker) and line[len(marker):].isdigit():
+                if terminal.wait_for_command(machine, line,
+                        max(0.0, deadline - time.monotonic()), started,
+                        exact=True) is None:
+                    fail("%r finished without the next shell prompt" % text)
                 return output, int(line[len(marker):])
         time.sleep(0.1)
     for line in machine.trace_with_syslog()[-120:]:
@@ -88,15 +97,105 @@ def command(machine, text, timeout, number):
 def run_cases(machine, cases):
     lines, status = command(machine, "fssem " + " ".join(cases), 600, 1)
     done = [line for line in lines if line.startswith("FSSEM DONE")]
-    for line in lines:
-        if line.startswith("FSSEM "):
-            print(line)
     if status != 0 or done != ["FSSEM DONE passed %d failed 0" % len(cases)]:
         print("recent guest trace:")
         for line in machine.trace_with_syslog()[-120:]:
             print(line)
         fail("fssem: status %d, %r" % (status, done))
     print("PASS fssem %s" % " ".join(cases))
+
+
+def check_external_mapping(machine, mount):
+    """Only the host changes EOF; the guest retains no target descriptor."""
+    directory = tempfile.mkdtemp(prefix="external-map-", dir=os.path.join(mount, "work"))
+    data = os.path.join(directory, "data")
+    with open(data, "wb") as output:
+        output.write(b"a" * 8192)
+    _, uid, gid = struct.unpack("3i", machine.qmp.socket.getsockopt(
+        socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+    if os.geteuid() == 0:
+        os.chown(directory, uid, gid)
+        os.chown(data, uid, gid)
+    stopped = threading.Event()
+    errors = []
+
+    def mutate():
+        try:
+            started = time.monotonic()
+            with open(data, "r+b", buffering=0) as output:
+                for marker, length in (("ready", 4105), ("partial", 1), ("eof", None)):
+                    deadline = time.monotonic() + 30
+                    while not os.path.exists(os.path.join(directory, marker)):
+                        if stopped.wait(0.01):
+                            return
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError("external mapping handshake: " + marker)
+                    if length is None:
+                        assert os.pwrite(output.fileno(), b"g", 4096) == 1
+                    else:
+                        output.truncate(length)
+                    os.fsync(output.fileno())
+                    with open(os.path.join(directory, marker + ".done"), "xb"):
+                        pass
+                    print("EXTERNAL_MAPPING_HOST", marker, "committed",
+                          "elapsed=%.3fs" % (time.monotonic() - started), flush=True)
+        except Exception as error:
+            errors.append(error)
+
+    # The observer never reads QMP alongside command's trace reader.
+    worker = threading.Thread(target=mutate)
+    worker.start()
+    try:
+        lines, status = command(machine,
+            "fssem --external-map /work/" + os.path.basename(directory), 120, 76)
+        worker.join(1)
+        assert not worker.is_alive() and not errors, errors
+        assert status == 0 and \
+            "FSSEM EXTERNAL MAP idle-owner partial-tail full-eof growth PASS" in lines
+    finally:
+        stopped.set()
+        worker.join()
+    shutil.rmtree(directory)
+    print("PASS external-mapping idle owner follows host EOF without target I/O", flush=True)
+
+
+CHECKS["external-mapping"] = check_external_mapping
+
+
+def check_shared_mapping(machine, mount, case="shared-map"):
+    """Read backing through the host after native mapped-write sync completes."""
+    work = os.path.join(mount, "work")
+    before = set(os.listdir(work))
+    assert case in ("shared-map", "shared-posix"), case
+    run_cases(machine, [case])
+    created = set(os.listdir(work)) - before
+    directories = [name for name in created if "-" + case + "-" in name]
+    assert len(directories) == 1, directories
+    with open(os.path.join(work, directories[0], "data"), "rb") as source:
+        expected = bytearray(b"a" * (8192 + 9))
+        for offset, value in ((0, b"p"), (4, b"b"), (4096, b"c"),
+                              (8193, b"t"), (8200, b"y")):
+            expected[offset:offset + 1] = value
+        assert source.read(len(expected)) == expected, "mapped bytes differ in backing file"
+        assert source.read(8) == bytes(8), "old partial EOF tail was persisted on growth"
+        source.seek(128 * 1024 * 1024 - 1)
+        assert source.read() == b"xy" + bytes(7) + b"z", "cross-window bytes or EOF differ"
+    if case == "shared-posix":
+        expected = b"ASYNC" + bytes(4096 + 9 - 6) + b"!"
+        asynchronous = os.path.join(work, directories[0], "async-data")
+        started = time.monotonic()
+        deadline = started + 30
+        while True:
+            with open(asynchronous, "rb") as source:
+                if source.read() == expected:
+                    break
+            assert time.monotonic() < deadline, "async mapped bytes not persisted after final unmap"
+            time.sleep(0.05)
+        print("ASYNC_MAPPING_HOST persisted elapsed=%.3fs" % (time.monotonic() - started), flush=True)
+    print("PASS " + case + " writes persist through native retained writer", flush=True)
+
+
+CHECKS["shared-mapping"] = check_shared_mapping
 
 
 def run_bench(machine, mount, label, output, tree=ROOT):
@@ -114,42 +213,47 @@ def run_bench(machine, mount, label, output, tree=ROOT):
     print("PASS bench %s -> %s" % (label, output))
 
 
-def scoped_commands(machine):
-    return machine.qmp.execute("qom-get", {
-        "path": "/machine", "property": "astra-host-scoped-commands"})
+def native_requests(machine, number):
+    lines, status = command(machine, "metrics", 60, number)
+    values = [line.split()[1:] for line in lines
+              if line.startswith("hostfs.vfs.work.requests ")]
+    if status != 0 or len(values) != 1 or len(values[0]) != 1 or \
+            not values[0][0].isdigit():
+        fail("missing native WORK request accounting: %r" % values)
+    return int(values[0][0])
 
 
-# fssem --stat-loop issues LANE_STATS stats; at least LANE_FLOOR scoped
-# commands must remain once the machine's own background is taken away.
+# fssem --stat-loop issues LANE_STATS stats; at least LANE_FLOOR native
+# requests must remain once the machine's own background is taken away.
 LANE_STATS = 500
 LANE_FLOOR = 400
 
 
 def check_lane(machine, mount):
-    """The lane is the path taken (FS44), attributably: `fssem --stat-loop`
-    makes LANE_STATS stats of /work, each at least one scoped command. An
+    """The native service is the path taken (FS44): `fssem --stat-loop`
+    makes LANE_STATS stats of /work, each at least one native VFS request. An
     idle window of about the same length measures the rest of the machine,
     and what the stats moved less that background must still reach
     LANE_FLOOR (re-review N4): background cannot satisfy the check. The
     100-stat margin covers a window that is not exactly the stat loop's.
-    raw-lane's forged MKDIR must have left nothing in SOUND."""
-    before = scoped_commands(machine)
+    raw-lane must not obtain provider authority or mutate SOUND."""
+    before = native_requests(machine, 62)
     started = time.monotonic()
     lines, status = command(machine, "fssem --stat-loop %d /work" %
                             LANE_STATS, 300, 61)
     elapsed = time.monotonic() - started
     if status != 0:
         fail("fssem --stat-loop: status %d, %r" % (status, lines[-5:]))
-    moved = scoped_commands(machine) - before
-    idle_before = scoped_commands(machine)
+    moved = native_requests(machine, 63) - before
+    idle_before = native_requests(machine, 64)
     time.sleep(elapsed)
-    idle = scoped_commands(machine) - idle_before
+    idle = native_requests(machine, 65) - idle_before
     if moved - idle < LANE_FLOOR:
-        fail("only %d scoped commands (idle %d) for %d lane stats" %
+        fail("only %d native requests (idle %d) for %d stats" %
              (moved, idle, LANE_STATS))
     if os.path.exists(os.path.join(mount, "sound", "raw-lane-forged")):
         fail("a forged volume reached SOUND")
-    print("PASS lane %d for %d stats (idle %d in %.1fs)" %
+    print("PASS native lane %d for %d stats (idle %d in %.1fs)" %
           (moved, LANE_STATS, idle, elapsed))
 
 
@@ -157,9 +261,10 @@ CHECKS["lane"] = check_lane
 
 
 # Fault injection needs a user-controllable HostFS, with normal restart policy.
-MANIFEST = astra_image.STARTUP_MANIFEST.replace(
-    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE critical priority=20",
-    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE priority=20")
+_manifest_lines = astra_image.STARTUP_MANIFEST.splitlines()
+assert _manifest_lines[0].startswith("service /services/hostfs ")
+_manifest_lines[0] = _manifest_lines[0].replace(" critical priority=20", " priority=20")
+MANIFEST = "\n".join(_manifest_lines) + "\n"
 HOSTFS_KILL = ("ps | while read -r id rest; do "
                "[[ $rest == *' /services/hostfs' ]] && "
                "print kill > /proc/$id/ctl; done")
@@ -167,30 +272,25 @@ FINAL_CHECKS = ("hostfs-kill",)
 
 
 def loss(machine, mode, act):
-    before = machine.sequence()
+    before = machine.trace_cursor()
     path = "/work/loss-%s-%x" % (mode, time.monotonic_ns())
     machine.qmp.type_line("fssem --loss-probe %s 120 %s &" % (path, mode))
-    if machine.wait_for_text("FSSEM LOSS armed", 60, before)[0] is None:
-        fail("loss probe never armed: %r" % machine.said(before)[0][-20:])
+    if not machine.wait_for_trace_text("FSSEM LOSS armed", 60, before):
+        fail("loss probe never armed: %r" % machine.trace_with_syslog()[-20:])
     machine.settle()
-    after = machine.sequence()
     act()
     deadline = time.monotonic() + 180
-    observed = []
     while time.monotonic() < deadline:
-        lines, after = machine.said(after)
-        observed.extend(lines)
-        for line in lines:
-            if line.startswith("FSSEM LOSS PASS"):
-                print(line)
+        for marker in ("FSSEM LOSS FAIL", "FSSEM LOSS none", "FSSEM LOSS PASS"):
+            if not machine.wait_for_trace_text(marker, 0, before):
+                continue
+            if marker == "FSSEM LOSS PASS":
+                print(marker)
                 return
-            if line.startswith(("FSSEM LOSS FAIL", "FSSEM LOSS none")):
-                for trace in machine.trace_with_syslog()[-120:]:
-                    print(trace)
-                fail("loss probe (%s): %s" % (mode, line))
+            for trace in machine.trace_with_syslog()[-120:]:
+                print(trace)
+            fail("loss probe (%s): %s" % (mode, marker))
         time.sleep(0.1)
-    for line in observed:
-        print(line)
     for line in machine.trace_with_syslog():
         print(line)
     fail("loss probe (%s) timed out" % mode)
@@ -203,12 +303,23 @@ def check_provider_reset(machine, mount):
     print("PASS provider-reset")
 
 
-def wait_for_hostfs_recovery(machine, mount, killed_at, sequence, timeout):
-    if not machine.wait_for_trace_text("desktop ready", timeout, sequence):
+def wait_for_hostfs_recovery(machine, mount, cursor, timeout):
+    if not machine.wait_for_trace_text(terminal.DESKTOP_READY, timeout, cursor):
         fail("desktop did not regain its namespace after HostFS restart")
     deadline = time.monotonic() + timeout
     sample = os.path.join(mount, "work", ".astra", "sample")
-    while not os.path.exists(sample) or os.stat(sample).st_mtime <= killed_at + 1.0:
+
+    def sample_stamp():
+        try:
+            return os.stat(sample).st_mtime_ns
+        except FileNotFoundError:
+            return None
+
+    previous = sample_stamp()
+    while True:
+        current = sample_stamp()
+        if current is not None and current != previous:
+            return
         if time.monotonic() > deadline:
             fail("sampler did not regain WORK after HostFS restart: %r" %
                  machine.trace_with_syslog()[-50:])
@@ -243,10 +354,9 @@ def check_durability(machine, mount):
     if status != 0 or "ASTRA DURABILITY EXACT" not in lines:
         fail("acknowledged bytes after provider reset: %r" % lines[-20:])
     print("PASS durability acknowledged bytes after provider reset")
-    before = machine.sequence()
-    killed_at = time.time()
+    before = machine.trace_cursor()
     machine.qmp.type_line(HOSTFS_KILL)
-    wait_for_hostfs_recovery(machine, mount, killed_at, before, 90)
+    wait_for_hostfs_recovery(machine, mount, before, 90)
     if not terminal.open_terminal_window(machine, 90):
         fail("no Terminal after HostFS restart in durability probe")
     lines, status = command(machine, check, 90, 33)
@@ -257,15 +367,13 @@ def check_durability(machine, mount):
 
 
 def check_hostfs_kill(machine, mount):
-    killed_at = None
-    killed_sequence = None
+    killed_cursor = None
     def kill_now():
-        nonlocal killed_at, killed_sequence
-        killed_at = time.time()
-        killed_sequence = machine.sequence()
+        nonlocal killed_cursor
+        killed_cursor = machine.trace_cursor()
         machine.qmp.type_line(HOSTFS_KILL)
     loss(machine, "dead", kill_now)
-    wait_for_hostfs_recovery(machine, mount, killed_at, killed_sequence, 60)
+    wait_for_hostfs_recovery(machine, mount, killed_cursor, 90)
     if not terminal.open_terminal_window(machine, 60):
         fail("no fresh terminal after HostFS restart")
     lines, status = command(machine, "print -r -- alive > /work/after-kill && cat /work/after-kill", 60, 41)
@@ -459,6 +567,10 @@ def main():
                 for name in sorted(selected_checks, key=lambda name: (name in FINAL_CHECKS, name)):
                     CHECKS[name](machine, mount)
         except BaseException:
+            print("native failure syslog:")
+            for line in machine.syslog_lines():
+                if " error " in line or "FSSEM" in line:
+                    print(line)
             print("native failure serial:")
             for line in machine.log[-250:]:
                 print(line)

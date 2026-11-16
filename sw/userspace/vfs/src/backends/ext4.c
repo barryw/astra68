@@ -284,8 +284,8 @@ ext4_backend_open_from(void *context, const ext4_dir *parent,
         fill_metadata(&backend->open_files[index].node.directory.f, info, 0);
         return ASTRA_VFS_OK;
     }
-    native_flags = (flags & ASTRA_VFS_OPEN_WRITE) == 0u ? O_RDONLY :
-                   (flags & ASTRA_VFS_OPEN_READ) != 0u ? O_RDWR : O_WRONLY;
+    /* Native VFS owns caller access; the filesystem can read partial-write pages. */
+    native_flags = (flags & ASTRA_VFS_OPEN_WRITE) == 0u ? O_RDONLY : O_RDWR;
     if ((flags & ASTRA_VFS_OPEN_CREATE) != 0u)
         native_flags |= O_CREAT;
     if ((flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u)
@@ -561,7 +561,7 @@ ext4_backend_stat_at(void *context, uintptr_t directory,
     AstraVfsExt4Backend *backend = backend_of(context);
     ext4_dir *parent = directory_of(backend, directory);
 
-    if (parent == NULL)
+    if (directory != 0u && parent == NULL)
         return ASTRA_VFS_ERR_BAD_HANDLE;
     uint32_t status = ext4_backend_stat_from(backend, parent, path, info);
     return status == ASTRA_VFS_OK && (flags & ASTRA_VFS_STAT_FOLLOW) != 0u &&
@@ -981,6 +981,7 @@ static const AstraVfsBackendOps ext4_ops = {
     .open = ext4_backend_open,
     .close = ext4_backend_close,
     .read = ext4_backend_read,
+    .read_for_write = ext4_backend_read,
     .write = ext4_backend_write,
     .sync = ext4_backend_sync,
     .truncate = ext4_backend_truncate,

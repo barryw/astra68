@@ -22,6 +22,7 @@ image=${ASTRA_NDK_DOCS_IMAGE:-astra68-ndk-docs:8.2.3-1}
 build_network=${ASTRA_NDK_DOCS_BUILD_NETWORK:-host}
 docker build --network "$build_network" --tag "$image" "$ndk_dir/docs"
 exec docker run --rm \
+    --memory 2g --memory-swap 2g --cpus 2 --pids-limit 96 \
     --network none \
     --user "$(id -u):$(id -g)" \
     --env HOME=/tmp \

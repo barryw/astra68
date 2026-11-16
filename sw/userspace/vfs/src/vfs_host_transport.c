@@ -13,6 +13,13 @@ typedef struct AstraVfsHostLaneCache {
 
 static _Thread_local AstraVfsHostLaneCache lane_cache;
 
+static void lane_reset(AstraVfsHostLane *lane)
+{
+    if (lane->dma != 0u)
+        (void)astra_close(lane->dma);
+    memset(lane, 0, sizeof(*lane));
+}
+
 #ifndef ASTRA_VFS_HOST_COMPLETION_POLLS
 #define ASTRA_VFS_HOST_COMPLETION_POLLS 512u
 #endif
@@ -171,8 +178,7 @@ void astra_vfs_host_transport_destroy(AstraVfsHostTransport *transport)
         memset(&lane_cache, 0, sizeof(lane_cache));
     for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
          ++index)
-        if (transport->lanes[index].dma != 0u)
-            (void)astra_close(transport->lanes[index].dma);
+        lane_reset(&transport->lanes[index]);
     memset(transport, 0, sizeof(*transport));
 }
 
@@ -209,7 +215,7 @@ void astra_vfs_host_transport_forget_scope(AstraVfsHostTransport *transport,
 static int lane_carries(const AstraVfsHostLane *lane, uint32_t scope)
 {
     if (scope == 0u)
-        return 1;
+        return lane->scope_count == 0u;
     for (uint32_t at = 0u; at < lane->scope_count; ++at)
         if (lane->scopes[at] == scope)
             return 1;
@@ -260,12 +266,18 @@ static uint32_t lane_attach(AstraVfsHostTransport *transport,
 
     if (lane_carries(lane, scope))
         return ASTRA_VFS_OK;
-    if (lane->scope_count == ASTRA_HOST_CHANNEL_SCOPE_MAX) {
-        status = astra_host_channel_close(scope, lane->channel_address);
+    if (scope == 0u || lane->scope_count == 0u ||
+        lane->scope_count == ASTRA_HOST_CHANNEL_SCOPE_MAX) {
+        /* Device control and scoped data require distinct opening authority. */
+        status = astra_host_channel_close(scope != 0u ? scope : transport->device,
+                                           lane->channel_address);
         if (status != ASTRA_SYSCALL_OK)
             return astra_vfs_host_status_from_syscall(status);
         lane->active = 0u;
-        return lane_open(transport, lane, lane->thread, scope);
+        status = lane_open(transport, lane, lane->thread, scope);
+        if (status != ASTRA_VFS_OK)
+            lane_reset(lane);
+        return status;
     }
     status = astra_host_scope_attach(scope, lane->channel_address);
     if (status != ASTRA_SYSCALL_OK)
@@ -304,10 +316,8 @@ static uint32_t lane_allocate(AstraVfsHostTransport *transport,
         return ASTRA_VFS_OK;
     }
     status = lane_open(transport, lane, thread, scope);
-    if (status != ASTRA_VFS_OK) {
-        (void)astra_close(lane->dma);
-        memset(lane, 0, sizeof(*lane));
-    }
+    if (status != ASTRA_VFS_OK)
+        lane_reset(lane);
     return status;
 }
 
@@ -361,9 +371,7 @@ static uint32_t lane_resize(AstraVfsHostTransport *transport,
         (void)astra_host_channel_close(scope != 0u ? scope :
                                                      transport->device,
                                       lane->channel_address);
-    if (lane->dma != 0u)
-        (void)astra_close(lane->dma);
-    memset(lane, 0, sizeof(*lane));
+    lane_reset(lane);
     return lane_allocate(transport, lane, thread, scope, needed,
                          target_capacity);
 }
@@ -628,8 +636,7 @@ uint32_t astra_vfs_host_transport_submit_sensitive(
             lane_cache.transport = NULL;
             lane_cache.lane = NULL;
             astra_secret_wipe(lane->bytes + offset, input_size);
-            (void)astra_close(lane->dma);
-            memset(lane, 0, sizeof(*lane));
+            lane_reset(lane);
             return status;
         }
     }
@@ -726,6 +733,11 @@ uint32_t astra_vfs_host_transport_execute_batch(
     if (transport->channel_supported != 0u && locked) {
         transport->release(transport->lock_context);
         locked = 0;
+    }
+    if (transport->channel_supported != 0u) {
+        status = lane_attach(transport, lane, 0u);
+        if (status != ASTRA_VFS_OK)
+            goto done;
     }
     capacity = lane->command_capacity;
     if (!lane_layout(transport, capacity, data_bytes, &total)) {

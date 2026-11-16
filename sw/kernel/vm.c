@@ -576,6 +576,7 @@ static void clear_space(KernelAddressSpace *space)
         space->private_writable[index] = 0u;
     }
     space->initialized = 0u;
+    space->area_mapping_sequence = 0u;
     space->reserved[0] = 0u;
     space->reserved[1] = 0u;
     space->reserved[2] = 0u;
@@ -1828,6 +1829,7 @@ KernelVmStatus kernel_vm_map_cow_page(KernelAddressSpace *space,
                               (1u << ASTRA_ADDRESS_REGION_EXECUTABLE) |
                               (1u << ASTRA_ADDRESS_REGION_DYNAMIC_IMAGES) |
                               (1u << ASTRA_ADDRESS_REGION_PRIVATE_MEMORY) |
+                              (1u << ASTRA_ADDRESS_REGION_SHARED_AREAS) |
                               (1u << ASTRA_ADDRESS_REGION_THREAD_STACKS) |
                               (1u << ASTRA_ADDRESS_REGION_THREAD_TLS),
                           true, true, false);
@@ -1926,15 +1928,60 @@ KernelVmStatus kernel_vm_cow_make_private(KernelAddressSpace *space,
     return KERNEL_VM_OK;
 }
 
+static KernelVmStatus copy_mapped_page(KernelAddressSpace *space,
+                                        uint32_t virtual_address,
+                                        VmPagePath *path, uint32_t physical,
+                                        KernelFrameInfo frame)
+{
+    volatile uint32_t *source;
+    volatile uint32_t *destination;
+    uint32_t replacement = 0u;
+
+    /* Unfilled: the whole page is copied over it. */
+    if (kernel_memory_alloc_unfilled_tagged(
+            KERNEL_ALLOCATION_SITE_PROCESS_PRIVATE_PAGE, 1u, 1u,
+            KERNEL_FRAME_PROCESS, space->owner, &replacement) !=
+        KERNEL_MEMORY_OK)
+        return KERNEL_VM_OUT_OF_MEMORY;
+    source = physical_words(physical);
+    destination = physical_words(replacement);
+    if (source == NULL || destination == NULL) {
+        (void)kernel_memory_release(replacement, 1u, space->owner);
+        return KERNEL_VM_CORRUPT;
+    }
+    kernel_bytes_copy((void *)(uintptr_t)destination,
+                      (const void *)(uintptr_t)source, KERNEL_PAGE_SIZE);
+    if (!frame_mapping_add(replacement, KERNEL_FRAME_PROCESS,
+                           virtual_address)) {
+        (void)kernel_memory_release(replacement, 1u, space->owner);
+        return KERNEL_VM_CORRUPT;
+    }
+    if (cow_rehome_before_unmap(space, virtual_address, physical, &frame) !=
+            KERNEL_VM_OK ||
+        !frame_mapping_remove(physical, (KernelFrameState)frame.state,
+                              virtual_address)) {
+        (void)frame_mapping_remove(replacement, KERNEL_FRAME_PROCESS,
+                                   virtual_address);
+        (void)kernel_memory_release(replacement, 1u, space->owner);
+        return KERNEL_VM_CORRUPT;
+    }
+    path->page_table[VM_PAGE_INDEX(virtual_address)] =
+        replacement | VM_DESC_PAGE;
+    if (active_user_space(space)) {
+        invalidate_caches();
+        flush_page(virtual_address);
+    }
+    if (kernel_memory_release(physical, 1u, frame.owner) != KERNEL_MEMORY_OK)
+        return KERNEL_VM_CORRUPT;
+    return KERNEL_VM_OK;
+}
+
 KernelVmStatus kernel_vm_cow_fault(KernelAddressSpace *space,
                                    uint32_t virtual_address)
 {
     VmPagePath path;
-    volatile uint32_t *source;
-    volatile uint32_t *destination;
     uint32_t descriptor;
     uint32_t physical;
-    uint32_t replacement = 0u;
     uint32_t encoded;
     KernelFrameInfo frame;
 
@@ -1969,43 +2016,39 @@ KernelVmStatus kernel_vm_cow_fault(KernelAddressSpace *space,
         return kernel_vm_cow_make_private(space, virtual_address);
     }
 
-    /* Unfilled: the whole page is copied over it. */
-    if (kernel_memory_alloc_unfilled_tagged(
-            KERNEL_ALLOCATION_SITE_PROCESS_PRIVATE_PAGE, 1u, 1u,
-            KERNEL_FRAME_PROCESS, space->owner, &replacement) !=
-        KERNEL_MEMORY_OK)
-        return KERNEL_VM_OUT_OF_MEMORY;
-    source = physical_words(physical);
-    destination = physical_words(replacement);
-    if (source == NULL || destination == NULL) {
-        (void)kernel_memory_release(replacement, 1u, space->owner);
-        return KERNEL_VM_CORRUPT;
-    }
-    kernel_bytes_copy((void *)(uintptr_t)destination,
-                      (const void *)(uintptr_t)source, KERNEL_PAGE_SIZE);
-    if (!frame_mapping_add(replacement, KERNEL_FRAME_PROCESS,
-                           virtual_address)) {
-        (void)kernel_memory_release(replacement, 1u, space->owner);
-        return KERNEL_VM_CORRUPT;
-    }
-    if (cow_rehome_before_unmap(space, virtual_address, physical, &frame) !=
-            KERNEL_VM_OK ||
-        !frame_mapping_remove(physical, KERNEL_FRAME_COW_WRITE,
-                              virtual_address)) {
-        (void)frame_mapping_remove(replacement, KERNEL_FRAME_PROCESS,
-                                   virtual_address);
-        (void)kernel_memory_release(replacement, 1u, space->owner);
-        return KERNEL_VM_CORRUPT;
-    }
-    path.page_table[VM_PAGE_INDEX(virtual_address)] =
-        replacement | VM_DESC_PAGE;
-    if (active_user_space(space)) {
-        invalidate_caches();
-        flush_page(virtual_address);
-    }
-    if (kernel_memory_release(physical, 1u, frame.owner) != KERNEL_MEMORY_OK)
-        return KERNEL_VM_CORRUPT;
-    return KERNEL_VM_OK;
+    return copy_mapped_page(space, virtual_address, &path, physical, frame);
+}
+
+KernelVmStatus kernel_vm_copy_shared_page(KernelAddressSpace *space,
+                                          uint32_t virtual_address,
+                                          uint32_t physical_address,
+                                          uint32_t frame_owner)
+{
+    VmPagePath path;
+    KernelFrameInfo frame;
+    uint32_t descriptor;
+    KernelVmStatus status;
+
+    virtual_address &= ~(KERNEL_PAGE_SIZE - 1u);
+    if (!initialized || space == NULL || space->initialized == 0u ||
+        virtual_address < ASTRA_SHARED_AREA_ADDRESS_START ||
+        virtual_address >= ASTRA_SHARED_AREA_ADDRESS_END)
+        return KERNEL_VM_INVALID_ARGUMENT;
+    status = page_path(space->root_physical, virtual_address, &path);
+    if (status != KERNEL_VM_OK)
+        return status;
+    descriptor = path.page_table[VM_PAGE_INDEX(virtual_address)];
+    /* Replacing a shared L3 entry would silently change every shared view. */
+    if ((path.pointer[VM_POINTER_INDEX(virtual_address)] &
+            VM_DESC_SHARED_TABLE) != 0u ||
+        (descriptor & VM_DESC_TYPE_MASK) != VM_DESC_PAGE ||
+        (descriptor & VM_DESC_WRITE_PROTECT) == 0u ||
+        (descriptor & VM_DESC_PAGE_ADDRESS) != physical_address ||
+        !kernel_memory_frame_info(physical_address, &frame) ||
+        frame.state != KERNEL_FRAME_SHARED || frame.owner != frame_owner)
+        return KERNEL_VM_NOT_OWNED;
+    return copy_mapped_page(space, virtual_address, &path, physical_address,
+                            frame);
 }
 
 static KernelVmStatus restore_single_cow_pages(KernelAddressSpace *space)

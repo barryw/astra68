@@ -1462,6 +1462,17 @@ static KernelProcessStatus queue_process_signal(KernelProcess *process,
     return KERNEL_PROCESS_OK;
 }
 
+static void pager_operation_clear(KernelThread *thread)
+{
+    thread->pager_operation = 0u;
+    thread->pager_flags = 0u;
+    thread->pager_failed = 0u;
+    thread->pager_deadline = 0u;
+    thread->pager_unmap_base = 0u;
+    thread->pager_unmap_size = 0u;
+    thread->pager_unmap_sequence = 0u;
+}
+
 static KernelCpuContext *runtime_resume(KernelThread *thread)
 {
     if (thread->pager_failed == 0u && thread->pager_retry == 0u)
@@ -1717,7 +1728,7 @@ static KernelProcessStatus retire_process(KernelProcess *retiring,
                                           uint32_t exit_status,
                                           KernelCpuContext **next_context);
 
-static void report_user_fault(KernelProcess *process, KernelThread *thread,
+static uint32_t report_user_fault(KernelProcess *process, KernelThread *thread,
                               uint32_t address, uint16_t vector,
                               uint16_t status, uint32_t kind)
 {
@@ -1752,6 +1763,9 @@ static void report_user_fault(KernelProcess *process, KernelThread *thread,
     trace_fault_text(process->id, crash->fault_pc, address, vector);
     kernel_process_fault_report(process->id, thread->id, crash->fault_pc,
                                 address, vector, kind);
+    return vector == 2u && kernel_area_backing_access(process->id,
+        &process->address_space, address, kernel_exception_access_write(status)) ?
+        ASTRA_STATUS_BACKING_FAULTED : ASTRA_STATUS_FAULTED;
 }
 
 static KernelProcessStatus schedule_idle(KernelCpuContext **next_context)
@@ -1791,6 +1805,7 @@ static KernelProcessStatus activate(KernelThread *next, SwitchCause cause,
         frame.fault_address = next->pager_fault_address;
         frame.vector_offset = (uint16_t)(next->pager_fault_vector << 2);
         frame.special_status = next->pager_fault_status;
+        frame.access_write = kernel_exception_access_write(frame.special_status);
         do {
             status = request_pager_page(process, next, &frame,
                                         &disposition);
@@ -1798,7 +1813,7 @@ static KernelProcessStatus activate(KernelThread *next, SwitchCause cause,
                 return status;
         } while (disposition == PAGER_RETRY_NOW);
         if (disposition == PAGER_NOT_BOUND) {
-            if (next->pager_syscall == 0u) {
+            if (next->pager_operation == 0u) {
                 mapping = kernel_vm_probe_address_space(
                     &process->address_space, frame.fault_address, NULL);
                 if (mapping != KERNEL_VM_MAPPING_READ_ONLY &&
@@ -1815,9 +1830,8 @@ static KernelProcessStatus activate(KernelThread *next, SwitchCause cause,
             return KERNEL_PROCESS_CORRUPT;
         cause = SWITCH_BLOCK;
     }
-    if (next->pager_syscall != 0u) {
-        next->pager_syscall = 0u;
-        next->pager_failed = 0u;
+    if (next->pager_operation != 0u) {
+        pager_operation_clear(next);
     }
     status = kernel_performance_sampling_enabled == 0u ?
         activate_fast(next, cause, next_context) :
@@ -1828,10 +1842,10 @@ static KernelProcessStatus activate(KernelThread *next, SwitchCause cause,
     if (process == NULL)
         return KERNEL_PROCESS_CORRUPT;
     next->pager_failed = 0u;
-    report_user_fault(process, next, next->pager_fault_address,
+    uint32_t verdict = report_user_fault(process, next, next->pager_fault_address,
                       next->pager_fault_vector, next->pager_fault_status,
                       KERNEL_PROCESS_FAULT_AREA_WINDOW);
-    return retire_process(process, KERNEL_PROCESS_EXIT_USER_FAULT, 0u,
+    return retire_process(process, KERNEL_PROCESS_EXIT_USER_FAULT, verdict,
                           next_context);
 }
 
@@ -3966,6 +3980,7 @@ static uint32_t display_attachment_prepare(
 {
     AstraRenderAttachment *list = &display_attachments[slot];
     KernelArea *area = NULL;
+    KernelAreaStatus area_status;
     uint32_t count = 0u;
 
     *dma_bytes = request->byte_size;
@@ -3994,7 +4009,10 @@ static uint32_t display_attachment_prepare(
                             ASTRA_RENDER_ATTACHMENT_EXTENT_MAX, &count) !=
         KERNEL_AREA_OK)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    if (kernel_area_child_retain(area) != KERNEL_AREA_OK)
+    area_status = kernel_area_child_retain(area);
+    if (area_status == KERNEL_AREA_NO_SLOT)
+        return ASTRA_SYSCALL_RESOURCE_LIMIT;
+    if (area_status != KERNEL_AREA_OK)
         return ASTRA_SYSCALL_INVALID_HANDLE;
     display_slots[slot].attachment_area = area;
     list->magic = ASTRA_RENDER_ATTACHMENT_MAGIC;
@@ -4226,7 +4244,8 @@ static KernelProcessStatus retire_process(KernelProcess *retiring,
      * through crt0, and it is what makes the bit worth reading at all.
      */
     if (reason == KERNEL_PROCESS_EXIT_USER_FAULT)
-        retiring->exit_status = (uint32_t)ASTRA_STATUS_FAULTED;
+        retiring->exit_status = exit_status == ASTRA_STATUS_BACKING_FAULTED ?
+            ASTRA_STATUS_BACKING_FAULTED : ASTRA_STATUS_FAULTED;
     else if (reason == KERNEL_PROCESS_EXIT_SIGNAL && exit_status != 0u &&
              exit_status < 32u)
         retiring->exit_status = ASTRA_STATUS_SIGNALLED(exit_status);
@@ -10225,9 +10244,34 @@ static KernelProcessStatus deliver_pager_reply(
         *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
         return KERNEL_PROCESS_OK;
     }
-    if (message_size == sizeof(received))
+    if (caller->pager_operation == ASTRA_PAGER_OPERATION_SYNC) {
+        AstraPagerSyncReply sync;
+        if (message_size == sizeof(sync)) {
+            kernel_bytes_copy(&sync, message, sizeof(sync));
+            if (sync.header.total_size == sizeof(sync) &&
+                sync.header.header_size == ASTRA_MESSAGE_HEADER_SIZE &&
+                sync.header.flags == 0u && sync.header.reserved == 0u &&
+                sync.header.protocol == ASTRA_PAGER_PROTOCOL &&
+                sync.header.protocol_version == ASTRA_PAGER_PROTOCOL_VERSION &&
+                sync.header.operation == ASTRA_PAGER_OPERATION_SYNC_REPLY &&
+                sync.header.transaction_id == call &&
+                sync.cookie == caller->pager_cookie &&
+                sync.offset == caller->pager_offset &&
+                sync.byte_size == caller->pager_size) {
+                if (caller->pager_epoch != kernel_area_pager_epoch(caller->pager_area) ||
+                    sync.status == ASTRA_STATUS_BUSY)
+                    caller_result = ASTRA_SYSCALL_WOULD_BLOCK;
+                else {
+                    caller_result = sync.status == ASTRA_STATUS_OK ? ASTRA_SYSCALL_OK :
+                        ASTRA_SYSCALL_IO_ERROR;
+                    caller->pager_saved_data[3] = sync.status;
+                }
+            }
+        }
+    } else if (message_size == sizeof(received))
         kernel_bytes_copy(&received, message, sizeof(received));
-    if (message_size == sizeof(*reply) &&
+    if (caller->pager_operation != ASTRA_PAGER_OPERATION_SYNC &&
+        message_size == sizeof(*reply) &&
         reply->header.total_size == sizeof(*reply) &&
         reply->header.header_size == ASTRA_MESSAGE_HEADER_SIZE &&
         reply->header.flags == 0u && reply->header.reserved == 0u &&
@@ -10247,15 +10291,20 @@ static KernelProcessStatus deliver_pager_reply(
                                  KERNEL_OBJECT_AREA, ASTRA_RIGHT_READ,
                                  (void **)&source) == KERNEL_HANDLE_OK &&
             source != NULL) {
-            area_status = kernel_area_read(source, reply->data_offset,
+            uint32_t valid = reply->valid_bytes;
+            uint32_t backing = kernel_area_backing_bytes(caller->pager_area);
+            if (caller->pager_offset >= backing) valid = 0u;
+            else if (valid > backing - caller->pager_offset)
+                valid = backing - caller->pager_offset;
+            area_status = valid == 0u ? KERNEL_AREA_INVALID_ARGUMENT : kernel_area_read(source, reply->data_offset,
                                            pager_reply_bytes,
-                                           reply->valid_bytes);
+                                           valid);
             if (area_status == KERNEL_AREA_CORRUPT)
                 return KERNEL_PROCESS_CORRUPT;
             if (area_status == KERNEL_AREA_OK) {
                 area_status = kernel_area_publish_page(
                     caller->pager_area, caller->pager_offset,
-                    pager_reply_bytes, reply->valid_bytes);
+                    pager_reply_bytes, valid);
                 if (area_status == KERNEL_AREA_CORRUPT)
                     return KERNEL_PROCESS_CORRUPT;
                 if (area_status == KERNEL_AREA_OK ||
@@ -12857,16 +12906,14 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         uint32_t rights = thread->context.data[2];
         uint32_t area_flags = thread->context.data[3];
 
-        if (rights == 0u || (rights & ~KERNEL_AREA_RIGHTS) != 0u ||
-            (area_flags & ~(uint32_t)ASTRA_AREA_CREATE_RESERVED) != 0u) {
+        if (rights == 0u || (rights & ~KERNEL_AREA_RIGHTS) != 0u) {
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
         }
         kernel_enable_interrupts();
         area_status = kernel_area_create(
             current->id, thread->context.data[1],
-            (area_flags & ASTRA_AREA_CREATE_RESERVED) != 0u ?
-                KERNEL_AREA_CREATE_RESERVED : 0u,
+            area_flags,
             &area);
         kernel_disable_interrupts();
         if (area_status != KERNEL_AREA_OK) {
@@ -12910,13 +12957,11 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         uint32_t byte_size;
         uint32_t required_rights;
 
-        if ((permissions & ASTRA_AREA_MAP_READ) == 0u ||
-            (permissions & ~(ASTRA_AREA_MAP_READ |
-                             ASTRA_AREA_MAP_WRITE)) != 0u) {
+        if (!kernel_area_mapping_permissions_valid(permissions)) {
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
         }
-        required_rights = ASTRA_RIGHT_MAP | permissions;
+        required_rights = kernel_area_mapping_rights(permissions);
         handle_status = kernel_handle_lookup(
             current->handles, thread->context.data[1], KERNEL_OBJECT_AREA,
             required_rights, (void **)&area);
@@ -12993,6 +13038,36 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         break;
     }
+    case ASTRA_SYSCALL_AREA_NEXT_PROCESS: {
+        KernelArea *area = NULL;
+        if (thread->context.data[5] != 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        KernelHandleStatus handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1], KERNEL_OBJECT_AREA,
+            ASTRA_RIGHT_ADMINISTER, (void **)&area);
+        if (handle_status != KERNEL_HANDLE_OK) {
+            if (!handle_status_to_syscall(handle_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        uint64_t sequence = ((uint64_t)thread->context.data[3] << 32) |
+            thread->context.data[4];
+        uint32_t process_id = 0u;
+        kernel_enable_interrupts();
+        KernelAreaStatus area_status = kernel_area_next_process(area,
+            thread->context.data[2], &sequence, &process_id);
+        kernel_disable_interrupts();
+        if (!area_status_to_syscall(area_status, &result))
+            return KERNEL_PROCESS_CORRUPT;
+        if (area_status == KERNEL_AREA_OK) {
+            thread->context.data[1] = process_id;
+            thread->context.data[2] = (uint32_t)(sequence >> 32);
+            thread->context.data[3] = (uint32_t)sequence;
+        }
+        break;
+    }
     case ASTRA_SYSCALL_AREA_REFERENCES: {
         KernelArea *area = NULL;
         KernelPerformanceToken performance = kernel_performance_begin(
@@ -13016,16 +13091,22 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         break;
     }
     case ASTRA_SYSCALL_AREA_READ_RESIDENT:
-    case ASTRA_SYSCALL_AREA_WRITE_PAGER: {
+    case ASTRA_SYSCALL_AREA_WRITE_PAGER:
+    case ASTRA_SYSCALL_AREA_PUBLISH_CLEAN_PAGE:
+    case ASTRA_SYSCALL_AREA_PUBLISH_DIRTY_PAGE: {
         KernelArea *area = NULL;
         uint32_t offset = thread->context.data[2];
         uint32_t user_buffer = thread->context.data[3];
         uint32_t length = thread->context.data[4];
-        bool writing = syscall == ASTRA_SYSCALL_AREA_WRITE_PAGER;
+        bool clean = syscall == ASTRA_SYSCALL_AREA_PUBLISH_CLEAN_PAGE;
+        bool publishing = clean || syscall == ASTRA_SYSCALL_AREA_PUBLISH_DIRTY_PAGE;
+        bool copying_in = syscall != ASTRA_SYSCALL_AREA_READ_RESIDENT;
+        uint32_t rights = ASTRA_RIGHT_READ;
+        if (copying_in)
+            rights = (clean ? ASTRA_RIGHT_READ : ASTRA_RIGHT_WRITE) | ASTRA_RIGHT_ADMINISTER;
         KernelHandleStatus handle_status = kernel_handle_lookup(
             current->handles, thread->context.data[1], KERNEL_OBJECT_AREA,
-            writing ? ASTRA_RIGHT_WRITE | ASTRA_RIGHT_ADMINISTER :
-                      ASTRA_RIGHT_READ, (void **)&area);
+            rights, (void **)&area);
 
         if (handle_status != KERNEL_HANDLE_OK) {
             if (!handle_status_to_syscall(handle_status, &result))
@@ -13034,11 +13115,13 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         if (length == 0u || length > KERNEL_PAGE_SIZE ||
             (offset & (KERNEL_PAGE_SIZE - 1u)) > KERNEL_PAGE_SIZE - length ||
-            !kernel_area_range_live(area, offset, length)) {
+            !kernel_area_range_live(area, offset, length) ||
+            (publishing && ((!clean && length != KERNEL_PAGE_SIZE) ||
+                           (offset & (KERNEL_PAGE_SIZE - 1u)) != 0u))) {
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
         }
-        if (writing && kernel_area_pager_epoch(area) == 0u) {
+        if (copying_in && kernel_area_pager_epoch(area) == 0u) {
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
         }
@@ -13046,19 +13129,28 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             result = ASTRA_SYSCALL_BAD_ADDRESS;
             break;
         }
-        if (!kernel_area_page_resident(
-                area, offset & ~(KERNEL_PAGE_SIZE - 1u))) {
+        uint32_t physical;
+        /* Owners can finish staged bytes before publishing a larger EOF. */
+        bool resident = copying_in ? kernel_area_page_physical(
+            area, offset & ~(KERNEL_PAGE_SIZE - 1u), &physical) :
+            kernel_area_page_resident(area, offset & ~(KERNEL_PAGE_SIZE - 1u));
+        if ((publishing && resident) || (!publishing && !resident)) {
             result = ASTRA_SYSCALL_WOULD_BLOCK;
             break;
         }
         KernelAreaStatus area_status = KERNEL_AREA_OK;
         int copy_status = KERNEL_USER_COPY_OK;
-        if (writing) {
+        if (copying_in) {
             copy_status = kernel_copy_from_user(pager_reply_bytes,
                                                 user_buffer, length);
-            if (copy_status == KERNEL_USER_COPY_OK)
-                area_status = kernel_area_write_pager(
-                    area, offset, pager_reply_bytes, length);
+            if (copy_status == KERNEL_USER_COPY_OK) {
+                if (clean)
+                    area_status = kernel_area_publish_page(area, offset, pager_reply_bytes, length);
+                else if (publishing)
+                    area_status = kernel_area_publish_dirty_page(area, offset, pager_reply_bytes);
+                else
+                    area_status = kernel_area_write_pager(area, offset, pager_reply_bytes, length);
+            }
         } else {
             area_status = kernel_area_read(area, offset, pager_reply_bytes,
                                            length);
@@ -13128,6 +13220,29 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
         break;
     }
+    case ASTRA_SYSCALL_AREA_SYNC_RANGE: {
+        KernelExceptionFrame frame = {0};
+        PagerDisposition disposition;
+        uint32_t flags = thread->context.data[3];
+        thread->context.data[3] = ASTRA_STATUS_OK;
+        if ((flags & ~ASTRA_AREA_SYNC_ASYNC) != 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        thread->pager_flags = (uint8_t)flags;
+        thread->pager_operation = ASTRA_PAGER_OPERATION_SYNC;
+        do {
+            status = request_pager_page(current, thread, &frame, &disposition);
+            if (status != KERNEL_PROCESS_OK) return status;
+        } while (disposition == PAGER_RETRY_NOW);
+        if (disposition != PAGER_BLOCKED) {
+            result = thread->context.data[0];
+            pager_operation_clear(thread);
+            break;
+        }
+        ++scheduler_stats.wait_blocks;
+        return schedule_next(SWITCH_BLOCK, next_context);
+    }
     case ASTRA_SYSCALL_AREA_PREFETCH: {
         KernelArea *area = NULL;
         KernelHandleStatus handle_status = kernel_handle_lookup(
@@ -13149,7 +13264,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             break;
         KernelExceptionFrame frame = {0};
         PagerDisposition disposition;
-        thread->pager_syscall = 1u;
+        thread->pager_operation = ASTRA_PAGER_OPERATION_PAGE;
         do {
             status = request_pager_page(current, thread, &frame, &disposition);
             if (status != KERNEL_PROCESS_OK)
@@ -13157,13 +13272,48 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         } while (disposition == PAGER_RETRY_NOW);
         if (disposition != PAGER_BLOCKED) {
             result = thread->context.data[0];
-            thread->pager_syscall = 0u;
-            thread->pager_failed = 0u;
-            thread->pager_deadline = 0u;
+            pager_operation_clear(thread);
             break;
         }
         ++scheduler_stats.wait_blocks;
         return schedule_next(SWITCH_BLOCK, next_context);
+    }
+    case ASTRA_SYSCALL_AREA_DIRTY_SCAN: {
+        KernelArea *area = NULL;
+        uint32_t offset = 0u, state = 0u;
+        KernelHandleStatus handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1], KERNEL_OBJECT_AREA,
+            ASTRA_RIGHT_ADMINISTER, (void **)&area);
+        if (handle_status != KERNEL_HANDLE_OK) {
+            if (!handle_status_to_syscall(handle_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        KernelAreaStatus area_status = kernel_area_dirty_scan(
+            area, thread->context.data[2], &offset, &state);
+        if (!area_status_to_syscall(area_status, &result))
+            return KERNEL_PROCESS_CORRUPT;
+        if (area_status == KERNEL_AREA_OK) {
+            thread->context.data[1] = offset;
+            thread->context.data[2] = state;
+        }
+        break;
+    }
+    case ASTRA_SYSCALL_AREA_RESIZE_BACKING: {
+        KernelArea *area = NULL;
+        KernelHandleStatus handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1], KERNEL_OBJECT_AREA,
+            ASTRA_RIGHT_ADMINISTER, (void **)&area);
+        if (handle_status != KERNEL_HANDLE_OK) {
+            if (!handle_status_to_syscall(handle_status, &result)) return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        kernel_enable_interrupts();
+        KernelAreaStatus area_status = kernel_area_resize_backing(area, thread->context.data[2]);
+        kernel_disable_interrupts();
+        if (area_status != KERNEL_AREA_OK && !area_status_to_syscall(area_status, &result))
+            return KERNEL_PROCESS_CORRUPT;
+        break;
     }
     case ASTRA_SYSCALL_AREA_RECLAIM: {
         KernelArea *area = NULL;
@@ -13200,22 +13350,44 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
         break;
     }
-    case ASTRA_SYSCALL_AREA_UNMAP: {
-        KernelAreaStatus area_status;
-        uint32_t virtual_base = thread->context.data[1];
-
-        kernel_enable_interrupts();
-        area_status = kernel_area_unmap(
-            current->id, &current->address_space, thread->context.data[1]);
-        kernel_disable_interrupts();
-        if (area_status != KERNEL_AREA_OK &&
-            !area_status_to_syscall(area_status, &result))
-            return KERNEL_PROCESS_CORRUPT;
-        if (area_status == KERNEL_AREA_OK)
-            (void)kernel_trace_write(
-                KERNEL_TRACE_EVENT_VM_UNMAP, KERNEL_TRACE_LEVEL_NOTICE,
-                current->id, virtual_base, 0u, 0u);
-        break;
+    case ASTRA_SYSCALL_AREA_UNMAP:
+    case ASTRA_SYSCALL_AREA_UNMAP_RANGE: {
+        if (syscall == ASTRA_SYSCALL_AREA_UNMAP_RANGE &&
+            (thread->context.data[2] == 0u ||
+             (thread->context.data[3] | thread->context.data[4] | thread->context.data[5]) != 0u)) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        KernelExceptionFrame frame = {0};
+        PagerDisposition disposition;
+        thread->pager_unmap_base = thread->context.data[1];
+        thread->pager_unmap_size = syscall == ASTRA_SYSCALL_AREA_UNMAP_RANGE ?
+            thread->context.data[2] : 0u;
+        uint32_t span = thread->pager_unmap_size;
+        KernelAreaStatus area_status = kernel_area_unmap_span(current->id,
+            &current->address_space, thread->pager_unmap_base, &span);
+        thread->context.data[3] = ASTRA_STATUS_OK;
+        if (area_status != KERNEL_AREA_OK) {
+            pager_operation_clear(thread);
+            if (!area_status_to_syscall(area_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        thread->context.data[2] = span;
+        thread->pager_unmap_sequence = current->address_space.area_mapping_sequence;
+        thread->pager_flags = ASTRA_AREA_SYNC_ASYNC;
+        thread->pager_operation = ASTRA_PAGER_OPERATION_SYNC;
+        do {
+            status = request_pager_page(current, thread, &frame, &disposition);
+            if (status != KERNEL_PROCESS_OK) return status;
+        } while (disposition == PAGER_RETRY_NOW);
+        if (disposition != PAGER_BLOCKED) {
+            result = thread->context.data[0];
+            pager_operation_clear(thread);
+            break;
+        }
+        ++scheduler_stats.wait_blocks;
+        return schedule_next(SWITCH_BLOCK, next_context);
     }
     case ASTRA_SYSCALL_AREA_DECOMMIT: {
         KernelAreaStatus area_status;
@@ -15596,7 +15768,9 @@ static void pager_wait_done(KernelThread *thread, uint32_t result,
     KernelPerformanceToken performance = kernel_performance_begin(
         KERNEL_PERFORMANCE_PAGER_HANDOFF);
     KernelArea *area = context;
-    bool resident = kernel_area_page_resident(area, thread->pager_offset);
+    bool syncing = thread->pager_operation == ASTRA_PAGER_OPERATION_SYNC;
+    bool resident = syncing ? result == ASTRA_SYSCALL_OK :
+        kernel_area_page_resident(area, thread->pager_offset);
     bool primary = thread->pager_primary != 0u;
     bool send_wait = thread->pager_send_wait != 0u;
     uint32_t offset = thread->pager_offset;
@@ -15614,8 +15788,13 @@ static void pager_wait_done(KernelThread *thread, uint32_t result,
 
     if (resident) {
         thread->pager_failed = 0u;
-        thread->pager_retry = 0u;
-        thread->pager_deadline = 0u;
+        if (syncing) {
+            thread->pager_saved_data[1] += thread->pager_size;
+            thread->pager_saved_data[2] -= thread->pager_size;
+        }
+        thread->pager_retry = syncing && (thread->pager_saved_data[2] != 0u ||
+            thread->pager_unmap_base != 0u);
+        if (thread->pager_retry == 0u) thread->pager_deadline = 0u;
     } else if ((send_wait && result == ASTRA_SYSCALL_OK) ||
                (primary && result == ASTRA_SYSCALL_WOULD_BLOCK)) {
         thread->pager_retry = 1u;
@@ -15626,19 +15805,20 @@ static void pager_wait_done(KernelThread *thread, uint32_t result,
     }
     kernel_bytes_copy(thread->context.data, thread->pager_saved_data,
                       sizeof(thread->pager_saved_data));
-    if (thread->pager_syscall != 0u)
+    if (thread->pager_operation != 0u)
         thread->context.data[0] = resident ? ASTRA_SYSCALL_OK :
             (result == ASTRA_SYSCALL_OK ? ASTRA_SYSCALL_IO_ERROR : result);
     thread->pager_area = NULL;
     if (kernel_area_child_release(area) != KERNEL_AREA_OK)
         process_pool_corrupt = 1u;
-    if (primary && thread->pager_retry == 0u) {
+    if (primary && !syncing && thread->pager_retry == 0u) {
         KernelThread *peer = pager_waiting;
 
         while (peer != NULL) {
             KernelThread *next = peer->pager_next;
 
-            if (peer->pager_area == area && peer->pager_offset == offset &&
+            if (peer->pager_operation != ASTRA_PAGER_OPERATION_SYNC &&
+                peer->pager_area == area && peer->pager_offset == offset &&
                 peer->state == KERNEL_THREAD_BLOCKED) {
                 uint32_t wake_result = resident ? ASTRA_SYSCALL_OK :
                     (result == ASTRA_SYSCALL_OK ? ASTRA_SYSCALL_IO_ERROR :
@@ -15668,6 +15848,7 @@ static void pager_wait_prepare(KernelThread *thread,
     thread->pager_offset = request->offset;
     thread->pager_cookie = request->cookie;
     thread->pager_epoch = request->epoch;
+    thread->pager_size = request->byte_size;
     thread->pager_fault_address = frame->fault_address;
     thread->pager_fault_vector = (uint16_t)(frame->vector_offset >> 2);
     thread->pager_fault_status = frame->special_status;
@@ -15684,7 +15865,10 @@ static KernelProcessStatus request_pager_page(
 {
     KernelAreaPagerRequest request;
     KernelThreadWaitSpec wait;
-    AstraPagerPageRequest message = {0};
+    union {
+        AstraPagerPageRequest page;
+        AstraPagerSyncRequest sync;
+    } message = {0};
     KernelHandle reply = KERNEL_HANDLE_INVALID;
     KernelAreaStatus area_status;
     KernelHandleStatus handle_status;
@@ -15697,7 +15881,67 @@ static KernelProcessStatus request_pager_page(
     KernelThread *peer;
 
     *disposition = PAGER_NOT_BOUND;
-    if (thread->pager_syscall != 0u) {
+    bool syncing = thread->pager_operation == ASTRA_PAGER_OPERATION_SYNC;
+    if (syncing) {
+        bool unmapping = thread->pager_unmap_base != 0u;
+        if (unmapping && thread->pager_deadline != 0u &&
+            scheduler_cycles() >= thread->pager_deadline) {
+            thread->context.data[0] = ASTRA_SYSCALL_TIMED_OUT;
+            thread->pager_failed = 1u;
+            return KERNEL_PROCESS_OK;
+        }
+        if (unmapping && thread->pager_unmap_sequence !=
+                process->address_space.area_mapping_sequence) {
+            uint32_t span = thread->pager_unmap_size;
+            area_status = kernel_area_unmap_span(process->id,
+                &process->address_space, thread->pager_unmap_base, &span);
+            if (!area_status_to_syscall(area_status, &thread->context.data[0]))
+                return KERNEL_PROCESS_CORRUPT;
+            if (area_status != KERNEL_AREA_OK) {
+                thread->pager_failed = 1u;
+                return KERNEL_PROCESS_OK;
+            }
+            thread->context.data[1] = thread->pager_unmap_base;
+            thread->context.data[2] = span;
+            thread->pager_unmap_sequence = process->address_space.area_mapping_sequence;
+        }
+        for (;;) {
+            if (thread->context.data[2] == 0u) {
+                area_status = KERNEL_AREA_OK;
+                if (unmapping) {
+                    kernel_enable_interrupts();
+                    area_status = thread->pager_unmap_size == 0u ?
+                        kernel_area_unmap(process->id, &process->address_space,
+                            thread->pager_unmap_base) :
+                        kernel_area_unmap_range(process->id, &process->address_space,
+                            thread->pager_unmap_base, thread->pager_unmap_size);
+                    kernel_disable_interrupts();
+                    if (area_status == KERNEL_AREA_OK)
+                        (void)kernel_trace_write(KERNEL_TRACE_EVENT_VM_UNMAP,
+                            KERNEL_TRACE_LEVEL_NOTICE, process->id,
+                            thread->pager_unmap_base, thread->pager_unmap_size, 0u);
+                }
+                if (!area_status_to_syscall(area_status, &thread->context.data[0]))
+                    return KERNEL_PROCESS_CORRUPT;
+                thread->pager_failed = area_status != KERNEL_AREA_OK;
+                return KERNEL_PROCESS_OK;
+            }
+            area_status = kernel_area_sync_request(process->id,
+                &process->address_space, thread->context.data[1],
+                thread->context.data[2], unmapping, &request);
+            if (area_status != KERNEL_AREA_OK) {
+                thread->pager_failed = 1u;
+                if (!area_status_to_syscall(area_status, &thread->context.data[0]))
+                    return KERNEL_PROCESS_CORRUPT;
+                if (area_status == KERNEL_AREA_NOT_MAPPED)
+                    thread->context.data[0] = ASTRA_SYSCALL_BAD_ADDRESS;
+                return KERNEL_PROCESS_OK;
+            }
+            if (request.area != NULL) break;
+            thread->context.data[1] += request.byte_size;
+            thread->context.data[2] -= request.byte_size;
+        }
+    } else if (thread->pager_operation != 0u) {
         KernelArea *area = NULL;
         uint32_t result = ASTRA_SYSCALL_IO_ERROR;
         handle_status = kernel_handle_lookup(process->handles,
@@ -15726,8 +15970,12 @@ static KernelProcessStatus request_pager_page(
         return KERNEL_PROCESS_OK;
     if (area_status == KERNEL_AREA_CORRUPT)
         return KERNEL_PROCESS_CORRUPT;
-    if (area_status != KERNEL_AREA_OK)
+    if (area_status != KERNEL_AREA_OK) {
+        if (thread->pager_operation != 0u &&
+            !area_status_to_syscall(area_status, &thread->context.data[0]))
+            return KERNEL_PROCESS_CORRUPT;
         return KERNEL_PROCESS_OK;
+    }
     deadline = thread->pager_deadline;
     if (deadline == 0u) {
         now_ns = kernel_platform_monotonic_ns();
@@ -15743,7 +15991,8 @@ static KernelProcessStatus request_pager_page(
         goto release;
     }
     for (peer = pager_waiting; peer != NULL; peer = peer->pager_next) {
-        if (peer->pager_primary == 0u || peer->pager_area != request.area ||
+        if (syncing || peer->pager_operation == ASTRA_PAGER_OPERATION_SYNC ||
+            peer->pager_primary == 0u || peer->pager_area != request.area ||
             peer->pager_offset != request.offset ||
             peer->state != KERNEL_THREAD_BLOCKED)
             continue;
@@ -15778,12 +16027,21 @@ static KernelProcessStatus request_pager_page(
             return KERNEL_PROCESS_CORRUPT;
         goto release;
     }
-    astra_message_header_set(&message.header, sizeof(message),
-                             ASTRA_PAGER_PROTOCOL,
-                             ASTRA_PAGER_PROTOCOL_VERSION,
-                             ASTRA_PAGER_OPERATION_PAGE, call);
-    message.cookie = request.cookie;
-    message.offset = request.offset;
+    if (syncing) {
+        astra_message_header_set(&message.sync.header, sizeof(message.sync),
+            ASTRA_PAGER_PROTOCOL, ASTRA_PAGER_PROTOCOL_VERSION,
+            ASTRA_PAGER_OPERATION_SYNC, call);
+        message.sync.cookie = request.cookie;
+        message.sync.offset = request.offset;
+        message.sync.byte_size = request.byte_size;
+        message.sync.flags = thread->pager_flags;
+    } else {
+        astra_message_header_set(&message.page.header, sizeof(message.page),
+            ASTRA_PAGER_PROTOCOL, ASTRA_PAGER_PROTOCOL_VERSION,
+            ASTRA_PAGER_OPERATION_PAGE, call);
+        message.page.cookie = request.cookie;
+        message.page.offset = request.offset;
+    }
     port_status = kernel_port_send_narrowed(
         request.port, &pager_handles, &message, sizeof(message), &reply,
         1u, NULL, &woken, &receiver);
@@ -15837,7 +16095,7 @@ static KernelProcessStatus request_pager_page(
     return KERNEL_PROCESS_OK;
 
 release:
-    if (thread->pager_syscall != 0u) {
+    if (thread->pager_operation != 0u) {
         thread->context.data[0] = failure_result;
         thread->pager_failed = 1u;
     }
@@ -15904,11 +16162,11 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
             return schedule_next(SWITCH_BLOCK, next_context);
         thread->pager_deadline = 0u;
     }
-    report_user_fault(current, thread, frame.fault_address,
+    uint32_t verdict = report_user_fault(current, thread, frame.fault_address,
                       (uint16_t)(frame.vector_offset >> 2),
                       frame.special_status,
                       classify_fault_address(thread, frame.fault_address));
-    return retire_current(KERNEL_PROCESS_EXIT_USER_FAULT, 0u,
+    return retire_current(KERNEL_PROCESS_EXIT_USER_FAULT, verdict,
                           next_context);
 }
 

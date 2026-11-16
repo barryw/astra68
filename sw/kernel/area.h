@@ -6,6 +6,8 @@
 #include "memory.h"
 #include "vm.h"
 
+#include <astra/object_abi.h>
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -25,8 +27,24 @@
  * of 2 MiB, and the address space it did not use costs nothing at all,
  * because there is 2 GB of that and 128 MB of the other.
  */
-#define KERNEL_AREA_CREATE_RESERVED (1u << 0)
-#define KERNEL_AREA_CREATE_FLAGS KERNEL_AREA_CREATE_RESERVED
+#define KERNEL_AREA_CREATE_RESERVED ASTRA_AREA_CREATE_RESERVED
+#define KERNEL_AREA_CREATE_MAPPED_LIFETIME ASTRA_AREA_CREATE_MAPPED_LIFETIME
+#define KERNEL_AREA_CREATE_FLAGS \
+    (KERNEL_AREA_CREATE_RESERVED | KERNEL_AREA_CREATE_MAPPED_LIFETIME)
+
+static inline bool kernel_area_mapping_permissions_valid(uint32_t permissions)
+{
+    return (permissions & ASTRA_AREA_MAP_READ) != 0u &&
+        (permissions & ~(ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE |
+                         ASTRA_AREA_MAP_PRIVATE)) == 0u;
+}
+
+static inline uint32_t kernel_area_mapping_rights(uint32_t permissions)
+{
+    return ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP |
+        ((permissions & ASTRA_AREA_MAP_PRIVATE) == 0u ?
+            permissions & ASTRA_AREA_MAP_WRITE : 0u);
+}
 
 /*
  * How much a fault commits. One page would be correct and slow: on a 30 MHz
@@ -41,6 +59,10 @@
  * walking upward land on distinct clusters and a fault never re-does work.
  */
 #define KERNEL_AREA_COMMIT_CLUSTER_PAGES 16u
+#define KERNEL_AREA_SYNC_REQUEST_BUDGET_CYCLES 100000u
+#define KERNEL_AREA_BACKING_ACCESS_BUDGET_CYCLES 100000u
+#define KERNEL_AREA_UNMAP_CHECK_BUDGET_CYCLES 100000u
+#define KERNEL_AREA_HOLDER_QUERY_BUDGET_CYCLES 100000u
 
 typedef enum KernelAreaStatus {
     KERNEL_AREA_OK = 0,
@@ -67,6 +89,7 @@ typedef struct KernelAreaPagerRequest {
     uint32_t cookie;
     uint32_t offset;
     uint32_t epoch;
+    uint32_t byte_size;
 } KernelAreaPagerRequest;
 
 /* A physically contiguous run of an area's bytes. */
@@ -83,7 +106,7 @@ typedef struct KernelAreaSnapshot {
     uint32_t terminal_result;
     uint16_t handle_references;
     uint16_t child_references;
-    uint16_t mapping_references;
+    uint32_t mapping_references;
     uint32_t page_count;
     uint32_t committed_pages;
     uint8_t state;
@@ -123,6 +146,10 @@ KernelAreaStatus kernel_area_bind_pager(KernelArea *area, KernelPort *port,
                                         uint32_t cookie,
                                         KernelHandleRelease release,
                                         void *release_context);
+/* Capacity stays reserved. Shrink revokes private copies too; an affected
+ * in-flight writeback refuses the entire change. Owners may stage future pages. */
+KernelAreaStatus kernel_area_resize_backing(KernelArea *area, uint32_t bytes);
+uint32_t kernel_area_backing_bytes(const KernelArea *area);
 KernelAreaStatus kernel_area_pager_request(uint32_t process_id,
                                             KernelAddressSpace *space,
                                             uint32_t address, bool write,
@@ -130,6 +157,15 @@ KernelAreaStatus kernel_area_pager_request(uint32_t process_id,
 /* Handle-authorized I/O uses the same retained request as a mapped fault. */
 KernelAreaStatus kernel_area_page_request(KernelArea *area, uint32_t offset,
                                           KernelAreaPagerRequest *request);
+/* Resolve one caller-owned view, retaining shared pager backing for the call.
+ * Anonymous/private views return only the consumed byte_size, with area NULL.
+ * Unmapping also skips holes and the pager's own provider views. */
+KernelAreaStatus kernel_area_sync_request(uint32_t process_id,
+    KernelAddressSpace *space, uint32_t address, uint32_t byte_size,
+    bool unmapping, KernelAreaPagerRequest *request);
+/* Validate an unmap without changing views; zero size resolves an exact base. */
+KernelAreaStatus kernel_area_unmap_span(uint32_t process_id,
+    KernelAddressSpace *space, uint32_t address, uint32_t *byte_size);
 /*
  * Answers an authorized fault inside the area window. Anonymous areas commit
  * their missing cluster; resident pager-page writes mark the shared page dirty
@@ -141,6 +177,9 @@ KernelAreaStatus kernel_area_page_request(KernelArea *area, uint32_t offset,
  */
 bool kernel_area_fault(uint32_t process_id, KernelAddressSpace *space,
                        uint32_t address, bool write);
+/* Classify an allowed pager-backed view without resolving or retaining it. */
+bool kernel_area_backing_access(uint32_t process_id, KernelAddressSpace *space,
+                               uint32_t address, bool write);
 /* Publish one complete file page after copying valid bytes into a zeroed
  * frame. No mapping sees the frame until the copy and zero tail are ready. */
 KernelAreaStatus kernel_area_publish_page(KernelArea *area, uint32_t offset,
@@ -155,9 +194,15 @@ uint32_t kernel_area_pager_epoch(const KernelArea *area);
  * keeps the page pending. Pending pages hold one existing area child pin.
  * File I/O and writable user mappings remain separately authorized. */
 KernelAreaStatus kernel_area_mark_dirty(KernelArea *area, uint32_t offset);
+/* Bounded pending-page scan; state zero returns a continuation/end cursor. */
+KernelAreaStatus kernel_area_dirty_scan(KernelArea *area, uint32_t start,
+                                        uint32_t *offset, uint32_t *state);
 /* Owner-authorized modification of one resident pager page; no implicit fill. */
 KernelAreaStatus kernel_area_write_pager(KernelArea *area, uint32_t offset,
                                          const void *source, uint32_t size);
+/* Publish a complete absent pager page as dirty; never replace resident data. */
+KernelAreaStatus kernel_area_publish_dirty_page(KernelArea *area, uint32_t offset,
+                                                const void *source);
 KernelAreaStatus kernel_area_writeback_begin(KernelArea *area, uint32_t offset,
                                              void *destination,
                                              uint32_t *token);
@@ -222,6 +267,11 @@ KernelAreaStatus kernel_area_clone_process(
 KernelAreaStatus kernel_area_unmap(uint32_t process_id,
                                    KernelAddressSpace *space,
                                    uint32_t virtual_base);
+/* Page-aligned address range; holes are allowed and other views survive. */
+KernelAreaStatus kernel_area_unmap_range(uint32_t process_id,
+                                         KernelAddressSpace *space,
+                                         uint32_t virtual_base,
+                                         uint32_t byte_size);
 KernelAreaStatus kernel_area_process_died(uint32_t process_id,
                                           uint32_t *closed_areas,
                                           uint32_t *revoked_mappings);
@@ -249,6 +299,10 @@ bool kernel_area_live(const KernelArea *area);
  * deciding whether the final external mapping has gone away. */
 bool kernel_area_references(const KernelArea *area, uint32_t *handles,
                             uint32_t *mappings, uint32_t *children);
+/* Ordered unique native holders. Sequence zero starts; mutation returns BUSY.
+ * PID zero ends iteration; after UINT32_MAX obtains only the current sequence. */
+KernelAreaStatus kernel_area_next_process(const KernelArea *area, uint32_t after,
+    uint64_t *sequence, uint32_t *process_id);
 uint32_t kernel_area_creator(const KernelArea *area);
 uint32_t kernel_area_generation(const KernelArea *area);
 uint32_t kernel_area_size(const KernelArea *area);

@@ -266,7 +266,7 @@ $(BUILD_DIR)/port.o: port.c port.h thread.h handle.h bytes.h generation.h \
                      ../include/astra/syscall.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/area.o: area.c area.h handle.h memory.h vm.h bytes.h \
+$(BUILD_DIR)/area.o: area.c area.h port.h handle.h memory.h vm.h bytes.h \
                      object_cache.h allocation.h \
                      generation.h ../include/astra/syscall.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
@@ -684,7 +684,7 @@ $(BUILD_DIR)/test_port: tests/test_port.c port.c port.h handle.c handle.h \
 		handle.c performance.c thread.c \
 		port.c tests/test_port.c -o $@
 
-$(BUILD_DIR)/test_area: tests/test_area.c area.c area.h vm.c vm.h \
+$(BUILD_DIR)/test_area: tests/test_area.c area.c area.h port.h vm.c vm.h \
 			  memory.c memory.h bytes.c bytes.h generation.h \
 			  allocation.c allocation.h object_cache.c object_cache.h \
 			  ../common/boot_contract.c ../include/astra/boot.h \
@@ -698,7 +698,7 @@ $(BUILD_DIR)/test_area: tests/test_area.c area.c area.h vm.c vm.h \
 		bytes.c vm.c area.c \
 		tests/test_area.c -o $@
 
-$(BUILD_DIR)/test_ring: tests/test_ring.c ring.c ring.h area.c area.h \
+$(BUILD_DIR)/test_ring: tests/test_ring.c ring.c ring.h area.c area.h port.h \
 			  vm.c vm.h memory.c memory.h thread.c thread.h \
 			  allocation.c allocation.h object_cache.c object_cache.h \
 			  performance.c performance.h context.c context.h \

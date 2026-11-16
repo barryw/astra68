@@ -405,6 +405,7 @@ KernelRingStatus kernel_ring_create_flagged(
 {
     KernelRing *ring = NULL;
     KernelRingStatus allocation_status;
+    KernelAreaStatus area_status;
     AstraBulkRingHeader header;
     uint32_t total_size;
     bool kernel_copy =
@@ -442,8 +443,13 @@ KernelRingStatus kernel_ring_create_flagged(
         pool_corrupt = 1u;
         return KERNEL_RING_CORRUPT;
     }
-    if (kernel_area_child_retain(area) != KERNEL_AREA_OK) {
+    area_status = kernel_area_child_retain(area);
+    if (area_status != KERNEL_AREA_OK) {
         free_ring(ring);
+        if (area_status == KERNEL_AREA_NO_SLOT) {
+            ++pool_stats.allocation_failures;
+            return KERNEL_RING_NO_SLOT;
+        }
         return KERNEL_RING_PEER_DEAD;
     }
 
