@@ -93,3 +93,19 @@ coherent image and private Config Kit storage. Production is cleanly closed
 before the trial. The user receives the power-cut signal only after native
 file/parent acknowledgement is captured on Beast. Runtime-only systemd
 overrides disappear on reboot; production HOME and settings are not test inputs.
+
+Trial93 reached native desktop with zero restarts and the updated NTP service.
+`arm93.log` records the actual file/parent acknowledgement while the file is
+still open, before close; Beast flushes that evidence before the power signal.
+The user confirms disconnecting/reconnecting the power supply. DE25 then has
+power LEDs but no display, UART or network. JTAG chip IDs remain correct;
+CONFIG_STATUS has no configuration error and CONF_DONE/INIT_DONE set. This
+locates the next investigation at boot/HPS; it does not establish filesystem
+corruption. Post-cut native readback and fsck remain unperformed. No private
+image or production image has been opened or repaired after this cut. Serial
+capture is armed for a user HPS KEY3 reset. Keep trial files until recovery,
+verified archival and normal-service restoration are complete.
+
+VM archive: `/home/barry/astra-evidence/powerloss92-vm-20261116.tar.gz`,
+958 sealed records, SHA-256
+`5aacb7ab3a8ab11aea22bce2c936183f1be4b4682aeb0a13a7ab50cdeeea7c0f`.

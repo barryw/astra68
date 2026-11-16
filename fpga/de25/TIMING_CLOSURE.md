@@ -1,5 +1,33 @@
 # DE25-Nano Timing Closure
 
+## 2026-11-16: durability power-cut boot investigation
+
+- Software checkpoint `0788619`, Beast Quartus Pro 26.1.1 Build 130. No RTL,
+  constraints, synthesis or routing changes. The disposable filesystem trial
+  boots the existing complete production fabric and reaches stage 8; native
+  file/parent sync acknowledgement is recorded before the user's DC supply
+  disconnect/reconnect.
+- Following that cut, power LEDs remain on but UART/network/HDMI do not return.
+  JTAG identifies `4BA06477` and `4362C0DD`, design hash
+  `3B9D7BF7D65C959963E4`. Read-only CONFIG_STATUS returns state zero, pin status
+  `c0000089`, soft-function status `00000003`, error location zero. RSU_STATUS
+  returns unsupported `0000000c`; it does not identify a reset/storage cause.
+- Retained renderer-abort shell manifest verifies SHA-256
+  `222060ec869149c5e28a280ef0a5fa2c4d4d216a38ecf42a5928831a5b91db08`.
+  Its unchanged HPS SOF is
+  `961bf357bcf7eed04bdf2e911b4024a7b571a00a7f807978b174d958418c74f4`;
+  JIC `501995758e97fe1696b02f7a34ffcc00b3cf1b43ec525952894f2ec18deb2408`,
+  RBF `731e04858072271076e96d4018d9863120d3a0882017401f8836a12b3443ffa8`.
+  JTAG RAM-only SOF reload succeeds at 17:17:14 UTC, checksum `07A0AFAC`, zero
+  errors/warnings; UART remains silent. No flash or SD programming occurs.
+- Resources and clock evidence remain the retained full-route results below:
+  41,053/46,800 ALMs, setup +0.062 ns, hold +0.000 ns. No new clock result or
+  failed timing cone is asserted. Disposition: boot/HPS investigation open;
+  physical durability readback and service restoration are not certified.
+  User prefers another power cycle over KEY3; serial capture awaits a full
+  DC/USB disconnect/reconnect to exclude residual power. Evidence:
+  Beast `/home/barry/astra-evidence/powerloss-20261116/`.
+
 ## 2026-11-06: bounded renderer abort after stalled AXI response
 
 - Source base `358ceb4b`; changed

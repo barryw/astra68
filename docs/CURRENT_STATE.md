@@ -14,9 +14,24 @@ port/deadline loop now publishes before background synchronization. Offline
 desktop and explicit NTP control pass. Setup failures remain archived. See
 [power-loss qualification](FILESYSTEM_POWER_LOSS.md) and Beast
 `/home/barry/astra-evidence/powerloss-20261116/`. Physical trial93 is staged with
-disposable image/private settings; production data remains excluded. The user
-is ready but has not received the power-cut signal. No further DVD hardware is
-needed. Network mounts and broad performance qualification remain excluded.
+disposable image/private settings; production data remains excluded. Native
+file/parent acknowledgement was captured and flushed on Beast, then the user
+disconnected/reconnected DE25's power supply. The board now has power LEDs but
+no HDMI, network or UART response. JTAG sees both expected chip IDs and design
+hash `3B9D7BF7D65C959963E4`. Read-only SDM CONFIG_STATUS reports no configuration
+error, `CONF_DONE`/`INIT_DONE` set and default AS Fast POR mode; RSU_STATUS is
+unsupported (`0x0c`), not evidence of a storage fault. Reload of the exact
+retained HPS SOF into RAM succeeds without flash/SD programming; UART remains
+silent. User declines KEY3 and requests another power cycle. Serial capture
+now awaits full DC/USB disconnect/reconnect to exclude residual power.
+No post-cut image read, repair or formatting
+has occurred; do not claim hardware durability or SD corruption. VM evidence
+archive `powerloss92-vm-20261116.tar.gz` verifies 958 records, SHA-256
+`5aacb7ab3a8ab11aea22bce2c936183f1be4b4682aeb0a13a7ab50cdeeea7c0f`.
+Implementation is committed/pushed as `0788619` on
+`wip/linux-power-loss-20261116`; hardware gate and main merge remain open.
+No further DVD hardware is needed. Network mounts and broad performance
+qualification remain excluded.
 
 Checkpoint82 implementation, test harnesses and hardware evidence are merged
 and pushed to `main` at `4a78ce7cd28691baf221c9b8076e3f63d64dc51f`.
