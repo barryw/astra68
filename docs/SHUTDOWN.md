@@ -211,8 +211,19 @@ confirmed-dead record before restoring its saved definition, while preserving
 the original failure and shared process-crash diagnostics. The old Supervisor
 leaves it failed at PID zero; the corrected replay restores a new running PID.
 All three recovery cases, native filesystem checks, clean exit and offline
-fsck pass together. See `shutdown-ui-20261115/{native82-v2,menu82-v4}.log`
-on Beast. Checkpoint47 qualifies HostFS failure retention on DE25:
+fsck pass together. DE25 also passes the 66-second edited-line cancellation,
+exact exit-77 recovery with fresh PID, manual/never policy and survivor/idle
+checks, clean menu shutdown 88 and restart 89. Its preserved custom shell has
+no fixture prompt markers: tests retain its configuration, prove live
+cancellation, and explicitly observe its normal exit before final power action.
+Actual stopped SD, exFAT and FAT32 pass read-only fsck after both power paths.
+Linux stays up; the temporary guest-only power policy is removed and normal
+stage 8/audio/RFB return. See `shutdown-ui-20261115/{native82-v2,menu82-v4,
+power82-board,recovery82-board,restore82-restart-board}.log` on Beast.
+The board evidence archive is verified before exact owned test-state cleanup;
+normal services remain active with zero restarts and 8.5 GiB free. The remaining
+filesystem qualification gate needs a physical optical drive and readable disc.
+Checkpoint47 qualifies HostFS failure retention on DE25:
 busy checks follow request draining, failed retirement preserves public
 endpoints, repeated close errors retain ownership, and failed READY delivery
 reclaims provider authority instead of exiting. Host and ASan/UBSan tests pass.

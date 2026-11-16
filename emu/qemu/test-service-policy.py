@@ -164,22 +164,27 @@ def check_policy_after_restart(shell):
     shell.ok("service inspect media", "boot: yes", "restart: on-fault")
 
 
-def check_shutdown_cancellation(machine, shell, deadline, mode='--lose-shutdown-port'):
-    shell.ok("service add shutdown-probe /services/fault-probe --manual "
+def check_shutdown_cancellation(machine, shell, deadline, mode='--lose-shutdown-port',
+                                request=None, open_terminal=None,
+                                probe_path='/services/fault-probe'):
+    shell.ok("service add shutdown-probe " + probe_path + " --manual "
              "--restart=never --grant=LIBS:r -- " + mode)
     shell.ok("service start shutdown-probe")
     info = shell.ok("service inspect shutdown-probe", "state: running")
     process = next(int(line.split(':', 1)[1]) for line in info if line.startswith('pid: '))
     assert process > 0
-    shell.ok("service add shutdown-survivor /services/fault-probe --manual "
+    shell.ok("service add shutdown-survivor " + probe_path + " --manual "
              "--restart=never --grant=LIBS:r -- --stay-ready")
     shell.ok("service start shutdown-survivor")
     survivor = shell.ok("service inspect shutdown-survivor", "state: running")
     survivor_process = next(int(line.split(':', 1)[1]) for line in survivor if line.startswith('pid: '))
-    shell.ok("service add shutdown-idle /services/fault-probe --manual "
+    shell.ok("service add shutdown-idle " + probe_path + " --manual "
              "--restart=never --grant=LIBS:r -- --stay-ready")
     before = machine.trace_cursor()
-    machine.qmp.type_line('shutdown')
+    if request is None:
+        machine.qmp.type_line('shutdown')
+    else:
+        request()
     expected = ('shutdown exit shutdown-probe pid=%u status=0 reason=77'
                 if mode == '--fail-shutdown' else
                 'shutdown declined shutdown-probe pid=%u status=0 reason=0'
@@ -188,7 +193,8 @@ def check_shutdown_cancellation(machine, shell, deadline, mode='--lose-shutdown-
     if not machine.wait_for_trace_text(expected, deadline, before):
         raise RuntimeError('shutdown lost native failure context:\n' +
                            '\n'.join(machine.trace_with_syslog()[-80:]))
-    if not terminal.open_terminal_window(machine, deadline):
+    opened = terminal.open_terminal_window(machine, deadline) if open_terminal is None else open_terminal()
+    if not opened:
         raise RuntimeError('no fresh Terminal after declined shutdown')
     if mode == '--fail-shutdown':
         recovered = shell.ok('service inspect shutdown-probe', 'state: running',

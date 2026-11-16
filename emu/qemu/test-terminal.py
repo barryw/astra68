@@ -1563,6 +1563,92 @@ def refresh_workspace_rom(rom):
     return True
 
 
+def open_power_confirmation(machine, restart, command_deadline):
+    """Use the common menu by identity on hosted and physical displays."""
+    before = machine.trace_cursor()
+    machine.qmp.point(40, 15)
+    machine.qmp.button(True)
+    machine.qmp.button(False)
+    time.sleep(.2)
+    machine.qmp.key('end')  # Last ASTRA item is Shut Down.
+    if restart:
+        machine.qmp.key('up')
+    machine.qmp.key('ret')
+    request = 'desktop %s requested' % ('restart' if restart else 'shutdown')
+    if not machine.wait_for_trace_text(request, command_deadline, before):
+        raise RuntimeError('ASTRA menu selected wrong power action: ' + request)
+    time.sleep(.4)
+
+
+def check_power_menu(machine, restart, command_deadline):
+    action = "Restart" if restart else "Shut Down"
+    expected = 89 if restart else 88
+
+    def click(x, y):
+        machine.qmp.point(x, y)
+        machine.qmp.button(True)
+        machine.qmp.button(False)
+
+    # Initial consent must be cancellable without touching Terminal.
+    open_power_confirmation(machine, restart, command_deadline)
+    click(994, 617)  # Shared confirmation's Cancel button.
+    click(400, 106)  # Existing Terminal title; no second launch.
+    before = machine.sequence()
+    machine.qmp.type_line('print POWER-CONFIRM-CANCELLED')
+    if wait_for_command(machine, 'POWER-CONFIRM-CANCELLED',
+                        command_deadline, before, exact=True) is None:
+        raise RuntimeError('initial power cancellation lost the live Terminal')
+    print('POWER UI initial confirmation Cancel PASS', flush=True)
+    machine.settle()
+    # Edited input vetoes exit. Modeless progress must permit an
+    # explicit ABORT, retaining that exact shell and unfinished line.
+    before = machine.sequence()
+    machine.qmp.type_text('print POWER-PENDING-KEPT')
+    open_power_confirmation(machine, restart, command_deadline)
+    click(1102, 617)  # Shared centered confirmation's primary button.
+    print('POWER UI pending request accepted', flush=True)
+    hold = 3.0 if restart else 66.0
+    end = time.monotonic() + hold
+    while time.monotonic() < end:
+        if machine.process.poll() is not None:
+            raise RuntimeError('power request killed an edited Terminal')
+        time.sleep(.25)
+    click(1102, 617)  # Same shared alert now offers live Cancel.
+    time.sleep(.5)
+    click(400, 106)
+    machine.qmp.key('ret')
+    if wait_for_command(machine, 'POWER-PENDING-KEPT', command_deadline,
+                        before, exact=True) is None:
+        raise RuntimeError('live power cancellation lost pending shell input')
+    print('POWER UI live Cancel retained edited shell line PASS', flush=True)
+    machine.settle()
+    if machine.process.poll() is not None:
+        raise RuntimeError('cancelled transaction still powered off')
+    open_power_confirmation(machine, restart, command_deadline)
+    click(1102, 617)
+    print('POWER UI final clean request accepted', flush=True)
+    try:
+        code = machine.process.wait(timeout=command_deadline)
+    except subprocess.TimeoutExpired:
+        print("FAIL: ASTRA menu %s did not complete" % action)
+        for line in machine.said_with_syslog()[0]:
+            if 'shutdown' in line or 'power' in line or 'POWER-' in line:
+                print('    power |%s|' % line)
+        for line in machine.recent_serial(20):
+            print("    %s" % line)
+        for line in machine.recent_trace(40):
+            print("    %s" % line)
+        return 1
+    if code != expected:
+        print("FAIL: ASTRA menu %s QEMU exit %d, expected %d" %
+              (action, code, expected))
+        return 1
+    print("ASTRA MENU %s PASS initial cancel, edited-line %us wait, live cancel, "
+          "same shell input retained, clean exit %u" %
+          (action.upper(), hold, expected))
+    return 0
+
+
 def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         report_timings, prepared_image, performance_only, vim_gate,
         network_only, vim_only, cxx_only, zsh_only, interface_layout_only,
@@ -1654,8 +1740,6 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                 print("ASTRA COMMAND PROBE PASS")
                 return 0
             if restart_menu_only or shutdown_menu_only:
-                action = "Restart" if restart_menu_only else "Shut Down"
-                expected = 89 if restart_menu_only else 88
                 # Hosted fixtures have no HDMI-audio or RFB provider. Keep
                 # their known failed launches out of this interaction gate.
                 before = machine.sequence()
@@ -1666,83 +1750,7 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                                     before, exact=True) is None:
                     raise RuntimeError('power fixture services did not settle')
                 machine.settle()
-
-                def click(x, y):
-                    machine.qmp.point(x, y)
-                    machine.qmp.button(True)
-                    machine.qmp.button(False)
-
-                def power_menu():
-                    before = machine.trace_cursor()
-                    click(40, 15)
-                    time.sleep(.2)
-                    machine.qmp.key('end')  # Last ASTRA item is Shut Down.
-                    if restart_menu_only:
-                        machine.qmp.key('up')
-                    machine.qmp.key('ret')
-                    request = 'desktop %s requested' % ('restart' if restart_menu_only else 'shutdown')
-                    if not machine.wait_for_trace_text(request, command_deadline, before):
-                        raise RuntimeError('ASTRA menu selected wrong power action: ' + request)
-                    time.sleep(.4)
-
-                # Initial consent must be cancellable without touching Terminal.
-                power_menu()
-                click(994, 617)  # Shared confirmation's Cancel button.
-                click(400, 106)  # Existing Terminal title; no second launch.
-                before = machine.sequence()
-                machine.qmp.type_line('print POWER-CONFIRM-CANCELLED')
-                if wait_for_command(machine, 'POWER-CONFIRM-CANCELLED',
-                                    command_deadline, before, exact=True) is None:
-                    raise RuntimeError('initial power cancellation lost the live Terminal')
-                print('POWER UI initial confirmation Cancel PASS', flush=True)
-                machine.settle()
-                # Edited input vetoes exit. Modeless progress must permit an
-                # explicit ABORT, retaining that exact shell and unfinished line.
-                before = machine.sequence()
-                machine.qmp.type_text('print POWER-PENDING-KEPT')
-                power_menu()
-                click(1102, 617)  # Shared centered confirmation's primary button.
-                print('POWER UI pending request accepted', flush=True)
-                hold = 3.0 if restart_menu_only else 66.0
-                end = time.monotonic() + hold
-                while time.monotonic() < end:
-                    if machine.process.poll() is not None:
-                        raise RuntimeError('power request killed an edited Terminal')
-                    time.sleep(.25)
-                click(1102, 617)  # Same shared alert now offers live Cancel.
-                time.sleep(.5)
-                click(400, 106)
-                machine.qmp.key('ret')
-                if wait_for_command(machine, 'POWER-PENDING-KEPT', command_deadline,
-                                    before, exact=True) is None:
-                    raise RuntimeError('live power cancellation lost pending shell input')
-                print('POWER UI live Cancel retained edited shell line PASS', flush=True)
-                machine.settle()
-                if machine.process.poll() is not None:
-                    raise RuntimeError('cancelled transaction still powered off')
-                power_menu()
-                click(1102, 617)
-                print('POWER UI final clean request accepted', flush=True)
-                try:
-                    code = machine.process.wait(timeout=command_deadline)
-                except subprocess.TimeoutExpired:
-                    print("FAIL: ASTRA menu %s did not complete" % action)
-                    for line in machine.said_with_syslog()[0]:
-                        if 'shutdown' in line or 'power' in line or 'POWER-' in line:
-                            print('    power |%s|' % line)
-                    for line in machine.recent_serial(20):
-                        print("    %s" % line)
-                    for line in machine.recent_trace(40):
-                        print("    %s" % line)
-                    return 1
-                if code != expected:
-                    print("FAIL: ASTRA menu %s QEMU exit %d, expected %d" %
-                          (action, code, expected))
-                    return 1
-                print("ASTRA MENU %s PASS initial cancel, edited-line %us wait, live cancel, "
-                      "same shell input retained, clean exit %u" %
-                      (action.upper(), hold, expected))
-                return 0
+                return check_power_menu(machine, restart_menu_only, command_deadline)
             if shutdown_only or restart_only:
                 action = "restart" if restart_only else "shutdown"
                 expected = 89 if restart_only else 88

@@ -2,6 +2,51 @@
 
 Status: active continuation map, 2026-11-16
 
+DE25 now selects development shadow
+`37c0383b6c6c03ae5fedbc8722c92c328d47311300d5ce2615466cc3c76df28c`.
+The focused installer updates 16 guest files and one ROM, retires three old
+minor-version library files, preserves HOME/private Config Kit storage, and
+reaches stage 8 in 128 seconds (`install82.log`). Runtime/System/Interface Kit
+manifests and provider records travel with their changed libraries. Final NDK
+distribution, C/C++/SDL CMake consumers, examples and docs pass in 130 seconds
+(`ndk82-final.log`). No full system-image or FPGA rebuild is involved.
+
+The actual running board passes all seven native filesystem cases under QEMU
+PID 1311272, UID/GID 999. Both stable `/usb0` exFAT and `/usb2` FAT32 pass
+write/read, copy/rename and desktop-icon Atlas root browsing; Doom stays intact.
+Updated Terminal, Atlas and Settings launch. The first observer mistakenly uses
+the launch-only CLI `open` on a volume path; the corrected observer uses the
+real desktop double-click. The seven cases are not needlessly repeated: its
+resume requires the same already-qualified QEMU PID (`board82{,-v2}.log`).
+Physical shared power UI passes initial confirmation Cancel, a 66-second wait
+with edited shell input, live Cancel retaining the same shell/line, reopened
+launch admission and zero restarts. The preserved custom shell emits no fixture
+prompt markers; its configuration stays untouched, and explicit normal shell
+exit is observed before the final clean shutdown 88. Linux does not reboot.
+The actual stopped system image and both USB filesystems then pass read-only
+fsck. The existing cross-built exFAT checker supplies the offline verifier;
+its absence from Linux PATH is not a filesystem failure. Normal host policy,
+stage 8, audio and RFB are restored (`power82-board.log`,
+`restore82-board-v2.log`). Physical exit-77 recovery also passes on QEMU PID
+1535141: exact failure context, a new running service PID with manual/never
+policy preserved, stopped survivor restored, idle service unchanged, fresh
+Terminal, definition removal and native I/O. The small native fault probe loads
+from WORK into the existing image; the same service-policy checker handles
+hosted CLI and physical menu requests through explicit callbacks. Physical menu
+Restart then exits 89 with Linux's boot identity unchanged. Read-only fsck of
+the stopped system, exFAT and FAT32 passes again. Normal host policy, stage 8,
+audio and RFB are restored (`recovery82-board.log`,
+`restore82-restart-board.log`); the temporary power guard is removed.
+Only the physical optical-media gate remains; Linux currently sees no optical
+device. Board evidence is copied to Beast, all 559 records and the archive
+contents are verified, and `board82-evidence.tar.gz` has SHA-256
+`884b00f4879f5b16963193c33dace2f99c69bc6db347a60459c0ff3a7954707e`.
+Cleanup verifies the sealed manifest and compares each live test tree with its
+archived copy before removing exactly nine owned WORK directories, the trace
+dump and the private trial stage. Older fixtures, Doom, HOME and private Config
+Kit data remain. Final health: all three services active with zero restarts,
+normal host power policy, only loop0 and 8.5 GiB free (`cleanup82-board.log`).
+
 Shutdown UI82 now integrates Desktop through a reusable Interface Kit power
 panel. Shared alert bodies compose existing wrapping TextView, ScrollView and
 Scrollbar; old blocking alerts use the same path. Host suites, ASan/UBSan and
@@ -21,9 +66,9 @@ Older menu coordinates selected the wrong item; the gate now uses common menu
 keyboard navigation and asserts the intended Desktop action. A retired image
 cannot be reused without its paired private Config Kit state; menu gates each
 start from the untouched coherent input. Retain the earlier failed harness logs.
-Final NDK refresh and hardware qualification remain. New code is committed and
-pushed on the shutdown work branch, not installed on DE25. Current board remains
-the qualified filesystem80 checkpoint below. Kit manifests and direct Runtime
+This preceding software checkpoint is now installed and hardware-qualified as
+described above. The deployed ROM records product source identity `02b47fca`;
+subsequent commits contain qualification harnesses and documentation. Kit manifests and direct Runtime
 3.1 app requirements now match their checked library payloads; the packaging
 gate rejects the earlier stale manifests before any deployment.
 Evidence: Beast `/home/barry/astra-evidence/shutdown-ui-20261115/`.
@@ -51,8 +96,8 @@ At that checkpoint Desktop integration, final NDK closure and hardware gates
 remained; checkpoint82 above tracks current progress. Evidence:
 Beast `/home/barry/astra-evidence/shutdown-ui-20261115/`.
 
-Current running development checkpoint:
-`/var/lib/astra/dev/current` selects
+Preceding qualified filesystem80 development checkpoint:
+`/var/lib/astra/dev/current` then selected
 `3b22ae6485b2f57f4f4d2191ce19407df4588e23fddc3ed7e6caf5ec1cac3286`.
 The stopped persistent user image received 89 guest updates and two obsolete
 ABI removals; five host components changed. HOME/settings were not installer
