@@ -1,435 +1,518 @@
 #!/usr/bin/env python3
-"""Exhaust every completed Astra block write/flush boundary."""
+"""Cut a disposable Linux VM, including its filesystem/page cache, beneath Astra.
+
+The inner MC68040 QEMU, provider, native probe and recovery checks are unchanged
+production mechanisms. Both QEMUs run without root privilege. No host block
+device is accepted; only generated regular-file disks enter the Linux VM.
+"""
 
 import argparse
+import hashlib
 import importlib.util
+import json
 import os
-import queue
+from pathlib import Path
 import re
+import select
 import shutil
+import signal
+import socket
+import stat
+import struct
 import subprocess
 import sys
 import time
 
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-SPEC = importlib.util.spec_from_file_location(
-    "astra_terminal_gate", os.path.join(HERE, "test-terminal.py"))
-terminal = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(terminal)
-
-CUT = re.compile(r"Astra68 block power cut: transition=(\d+) op=(write|flush)")
-PROPERTY = "astra-block-durability-transitions"
-CUT_PROPERTY = "astra-block-power-cut-after"
-QEMU_ARGS = ("-icount", "shift=8,align=off,sleep=on")
-BLOCK_QUIET_SECONDS = 2.0
-# Far longer than an event-store save takes to follow a launch under icount;
-# silence that long means persistence stopped (it does after a failed save).
-IDLE_QUIET_SECONDS = 60.0
-# Every wait is bounded: a guest that stops talking fails the gate with its
-# serial tail instead of holding an exhaustive run open forever.
-WAIT_SECONDS = 600.0
-PAYLOAD = "durable-data-68040"
-# HOME: is the ext4 volume. WORK: is not a block path under the emulator:
-# /services/hostfs serves WORK, and its publication replaces the storage
-# binding, so a /work probe writes the QEMU host directory of one run and a
-# fresh recovery run finds it ABSENT. trace_run proves the payload reached
-# the block image.
-PATH = "/home/durability-cut.txt"
-WRITE = "posix --durability-gated %s %s" % (PATH, PAYLOAD)
-CHECK = "posix --durability-check %s %s" % (PATH, PAYLOAD)
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+PAYLOAD = "Astra-native-durable-68040-v84"
+BASELINE = "previously-acknowledged-baseline"
+LABELS = {"fat32": "CUT_FAT32", "exfat": "CUT_EXFAT"}
+OUTER_LABEL = 'ASTRA_POWERCUT'
+MARKER = "ASTRA-POWER-"
 
 
-def wait_serial(machine, marker):
-    end = time.monotonic() + WAIT_SECONDS
-    while time.monotonic() < end:
+def module(filename):
+    spec = importlib.util.spec_from_file_location(filename.replace('-', '_'), HERE / filename)
+    result = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(result)
+    return result
+
+
+def digest(path):
+    value = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(1 << 20), b''):
+            value.update(block)
+    return value.hexdigest()
+
+
+def verdict(phase, value, baseline):
+    if phase not in ('ready', 'written', 'synced'):
+        raise RuntimeError('invalid power-cut phase')
+    if baseline != "EXACT":
+        raise RuntimeError("previous acknowledged baseline was lost")
+    if phase == "synced" and value != "EXACT":
+        raise RuntimeError("acknowledged data was lost: " + value)
+    if phase != "synced" and value != "UNACKNOWLEDGED":
+        raise RuntimeError("invalid unacknowledged recovery result")
+
+
+def checked(command, **kwargs):
+    return subprocess.run(list(map(str, command)), check=True, **kwargs)
+
+
+def filesystem_check(command, repair):
+    result = subprocess.run(list(map(str, command)), stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True)
+    print(result.stdout, end='', flush=True)
+    if result.returncode not in ((0, 1) if repair else (0,)):
+        raise RuntimeError("filesystem check failed: %r status %u" % (command, result.returncode))
+
+
+def worker():
+    # This guard precedes every mount, sysctl or block-device operation.
+    cmdline = dict(word.split('=', 1) for word in Path('/proc/cmdline').read_text().split() if '=' in word)
+    if os.geteuid() != 0 or cmdline.get('astra_power_vm') != '1':
+        raise RuntimeError("worker runs only in its disposable Linux VM")
+    mode, target, phase = (cmdline['astra_' + name] for name in ('mode', 'target', 'phase'))
+    if mode not in ('cut', 'recover', 'baseline') or target not in ('system', 'fat32', 'exfat') or phase not in ('ready', 'written', 'synced'):
+        raise RuntimeError("invalid VM test selection")
+    outer = subprocess.check_output(['blkid', '-s', 'LABEL', '-o', 'value', '/dev/vda'], text=True).strip()
+    assert outer == OUTER_LABEL, outer
+    checked(['mount', '/dev/vda', '/data'])
+    for name, permissions in (('/data/tmp', 0o1777), ('/data/session', 0o700), ('/data/system.img', 0o600)):
+        os.chown(name, 0, 0)
+        os.chmod(name, permissions)
+    checked(['mount', '--bind', '/data/tmp', '/var/tmp'])
+    Path('/proc/sys/vm/dirty_writeback_centisecs').write_text('0\n')
+    Path('/proc/sys/vm/dirty_expire_centisecs').write_text('360000\n')
+    terminal = module('test-terminal.py')
+    semantics = module('test-fs-semantics.py')
+    from qemu_runtime import storage_fixture, require_provider_abi
+    from storage_image import image_window
+    image = Path('/data/system.img')
+    devices = {}
+    end = time.monotonic() + 20
+    while time.monotonic() < end and set(devices) != set(LABELS):
+        for device in Path('/sys/class/block').glob('sd*'):
+            path = '/dev/' + device.name
+            info = subprocess.run(['blkid', '-o', 'export', path], capture_output=True, text=True)
+            values = dict(line.split('=', 1) for line in info.stdout.splitlines() if '=' in line)
+            for kind, label in LABELS.items():
+                if values.get('LABEL') == label:
+                    devices[kind] = path
+        if set(devices) != set(LABELS):
+            time.sleep(.1)
+    assert set(devices) == set(LABELS), devices
+    for device in devices.values():
+        properties = subprocess.check_output(['udevadm', 'info', '--query=property', '--name', device], text=True)
+        print(properties, flush=True)
+        assert 'ID_BUS=usb\n' in properties, 'udev must identify the actual USB transport'
+    if mode == 'recover':
+        offset, size, _ = image_window(image)
+        loop = subprocess.check_output(['losetup', '--find', '--show', '--offset', str(offset),
+            '--sizelimit', str(size), str(image)], text=True).strip()
         try:
-            line = machine.serial.get(timeout=0.2)
-        except queue.Empty:
-            if machine.process.poll() is not None:
-                return False
-            continue
-        if line is None:
-            return False
-        machine.log.append(line)
-        if marker in line:
-            return True
-    return False
+            filesystem_check(['e2fsck', '-p', loop], True)
+        finally:
+            checked(['losetup', '-d', loop])
+        filesystem_check(['fsck.fat', '-a', devices['fat32']], True)
+        filesystem_check(['fsck.exfat', '-p', devices['exfat']], True)
+    # Commit only the initial fixture. No global sync occurs after writes arm.
+    os.sync()
+    control = Path('/tmp/control')
+    control.mkdir()
+    os.chown(control, 1000, 1000)
+    os.environ['ASTRA_TEST_QEMU_UID'] = '1000'
+    os.environ['ASTRA_TEST_QEMU_GID'] = '1000'
+    require_provider_abi('/opt/astra/qemu', '/usr/local/libexec/astra-storage')
+    launcher, owner = storage_fixture(image, control, exports='/data/session/exports',
+        credentials=(1000, 1000), discovery='udev')
+    machine = terminal.Machine('/opt/astra/qemu', '/opt/astra/rom', str(image), str(control),
+        launcher=launcher, socket_owner=owner, extra_args=('-pidfile', '/tmp/native.pid'))
+    finished = False
+    step = 0
 
+    def wait(text, before, timeout=90):
+        lines, highest = machine.wait_for_text(text, timeout, before)
+        if lines is None:
+            raise RuntimeError('native marker absent: %r\n%s' % (text, '\n'.join(machine.said(before)[0][-35:])))
+        return lines, highest
 
-def wait_text(machine, needles, after):
-    needles = (needles,) if isinstance(needles, str) else tuple(needles)
-    end = time.monotonic() + WAIT_SECONDS
-    while machine.process.poll() is None and time.monotonic() < end:
-        lines, highest = machine.said(after)
-        if any(any(needle in line for line in lines) for needle in needles):
-            return lines, highest
-        time.sleep(0.25)
-    return None, after
+    def command(text):
+        nonlocal step
+        step += 1
+        lines, status = semantics.command(machine, text, 90, step)
+        assert status == 0, (text, status, lines[-30:])
+        return lines
 
+    def check(path, payload):
+        lines = command('posix --durability-check ' + path + ' ' + payload)
+        outcomes = [line.rsplit(' ', 1)[-1] for line in lines if line in (
+            'ASTRA DURABILITY EXACT', 'ASTRA DURABILITY ABSENT')]
+        assert len(outcomes) == 1, lines
+        return outcomes[0]
 
-def settle(machine):
-    last = machine.sequence()
-    end = time.monotonic() + WAIT_SECONDS
-    while machine.process.poll() is None:
-        if time.monotonic() >= end:
-            raise RuntimeError("the terminal never settled")
-        time.sleep(0.4)
-        current = machine.sequence()
-        if current == last:
-            return
-        last = current
-    raise RuntimeError("QEMU exited while the terminal was settling")
-
-
-def open_terminal(machine):
-    if not wait_serial(machine, terminal.BOOT_MARKER):
-        return False
-    time.sleep(2.0)
-    machine.qmp.double_click(*machine.application_icon(terminal.TERMINAL_BUNDLE))
-    if wait_text(machine, terminal.BANNER, 0)[0] is None:
-        return False
-    settle(machine)
-    # Durability counting needs a quiet disk. Without a host helper here,
-    # media and remote-desktop fail and are retried forever, and every
-    # failure is an event written and synced to storage. Both are user
-    # services, so the gate stops them the way a user would.
-    before = machine.sequence()
-    machine.qmp.type_line("service stop remote-desktop; "
-                          "service stop media; print -r -- PC-QUIET-$?")
-    lines, _ = wait_text(
-        machine, tuple("PC-QUIET-%d" % digit for digit in range(10)), before)
-    if lines is None or not any(line.startswith("PC-QUIET-0")
-                                for line in lines):
-        return False
-    settle(machine)
-    return True
-
-
-def transitions(machine):
-    return machine.qmp.execute("qom-get", {
-        "path": "/machine", "property": PROPERTY})
-
-
-def wait_for_background_commit(machine, baseline):
-    previous = transitions(machine)
-    changed = previous != baseline
-    quiet_since = time.monotonic()
-    end = quiet_since + WAIT_SECONDS
-
-    while machine.process.poll() is None:
-        if time.monotonic() >= end:
-            raise RuntimeError("background storage never settled")
-        time.sleep(0.1)
-        current = transitions(machine)
-        if current != previous:
-            previous = current
-            changed = True
-            quiet_since = time.monotonic()
-        elif changed and time.monotonic() - quiet_since >= BLOCK_QUIET_SECONDS:
-            return
-        elif not changed and \
-                time.monotonic() - quiet_since >= IDLE_QUIET_SECONDS:
-            # The event store writes only when events arrived, so a commit
-            # after READY is not guaranteed; a long silence is settled too.
-            return
-    raise RuntimeError("QEMU exited while background storage was settling")
-
-
-def write_probe(machine, cut=0, seen=None):
-    """Run the probe, cutting power at write/flush transition @p cut (0: no
-    cut). @p seen, when given, records whether fsync was acknowledged -- the
-    guest printed SYNCED -- before the machine went away."""
-    settle(machine)
-    machine.qmp.execute("stop")
-    machine.qmp.execute("qom-set", {
-        "path": "/machine", "property": PROPERTY, "value": 0})
-    machine.qmp.execute("qom-set", {
-        "path": "/machine", "property": CUT_PROPERTY, "value": 0})
-    machine.qmp.execute("cont")
-    before = machine.sequence()
-    machine.qmp.type_line(WRITE)
-    lines, ready_sequence = wait_text(
-        machine, ("ASTRA DURABILITY READY", "posix:"), before)
-    if lines is None or not any("ASTRA DURABILITY READY" in line
-                                for line in lines):
-        raise RuntimeError("durability probe failed before start gate")
-    wait_for_background_commit(machine, 0)
-    machine.qmp.execute("stop")
-    machine.qmp.execute("qom-set", {
-        "path": "/machine", "property": PROPERTY, "value": 0})
-    machine.qmp.execute("qom-set", {
-        "path": "/machine", "property": CUT_PROPERTY, "value": cut})
-    machine.qmp.execute("cont")
-    machine.qmp.key("ret")
-    lines, synced_sequence = wait_text(
-        machine, ("ASTRA DURABILITY SYNCED", "posix:"), ready_sequence)
-    if lines is None or not any("ASTRA DURABILITY SYNCED" in line
-                                for line in lines):
-        raise RuntimeError("durability probe failed before fsync")
-    if seen is not None:
-        seen["synced"] = True
-    machine.qmp.execute("stop")
-    synced = transitions(machine)
-    machine.qmp.execute("cont")
-    machine.qmp.key("ret")
-    if not any("ASTRA DURABILITY PASS" in line for line in lines):
-        lines, _ = wait_text(
-            machine, ("ASTRA DURABILITY PASS", "posix:"), synced_sequence)
-    if lines is None or not any("ASTRA DURABILITY PASS" in line
-                                for line in lines):
-        raise RuntimeError("durability probe failed after fsync")
-    machine.qmp.execute("stop")
-    total = transitions(machine)
-    machine.qmp.execute("cont")
-    return synced, total
-
-
-def check_probe(machine):
-    settle(machine)
-    before = machine.sequence()
-    machine.qmp.type_line(CHECK)
-    lines, _ = wait_text(machine, ("ASTRA DURABILITY ", "posix:"), before)
-    if lines is None:
-        raise RuntimeError("durability check did not complete")
-    for result in ("EXACT", "ABSENT", "PREFIX"):
-        if any("ASTRA DURABILITY " + result in line for line in lines):
-            return result
-    raise RuntimeError("durability check rejected recovered data")
-
-
-def close_and_log(machine):
-    machine.close()
-    time.sleep(0.1)
-    machine.recent_serial()
-    return "\n".join(machine.log)
-
-
-def serial_tail(machine):
-    machine.recent_serial()
-    tail = "\n".join(machine.log[-100:])
-    # Once a service drains the ring the console goes quiet, so why a boot
-    # stopped is only in the ring: decode its tail while the machine lives.
-    if machine.process.poll() is None:
+    try:
+        assert terminal.open_terminal(machine, 120, 90), 'native Terminal unavailable'
+        pid = int(Path('/tmp/native.pid').read_text())
+        status = dict(line.split(':', 1) for line in Path('/proc/%u/status' % pid).read_text().splitlines() if ':' in line)
+        assert list(map(int, status['Uid'].split())) == [1000] * 4
+        assert list(map(int, status['Gid'].split())) == [1000] * 4
+        assert not status['Groups'].strip() and status['NoNewPrivs'].strip() == '1'
+        assert all(int(status[key], 16) == 0 for key in ('CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb'))
+        print(MARKER + 'NATIVE-UID1000-CAPS0', flush=True)
+        if mode == 'baseline':
+            step += 1
+            lines, result = semantics.command(machine, 'ntp offline.invalid', 30, step)
+            assert result != 0 and any('ntp: could not resolve the time server' in line for line in lines), lines
+            print(MARKER + 'OFFLINE-NTP-CONTROL-PASS', flush=True)
+        command('service disable media; service stop media; service disable remote-desktop; service stop remote-desktop')
+        rows = [line.split() for line in command('volumes --all')]
+        paths = {'system': '/home'}
+        for kind, label in LABELS.items():
+            found = [row for row in rows if len(row) >= 11 and row[1:3] == ['mount', 'mounted'] and row[-1] == label]
+            assert len(found) == 1 and found[0][5] == 'rw', (kind, rows)
+            paths[kind] = found[0][3]
+        path = paths[target] + '/POWER-CUT.TXT'
+        baseline = paths[target] + '/POWER-BASELINE.TXT'
+        if mode == 'cut':
+            assert check(path, PAYLOAD) == 'ABSENT'
+            command('posix --durability ' + baseline + ' ' + BASELINE)
+            before = machine.sequence()
+            machine.qmp.type_line('posix --durability-gated ' + path + ' ' + PAYLOAD)
+            _, before = wait(('ASTRA DURABILITY GATE 2', 'ASTRA DURABILITY READY'), before)
+            if phase in ('written', 'synced'):
+                machine.qmp.key('ret')
+                _, before = wait('ASTRA DURABILITY WRITTEN', before)
+            if phase == 'synced':
+                machine.qmp.key('ret')
+                wait('ASTRA DURABILITY SYNCED', before)
+            machine.qmp.execute('stop')
+            print(MARKER + 'CUT ' + json.dumps({'target': target, 'phase': phase, 'path': path}), flush=True)
+            # Host kills the complete Linux VM. Do not close/sync on this path.
+            while True:
+                time.sleep(1)
+        elif mode == 'baseline':
+            for kind, directory in paths.items():
+                name = directory + '/POWER-CUT.TXT'
+                before = machine.sequence()
+                machine.qmp.type_line('posix --durability-gated ' + name + ' ' + PAYLOAD + '; print POWER-BASELINE-DONE-$?')
+                wait('ASTRA DURABILITY GATE 2', before)
+                for stage in ('READY', 'WRITTEN', 'SYNCED'):
+                    _, before = wait('ASTRA DURABILITY ' + stage, before)
+                    machine.qmp.key('ret')
+                wait('POWER-BASELINE-DONE-0', before)
+                assert check(name, PAYLOAD) == 'EXACT'
+        else:
+            previous = check(baseline, BASELINE)
+            value = check(path, PAYLOAD) if phase in ('ready', 'synced') else 'UNACKNOWLEDGED'
+            if phase == 'ready':
+                assert value == 'ABSENT', value
+            print(MARKER + 'RECOVER ' + json.dumps({'baseline': previous, 'value': value}), flush=True)
+        assert machine.settle()
+        machine.qmp.type_line('shutdown')
+        assert machine.process.wait(timeout=90) == 88
+        machine.close()
+        finished = True
+        offset, size, _ = image_window(image)
+        loop = subprocess.check_output(['losetup', '--find', '--show', '--read-only',
+            '--offset', str(offset), '--sizelimit', str(size), str(image)], text=True).strip()
         try:
-            tail += "\n--- trace ring (newest 250) ---\n" + \
-                "\n".join(machine.trace()[-250:])
-        except Exception as error:
-            tail += "\n--- trace ring unavailable: %s ---" % error
-    return tail
-
-
-def trace_run(args, image, run_directory):
-    machine = terminal.Machine(args.qemu, args.rom, image, run_directory,
-                               QEMU_ARGS)
-    try:
-        if not open_terminal(machine):
-            raise RuntimeError("trace boot did not reach Terminal")
-        synced, total = write_probe(machine)
-        if os.environ.get("ASTRA_QEMU_BLOCK_TRACE"):
-            for line in machine.log:
-                if "Astra68 block durability transition=" in line:
-                    print(line, flush=True)
-        return synced, total
-    except Exception as error:
-        status = machine.process.poll()
-        raise RuntimeError("trace QEMU failed (%s, status %s)\n%s" %
-                           (error, "running" if status is None else status,
-                            serial_tail(machine))) from error
+            filesystem_check(['e2fsck', '-fn', loop], False)
+        finally:
+            checked(['losetup', '-d', loop])
+        filesystem_check(['fsck.fat', '-n', devices['fat32']], False)
+        filesystem_check(['fsck.exfat', '-n', devices['exfat']], False)
+        print(MARKER + 'FSCK-PASS', flush=True)
     finally:
-        close_and_log(machine)
+        if not finished:
+            machine.close()
 
 
-def cut_run(args, image, run_directory, cut):
-    """Cut power at transition @p cut. Returns None when this run never made
-    that many transitions, else whether fsync was acknowledged before the cut.
+def copy_binary(source, root, destination=None, seen=None):
+    """Copy one ELF plus the libraries reported by the installed loader."""
+    source = Path(source)
+    destination = Path(destination or str(source).lstrip('/'))
+    target = root / destination
+    if seen is None:
+        seen = set()
+    key = (str(source), str(destination))
+    if key in seen:
+        return
+    seen.add(key)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target, follow_symlinks=True)
+    result = subprocess.run(['ldd', str(source)], capture_output=True, text=True)
+    assert 'not found' not in result.stdout, result.stdout
+    for library in re.findall(r'(/[^\s()]+)', result.stdout):
+        if Path(library).is_file():
+            copy_binary(library, root, seen=seen)
 
-    Background writers (the event store saves whenever events arrive) make the
-    transition sequence differ from run to run, so a transition index is not
-    a fixed point in the probe. What the recovered data must be is decided by
-    what this run's guest was told: once SYNCED was printed the data is owed.
-    Seeing SYNCED races the cut, which can only make a run lenient."""
-    machine = terminal.Machine(args.qemu, args.rom, image, run_directory,
-                               QEMU_ARGS)
-    seen = {"synced": False}
-    booted = False
-    probed = False
+
+def prepare(args):
+    work = args.output
+    work.mkdir(parents=True)
+    root = work / 'initramfs'
+    root.mkdir()
+    for name in ('dev', 'proc', 'sys', 'run', 'tmp', 'var/tmp', 'data', 'etc', 'usr/bin'):
+        (root / name).mkdir(parents=True, exist_ok=True)
+    (root / 'tmp').chmod(0o1777)
+    (root / 'var/tmp').chmod(0o1777)
+    seen = set()
+    binaries = ('/usr/bin/busybox', '/usr/bin/python3', '/usr/bin/setpriv', '/usr/bin/mount',
+        '/usr/bin/umount', '/usr/sbin/blkid', '/usr/sbin/losetup', '/usr/sbin/e2fsck',
+        '/usr/sbin/fsck.fat', '/usr/sbin/fsck.exfat', '/usr/sbin/modprobe',
+        '/usr/bin/udevadm', '/usr/lib/systemd/systemd-udevd')
+    for binary in binaries:
+        copy_binary(binary, root, seen=seen)
+    copy_binary('/usr/bin/busybox', root, 'bin/busybox', seen)
+    (root / 'bin/sh').symlink_to('busybox')
+    for applet in ('mkdir', 'sleep', 'mount', 'sync', 'poweroff'):
+        (root / 'bin' / applet).symlink_to('busybox')
+    version = '%u.%u' % sys.version_info[:2]
+    stdlib = Path('/usr/lib/python' + version)
+    shutil.copytree(stdlib, root / stdlib.relative_to('/'),
+        ignore=shutil.ignore_patterns('__pycache__', 'test', 'tests', 'idlelib', 'tkinter', 'config-*'))
+    for library in (stdlib / 'lib-dynload').glob('*.so'):
+        if '_tkinter' not in library.name:
+            copy_binary(library, root, seen=seen)
+    for helper in ('ata_id', 'scsi_id'):
+        copy_binary('/usr/lib/udev/' + helper, root, seen=seen)
+    rules = root / 'usr/lib/udev/rules.d'
+    rules.mkdir(parents=True)
+    shutil.copy2('/usr/lib/udev/rules.d/60-persistent-storage.rules', rules)
+    modules = Path('/lib/modules') / args.kernel_release
+    target = root / modules.relative_to('/')
+    target.mkdir(parents=True)
+    for path in modules.glob('modules.*'):
+        if path.is_file():
+            shutil.copy2(path, target)
+    drivers = ('loop', 'virtio_pci', 'virtio_blk', 'ext4', 'vfat', 'exfat', 'usb_storage', 'xhci_pci', 'nls_cp437', 'nls_iso8859_1')
+    for driver in drivers:
+        output = subprocess.check_output(['/usr/sbin/modprobe', '-S', args.kernel_release, '--show-depends', driver], text=True)
+        for path in re.findall(r'^insmod (\S+)', output, re.M):
+            destination = root / path.lstrip('/')
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, destination)
+    gate = root / 'opt/astra'
+    gate.mkdir(parents=True)
+    for directory in ('emu/qemu', 'tools'):
+        (gate / directory).mkdir(parents=True)
+        for path in (ROOT / directory).glob('*.py'):
+            shutil.copy2(path, gate / directory)
+    for relative in ('sw/kernel/trace.h',):
+        destination = gate / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative, destination)
+    shutil.copytree(ROOT / 'sw/include/astra', gate / 'sw/include/astra')
+    for relative in ('supervisor/build/m68k/astra_supervisor.elf',
+                     'services/terminal/build/m68k/terminal.elf',
+                     'services/desktop/build/m68k/desktop.elf'):
+        source = ROOT / 'sw/userspace' / relative
+        destination = gate / 'sw/userspace' / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    copy_binary(args.qemu, root, 'opt/astra/qemu', seen)
+    copy_binary(args.provider, root, 'usr/local/libexec/astra-storage', seen)
+    copy_binary('/usr/local/libexec/astra-codec-worker', root, seen=seen)
+    shutil.copy2(args.rom, gate / 'rom')
+    (root / 'usr/local/sbin').mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / 'tools/astra-qemu-root', root / 'usr/local/sbin/astra-qemu-root')
+    (root / 'sbin').symlink_to('usr/sbin')
+    (root / 'etc/mtab').symlink_to('/proc/self/mounts')
+    (root / 'etc/passwd').write_text('root:x:0:0:root:/root:/bin/sh\nastra:x:1000:1000:astra:/tmp:/bin/sh\n')
+    (root / 'etc/group').write_text('root:x:0:\ndisk:x:6:\nastra:x:1000:\n')
+    (root / 'etc/nsswitch.conf').write_text('passwd: files\ngroup: files\nhosts: files\n')
+    (root / 'init').write_text('#!/bin/sh\n/bin/mount -t devtmpfs devtmpfs /dev\nexec </dev/console >/dev/console 2>&1\nset -eu\nexport PATH=/usr/sbin:/usr/bin:/sbin:/bin\nmount -t proc proc /proc\nmount -t sysfs sysfs /sys\nmount -t tmpfs tmpfs /run\n' +
+        '\n'.join('/usr/sbin/modprobe ' + driver for driver in drivers) + '\n' +
+        '/usr/lib/systemd/systemd-udevd --daemon\nudevadm trigger --action=add --subsystem-match=block\nudevadm settle --timeout=20\n' +
+        'if python3 -u /opt/astra/emu/qemu/test-storage-power-cuts.py --worker; then\n sync\n poweroff -f\nelse\n echo ASTRA-POWER-FAIL\n poweroff -n -f\nfi\n')
+    (root / 'init').chmod(0o755)
+    with (work / 'initramfs.cpio.gz').open('wb') as output:
+        result = subprocess.run(['bash', '-o', 'pipefail', '-c',
+            'find . -print0 | cpio --null -o --format=newc --owner=0:0 | gzip -1'], cwd=root, stdout=output)
+        assert result.returncode == 0
+    seed = work / 'seed'
+    seed.mkdir()
+    (seed / 'tmp').mkdir(mode=0o1777)
+    (seed / 'session').mkdir()
+    shutil.copyfile(args.image, seed / 'system.img')
+    # Install only the changed probe and offline-boot fix, not a new OS image.
+    image_tools = module('astra_image.py')
+    image_tools.install_test_command(str(seed / 'system.img'), 'posix')
+    image_tools.install_service(str(seed / 'system.img'), 'ntpd')
+    for kind, size in (('system', 1024), ('fat32', 64), ('exfat', 64)):
+        image = work / (kind + '-base.img')
+        with image.open('wb') as output:
+            output.truncate(size << 20)
+        if kind == 'system':
+            checked(['/usr/sbin/mkfs.ext4', '-q', '-F', '-O', '^orphan_file', '-L', OUTER_LABEL, '-d', seed, image])
+        elif kind == 'fat32':
+            checked(['/usr/sbin/mkfs.fat', '-F', '32', '-n', LABELS[kind], image])
+        else:
+            checked(['/usr/sbin/mkfs.exfat', '-L', LABELS[kind], image])
+    manifest = {name: {'path': str(path), 'sha256': digest(path)} for name, path in (
+        ('qemu', args.qemu), ('provider', args.provider), ('rom', args.rom), ('image', args.image),
+        ('linux_kernel', args.linux_kernel), ('linux_qemu', args.linux_qemu),
+        ('codec_worker', Path('/usr/local/libexec/astra-codec-worker')),
+        ('initramfs', work / 'initramfs.cpio.gz'), ('prepared_image', seed / 'system.img'),
+        ('posix_probe', ROOT / 'sw/userspace/commands/build/m68k/posix'),
+        ('ntpd', ROOT / 'sw/userspace/services/ntpd/build/m68k/ntpd'))}
+    (work / 'inputs.json').write_text(json.dumps(manifest, indent=2) + '\n')
+
+
+def run_vm(args, directory, mode, target, phase):
+    terminal = module('test-terminal.py')
+    console = directory / (mode + '.log')
+    qmp = directory / 'outer.qmp'
+    command = ['sudo', '-n', 'setpriv', '--reuid=' + str(os.getuid()), '--regid=' + str(os.getgid()),
+        '--groups=' + str(args.kvm_gid), '--no-new-privs', '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all']
+    command += ['env', 'LD_LIBRARY_PATH=' + str(args.linux_qemu.parents[1] / 'lib/x86_64-linux-gnu'), str(args.linux_qemu),
+        '-machine', 'q35,accel=kvm', '-cpu', 'host', '-m', '1536', '-smp', '1', '-nodefaults',
+        '-display', 'none', '-monitor', 'none', '-serial', 'stdio', '-no-reboot',
+        '-qmp', 'unix:' + str(qmp) + ',server=on,wait=off',
+        '-L', str(args.firmware), '-bios', str(args.bios), '-kernel', str(args.linux_kernel),
+        '-initrd', str(args.output / 'initramfs.cpio.gz'), '-append',
+        'console=ttyS0 rdinit=/init panic=-1 astra_power_vm=1 astra_mode=%s astra_target=%s astra_phase=%s' % (mode, target, phase),
+        '-device', 'qemu-xhci,id=xhci']
+    for kind, interface in (('system', 'virtio'), ('fat32', 'none'), ('exfat', 'none')):
+        command += ['-drive', 'file=%s,format=raw,if=%s,id=%s,cache=none' % (directory / (kind + '.img'), interface, kind)]
+        if kind != 'system':
+            command += ['-device', 'usb-storage,bus=xhci.0,removable=on,drive=' + kind + ',serial=' + kind]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    connection = None
+    descriptor = None
+    result = None
+    fsck = False
+    end = time.monotonic() + 360
     try:
-        booted = open_terminal(machine)
-        if booted:
-            write_probe(machine, cut, seen)
-            probed = True
-    except (BrokenPipeError, ConnectionError, EOFError, OSError,
-            RuntimeError):
-        pass
+        connection = terminal.Qmp(str(qmp), deadline=20, process=process)
+        pid, uid, gid = struct.unpack('3i', connection.socket.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        assert uid == os.getuid() != 0 and gid == os.getgid(), (pid, uid, gid)
+        descriptor = os.pidfd_open(pid)
+        status = dict(line.split(':', 1) for line in Path('/proc/%u/status' % pid).read_text().splitlines() if ':' in line)
+        assert status['NoNewPrivs'].strip() == '1'
+        assert all(int(status[key], 16) == 0 for key in ('CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb'))
+        (directory / (mode + '-identity.json')).write_text(json.dumps({'pid': pid, 'uid': uid, 'gid': gid, 'groups': status['Groups'].strip(), 'command': command}, indent=2) + '\n')
+        pending = b''
+        with console.open('wb') as log:
+            while time.monotonic() < end:
+                ready, _, _ = select.select([process.stdout], [], [], .25)
+                if ready:
+                    block = os.read(process.stdout.fileno(), 65536)
+                    if not block:
+                        break
+                    log.write(block)
+                    log.flush()
+                    pending += block
+                    while b'\n' in pending:
+                        line, pending = pending.split(b'\n', 1)
+                        text = line.decode('utf-8', 'replace').strip()
+                        if MARKER in text:
+                            text = text[text.index(MARKER):]
+                            print(directory.name, mode, text, flush=True)
+                        if text.startswith(MARKER + 'CUT '):
+                            assert mode == 'cut'
+                            result = json.loads(text.split(' ', 1)[1])
+                            assert result['target'] == target and result['phase'] == phase
+                            signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                        elif text.startswith(MARKER + 'RECOVER '):
+                            result = json.loads(text.split(' ', 1)[1])
+                        elif text == MARKER + 'FSCK-PASS':
+                            fsck = True
+                if process.poll() is not None and not ready:
+                    break
+            else:
+                raise RuntimeError('Linux VM deadline expired: ' + str(console))
+        code = process.wait(timeout=20)
+        if mode == 'cut':
+            assert result is not None and code in (-9, 137), (result, code, console)
+        else:
+            assert code == 0 and fsck, (code, console)
+        return result
     finally:
-        log = close_and_log(machine)
-    match = CUT.search(log)
-    if machine.process.returncode == 86 and match is not None and \
-            int(match.group(1)) == cut:
-        return seen["synced"]
-    if probed:
-        return None
-    raise RuntimeError("cut %d exited %s without its marker\n%s" %
-                       (cut, machine.process.returncode,
-                        "\n".join(machine.log[-20:])))
-
-
-def independent_fsck(args, image, volume):
-    offset, length = terminal.astra_image.ext4_partition(image)
-    terminal.astra_image._slice(image, offset, length, volume)
-    repaired = subprocess.run([args.e2fsck, "-fy", volume],
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, text=True)
-    clean = subprocess.run([args.e2fsck, "-fn", volume],
-                           stdout=subprocess.PIPE,
-                           stderr=subprocess.STDOUT, text=True)
-    if repaired.returncode > 2 or clean.returncode != 0:
-        raise RuntimeError("independent e2fsck failed\n%s\n%s" %
-                           (repaired.stdout, clean.stdout))
-
-
-def recovery_run(args, image, run_directory, cut, acknowledged):
-    machine = terminal.Machine(args.qemu, args.rom, image, run_directory,
-                               QEMU_ARGS)
-    try:
-        if not open_terminal(machine):
-            raise RuntimeError("recovery after cut %d did not reach Terminal" %
-                               cut)
-        outcome = check_probe(machine)
-        # The cut hook fires after host I/O completes but before its completion
-        # is published to Astra, so SYNCED printed means fsync returned before
-        # the cut transition.
-        if acknowledged and outcome != "EXACT":
-            raise RuntimeError("cut %d followed acknowledged fsync but data is %s"
-                               % (cut, outcome))
-        write_probe(machine)
-        if check_probe(machine) != "EXACT":
-            raise RuntimeError("filesystem failed a new fsync after cut %d" %
-                               cut)
-    except Exception as error:
-        status = machine.process.poll()
-        raise RuntimeError("recovery QEMU failed after cut %d (%s, status "
-                           "%s)\n%s" %
-                           (cut, error,
-                            "running" if status is None else status,
-                            serial_tail(machine))) from error
-    finally:
-        close_and_log(machine)
-
-
-def fresh_copy(source, target):
-    if os.path.exists(target):
-        os.unlink(target)
-    shutil.copyfile(source, target)
+        if process.poll() is None:
+            if descriptor is not None:
+                signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=30)
+        if connection is not None:
+            connection.close()
+        if descriptor is not None:
+            os.close(descriptor)
+        if qmp.exists():
+            qmp.unlink()
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("qemu")
-    parser.add_argument("rom")
-    parser.add_argument("image")
-    parser.add_argument("--e2fsck", required=True)
-    parser.add_argument("--work", required=True)
-    parser.add_argument("--trace-only", action="store_true")
-    parser.add_argument("--expected-synced", type=int)
-    parser.add_argument("--expected-total", type=int)
-    parser.add_argument("--start", type=int, default=1)
-    parser.add_argument("--end", type=int)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('qemu', type=Path)
+    parser.add_argument('rom', type=Path)
+    parser.add_argument('image', type=Path)
+    parser.add_argument('--provider', type=Path, default=Path('/usr/local/libexec/astra-storage'))
+    parser.add_argument('--linux-qemu', type=Path, required=True)
+    parser.add_argument('--linux-kernel', type=Path, required=True)
+    parser.add_argument('--kernel-release', required=True)
+    parser.add_argument('--firmware', type=Path, required=True)
+    parser.add_argument('--bios', type=Path, required=True)
+    parser.add_argument('--kvm-gid', type=int, required=True)
+    parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    if os.geteuid() == 0:
+        parser.error('run controller as an unprivileged user')
+    for name in ('qemu', 'rom', 'image', 'provider', 'linux_qemu', 'linux_kernel', 'firmware', 'bios', 'output'):
+        setattr(args, name, getattr(args, name).absolute())
+    if args.output.exists():
+        parser.error('output directory must be fresh; never overwrite prior evidence')
+    for path in (args.qemu, args.rom, args.image, args.provider, args.linux_qemu, args.linux_kernel, args.bios):
+        if not stat.S_ISREG(path.lstat().st_mode):
+            parser.error('regular file required: ' + str(path))
+    if args.image.stat().st_size > 4 << 30:
+        parser.error('input image exceeds 4 GiB')
+    from qemu_runtime import require_provider_abi
+    require_provider_abi(args.qemu, args.provider)
+    with args.qemu.open('rb') as stream:
+        header = stream.read(20)
+    if header[4:6] != b'\x02\x01' or header[18:20] != b'\x3e\x00':
+        parser.error('Linux VM fixture requires the x86-64 host-profile emulator')
+    if shutil.disk_usage(args.output.parent).free < 16 << 30:
+        parser.error('at least 16 GiB free required for disposable disks')
+    prepare(args)
+    cases = [('baseline', 'system', 'synced')]
+    cases += [(kind + '-' + phase, kind, phase) for kind in ('system', 'fat32', 'exfat') for phase in ('ready', 'written', 'synced')]
+    cases += [('negative-early-ack', 'system', 'ready')]
+    results = []
+    for name, kind, phase in cases:
+        directory = args.output / name
+        directory.mkdir()
+        for disk in ('system', 'fat32', 'exfat'):
+            checked(['cp', '--reflink=auto', '--sparse=always', '--', args.output / (disk + '-base.img'), directory / (disk + '.img')])
+        if name == 'baseline':
+            run_vm(args, directory, 'baseline', kind, phase)
+            results.append({'case': name, 'clean': True})
+        else:
+            run_vm(args, directory, 'cut', kind, phase)
+            recovered = run_vm(args, directory, 'recover', kind, phase)
+            if name == 'negative-early-ack':
+                try:
+                    verdict('synced', recovered['value'], recovered['baseline'])
+                except RuntimeError as error:
+                    assert 'acknowledged data was lost' in str(error)
+                else:
+                    raise AssertionError('early-ack negative control was accepted')
+            else:
+                verdict('synced' if phase == 'synced' else 'written',
+                        recovered['value'] if phase != 'ready' else 'UNACKNOWLEDGED', recovered['baseline'])
+            results.append({'case': name, 'negative_control_rejected': name == 'negative-early-ack', **recovered})
+        (args.output / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
+    print('ASTRA LINUX POWER-LOSS PASS: 3 writable filesystems, 9 boundary cuts plus early-ack negative control, clean baseline, recovery/fsck', flush=True)
 
-    os.makedirs(args.work, exist_ok=True)
-    # The probe is the posix test command, which is not in the release set:
-    # install the current build into the gate's own template, so a missing
-    # command fails here instead of leaving the guest shell with nothing to
-    # run.
-    template = os.path.join(args.work, "template.img")
-    fresh_copy(args.image, template)
-    terminal.astra_image.install_test_command(template, "posix")
-    if (args.expected_synced is None) != (args.expected_total is None):
-        raise RuntimeError("expected synced and total counts must be supplied "
-                           "together")
-    if args.expected_synced is not None:
-        synced, total = args.expected_synced, args.expected_total
-        if synced < 1 or total < synced:
-            raise RuntimeError("expected counts must satisfy 1 <= synced <= "
-                               "total")
-        print("ASTRA POWER CUT TRACE REUSED: synced=%d total=%d" %
-              (synced, total), flush=True)
+
+if __name__ == '__main__':
+    if sys.argv[1:] == ['--worker']:
+        worker()
     else:
-        traces = []
-        for index in range(2):
-            image = os.path.join(args.work, "trace-%d.img" % index)
-            run_directory = os.path.join(args.work, "trace-%d" % index)
-            fresh_copy(template, image)
-            os.makedirs(run_directory, exist_ok=True)
-            traces.append(trace_run(args, image, run_directory))
-            with open(image, "rb") as handle:
-                if PAYLOAD.encode("ascii") not in handle.read():
-                    raise RuntimeError("durability probe never reached the "
-                                       "block volume; %s is not on it" % PATH)
-            os.unlink(image)
-            shutil.rmtree(run_directory)
-        # Background writes make the count vary between runs; the traces
-        # only size the sweep, and each cut is judged by its own run.
-        synced = min(trace[0] for trace in traces)
-        total = max(trace[1] for trace in traces)
-        print("ASTRA POWER CUT TRACE PASS: synced=%d total=%d" %
-              (synced, total), flush=True)
-    if args.trace_only:
-        return 0
-    end = total if args.end is None else args.end
-    if args.start < 1 or end < args.start or end > total:
-        raise RuntimeError("cut range must be within 1..%d" % total)
-
-    owed = 0
-    skipped = 0
-    for cut in range(args.start, end + 1):
-        image = os.path.join(args.work, "cut-%06d.img" % cut)
-        volume = os.path.join(args.work, "cut-%06d.ext4" % cut)
-        cut_directory = os.path.join(args.work, "cut-%06d-run" % cut)
-        recovery_directory = os.path.join(
-            args.work, "cut-%06d-recovery" % cut)
-        fresh_copy(template, image)
-        os.makedirs(cut_directory, exist_ok=True)
-        os.makedirs(recovery_directory, exist_ok=True)
-        try:
-            acknowledged = cut_run(args, image, cut_directory, cut)
-            if acknowledged is not None:
-                independent_fsck(args, image, volume)
-                recovery_run(args, image, recovery_directory, cut,
-                             acknowledged)
-        except Exception:
-            print("retained failing image: %s" % image, file=sys.stderr)
-            raise
-        os.unlink(image)
-        if os.path.exists(volume):
-            os.unlink(volume)
-        shutil.rmtree(cut_directory)
-        shutil.rmtree(recovery_directory)
-        if acknowledged is None:
-            skipped += 1
-            print("cut %d/%d SKIPPED: this run made fewer transitions" %
-                  (cut, total), flush=True)
-            continue
-        owed += acknowledged
-        print("cut %d/%d PASS%s" % (cut, total,
-                                    " (after acknowledged fsync)"
-                                    if acknowledged else ""), flush=True)
-    # Background writes may shift a cut, but a sweep that never cut after an
-    # acknowledged fsync has tested nothing that matters.
-    if args.start == 1 and end == total and owed == 0:
-        raise RuntimeError("no cut followed an acknowledged fsync")
-    if skipped * 2 > end + 1 - args.start:
-        raise RuntimeError("%d of %d cuts were never reached" %
-                           (skipped, end + 1 - args.start))
-    if args.start == 1 and end == total:
-        print("ASTRA POWER CUT SWEEP PASS: %d transitions" % total)
-    else:
-        print("ASTRA POWER CUT RANGE PASS: %d..%d of %d" %
-              (args.start, end, total))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+        main()

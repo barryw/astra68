@@ -80,7 +80,7 @@ def provider_command(provider, image, exports, uid, gid, discovery="none"):
             "--discovery", discovery, "--seed-sound", "none", "--"]
 
 
-def storage_fixture(image, directory, exports=None, credentials=None):
+def storage_fixture(image, directory, exports=None, credentials=None, discovery="none"):
     """Root observer launches one provider and non-root QEMU for desktop gates.
 
     The root observer reads preserved root-owned logs without changing modes.
@@ -88,6 +88,8 @@ def storage_fixture(image, directory, exports=None, credentials=None):
     A regular caller uses the separately installed hostile-caller wrapper.
     """
     if os.geteuid() != 0:
+        if discovery != "none":
+            raise ValueError("physical discovery requires a trusted root observer")
         if exports is not None:
             raise ValueError("external test exports require a root observer")
         if ROOT_WRAPPER_SOURCE.read_bytes() != Path(ROOT_WRAPPER).read_bytes():
@@ -97,7 +99,11 @@ def storage_fixture(image, directory, exports=None, credentials=None):
     directory = Path(directory).resolve()
     exports = Path(exports).resolve() if exports is not None else directory / "exports"
     command = provider_command(os.environ.get("ASTRA_TEST_STORAGE_PROVIDER", STORAGE_PROVIDER),
-                               image, exports, *credentials)
+                               image, exports, *credentials, discovery=discovery)
+    if discovery == "udev":
+        names = exports.parent / "volume-names"
+        names.mkdir(mode=0o700, exist_ok=True)
+        command = ["env", "ASTRA_STORAGE_NAME_STATE=" + str(names)] + command
     fixture = directory / "storage-fixture.sh"
     fixture.write_text("#!/bin/sh\nset -eu\nprintf '%s\\n' " +
                        shlex.quote(LAUNCHER_EXPORTS + str(exports)) +

@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
-from qemu_runtime import DEFAULT_MEMORY_BYTES, qemu_environment, require_provider_abi, unprivileged_command
+from qemu_runtime import DEFAULT_MEMORY_BYTES, qemu_environment, require_provider_abi, unprivileged_command, storage_fixture
 
 
 HERE = Path(__file__).resolve().parent
@@ -111,3 +111,21 @@ with patch("qemu_runtime.os.geteuid", return_value=0):
 with patch("qemu_runtime.os.geteuid", return_value=1000):
     assert unprivileged_command(["qemu", "-S"]) == ["qemu", "-S"]
 print("Device-only QEMU privilege separation: PASS")
+
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    with patch("qemu_runtime.os.geteuid", return_value=1000):
+        try:
+            storage_fixture("image", root, discovery="udev")
+            raise AssertionError("untrusted physical discovery accepted")
+        except ValueError as error:
+            assert "trusted root observer" in str(error)
+    with patch("qemu_runtime.os.geteuid", return_value=0), \
+            patch("qemu_runtime.image_window", return_value=(1048576, 267386880, "test-uuid")):
+        command, owner = storage_fixture("image", root, credentials=(1000, 1000), discovery="udev")
+        assert owner == (1000, 1000)
+        assert "--discovery udev" in Path(command[1]).read_text()
+        assert "ASTRA_STORAGE_NAME_STATE=" + str(root / "volume-names") in Path(command[1]).read_text()
+        assert (root / "volume-names").is_dir()
+        assert (root / "volume-names").stat().st_mode & 0o777 == 0o700
+print("Physical discovery restricted to trusted root fixtures: PASS")

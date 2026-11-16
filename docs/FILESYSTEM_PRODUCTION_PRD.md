@@ -978,9 +978,12 @@ The existing [host protocol test](../emu/qemu/test-hostfs.py),
 [filesystem stress runner](../emu/qemu/test-filesystem-stress.py),
 [native HostFS benchmark](../emu/qemu/benchmark-hostfs-native.c), and
 [power-cut oracle](../emu/qemu/test-storage-power-cuts.py) are starting points.
-The old power-cut runner observes guest block transitions; it must be adapted
-to the Linux-owned storage boundary. Killing only the guest does not simulate
-loss of the Linux page cache or a physical power cut.
+The power-cut runner now kills a complete disposable Linux VM beneath native
+Astra, including the provider and Linux page cache. Run92 passes a clean
+three-format baseline, nine ext4/FAT32/exFAT boundaries and a rejected early
+acknowledgement. Killing only the guest remains insufficient. Physical DE25
+confirmation and exact evidence are tracked in
+[power-loss qualification](FILESYSTEM_POWER_LOSS.md).
 
 Before changing the data path, capture the installed source/artifact identity
 and DE25 baselines for cold/warm stat/open/close, batched directory scans,

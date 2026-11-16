@@ -88,6 +88,16 @@ privileged clock ABI. A correction underneath â€” Linux NTP stepping the host â€
 is therefore visible immediately, while Astra's resident `ntpd` can still
 discipline the guest without replacing the host clock with a boot-time sample.
 
+`ntpd` publishes its control port after configuration and port setup, before
+attempting network synchronization. Offline DNS/NTP failure cannot hold native
+boot hostage. Its existing deadline loop retries failed background sync after
+one second, polls successful sync after 1000 seconds, and serves explicit sync
+requests between attempts. Haiku reference: `src/preferences/time/Time.cpp`
+separates normal application startup from `--update`, and
+`src/preferences/time/NetworkTimeView.cpp` performs network synchronization in
+an update thread and posts its result. Astra adapts that separation to its
+existing native service port/deadline loop, without another thread or clock.
+
 **Nanoseconds since the Unix epoch, in 64 bits.** Not 32-bit seconds: a
 seconds register is the 2038 problem compiled into the hardware contract, and
 this project has spent enough of its life pulling ceilings back out of images.

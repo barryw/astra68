@@ -12,7 +12,6 @@
 #include <astra/status.h>
 #include <astra/vfs_process.h>
 
-#include <poll.h>
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
@@ -21,6 +20,7 @@ ASTRA_PROGRAM("ntpd", 0, 1, 0, "Astra68 contributors",
               "Toybox SNTP (0BSD)");
 
 #define NTP_POLL_NS (UINT64_C(1000) * UINT64_C(1000000000))
+#define NTP_RETRY_NS UINT64_C(1000000000)
 
 static uint32_t control_receive;
 static uint32_t control_send;
@@ -121,6 +121,7 @@ int astra_main(const AstraStartupInfo *startup)
     AstraConfigError config_error;
     AstraNtpSample sample;
     AstraNtpStatus last_failure = ASTRA_NTP_OK;
+    uint64_t deadline;
     uint32_t published, status;
 
     if (!astra_startup_validate(startup))
@@ -142,36 +143,30 @@ int astra_main(const AstraStartupInfo *startup)
                              &control_receive, &control_send) !=
         ASTRA_SYSCALL_OK)
         return ASTRA_STATUS_LIMIT;
-    for (;;) {
-        AstraNtpStatus sync_status = synchronize(NULL, &sample);
-
-        if (sync_status == ASTRA_NTP_OK)
-            break;
-        if (sync_status != last_failure) {
-            (void)astra_log(astra_ntp_status_text(sync_status));
-            last_failure = sync_status;
-        }
-        (void)poll(NULL, 0u, 1000);
-    }
-    /* A valid local clock enables the full four-timestamp refinement. */
-    (void)synchronize(NULL, &sample);
+    /* The host RTC is already valid; network discipline must not gate boot. */
     published = control_send;
     status = astra_service_ready(bootstrap->handle, ASTRA_STATUS_OK,
                                  &published, 1u);
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_SYSCALL_OK)
         return ASTRA_STATUS_PEER_DEAD;
+    deadline = astra_clock_monotonic();
     for (;;) {
-        uint64_t deadline = astra_clock_monotonic() + NTP_POLL_NS;
-
         status = astra_wait_one(control_receive, deadline, NULL);
-        if (status == ASTRA_SYSCALL_OK)
+        if (status == ASTRA_SYSCALL_OK) {
             control();
-        else if (status == ASTRA_SYSCALL_TIMED_OUT) {
-            if (astra_config_reload(&config, NULL) == ASTRA_CONFIG_OK)
-                (void)synchronize(NULL, &sample);
-        }
-        else
+            deadline = astra_clock_monotonic() + NTP_POLL_NS;
+        } else if (status == ASTRA_SYSCALL_TIMED_OUT) {
+            AstraNtpStatus sync_status =
+                astra_config_reload(&config, NULL) == ASTRA_CONFIG_OK ?
+                    synchronize(NULL, &sample) : ASTRA_NTP_CONFIG;
+
+            if (sync_status != ASTRA_NTP_OK && sync_status != last_failure)
+                (void)astra_log(astra_ntp_status_text(sync_status));
+            last_failure = sync_status;
+            deadline = astra_clock_monotonic() +
+                (sync_status == ASTRA_NTP_OK ? NTP_POLL_NS : NTP_RETRY_NS);
+        } else
             return ASTRA_STATUS_PEER_DEAD;
     }
 }

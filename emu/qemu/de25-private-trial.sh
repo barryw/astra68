@@ -40,9 +40,8 @@ runuser -u astra -- test -x "$release/bin/astra-codec-worker" || {
     echo "candidate Codec worker is not executable by Astra" >&2
     exit 1
 }
-for unit in astra.service astra-audio-host.service astra-remote-desktop.service; do
-    systemctl is-active --quiet "$unit" || { echo "$unit is not active" >&2; exit 1; }
-done
+# The selected runtime may already be cleanly stopped; start the same three
+# units below and require all three restored in cleanup.
 install -d -m 0755 "$trial_root/hostfs/work" "$trial_root/hostfs/sound" \
     "$trial_root/state/system" "$trial_root/log"
 
@@ -91,6 +90,8 @@ systemctl start astra-audio-host.service astra-remote-desktop.service astra.serv
 for ((elapsed = 0; elapsed < seconds; ++elapsed)); do
     sleep 1
     systemctl is-active --quiet astra.service || {
+        # Native shutdown/restart is a valid completed private gate.
+        [[ $(systemctl show --value --property=ExecMainStatus astra.service) =~ ^8[89]$ ]] && break
         echo "candidate runtime exited at ${elapsed}s" >&2
         exit 1
     }
@@ -103,4 +104,4 @@ if [ ! -f "$console" ] ||
     echo "candidate guest did not remain healthy at stage 8" >&2
     exit 1
 fi
-echo "ASTRA_PRIVATE_TRIAL ran=${seconds}s root=$trial_root"
+echo "ASTRA_PRIVATE_TRIAL completed root=$trial_root"

@@ -333,9 +333,12 @@ def check_durability(machine, mount):
     before = machine.sequence()
     machine.qmp.type_line("posix --durability-gated %s %s; print DUR-EXIT-$?" %
                           (path, payload))
-    if machine.wait_for_text("ASTRA DURABILITY READY", 60, before)[0] is None:
+    if machine.wait_for_text(("ASTRA DURABILITY GATE 2", "ASTRA DURABILITY READY"), 60, before)[0] is None:
         lines = machine.said(before)[0]
         fail("POSIX durability probe did not arm: %r ... %r" % (lines[:20], lines[-20:]))
+    machine.qmp.key("ret")
+    if machine.wait_for_text("ASTRA DURABILITY WRITTEN", 60, before)[0] is None:
+        fail("POSIX durability probe did not reach the pre-sync boundary")
     machine.qmp.key("ret")
     if machine.wait_for_text("ASTRA DURABILITY SYNCED", 60, before)[0] is None:
         fail("file and parent directory did not acknowledge sync")

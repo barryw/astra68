@@ -224,7 +224,11 @@ The board evidence archive is verified before exact owned test-state cleanup;
 normal services remain active with zero restarts and 8.5 GiB free. Physical
 optical regression83 subsequently passes current native reads, exact busy eject,
 Desktop Eject, media reinsertion and fresh Atlas access. Current State records
-the remaining Linux-level controlled power-loss evidence gap separately.
+the separate Linux-level controlled power-loss qualification. Run92 now passes
+the complete Linux VM cut matrix across ext4/FAT32/exFAT, including prior
+acknowledged baselines, post-sync exact bytes, a rejected false acknowledgement,
+clean native shutdown 88 and offline fsck after each recovery. Physical DE25
+confirmation remains tracked in [power-loss qualification](FILESYSTEM_POWER_LOSS.md).
 Checkpoint47 qualifies HostFS failure retention on DE25:
 busy checks follow request draining, failed retirement preserves public
 endpoints, repeated close errors retain ownership, and failed READY delivery

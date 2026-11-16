@@ -2,15 +2,21 @@
 
 Status: active continuation map, 2026-11-16
 
-Current remaining correctness gate: controlled loss of the Linux-owned storage
-boundary. Native file/parent-directory sync, provider termination, acknowledged
-readback and offline fsck pass, but `test-storage-power-cuts.py` still drives
-the retired guest-block transition properties. It cannot prove loss of Linux's
-page cache. The production PRD's durability family requires this distinct
-evidence; do not mark the full filesystem objective complete on optical proof
-alone. Use disposable storage on Beast, preserve production data, and retain
-resource caps. No further DVD hardware is needed. Network mounts and broad
-performance qualification remain excluded.
+Current remaining correctness gate: physical DE25 power-loss confirmation.
+The Linux-owned storage cut matrix now passes on Beast: clean baseline, nine
+boundaries across ext4/FAT32/exFAT, rejected early acknowledgement, exact native
+readback and clean offline checking after each recovery (8m44s). The rewritten
+`test-storage-power-cuts.py` kills the complete disposable Linux VM, including
+its page cache/provider/native memory; both emulators are unprivileged. The
+separate native atomic-save/provider-loss regression passes in 49 seconds.
+Run87 also exposed offline `ntpd` blocking READY forever; its existing control
+port/deadline loop now publishes before background synchronization. Offline
+desktop and explicit NTP control pass. Setup failures remain archived. See
+[power-loss qualification](FILESYSTEM_POWER_LOSS.md) and Beast
+`/home/barry/astra-evidence/powerloss-20261116/`. Physical trial93 is staged with
+disposable image/private settings; production data remains excluded. The user
+is ready but has not received the power-cut signal. No further DVD hardware is
+needed. Network mounts and broad performance qualification remain excluded.
 
 Checkpoint82 implementation, test harnesses and hardware evidence are merged
 and pushed to `main` at `4a78ce7cd28691baf221c9b8076e3f63d64dc51f`.

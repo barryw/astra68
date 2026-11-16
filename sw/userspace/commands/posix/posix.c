@@ -381,6 +381,18 @@ regex_close_probe(const char *pattern, const char *path)
 }
 
 static int
+durability_stage(const char *phase, int wait)
+{
+    if (printf("ASTRA DURABILITY %s\n", phase) < 0 || fflush(stdout) != 0)
+        return 0;
+    if (wait && getchar() == EOF) {
+        errno = EIO;
+        return 0;
+    }
+    return 1;
+}
+
+static int
 durability_probe(const char *path, const char *payload, int gated)
 {
     size_t length = strlen(payload);
@@ -405,14 +417,10 @@ durability_probe(const char *path, const char *payload, int gated)
         memcpy(parent, path, parent_length);
         parent[parent_length] = '\0';
     }
-    if (gated) {
-        printf("ASTRA DURABILITY READY\n");
-        (void)fflush(stdout);
-        if (getchar() == EOF) {
-            free(observed);
-            free(parent);
-            return complain(FAIL_DURABILITY, "durability start gate");
-        }
+    if (gated && (!durability_stage("GATE 2", 0) || !durability_stage("READY", 1))) {
+        free(observed);
+        free(parent);
+        return complain(FAIL_DURABILITY, "durability start gate");
     }
     directory_fd = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     free(parent);
@@ -427,7 +435,8 @@ durability_probe(const char *path, const char *payload, int gated)
         O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0666);
     file = file_fd < 0 ? NULL : fdopen(file_fd, "wb");
     if (file == NULL || fwrite(payload, 1u, length, file) != length ||
-        fflush(file) != 0 || fsync(fileno(file)) != 0) {
+        fflush(file) != 0 ||
+        (gated && !durability_stage("WRITTEN", 1)) || fsync(fileno(file)) != 0) {
         int error = errno;
         if (file != NULL)
             (void)fclose(file);
@@ -453,9 +462,7 @@ durability_probe(const char *path, const char *payload, int gated)
         errno = error;
         return complain(FAIL_DURABILITY, "durability directory close");
     }
-    printf("ASTRA DURABILITY SYNCED\n");
-    (void)fflush(stdout);
-    if (gated && getchar() == EOF) {
+    if (!durability_stage("SYNCED", gated)) {
         (void)fclose(file);
         free(observed);
         return complain(FAIL_DURABILITY, "durability gate");
