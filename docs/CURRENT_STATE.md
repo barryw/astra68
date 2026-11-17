@@ -9,6 +9,21 @@ AFNT byte checks, malformed/color rejection and sanitizers on Beast. Full
 physical import/fault qualification remains ASTRA68-38. Five of the original
 eleven Verification tickets are now Done (#8, #27, #32, #36, #47).
 
+NFS verification checkpoint, 2026-11-17: a disposable DE25 NFSv4 mount exposed
+`ENOSYS` on its first guest write after the unified file-cache change. NFS
+reports no birth generation, so cache admission correctly refused an unsafe
+shared identity but ordinary writes had no direct path. HostFS now uses its
+existing provider write operation for files without exact identity; complete
+identities still use the native area cache. Beast HostFS test and MC68040 build
+pass. Focused installation on the running DE25 passed 20 native `fsbench`
+durable saves (failed=false), server byte proof, Astra readback, unmount and
+network-source retirement. Evidence:
+`/home/barry/astra-evidence/nfs-fix-20261117/` on Beast; report SHA-256
+`69597f49f34f2144a4428a9abff5195e3744f43b532c1504f9b1185570eef0fb`.
+DE25 Astra, audio and RFB remain active, Astra NRestarts=0, 8.5 GiB free.
+The exact in-flight `fsync` network cut and remaining ASTRA68-28 matrix are
+still open.
+
 Physical USB ASTRA68-8 is Done. On the selected DE25 development
 runtime, a guarded usb-storage unbind/rebind of the disposable SanDisk Cruzer
 `FC006A81F5493213` removed both writable volumes and returned exFAT `/usb0`

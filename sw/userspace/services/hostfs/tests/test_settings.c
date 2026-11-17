@@ -1273,6 +1273,23 @@ static void test_write_boundary(void)
         .context = &volume.backend}, .node = 55u, .flags = ASTRA_VFS_OPEN_WRITE};
     file.io = &file.io_storage;
     file.io_storage.active = &file; file.io_storage.identity = info.meta;
+    writes = 0u;
+    area_call_session = 101u; area_call_file = 1234u;
+    open_file_identity_valid = 0u;
+    assert(stat_open_file(&volume.backend, 55u, &info) == ASTRA_VFS_OK);
+    file.io_storage.identity = info.meta;
+    AstraVfsFile direct_owned;
+    uint32_t direct_moved = 0u;
+    uint64_t direct_position = 0u;
+    assert(astra_vfs_service_retain_active(&volume.service, &file, &direct_owned) == ASTRA_VFS_OK);
+    assert(hostfs_write(NULL, &file, &direct_owned, 0u, 0u, 99u, "x", 1u,
+        &direct_moved, &direct_position) == ASTRA_VFS_OK);
+    assert(direct_moved == 1u && direct_position == 1u && writes == 1u &&
+        direct_owned != ASTRA_VFS_FILE_INVALID && file.io->cache == NULL && file_areas == NULL);
+    assert(astra_vfs_service_release_retained(&volume.service, &direct_owned) == ASTRA_VFS_OK);
+    open_file_identity_valid = 1u;
+    assert(stat_open_file(&volume.backend, 55u, &info) == ASTRA_VFS_OK);
+    file.io_storage.identity = info.meta;
     file_pager_thread = 88u; file_pager_send = 99u;
     next_area = 40u; area_handles = 1u; area_mappings = area_children = 0u;
     area_call_session = 101u; area_call_file = 1234u;

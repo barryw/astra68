@@ -1524,6 +1524,21 @@ Haiku `src/system/kernel/cache/file_cache.cpp:1273-1327` attaches a VM cache to
 a vnode; Astra keeps the provider description as the safe owner when no
 stable cross-open vnode identity exists.
 
+Incomplete-identity writes, 2026-11-17: NFSv4 on DE25 did not report a birth
+generation. HostFS's cache admission refused the unknown identity, returning
+`ENOSYS` for an ordinary write. HostFS now sends such writes through its
+existing pinned-description provider write operation, retaining write bounds,
+append and sequential-cursor behavior. No new cache or NFS-specific I/O path
+was added. Haiku `src/system/kernel/cache/file_cache.cpp:566-590` prepares
+partial page writes through the vnode's backing I/O, while
+`src/system/kernel/fs/vfs.cpp:4735` owns that backing operation. Astra keeps
+the same separation: cached writes need proven identity, and ordinary writes
+remain available when the provider cannot prove it. Beast focused HostFS test
+and MC68040 build pass. A targeted DE25 HostFS install passed 20 NFS durable
+saves, server and Astra readback, and source retirement; evidence is under
+`/home/barry/astra-evidence/nfs-fix-20261117/` on Beast. The dispatched
+`fsync` network-cut gate remains open.
+
 Immediate mutation coherence, 2026-11-07: DE25 exposed a correctness gap
 after `pwrite`/`fsync` and `ftruncate`/`fsync`. An already-faulted mapping can
 still return the old byte immediately after each operation returns; the

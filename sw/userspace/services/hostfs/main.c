@@ -1584,6 +1584,9 @@ static uint32_t hostfs_io(const AstraVfsOpenFile *file, AstraVfsFile *owned,
         if (max_end > INT64_MAX) max_end = INT64_MAX;
         if (offset >= max_end) return ASTRA_VFS_ERR_FILE_TOO_LARGE;
         if (wanted > max_end - offset) wanted = (uint32_t)(max_end - offset);
+        if (!astra_vfs_node_identity_equal(&info.meta, &info.meta))
+            return file->backend.ops->write(file->backend.context, file->node,
+                offset, flags, max_end, buffer, wanted, moved, position);
         if (astra_clock_realtime(&modified_ns) != ASTRA_SYSCALL_OK)
             return ASTRA_VFS_ERR_IO;
     } else {
