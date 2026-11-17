@@ -1,6 +1,31 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-11-16
+Status: active continuation map, 2026-11-17
+
+Verification checkpoint, 2026-11-17: Plane ASTRA68-32 (native AFNT format
+conversion) is Done at origin/main `71e0fc2b`; static TTF/OTF, distinct mixed
+TTC faces, four variable instances and complete Amiga repertoires pass pinned
+AFNT byte checks, malformed/color rejection and sanitizers on Beast. Full
+physical import/fault qualification remains ASTRA68-38. Four of the original
+eleven Verification tickets are now Done (#27, #32, #36, #47).
+
+Physical USB ASTRA68-8 remains In Progress. On the selected DE25 development
+runtime, a guarded usb-storage unbind/rebind of the disposable SanDisk Cruzer
+`FC006A81F5493213` removed both writable volumes and returned exFAT `/usb0`
+and FAT32 `/usb2` at stable paths with new incarnations. Native retained file
+and CWD reads refused after reattachment; fresh path readback matched the
+synced bytes. The same Atlas process moved from `/usb0` to `/home` on detach
+and did not retarget after rebind. Beast evidence is
+`/home/barry/astra-evidence/usb-detach-20261117.tar.gz` (SHA-256
+`c2289ff0f0e0ac2d237ce4e1ca790733c81fcb018310ab6a55abd40a42ae5ace`),
+`usb-atlas-detach-verify-20261117-v6.log` and
+`usb-atlas-transition-20261117.log`. The offline exFAT snapshot checked clean.
+Forced loss left FAT32 dirty, as expected; its 512 MiB pre-repair image and
+hash are retained on Beast. Offline fsck repaired the dirty bit, and a separate
+normal Astra mount/stop left FAT32 clean. Trial stage was removed. Final board
+reached stage 8 with Astra/audio/RFB active, zero restarts and 8.5 GiB free.
+Dispatched flush failure with unmount refusal and final accounting under that
+fault remain before #8 closes. DVD and F310 physical gates await reconnection.
 
 Physical DE25 power-loss durability gate is complete.
 The Linux-owned storage cut matrix now passes on Beast: clean baseline, nine
@@ -58,7 +83,8 @@ archive `powerloss92-vm-20261116.tar.gz` verifies 958 records, SHA-256
 `5aacb7ab3a8ab11aea22bce2c936183f1be4b4682aeb0a13a7ab50cdeeea7c0f`.
 Implementation and hardware qualification are merged and pushed to `main` at
 `1b5773f6`; the work branch was removed.
-No further DVD hardware is needed. Network mounts and broad performance
+No further DVD hardware is needed for this power-loss gate; ASTRA68-9 still
+needs optical media. Network mounts and broad performance
 qualification remain excluded.
 
 Checkpoint82 implementation, test harnesses and hardware evidence are merged
