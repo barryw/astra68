@@ -34,6 +34,8 @@ The QEMU native GUI cancellation path now passes progress, retirement,
 source-list focus, same-file retry and normal import. An oversized Iosevka
 source exhausted the probe's read allocation before import began, so that
 attempt does not count as a successful size-limit gate.
+A separate current-source QEMU probe forces the HPS worker to exit 42 and
+confirms the failed import leaves the native catalog and AFNT store unchanged.
 
 ## 1. Locked architecture
 

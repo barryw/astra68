@@ -117,6 +117,8 @@ def main():
     parser.add_argument("source")
     parser.add_argument("--expect-limit", action="store_true")
     parser.add_argument("--expect-later-failure", action="store_true")
+    parser.add_argument("--expect-worker-failure", action="store_true",
+                        help="verify a converter process failure rolls back the import")
     parser.add_argument("--expect-variable", action="store_true")
     parser.add_argument("--concurrent", action="store_true",
                         help="verify catalog access while a real converter is delayed")
@@ -128,8 +130,12 @@ def main():
     if os.geteuid() != 0:
         parser.error("restart gate requires root observer with persistent private Config Kit state")
     if args.cancel and (args.concurrent or args.expect_limit or args.expect_later_failure or
-                        args.expect_variable or args.amiga):
+                        args.expect_worker_failure or args.expect_variable or args.amiga):
         parser.error("--cancel is a separate outline lifecycle case")
+    if args.expect_worker_failure and (args.concurrent or args.expect_limit or
+                                       args.expect_later_failure or args.expect_variable or
+                                       args.amiga):
+        parser.error("--expect-worker-failure is a separate failure case")
     global PROBE
     if args.amiga:
         if args.expect_limit or args.expect_later_failure or args.expect_variable:
@@ -145,10 +151,11 @@ def main():
         astra_image.install(image, vim_runtime=None)
         astra_image.install_test_app(image, args.bundle)
         environment = None
-        if args.concurrent or args.cancel:
+        if args.concurrent or args.cancel or args.expect_worker_failure:
             os.chmod(work, 0o755)
             wrapper = Path(work) / "delayed-font-worker"
-            wrapper.write_text("#!/bin/sh\nsleep 5\nexec " +
+            wrapper.write_text("#!/bin/sh\nexit 42\n" if args.expect_worker_failure else
+                               "#!/bin/sh\nsleep 5\nexec " +
                                shlex.quote(str(worker.resolve())) + ' "$@"\n')
             wrapper.chmod(0o755)
             environment = os.environ.copy()
@@ -169,7 +176,7 @@ def main():
             limit.write_text("limit\n", encoding="ascii")
             astra_image._replace_volume_file(
                 image, str(limit), "/expect-outline-limit")
-        if args.expect_later_failure:
+        if args.expect_later_failure or args.expect_worker_failure:
             marker = Path(work) / "expect-later-failure"
             marker.write_text("later-failure\n", encoding="ascii")
             astra_image._replace_volume_file(
@@ -196,12 +203,13 @@ def main():
                 raise RuntimeError("cancelled import left font objects after restart")
             print("ASTRA FONT CANCEL PASS responsive catalog, retirement, empty store, restart")
             return 0
-        if args.expect_later_failure:
+        if args.expect_later_failure or args.expect_worker_failure:
             objects = stored_objects(image, work)
             if objects:
                 raise RuntimeError("failed collection left AFNT objects: %s" %
                                    objects)
-            print("ASTRA FONT OUTLINE PASS later-face failure rolled back")
+            print("ASTRA FONT OUTLINE PASS %s rolled back" %
+                  ("worker failure" if args.expect_worker_failure else "later-face failure"))
             return 0
         if args.expect_limit:
             print("ASTRA FONT OUTLINE PASS oversized AFNT limit, no partial catalog")

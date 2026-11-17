@@ -35,6 +35,8 @@ live selection and uninstall. Fonts restores list focus after a cancelled or
 failed import using the existing Interface Kit focus API. An oversized Iosevka
 probe did not reach the intended import limit: its 11 MB source exceeded the
 probe's available read allocation, so that gate remains unqualified.
+An additional current-source QEMU gate makes the HPS converter exit 42;
+the native import fails without changing the catalog or leaving AFNT objects.
 
 AstraZ verification checkpoint, 2026-11-17: NAS Infocom collection has no
 V1/V2/V7 story after file-header scan. Authored 1,024-byte V1/V2 and
