@@ -187,6 +187,8 @@ static void test_collection(const uint8_t *source, uint32_t size)
                                       sizeof(family)));
         assert(strcmp(family, face == 0u ? "Atkinson Hyperlegible Next" :
                                         "Source Sans 3") == 0);
+        assert(astra_crc32(converted, length) ==
+               (face == 0u ? 0x72d60b95u : 0xf0b2fa00u));
         free(converted);
     }
     uint8_t *converted = NULL;
@@ -194,6 +196,10 @@ static void test_collection(const uint8_t *source, uint32_t size)
     assert(astra_font_convert_outline(collection, total, 2u,
         "two-face.ttc", "OFL-1.1", &converted, &length, &faces) ==
         ASTRA_FONT_CONVERT_INVALID && converted == NULL && faces == 2u);
+    memcpy(collection + second, "FAIL", 4u);
+    assert(astra_font_convert_outline(collection, total, 0u,
+        "broken.ttc", "OFL-1.1", &converted, &length, &faces) ==
+        ASTRA_FONT_CONVERT_INVALID && converted == NULL);
     free(collection);
     free(otf);
 }
