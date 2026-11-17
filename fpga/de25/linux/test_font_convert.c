@@ -1,7 +1,9 @@
 #include "astra_font_convert.h"
 
 #include <astra/afnt.h>
+#include <astra/crc32.h>
 #include <astra/font_catalog.h>
+#include <astra/sha256.h>
 #include <astra/theme.h>
 #include <astra/endian.h>
 
@@ -63,6 +65,9 @@ static void test_variable(void)
 {
     static const char *styles[] = {"Regular", "Medium", "SemiBold", "Bold"};
     static const uint32_t instances[] = {0u, 2u, 3u, 4u};
+    static const uint32_t golden[] = {
+        0x93905adeu, 0xbc484903u, 0x8cf0d8cbu, 0xdf4f46e0u
+    };
     FILE *file = fopen("tests/fonts/STIXTwoText.ttf", "rb");
     uint8_t *source;
     long size;
@@ -95,6 +100,7 @@ static void test_variable(void)
             found |= memcmp(view.name.bytes + offset, marker,
                             (size_t)marker_length) == 0;
         assert(found);
+        assert(astra_crc32(converted, length) == golden[at]);
         free(converted);
     }
     uint8_t *converted = NULL;
@@ -112,6 +118,103 @@ static int name_contains(const AstraAfntView *view, const char *text)
          at <= view->name.length - length; ++at)
         if (memcmp(view->name.bytes + at, text, length) == 0) return 1;
     return 0;
+}
+
+static void test_source_metadata(const uint8_t *source, uint32_t size,
+                                 const AstraAfntView *view)
+{
+    static const char digits[] = "0123456789abcdef";
+    AstraSha256 hash;
+    uint8_t digest[32];
+    char expected[76] = "\"sha256\":\"";
+    astra_sha256_init(&hash);
+    astra_sha256_update(&hash, source, size);
+    astra_sha256_final(&hash, digest);
+    for (uint32_t at = 0u; at < 32u; ++at) {
+        expected[10u + at * 2u] = digits[digest[at] >> 4];
+        expected[11u + at * 2u] = digits[digest[at] & 15u];
+    }
+    expected[74u] = '"';
+    expected[75u] = '\0';
+    assert(name_contains(view, expected));
+    assert(name_contains(view, "\"converter\":\"astra-font-worker/0.3\""));
+}
+
+static void test_collection(const uint8_t *source, uint32_t size)
+{
+    FILE *file = fopen("tests/fonts/SourceSans3-Regular.otf", "rb");
+    assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
+    long otf_size = ftell(file);
+    assert(otf_size > 0 && otf_size < 16L * 1024L * 1024L &&
+           fseek(file, 0, SEEK_SET) == 0);
+    uint8_t *otf = malloc((size_t)otf_size);
+    assert(otf != NULL && fread(otf, 1u, (size_t)otf_size, file) ==
+           (size_t)otf_size && fclose(file) == 0);
+    uint32_t second = (20u + size + 3u) & ~3u;
+    uint32_t total = second + (uint32_t)otf_size;
+    uint8_t *collection = calloc(total, 1u);
+    assert(collection != NULL && size < 16u * 1024u * 1024u);
+    memcpy(collection, "ttcf", 4u);
+    astra_store_be32(collection + 4u, 0x00010000u);
+    astra_store_be32(collection + 8u, 2u);
+    astra_store_be32(collection + 12u, 20u);
+    astra_store_be32(collection + 16u, second);
+    for (uint32_t face = 0u; face < 2u; ++face) {
+        uint32_t base = face == 0u ? 20u : second;
+        uint8_t *sfnt = collection + base;
+        memcpy(sfnt, face == 0u ? source : otf,
+               face == 0u ? size : (uint32_t)otf_size);
+        for (uint32_t at = 0u; at < astra_load_be16(sfnt + 4u); ++at) {
+            uint8_t *entry = sfnt + 12u + at * 16u;
+            astra_store_be32(entry + 8u,
+                astra_load_be32(entry + 8u) + base);
+        }
+    }
+    for (uint32_t face = 0u; face < 2u; ++face) {
+        uint8_t *converted = NULL;
+        uint32_t length = 0u, faces = 0u;
+        AstraAfntView view;
+        char marker[48];
+        assert(astra_font_convert_outline(collection, total, face,
+            "two-face.ttc", "OFL-1.1", &converted, &length, &faces) ==
+            ASTRA_FONT_CONVERT_OK);
+        assert(faces == 2u && astra_afnt_validate(converted, length, &view));
+        test_source_metadata(collection, total, &view);
+        snprintf(marker, sizeof(marker), "\"source_face_index\":%u", face);
+        assert(name_contains(&view, marker));
+        char family[64];
+        assert(astra_afnt_name_string(&view, "family", family,
+                                      sizeof(family)));
+        assert(strcmp(family, face == 0u ? "Atkinson Hyperlegible Next" :
+                                        "Source Sans 3") == 0);
+        free(converted);
+    }
+    uint8_t *converted = NULL;
+    uint32_t length = 0u, faces = 0u;
+    assert(astra_font_convert_outline(collection, total, 2u,
+        "two-face.ttc", "OFL-1.1", &converted, &length, &faces) ==
+        ASTRA_FONT_CONVERT_INVALID && converted == NULL && faces == 2u);
+    free(collection);
+    free(otf);
+}
+
+static void test_color_rejection(void)
+{
+    FILE *file = fopen("tests/fonts/AtkinsonColor-test.ttf", "rb");
+    assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
+    long size = ftell(file);
+    assert(size > 0 && size <= 32L * 1024L * 1024L &&
+           fseek(file, 0, SEEK_SET) == 0);
+    uint8_t *source = malloc((size_t)size);
+    assert(source != NULL && fread(source, 1u, (size_t)size, file) ==
+           (size_t)size && fclose(file) == 0);
+    uint8_t *converted = NULL;
+    uint32_t length = 0u, faces = 0u;
+    assert(astra_font_convert_outline(source, (uint32_t)size, 0u,
+        "color.ttf", "OFL-1.1", &converted, &length, &faces) ==
+        ASTRA_FONT_CONVERT_UNSUPPORTED);
+    assert(converted == NULL && faces == 1u);
+    free(source);
 }
 
 static void test_notice_encodings(const uint8_t *source, uint32_t size)
@@ -236,8 +339,11 @@ int main(int argc, char **argv)
     if (result != ASTRA_FONT_CONVERT_OK)
         fprintf(stderr, "conversion status %d, faces %u\n", result, faces);
     assert(result == ASTRA_FONT_CONVERT_OK);
+    assert(astra_crc32(converted, converted_length) ==
+           (argc > 1 ? 0x9e5ca2d9u : 0xe3eed447u));
     assert(faces >= 1u && converted_length > 128u &&
            astra_afnt_validate(converted, converted_length, &view));
+    test_source_metadata(source, (uint32_t)size, &view);
     AstraFontCatalogFace catalog_face;
     AstraFontCatalogStrike catalog_strikes[32];
     char catalog_family[256], catalog_style[128];
@@ -269,7 +375,11 @@ int main(int argc, char **argv)
         found_license |= memcmp(view.name.bytes + at, "OFL-1.1", 7u) == 0;
     assert(found_license);
     test_notices(source, (uint32_t)size, &view);
-    if (argc == 1) test_notice_encodings(source, (uint32_t)size);
+    if (argc == 1) {
+        test_notice_encodings(source, (uint32_t)size);
+        test_collection(source, (uint32_t)size);
+        test_color_rejection();
+    }
     free(converted);
     memset(source, 0, (size_t)size < 16u ? (size_t)size : 16u);
     assert(astra_font_convert_outline(source, (uint32_t)size, face,

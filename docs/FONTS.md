@@ -739,6 +739,14 @@ Fonts capability and submits glyph masks to Astraea. The disposable Amiga
 probe draws through ordinary GUI capability without raw-font access. Physical
 release gate remains open.
 
+Beast native converter tests now pin complete AFNT bytes for static TTF/OTF,
+four variable instances and both sizes/encodings of the Amiga sample. They
+check source SHA-256, converter revision, notices, exact strike sizes, complete
+Amiga repertoire, both distinct faces of a mixed TTF/OTF collection, invalid
+face/malformed input and explicit color-font rejection. Address/undefined
+sanitizers pass. Build-time AFNT generation still compares built-in objects
+byte-for-byte; full DE25 import fault matrix remains separate ticket #38.
+
 Fonts marks each installed style as able or unable to serve as the system
 font. Catalog v3 derives `BASIC_TEXT` from exact CMAP entries for printable
 ASCII (U+0020 through U+007E); the service also requires every fixed UI-role

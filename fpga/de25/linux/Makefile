@@ -354,6 +354,7 @@ $(OUT)/test-font-convert: $(FONT_CONVERT_SOURCES) $(FONT_CODEC) astra_font_conve
 
 font-convert-test: $(OUT)/test-font-convert
 	cd $(CURDIR) && $(abspath $<)
+	cd $(CURDIR) && $(abspath $<) tests/fonts/SourceSans3-Regular.otf
 
 $(OUT)/test-amiga-font: astra_amiga_font.c astra_amiga_font.h \
 		test_amiga_font.c Makefile
