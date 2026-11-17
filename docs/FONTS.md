@@ -30,6 +30,10 @@ Interface Kit focus API. The QEMU test refreshes its offline image snapshot
 after import and selects the current built worker through
 `ASTRA_FONT_WORKER_PATH`; Beast's installed worker is older. The selected DE25
 and remaining fault cases still need qualification.
+The QEMU native GUI cancellation path now passes progress, retirement,
+source-list focus, same-file retry and normal import. An oversized Iosevka
+source exhausted the probe's read allocation before import began, so that
+attempt does not count as a successful size-limit gate.
 
 ## 1. Locked architecture
 

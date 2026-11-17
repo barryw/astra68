@@ -929,6 +929,9 @@ static uint32_t update_import(void)
             "Font imported; could not confirm session release";
     } else message = import_error(result);
     if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+    if (browsing && astra_interface_ui_focus_control(&ui,
+        FONTS_FILE_PANEL_FIRST + ASTRA_FILE_PANEL_LIST) != ASTRA_OK)
+        return FONTS_FAIL_CONTROL;
     return present(result == ASTRA_OK ? "fonts UI import complete" :
         result == ASTRA_ERROR_CANCELLED ? "fonts UI import cancelled" : "fonts UI import failed");
 }

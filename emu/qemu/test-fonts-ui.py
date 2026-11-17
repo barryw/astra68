@@ -302,9 +302,10 @@ def main():
                 wait_import_state(machine, "cancelling", cancel_trace, cancel_log)
                 wait_import_state(machine, "cancelled", cancel_trace, cancel_log)
                 print("Fonts native cancellation: progress, Cancel, retirement and retry passed", flush=True)
-                # Cancellation returns to browser, retaining selected source row.
-                for _ in range(2):
-                    machine.qmp.key("tab")
+                # Cancellation returns focus to the source list.
+                machine.qmp.key("home")
+                for _ in range(row):
+                    machine.qmp.key("down")
                 trace_before, syslog_before = machine.sequence(), len(machine.syslog_lines())
                 machine.qmp.key("ret")
             wait_ui(machine, "import", trace_before, syslog_before)

@@ -29,6 +29,12 @@ and removal. QEMU selected the current built `astra-font-worker/0.3` via
 `ASTRA_FONT_WORKER_PATH`; Beast's installed worker remains older 0.2 and was
 not replaced. The test now refreshes its offline ext4 snapshot after import.
 Physical DE25 and remaining ASTRA68-38 fault cases remain open.
+The 2026-11-17 QEMU Fonts cancellation gate also passes visible progress,
+converter retirement, return to the source list, same-file retry, full import,
+live selection and uninstall. Fonts restores list focus after a cancelled or
+failed import using the existing Interface Kit focus API. An oversized Iosevka
+probe did not reach the intended import limit: its 11 MB source exceeded the
+probe's available read allocation, so that gate remains unqualified.
 
 AstraZ verification checkpoint, 2026-11-17: NAS Infocom collection has no
 V1/V2/V7 story after file-header scan. Authored 1,024-byte V1/V2 and
