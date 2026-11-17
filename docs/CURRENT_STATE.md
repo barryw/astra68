@@ -2,7 +2,7 @@
 
 Status: active continuation map, 2026-11-16
 
-Current remaining correctness gate: physical DE25 power-loss confirmation.
+Physical DE25 power-loss durability gate is complete.
 The Linux-owned storage cut matrix now passes on Beast: clean baseline, nine
 boundaries across ext4/FAT32/exFAT, rejected early acknowledgement, exact native
 readback and clean offline checking after each recovery (8m44s). The rewritten
@@ -13,8 +13,8 @@ Run87 also exposed offline `ntpd` blocking READY forever; its existing control
 port/deadline loop now publishes before background synchronization. Offline
 desktop and explicit NTP control pass. Setup failures remain archived. See
 [power-loss qualification](FILESYSTEM_POWER_LOSS.md) and Beast
-`/home/barry/astra-evidence/powerloss-20261116/`. Physical trial93 is staged with
-disposable image/private settings; production data remains excluded. Native
+`/home/barry/astra-evidence/powerloss-20261116/`. Physical trial93 used a
+disposable image and private settings; production data remained excluded. Native
 file/parent acknowledgement was captured and flushed on Beast, then the user
 disconnected/reconnected DE25's power supply. Initial boot had power LEDs but
 no HDMI, network or UART response. JTAG sees both expected chip IDs and design
@@ -25,10 +25,10 @@ retained HPS SOF into RAM succeeds without flash/SD programming. After the
 requested full power cycle, stable UART `if02` reveals a U-Boot prompt. An
 explicit boot proves Linux host root journal replay fails with `EUCLEAN` (-117),
 then VFS panics mounting `/dev/mmcblk0p2`. This is not an Astra kernel panic.
-The root filesystem has ext4 fast commits and pending recovery; the precise
-replay defect remains under investigation. RAM-only network boot now runs the
-same retained FPGA/kernel/DTB plus a private rescue initramfs. All SD devices
-are read-only and unmounted. Complete 31,267,487,744-byte raw SD backup on Beast
+The root filesystem had ext4 fast commits and pending recovery. RAM-only
+network boot ran the same retained FPGA/kernel/DTB plus a private rescue
+initramfs. All SD devices were read-only and unmounted during rescue. Complete
+31,267,487,744-byte raw SD backup on Beast
 passed source/destination SHA-256 and exact-length checks:
 `47acb9f84ba1e3b17dd9de7b2c933547645c346fbb3ad378bf754a1371bb0010`.
 Evidence is `rescue94/`, `uboot93-boot2303.log`, `backup94.log` and the
@@ -39,8 +39,11 @@ matched exactly. A RAM-only crash reproducer on the same kernel isolated the
 host failure to ext4 fast commits; identical crash with standard journal mounts.
 After clone verification, original root journal replayed cleanly and ext4
 `fast_commit` was removed using `tune2fs`, with clean follow-up fsck. Normal
-Linux and Astra booted to stage 8, zero restarts. Trial93 then booted its actual
-post-cut image on DE25; native CLI confirmed both files byte-exact, all three
+Linux and Astra booted to stage 8, zero restarts. RAM-rescue `reboot -f` left
+HPS silent; RAM-only HPS SOF reload and U-Boot `boot` restored normal startup.
+This reset/bootstrap behavior remains a separate investigation. Trial93 then
+booted its actual post-cut image on DE25; native CLI confirmed both files
+byte-exact, all three
 filesystem semantics passed, clean exit 88 and offline ext4 fsck passed. Normal
 three services restored at stage 8, zero restarts, normal selector. The
 57-record board trial archive was verified on Beast (SHA-256
@@ -53,8 +56,8 @@ PASS guest=1 host=0 removed=0`. Normal Astra reached stage 8 with three active
 services, zero restarts, only loop0 and 8.5 GiB free. VM evidence
 archive `powerloss92-vm-20261116.tar.gz` verifies 958 records, SHA-256
 `5aacb7ab3a8ab11aea22bce2c936183f1be4b4682aeb0a13a7ab50cdeeea7c0f`.
-Implementation is committed/pushed as `0788619` on
-`wip/linux-power-loss-20261116`; hardware gate and main merge remain open.
+Implementation and hardware qualification are merged and pushed to `main` at
+`1b5773f6`; the work branch was removed.
 No further DVD hardware is needed. Network mounts and broad performance
 qualification remain excluded.
 

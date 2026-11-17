@@ -113,16 +113,14 @@ of that snapshot cleanly. Repeating the same snapshot/replay on an ext4 image
 without fast commits mounts successfully on the same DE25 kernel
 (`unlinked95-replay.log`, `unlinked96-control.log`). An
 [upstream ext4 report](https://lists.openwall.net/linux-kernel/2026/08/24/987)
-describes the same reproducer and error. This makes the fast-commit replay defect
-a strong diagnosis; repair of the actual root copy is still needed to confirm.
-The Beast VM root lacked `fast_commit`, so its successful cut matrix did not
-exercise this Linux host-root feature. No original repair, journal discard,
-feature removal or formatting has been performed.
+describes the same reproducer and error. Repaired root and matching control
+confirm fast-commit replay as observed Linux host failure. Beast VM root lacked
+`fast_commit`, so its successful cut matrix did not exercise this feature.
 
-RAM-only netboot uses the exact retained FPGA core, Linux kernel and DTB with
-a private rescue initramfs. It sets every SD device read-only, mounts none, and
-provides public-key-only SSH on port 2222 with a UART-pinned host key. The
-source-IP-restricted temporary TFTP server stops after rescue access succeeds.
+RAM-only netboot used the exact retained FPGA core, Linux kernel and DTB with
+a private rescue initramfs. It set every SD device read-only, mounted none, and
+provided public-key-only SSH on port 2222 with a UART-pinned host key. The
+source-IP-restricted temporary TFTP server stopped after rescue access succeeded.
 `rescue94/` holds verified 31,267,487,744-byte raw SD backup, SHA-256
 `47acb9f84ba1e3b17dd9de7b2c933547645c346fbb3ad378bf754a1371bb0010`.
 Bounded `astra-rescue94-backup.service` checked exact length and source/
@@ -134,7 +132,10 @@ root repaired with standard `e2fsck -p`; `tune2fs -O ^fast_commit` removed the
 broken fast-commit feature while retaining the normal ext4 journal. Follow-up
 fsck was clean. No data partition was formatted or replaced.
 
-After RAM rescue, normal Linux/Astra reached stage 8. A guarded private DE25
+RAM-rescue `reboot -f` left HPS silent; RAM-only HPS SOF reload followed by
+U-Boot `boot` restored normal startup. That reset/bootstrap behavior remains a
+separate investigation. After RAM rescue, normal Linux/Astra reached stage 8.
+A guarded private DE25
 trial booted the actual post-cut image. Native `posix --durability-check`
 confirmed both previous baseline and newly acknowledged file exactly. Native
 `fssem volume-root mapped-usage unmap-errors` passed all three cases; guest
