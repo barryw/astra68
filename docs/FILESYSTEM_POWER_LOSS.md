@@ -1,6 +1,6 @@
 # Filesystem power-loss qualification
 
-Status: Linux VM matrix passed; physical DE25 cut pending, 2026-11-16.
+Status: Linux VM and physical DE25 durability gates passed; host-root recovery defect isolated, 2026-11-17.
 This closes the storage correctness gate, not broad performance qualification.
 
 ## What is cut
@@ -97,14 +97,69 @@ overrides disappear on reboot; production HOME and settings are not test inputs.
 Trial93 reached native desktop with zero restarts and the updated NTP service.
 `arm93.log` records the actual file/parent acknowledgement while the file is
 still open, before close; Beast flushes that evidence before the power signal.
-The user confirms disconnecting/reconnecting the power supply. DE25 then has
+The user confirms disconnecting/reconnecting the power supply. DE25 initially has
 power LEDs but no display, UART or network. JTAG chip IDs remain correct;
 CONFIG_STATUS has no configuration error and CONF_DONE/INIT_DONE set. This
-locates the next investigation at boot/HPS; it does not establish filesystem
-corruption. Post-cut native readback and fsck remain unperformed. No private
-image or production image has been opened or repaired after this cut. Serial
-capture is armed for a user HPS KEY3 reset. Keep trial files until recovery,
-verified archival and normal-service restoration are complete.
+initially locates investigation at boot/HPS. Following the requested full power
+cycle, UART `if02` reveals U-Boot. Explicit boot captures Linux root journal
+recovery failure and VFS panic with `EUCLEAN` (-117) on `/dev/mmcblk0p2`;
+`uboot93-boot2303.log` is the evidence. This is the Linux host, not Astra's kernel.
+Root has ext4 fast commits and pending recovery. Journal metadata is preserved;
+its fast-commit log contains a zero-link inode and repeated file replacements.
+A 64 MiB RAM-only ext4 reproducer on the exact DE25 Linux kernel now triggers
+the same `JBD2: journal recovery failed`/`EUCLEAN` after fsync of an unlinked,
+still-open file and a crash snapshot. Standard `e2fsck -p` recovers a copy
+of that snapshot cleanly. Repeating the same snapshot/replay on an ext4 image
+without fast commits mounts successfully on the same DE25 kernel
+(`unlinked95-replay.log`, `unlinked96-control.log`). An
+[upstream ext4 report](https://lists.openwall.net/linux-kernel/2026/08/24/987)
+describes the same reproducer and error. This makes the fast-commit replay defect
+a strong diagnosis; repair of the actual root copy is still needed to confirm.
+The Beast VM root lacked `fast_commit`, so its successful cut matrix did not
+exercise this Linux host-root feature. No original repair, journal discard,
+feature removal or formatting has been performed.
+
+RAM-only netboot uses the exact retained FPGA core, Linux kernel and DTB with
+a private rescue initramfs. It sets every SD device read-only, mounts none, and
+provides public-key-only SSH on port 2222 with a UART-pinned host key. The
+source-IP-restricted temporary TFTP server stops after rescue access succeeds.
+`rescue94/` holds verified 31,267,487,744-byte raw SD backup, SHA-256
+`47acb9f84ba1e3b17dd9de7b2c933547645c346fbb3ad378bf754a1371bb0010`.
+Bounded `astra-rescue94-backup.service` checked exact length and source/
+destination SHA-256, fsynced and renamed after completion. Diagnose and test recovery on disposable
+copies before original SD writes. Repaired clone passed `e2fsck -p` and a full
+read-only fsck. Extracted actual post-cut trial image held both acknowledged
+files byte-exact after its own journal replay. Only then was original Linux
+root repaired with standard `e2fsck -p`; `tune2fs -O ^fast_commit` removed the
+broken fast-commit feature while retaining the normal ext4 journal. Follow-up
+fsck was clean. No data partition was formatted or replaced.
+
+After RAM rescue, normal Linux/Astra reached stage 8. A guarded private DE25
+trial booted the actual post-cut image. Native `posix --durability-check`
+confirmed both previous baseline and newly acknowledged file exactly. Native
+`fssem volume-root mapped-usage unmap-errors` passed all three cases; guest
+exited cleanly with status 88. Offline `e2fsck -p` returned clean and recorded
+the changed Linux boot ID. The private trial restored all three normal
+services; stage 8, zero restarts and selected release verified. Its 57-record
+board evidence was copied and checksum-verified on Beast as
+`board93-postcut.tar.gz`, SHA-256
+`00cfe1a7b68d9f3fdfbac08bb73c6c9f5c83adf91242b982b4b3c4d76014dde2`.
+Disposable trial state was removed from DE25; 8.5 GiB free. Beast's original
+`board93/input.img` remains the pre-trial seed. The post-cut image is in the
+verified archive and `rescue94/trial93-postcut.img`.
+The focused development installer then installed only the qualified native
+`/services/ntpd` file into the selected user image. It reported
+`ASTRA_DE25_DEV_INSTALL PASS guest=1 host=0 removed=0`; normal stage 8, three
+active services, zero restarts, only loop0 and 8.5 GiB free were rechecked.
+
+Production Linux root policy: use ext4's standard journal without
+`fast_commit`. For new DE25 root media, create ext4 with `-O ^fast_commit`;
+for existing media, first preserve a raw backup, run `e2fsck -p` offline, then
+`tune2fs -O ^fast_commit` and another offline `e2fsck -p`. Verify
+`dumpe2fs -h` shows clean filesystem, journal start zero and no `fast_commit`.
+This avoids a reproduced upstream replay defect; no Astra filesystem contract
+changes. Keep this policy until a corrected Linux kernel passes the same
+unlinked-file crash test on DE25.
 
 VM archive: `/home/barry/astra-evidence/powerloss92-vm-20261116.tar.gz`,
 958 sealed records, SHA-256

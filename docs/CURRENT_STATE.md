@@ -16,16 +16,41 @@ desktop and explicit NTP control pass. Setup failures remain archived. See
 `/home/barry/astra-evidence/powerloss-20261116/`. Physical trial93 is staged with
 disposable image/private settings; production data remains excluded. Native
 file/parent acknowledgement was captured and flushed on Beast, then the user
-disconnected/reconnected DE25's power supply. The board now has power LEDs but
+disconnected/reconnected DE25's power supply. Initial boot had power LEDs but
 no HDMI, network or UART response. JTAG sees both expected chip IDs and design
 hash `3B9D7BF7D65C959963E4`. Read-only SDM CONFIG_STATUS reports no configuration
 error, `CONF_DONE`/`INIT_DONE` set and default AS Fast POR mode; RSU_STATUS is
 unsupported (`0x0c`), not evidence of a storage fault. Reload of the exact
-retained HPS SOF into RAM succeeds without flash/SD programming; UART remains
-silent. User declines KEY3 and requests another power cycle. Serial capture
-now awaits full DC/USB disconnect/reconnect to exclude residual power.
-No post-cut image read, repair or formatting
-has occurred; do not claim hardware durability or SD corruption. VM evidence
+retained HPS SOF into RAM succeeds without flash/SD programming. After the
+requested full power cycle, stable UART `if02` reveals a U-Boot prompt. An
+explicit boot proves Linux host root journal replay fails with `EUCLEAN` (-117),
+then VFS panics mounting `/dev/mmcblk0p2`. This is not an Astra kernel panic.
+The root filesystem has ext4 fast commits and pending recovery; the precise
+replay defect remains under investigation. RAM-only network boot now runs the
+same retained FPGA/kernel/DTB plus a private rescue initramfs. All SD devices
+are read-only and unmounted. Complete 31,267,487,744-byte raw SD backup on Beast
+passed source/destination SHA-256 and exact-length checks:
+`47acb9f84ba1e3b17dd9de7b2c933547645c346fbb3ad378bf754a1371bb0010`.
+Evidence is `rescue94/`, `uboot93-boot2303.log`, `backup94.log` and the
+`astra-rescue94-backup.service` user unit. Disposable root clone replay passed
+`e2fsck -p` and read-only fsck. The exact private post-cut Astra image was
+extracted from that clone: both previous baseline and newly acknowledged file
+matched exactly. A RAM-only crash reproducer on the same kernel isolated the
+host failure to ext4 fast commits; identical crash with standard journal mounts.
+After clone verification, original root journal replayed cleanly and ext4
+`fast_commit` was removed using `tune2fs`, with clean follow-up fsck. Normal
+Linux and Astra booted to stage 8, zero restarts. Trial93 then booted its actual
+post-cut image on DE25; native CLI confirmed both files byte-exact, all three
+filesystem semantics passed, clean exit 88 and offline ext4 fsck passed. Normal
+three services restored at stage 8, zero restarts, normal selector. The
+57-record board trial archive was verified on Beast (SHA-256
+`00cfe1a7b68d9f3fdfbac08bb73c6c9f5c83adf91242b982b4b3c4d76014dde2`);
+disposable trial files were removed, leaving 8.5 GiB free. The Linux root must
+use standard ext4 journaling without `fast_commit` until upstream fixes replay
+of unlinked, still-open files. The focused installer then updated only native
+`/services/ntpd` in the selected development image; `ASTRA_DE25_DEV_INSTALL
+PASS guest=1 host=0 removed=0`. Normal Astra reached stage 8 with three active
+services, zero restarts, only loop0 and 8.5 GiB free. VM evidence
 archive `powerloss92-vm-20261116.tar.gz` verifies 958 records, SHA-256
 `5aacb7ab3a8ab11aea22bce2c936183f1be4b4682aeb0a13a7ab50cdeeea7c0f`.
 Implementation is committed/pushed as `0788619` on
