@@ -116,3 +116,15 @@ fixed. Selected screenshot is archived on Beast at
 Board trial story and RFB captures were removed after archiving; all three
 Astra services remained active with 8.3 GiB free. AstraZ launch and its saved
 default remain untested until AstraZ exists.
+
+Selected DE25 Open With checkpoint, 2026-11-17: native Open With identified
+real Zork I V3 content without a filename suffix and launched AstraZ, which
+rendered its opening scene. Explicit Choose offered AstraZ for invalid `.z3`
+through its extension hint; AstraZ rejected the bytes instead of treating the
+hint as validated story content. A suffixless copy on exFAT `/usb0` launched
+through Open With and through Atlas double-click; native copy-back matched the
+original SHA-256. Captures and verified hashes are archived on Beast at
+`/home/barry/astra-evidence/openwith-20261117/`. Trial files were removed;
+services remained active with zero Astra restarts and 8.5 GiB free. The
+persistent preference, absent handler, APKG, optical and failed-launch gates
+remain open in ASTRA68-64.
