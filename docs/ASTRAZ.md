@@ -1,11 +1,12 @@
 # AstraZ interpreter
 
-Status, 2026-10-29: AstraZ GUI bundle runs on DE25. Real Zork I Z3 displays
+Status, 2026-11-17: AstraZ GUI bundle runs on DE25. Real Zork I Z3 displays
 its opening scene, takes commands at an inline `>` prompt, and updates its
 fixed room/Score/Moves status line after a turn. Deadline Z3 displays the
 room/Time status variant. The private Frotz engine also passed native DE25
-save/restore and Z5 Adventure `look` gates. Synthetic Z1–8 and Blorb content
-probes passed. Z6 Blorb pictures now use SDL2_image decode, a shared Image View
+save/restore and Z5 Adventure `look` gates. Authored Z1/Z2/Z7 interactive
+stories passed DE25 GUI and host execution; Z1/Z2 drew their room status lines.
+Z6 Blorb pictures now use SDL2_image decode, a shared Image View
 hardware blit and an ordered Graphics Kit canvas. FORM/AIFF, OGGV and MOD
 resources use the generic SDL2_mixer/Codec Kit media path. DE25 trials have
 opened Z3 Zork I, Z4 Trinity, Z5 Sherlock, Z6 Zork Zero, and Z8 One Room.
@@ -52,10 +53,10 @@ backend and Glk adapter are added. No NDK engine interface is exported.
 
 | Version | Adapter surface | Current execution evidence |
 | --- | --- | --- |
-| Z1–3 | Text, status, split screen, input, save/restore, beep | Zork I and Deadline GUI on DE25; score/moves and time status variants; Z3 Mini Zork save/restore; Z1–2 probe only |
+| Z1–3 | Text, status, split screen, input, save/restore, beep | Authored Z1/Z2 input, response, status and exit on DE25; Zork I and Deadline GUI on DE25; score/moves and time status variants; Z3 Mini Zork save/restore |
 | Z4–5 | Timed input, styles, colour, mouse, undo, Unicode, files | Z4 Trinity and Z5 Sherlock display and accept `look` on DE25 |
-| Z6 | Pixel dimensions, windows, font metrics, pictures, sound resources, mouse | Zork Zero draws Blorb artwork, pages, and accepts inline `look` on DE25; font-3 hardware glyph gate pending |
-| Z7–8 | Z5-style display and input, larger story addressing | Libre Z8 One Room displays and accepts `look` on DE25; Z7 execution still needs a fixture |
+| Z6 | Pixel dimensions, windows, font metrics, pictures, sound resources, mouse | Zork Zero draws Blorb artwork, pages, and accepts inline `look` on DE25; font-3 hardware glyph gate passed |
+| Z7–8 | Z5-style display and input, larger story addressing | Authored 66,560-byte Z7 story calls a routine beyond 64 KiB, accepts input, responds and exits on DE25; libre Z8 One Room displays and accepts `look` on DE25 |
 
 Host must advertise only capabilities it implements. `make_menu` remains
 disabled because pinned Frotz core always returns failure for that optional

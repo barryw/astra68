@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate freely redistributable Z6/Blorb media for AstraZ gates.
+"""Generate freely redistributable Z-machine and Blorb test stories.
 
 The story executes draw_picture(7, 1, 1), sound_effect(3, 2), then quits.
 The companion uses standard Blorb resource indexing; no game assets are used.
@@ -156,6 +156,54 @@ def style_display_story():
     return bytes(data)
 
 
+def legacy_story(version):
+    """Small interactive V1, V2 or V7 story for version execution gates."""
+    assert version in (1, 2, 7)
+    data = bytearray(66560 if version == 7 else 1024)
+    data[0] = version
+    data[2:4] = be16(1)
+    data[4:6] = be16(0x300)  # high memory
+    data[6:8] = be16(0x300)  # initial PC, byte address outside V6
+    data[8:10] = be16(0x40)  # dictionary
+    data[10:12] = be16(0xd0) # objects
+    data[12:14] = be16(0x120) # 240-word globals fit below static memory
+    data[14:16] = be16(0x300) # static memory
+    data[18:24] = b"261117"
+    data[24:26] = be16(0x70) # abbreviations (V2+)
+    data[26:28] = be16(len(data) // (8 if version == 7 else 2))
+    if version == 7:
+        data[0x28:0x2a] = be16(0x2000) # routine offset crosses 64 KiB
+    data[0xb0] = 30          # input buffer capacity
+    if version <= 2:
+        data[0x120:0x122] = be16(1)  # status line's room object
+        data[0x115:0x117] = be16(0x118) # object 1 short name
+        data[0x118:0x11d] = bytes.fromhex("02 5e 94 c8 a5") # "room"
+
+    program = bytearray()
+    for character in b"Room. Press Return to open door:":
+        program += bytes((0xe5, 0x7f, character)) # VAR:5 print_char
+    program += b"\xbb"                            # new_line
+    if version == 7:
+        program += bytes.fromhex("8f 00 6a") # call_1n at (0x6a*4)+(0x2000*8)
+    program += bytes.fromhex("e4 5f b0 00")        # VAR:4 read input
+    if version == 7:
+        program += b"\x10" # V5+ read stores terminating key
+    for character in b"The door opens.":
+        program += bytes((0xe5, 0x7f, character))
+    program += bytes.fromhex("bb ba") # new_line, quit
+    assert 0x300 + len(program) <= 0x400
+    data[0x300:0x300 + len(program)] = program
+    if version == 7:
+        routine = b"\0" + b"".join(bytes((0xe5, 0x7f, character))
+                                 for character in b"V7 routine reached.") + \
+                  bytes.fromhex("bb b0") # new_line, rtrue
+        address = 0x6a * 4 + 0x2000 * 8
+        assert address > 0xffff and address + len(routine) <= len(data)
+        data[address:address + len(routine)] = routine
+    data[28:30] = be16(sum(data[64:]) & 0xffff)
+    return bytes(data)
+
+
 def blorb(sound_tag, sound_payload):
     resources = ((b"Pict", 7, b"PNG ", png()),
                  (b"Snd ", 3, sound_tag, sound_payload))
@@ -182,6 +230,8 @@ def main():
     (args.directory / "font3.z6").write_bytes(font3_story())
     (args.directory / "font3-display.z6").write_bytes(font3_display_story())
     (args.directory / "style-display.z5").write_bytes(style_display_story())
+    for version in (1, 2, 7):
+        (args.directory / f"legacy.z{version}").write_bytes(legacy_story(version))
     (args.directory / "media.png").write_bytes(png())
     (args.directory / "media.aiff").write_bytes(b"FORM" +
                                                  be32(len(aiff_data)) + aiff_data)
@@ -189,7 +239,7 @@ def main():
     (args.directory / "media.mod").write_bytes(mod())
     (args.directory / "media-mod.blb").write_bytes(
         blorb(b"MOD ", mod()))
-    print("AstraZ synthetic Z6/Blorb fixtures: PASS")
+    print("AstraZ synthetic Z-machine/Blorb fixtures: PASS")
 
 
 if __name__ == "__main__":

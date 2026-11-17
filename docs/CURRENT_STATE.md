@@ -2,6 +2,23 @@
 
 Status: active continuation map, 2026-11-17
 
+Plane ASTRA68-65 is Done after selected DE25 V1–V8 execution coverage. Glulx
+execution remains separate ASTRA68-70. Six of original eleven Verification
+tickets are now Done (#8, #27, #32, #36, #47, #65).
+
+AstraZ verification checkpoint, 2026-11-17: NAS Infocom collection has no
+V1/V2/V7 story after file-header scan. Authored 1,024-byte V1/V2 and
+66,560-byte V7 stories execute through the existing Frotz private engine,
+pass host input/response trace, and pass selected DE25 GUI opening, Return,
+response and clean-exit
+gates. V1/V2 show their room status lines. Beast archive
+`/home/barry/astra-evidence/astraz-legacy-20261117/` holds verified board
+captures, story bytes, traces and health. Board trial files were removed;
+three services active, Astra NRestarts=0, 8.5 GiB free. These authored stories
+prove text, input and exit for missing versions. V7 also called a routine
+beyond 64 KiB using its packed address offset. Broader real-game compatibility
+remains open.
+
 Open With verification checkpoint, 2026-11-17: selected DE25 runtime opened
 real Zork I (V3) from a suffixless WORK file through native Open With and
 rendered its opening scene in AstraZ. Explicit Choose on an invalid `.z3`
@@ -25,8 +42,7 @@ Verification checkpoint, 2026-11-17: Plane ASTRA68-32 (native AFNT format
 conversion) is Done at origin/main `71e0fc2b`; static TTF/OTF, distinct mixed
 TTC faces, four variable instances and complete Amiga repertoires pass pinned
 AFNT byte checks, malformed/color rejection and sanitizers on Beast. Full
-physical import/fault qualification remains ASTRA68-38. Five of the original
-eleven Verification tickets are now Done (#8, #27, #32, #36, #47).
+physical import/fault qualification remains ASTRA68-38.
 
 NFS verification checkpoint, 2026-11-17: a disposable DE25 NFSv4 mount exposed
 `ENOSYS` on its first guest write after the unified file-cache change. NFS
