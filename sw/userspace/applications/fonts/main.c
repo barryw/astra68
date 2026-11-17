@@ -1100,6 +1100,9 @@ static uint32_t action(const AstraUIAction *event)
             message = NULL;
         } else message = "Could not open font source volume";
         if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+        if (browsing && astra_interface_ui_focus_control(&ui,
+            FONTS_FILE_PANEL_FIRST + ASTRA_FILE_PANEL_LIST) != ASTRA_OK)
+            return FONTS_FAIL_CONTROL;
         return present(NULL);
     }
     if (confirm_uninstall && event->type == ASTRA_UI_ACTION_ACTIVATE &&

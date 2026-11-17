@@ -16,6 +16,20 @@ HostFS settings; the test now requires a root observer and fails before image
 setup when that requirement is missed. ASTRA68-38 remains Verification for the
 complete fault matrix and selected DE25 release gate.
 
+Additional font qualification, 2026-11-17: current-source QEMU passes native
+AFNT import, idempotence, selected setting, uninstall, restart and damaged
+inventory fallback; four STIX Two Text variable instances, valid two-face TTC
+restart, corrupted second-face atomic rollback, delayed-converter cancellation
+and concurrent catalog access also pass. Fonts GUI now focuses the shared open
+panel file list on entry, matching Haiku's `src/kits/tracker/FilePanelPriv.cpp`;
+the previous test keyboard sequence activated Up instead. The corrected GUI
+gate passes Source Sans OTF import, persisted AFNT/source hash and three
+notices, information Text View, live Desktop/Fonts adoption, built-in restore
+and removal. QEMU selected the current built `astra-font-worker/0.3` via
+`ASTRA_FONT_WORKER_PATH`; Beast's installed worker remains older 0.2 and was
+not replaced. The test now refreshes its offline ext4 snapshot after import.
+Physical DE25 and remaining ASTRA68-38 fault cases remain open.
+
 AstraZ verification checkpoint, 2026-11-17: NAS Infocom collection has no
 V1/V2/V7 story after file-header scan. Authored 1,024-byte V1/V2 and
 66,560-byte V7 stories execute through the existing Frotz private engine,

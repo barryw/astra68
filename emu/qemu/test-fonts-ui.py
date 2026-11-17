@@ -60,7 +60,10 @@ def wait_ui(machine, operation, trace_before, syslog_before):
         if any("fonts UI " + operation + " complete" in line for line in lines):
             return
         time.sleep(.1)
-    raise RuntimeError("Fonts " + operation + " UI did not complete: " + repr(lines[-30:]))
+    relevant = [line for line in lines if "fonts UI" in line or
+                "Fonts[" in line or "launch /apps/Fonts.app" in line]
+    raise RuntimeError("Fonts " + operation + " UI did not complete: " +
+                       repr(relevant[-30:]))
 
 
 def wait_import_state(machine, state, trace_before, syslog_before):
@@ -130,13 +133,13 @@ def wait_live_font(machine, prefix, trace_before, syslog_before, glyphs_before):
 
 
 def state_on_disk(image, work):
+    offset, length = astra_image.ext4_partition(image)
+    volume = str(Path(work) / "inspect-volume.ext4")
+    astra_image._slice(image, offset, length, volume)
     private = Path(work) / "config/config/system/fonts/settings.conf"
     if private.is_file():
         settings_text = private.read_text(encoding="utf-8")
     else:
-        offset, length = astra_image.ext4_partition(image)
-        volume = str(Path(work) / "inspect-volume.ext4")
-        astra_image._slice(image, offset, length, volume)
         result = subprocess.run([
             "debugfs", "-R", "cat /config/system/fonts/settings.conf", volume],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -220,8 +223,6 @@ def main():
         parser.error("--cancel-first requires an outline font")
     if args.font is None and not (args.long_style or args.unsupported_preview or args.long_notice):
         parser.error("font is required unless a fixture is selected")
-    if os.geteuid() != 0:
-        parser.error("run as root observer with ASTRA_TEST_QEMU_UID/GID set to a non-root account")
     with tempfile.TemporaryDirectory(prefix="astra-fonts-ui-") as work:
         image = str(Path(work) / "system.img")
         shutil.copyfile(args.image, image)
@@ -284,8 +285,7 @@ def main():
             for _ in range(3):
                 machine.qmp.key("tab")
             machine.qmp.key("ret")
-            for _ in range(2):
-                machine.qmp.key("tab")
+            # Opening the shared file panel focuses its list.
             machine.qmp.key("home")
             for _ in range(row):
                 machine.qmp.key("down")
@@ -370,10 +370,13 @@ def main():
         except Exception:
             if machine is not None:
                 print("Fonts native failure: launcher exit=%r serial=%r" %
-                      (machine.process.poll(), machine.recent_serial(100)), flush=True)
+                      (machine.process.poll(), machine.recent_serial(25)), flush=True)
                 try:
+                    relevant = [line for line in machine.syslog_lines()
+                                if "fonts UI" in line or "Fonts[" in line or
+                                "launch /apps/Fonts.app" in line]
                     print("Fonts native failure syslog=" +
-                          repr(machine.syslog_lines()[-100:]), flush=True)
+                          repr(relevant[-50:]), flush=True)
                 except OSError as error:
                     print("Fonts native failure syslog unavailable: " + repr(error), flush=True)
             raise
@@ -417,7 +420,12 @@ def main():
                     metadata.get("source_files", [{}])[0].get("sha256") != \
                     hashlib.sha256(original).hexdigest() or \
                     not isinstance(metadata.get("notices"), list):
-                raise RuntimeError("native import lost converter/source/notice metadata")
+                raise RuntimeError("native import metadata mismatch: converter=%r "
+                    "source_sha256=%r expected_sha256=%r notices=%s" %
+                    (metadata.get("converter"),
+                     metadata.get("source_files", [{}])[0].get("sha256"),
+                     hashlib.sha256(original).hexdigest(),
+                     type(metadata.get("notices")).__name__))
             for notice in metadata["notices"]:
                 raw = bytes.fromhex(notice["raw_hex"])
                 sfnt = original[:4] in (b"\0\1\0\0", b"OTTO", b"ttcf", b"true")

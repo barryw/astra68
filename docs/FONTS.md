@@ -18,6 +18,19 @@ The non-root helper creates a fresh private store each run; using it for this
 restart gate loses migrated HostFS settings. Physical DE25 and remaining fault
 matrix for ASTRA68-38 are still open.
 
+The 2026-11-17 current-source QEMU continuation passes native AFNT persistence,
+four STIX variable styles, two-face TTC commit and second-face rollback,
+cancellation, concurrent catalog access, and GUI Source Sans OTF import with
+source hash, three notices, information Text View, live system adoption,
+restoration and removal. Fonts now focuses the shared file panel list when
+opening its picker. Haiku read-only reference:
+`src/kits/tracker/FilePanelPriv.cpp` focuses its pose view for open panels and
+name field for save panels; Astra applies the open-panel part through existing
+Interface Kit focus API. The QEMU test refreshes its offline image snapshot
+after import and selects the current built worker through
+`ASTRA_FONT_WORKER_PATH`; Beast's installed worker is older. The selected DE25
+and remaining fault cases still need qualification.
+
 ## 1. Locked architecture
 
 The installed-font filesystem root is `FONTS:` (`/fonts` on the system
