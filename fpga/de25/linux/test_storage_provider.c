@@ -26,6 +26,18 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+static int reject_syncfs;
+int __real_syncfs(int fd);
+
+int __wrap_syncfs(int fd)
+{
+    if (reject_syncfs) {
+        errno = EIO;
+        return -1;
+    }
+    return __real_syncfs(fd);
+}
+
 static void wait_work(AstraStorageProvider *provider)
 {
     for (unsigned at = 0u; provider->workers != 0u && at < 10000u; ++at) {
@@ -956,6 +968,19 @@ static void usb_format(AstraStorageProvider *provider, const char *path,
     if (format == ASTRA_VOLUME_EXFAT)
         exfat_external_changes(provider, mount, root);
     close(root);
+    if (writable) {
+        const AstraStorageRecord *before = astra_storage_find(&provider->catalog, mount);
+        assert(before != NULL && before->state == ASTRA_VOLUME_MOUNTED);
+        uint64_t linux_id = before->linux_mount_id;
+        reject_syncfs = 1;
+        assert(unmount_wait(provider, mount, 1u) == EIO);
+        reject_syncfs = 0;
+        const AstraStorageRecord *after = astra_storage_find(&provider->catalog, mount);
+        assert(after != NULL && after->state == ASTRA_VOLUME_MOUNTED &&
+               after->linux_mount_id == linux_id);
+        assert(astra_storage_provider_root(provider, mount, 1u, &root) == 0);
+        close(root);
+    }
     assert(unmount_wait(provider, mount, 1u) == 0);
     if (writable) {
         assert(astra_storage_provider_release(provider, mount) == 0);

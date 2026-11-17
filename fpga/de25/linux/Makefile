@@ -596,14 +596,16 @@ $(OUT)/test-storage-provider: $(STORAGE_PROVIDER_SOURCES) test_storage_provider.
 		$(STORAGE_HEADERS) Makefile
 	mkdir -p $(OUT)
 	$(HOST_CC) $(STORAGE_CATALOG_FLAGS) -I$(STORAGE_RESOLVER) \
-		$(STORAGE_PROVIDER_SOURCES) test_storage_provider.c -o $@ -lblkid -lmount -ludev
+		$(STORAGE_PROVIDER_SOURCES) test_storage_provider.c -o $@ \
+		-Wl,--wrap=syncfs -lblkid -lmount -ludev
 
 $(OUT)/test-storage-provider-aarch64: $(STORAGE_PROVIDER_SOURCES) test_storage_provider.c \
 		$(STORAGE_HEADERS) Makefile
 	mkdir -p $(OUT)
 	$(CC) $(REMOTE_CFLAGS) -std=gnu11 -I$(ROOT)/ndk/include -I$(STORAGE_RESOLVER) \
 		$(STORAGE_PROVIDER_SOURCES) test_storage_provider.c -o $@ \
-		-Wl,-rpath-link,$(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu -lblkid -lmount -ludev
+		-Wl,--wrap=syncfs -Wl,-rpath-link,$(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu \
+		-lblkid -lmount -ludev
 
 storage-provider-test: $(OUT)/test-storage-provider
 	python3 test_storage_mount.py $< --provider

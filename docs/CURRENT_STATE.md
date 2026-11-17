@@ -6,10 +6,10 @@ Verification checkpoint, 2026-11-17: Plane ASTRA68-32 (native AFNT format
 conversion) is Done at origin/main `71e0fc2b`; static TTF/OTF, distinct mixed
 TTC faces, four variable instances and complete Amiga repertoires pass pinned
 AFNT byte checks, malformed/color rejection and sanitizers on Beast. Full
-physical import/fault qualification remains ASTRA68-38. Four of the original
-eleven Verification tickets are now Done (#27, #32, #36, #47).
+physical import/fault qualification remains ASTRA68-38. Five of the original
+eleven Verification tickets are now Done (#8, #27, #32, #36, #47).
 
-Physical USB ASTRA68-8 remains In Progress. On the selected DE25 development
+Physical USB ASTRA68-8 is Done. On the selected DE25 development
 runtime, a guarded usb-storage unbind/rebind of the disposable SanDisk Cruzer
 `FC006A81F5493213` removed both writable volumes and returned exFAT `/usb0`
 and FAT32 `/usb2` at stable paths with new incarnations. Native retained file
@@ -24,8 +24,15 @@ Forced loss left FAT32 dirty, as expected; its 512 MiB pre-repair image and
 hash are retained on Beast. Offline fsck repaired the dirty bit, and a separate
 normal Astra mount/stop left FAT32 clean. Trial stage was removed. Final board
 reached stage 8 with Astra/audio/RFB active, zero restarts and 8.5 GiB free.
-Dispatched flush failure with unmount refusal and final accounting under that
-fault remain before #8 closes. DVD and F310 physical gates await reconnection.
+The existing provider test now injects `EIO` at Linux `syncfs` for both
+disposable FAT32 and exFAT mounts. It verifies unmount refusal, unchanged
+Linux mount identity, successful retry and final source/loop cleanup. Beast
+host test passes; the AArch64 binary ran on DE25 with all provider cases and
+clean offline FAT32/exFAT image checks. Beast evidence
+`/home/barry/astra-evidence/usb-flush-20261117.tar.gz` (SHA-256
+`d1983651b847d7d15b67d7eb704da71b4a92a85a055b30e32cf01b1ef633e2fe`)
+retains binary, fixtures and output. No extra loop device or board stage
+remains. DVD and F310 physical gates await reconnection.
 
 Physical DE25 power-loss durability gate is complete.
 The Linux-owned storage cut matrix now passes on Beast: clean baseline, nine
