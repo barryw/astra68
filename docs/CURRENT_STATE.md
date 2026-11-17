@@ -10,12 +10,15 @@ offered AstraZ through the extension hint; AstraZ rejected its bytes with
 story on writable exFAT `/usb0` opened through native Open With and Atlas
 double-click. Guest copy-back matched original SHA-256
 `0ae5ac229e79094ff368b6669356444af0f35e21d862a1baaa546989085c15fd`.
-Six selected raw/PNG frame pairs and verified SHA256SUMS are on Beast under
+Seven selected raw/PNG frame pairs and verified SHA256SUMS are on Beast under
 `/home/barry/astra-evidence/openwith-20261117/`. Native USB trial file was
-removed; WORK fixtures and board captures were removed after archive.
+removed. Native `apkg create` produced a valid Terminal bundle installer;
+Open With launched Installer's review window without installing it. Its package
+SHA-256 was `0d2a604a05e4f953b3305cf206eb4e1f63e048707def9f1d5e6980e1f2a0d908`.
+WORK fixtures and board captures were removed after archive.
 Astra, audio and RFB remain active, Astra NRestarts=0, 8.5 GiB free.
 ASTRA68-64 remains Verification: persistent preference across reboot,
-preferred-handler removal/reinstall, APKG, optical read-only opening and
+preferred-handler removal/reinstall, optical read-only opening and
 failed automatic-launch recovery still need a private-state hardware gate.
 
 Verification checkpoint, 2026-11-17: Plane ASTRA68-32 (native AFNT format

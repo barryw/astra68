@@ -123,8 +123,10 @@ rendered its opening scene. Explicit Choose offered AstraZ for invalid `.z3`
 through its extension hint; AstraZ rejected the bytes instead of treating the
 hint as validated story content. A suffixless copy on exFAT `/usb0` launched
 through Open With and through Atlas double-click; native copy-back matched the
-original SHA-256. Captures and verified hashes are archived on Beast at
+original SHA-256. Native `apkg create` produced a valid Terminal installer;
+Open With launched Installer's review window, then closed without installation.
+Captures and verified hashes are archived on Beast at
 `/home/barry/astra-evidence/openwith-20261117/`. Trial files were removed;
 services remained active with zero Astra restarts and 8.5 GiB free. The
-persistent preference, absent handler, APKG, optical and failed-launch gates
+persistent preference, absent handler, optical and failed-launch gates
 remain open in ASTRA68-64.
