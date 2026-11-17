@@ -8,6 +8,16 @@ This document defines the native font direction for Astra 68 and the boundary
 between font files, the font/display services, and Astraea. The graphical OS
 must not draw bitmap glyphs with CPU pixel loops.
 
+Qualification checkpoint, 2026-11-17: current-source Beast host worker,
+TTF/OTF and Amiga-to-AFNT conversion, host invocation, and related
+ASan/UBSan gates pass. The QEMU outline probe imports Source Sans OTF,
+renders it through the named hardware path, selects it as system font and
+passes restart. This restart test requires a root observer with an explicit
+non-root QEMU UID/GID so its private Config Kit store persists across boots.
+The non-root helper creates a fresh private store each run; using it for this
+restart gate loses migrated HostFS settings. Physical DE25 and remaining fault
+matrix for ASTRA68-38 are still open.
+
 ## 1. Locked architecture
 
 The installed-font filesystem root is `FONTS:` (`/fonts` on the system

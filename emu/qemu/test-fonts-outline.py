@@ -100,6 +100,10 @@ def boot(qemu, rom, image, work, phase, environment=None, concurrent=False):
         raise RuntimeError("%s readiness absent: %s" %
                            (phase, [line for line in machine.said()[0]
                                     if PROBE in line][-10:]))
+    except (BrokenPipeError, ConnectionError, EOFError) as error:
+        raise RuntimeError("%s QEMU monitor lost: %s; exit=%s; serial=%s" %
+                           (phase, error, machine.process.poll(),
+                            machine.recent_serial(80))) from error
     finally:
         machine.close()
 
@@ -121,6 +125,8 @@ def main():
     parser.add_argument("--amiga", action="store_true",
                         help="run fixed-strike Amiga import probe")
     args = parser.parse_args()
+    if os.geteuid() != 0:
+        parser.error("restart gate requires root observer with persistent private Config Kit state")
     if args.cancel and (args.concurrent or args.expect_limit or args.expect_later_failure or
                         args.expect_variable or args.amiga):
         parser.error("--cancel is a separate outline lifecycle case")

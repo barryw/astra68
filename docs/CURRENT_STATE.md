@@ -6,6 +6,16 @@ Plane ASTRA68-65 is Done after selected DE25 V1–V8 execution coverage. Glulx
 execution remains separate ASTRA68-70. Six of original eleven Verification
 tickets are now Done (#8, #27, #32, #36, #47, #65).
 
+Font qualification checkpoint, 2026-11-17: Beast host worker, TTF/OTF and
+Amiga-to-AFNT conversion, host invocation, and ASan/UBSan worker/converter/
+Amiga/host tests pass. A current-source QEMU outline import, hardware draw,
+system selection and restart gate passes with a persistent private Config Kit
+fixture and unprivileged QEMU. The earlier non-root wrapper run passed first
+boot but panicked on restart because its fresh private store lacked migrated
+HostFS settings; the test now requires a root observer and fails before image
+setup when that requirement is missed. ASTRA68-38 remains Verification for the
+complete fault matrix and selected DE25 release gate.
+
 AstraZ verification checkpoint, 2026-11-17: NAS Infocom collection has no
 V1/V2/V7 story after file-header scan. Authored 1,024-byte V1/V2 and
 66,560-byte V7 stories execute through the existing Frotz private engine,
