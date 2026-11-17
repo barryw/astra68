@@ -78,6 +78,7 @@ CMAKE_EXPECTED = {
     "native": "Astra CMake Native",
     "posix": "Astra NDK",
     "cxx": "Astra CMake C++23",
+    "cxx-runtime": "ASTRA C++ PASS",
     "sdl": "Astra CMake SDL2",
 }
 # The audio examples must also have been heard by the stand-in host

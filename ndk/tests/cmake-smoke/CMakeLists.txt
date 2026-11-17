@@ -21,6 +21,11 @@ target_compile_features(cxx PRIVATE cxx_std_23)
 astra_posix_program(cxx CXX NAME ndk-cmake-cxx VERSION 1.0.0
   AUTHOR "Astra 68 Project" COPYRIGHT "Copyright 2026 Astra 68 Project")
 
+add_executable(cxx-runtime ../../../sw/userspace/posix/tests/cxx_runtime.cpp)
+target_compile_features(cxx-runtime PRIVATE cxx_std_23)
+astra_posix_program(cxx-runtime CXX NAME ndk-cmake-cxx-runtime VERSION 1.0.0
+  AUTHOR "Astra 68 Project" COPYRIGHT "Copyright 2026 Astra 68 Project")
+
 add_executable(sdl ../distribution_sdl.c)
 target_link_libraries(sdl PRIVATE SDL2::SDL2 SDL2_net::SDL2_net
   SDL2_image::SDL2_image SDL2_mixer::SDL2_mixer SDL2_ttf::SDL2_ttf)

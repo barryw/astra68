@@ -243,6 +243,10 @@ dist-check: $(DIST_ARCHIVE) result-test
 			--needed libc.library.4 --needed cxx.library.2 \
 			--needed unwind.library.1 $$build/cxx; \
 		python3 $$checker --readelf $(CROSS)readelf \
+			--needed runtime.library.3 --needed compiler.library.2 \
+			--needed libc.library.4 --needed cxx.library.2 \
+			--needed unwind.library.1 $$build/cxx-runtime; \
+		python3 $$checker --readelf $(CROSS)readelf \
 			--needed SDL2_net.library.2 --needed SDL2_image.library.2 \
 			--needed SDL2_mixer.library.3 --needed runtime.library.3 \
 			--needed compiler.library.2 --needed libc.library.4 \

@@ -171,7 +171,8 @@ access) alongside `include/astra` and the HTML/PDF guides. `make -C ndk
 dist-check` extracts that archive and, using only its contents and the
 installed `m68k-astra` compiler, dynamically links native C, POSIX C, and
 POSIX C++ programs, their static-linked variants, and an SDL program. It also
-builds native C, POSIX C, C++23, and SDL programs through CMake and Ninja.
+builds native C, POSIX C, C++23, C++23 exception/RTTI/thread, and SDL programs
+through CMake and Ninja.
 Each smoke program passes the packaged dynamic-executable contract checker.
 
 Documentation warnings are errors, including undocumented public structures,
