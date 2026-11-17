@@ -4,6 +4,15 @@ Status: validation in progress, 2026-10-29. This document records test inputs
 and observations. The private Infocom files are local test material only and
 must never enter the repository or a distributable image.
 
+Version coverage audit, 2026-11-17: standalone V1, V2 and V7 story files are
+absent from the local Infocom test collection. Inform's
+[architecture reference](https://www.inform-fiction.org/manual/html/s41.html)
+says V1/V2 were early Infocom designs that Inform cannot produce; it calls V7
+deprecated. The existing engine contract test recognizes headers 1–8, but
+that is not an execution gate. ASTRA68-65 remains open until playable V1/V2/V7
+stories or authored conformance stories are run on DE25. Keep source and
+redistribution rights explicit for every fixture.
+
 | VM | Story | Primary gate |
 | --- | --- | --- |
 | Z3 | `Zork1.z3` | Opening, West of House status, `look`, quit |
