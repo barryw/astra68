@@ -2,6 +2,19 @@
 
 @/Users/barry/.codex/RTK.md
 
+## Plane work tracking
+
+- Track Astra68 work in the [Plane project](https://plane.barrywalker.io/quincywalkers/projects/c6d9399a-6493-4925-8bad-6ca71c55ec53/issues/).
+  Check existing issues before starting work; create one when the scope is missing.
+- Move the owning issue to In Progress when work starts. Record source identity,
+  test result, hardware evidence, and remaining limits as checkpoints complete.
+  Move it to Verification while required gates remain, Blocked only with a named
+  resume condition, and Done only when its acceptance criteria are met.
+- Update Plane when scope, priority, or status changes and before reporting a
+  task complete. Keep `docs/CURRENT_STATE.md` as the technical continuation
+  authority and link its evidence from Plane; do not treat old issue text as
+  current source truth.
+
 ## Execution Topology
 
 - Use `beast` for builds, synthesis, simulation, QEMU, and FPGA tooling.
