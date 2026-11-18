@@ -128,8 +128,22 @@ and eight-byte server proof are archived under
 `/home/barry/astra-evidence/nfs-fix-20261117/` as
 `provider-matrix-receipt.txt` (SHA-256
 `b97b01ab981853ee26c9f91bab2b80666bb913c232f32c9c8bed308b091ab797`)
-and `provider-matrix-rw-proof`. Export was removed after test. DE25 checks and
+and `provider-matrix-rw-proof`. Export was removed after test. DE25 capacity and
 outage/restart/different-export/shutdown gates remain open.
+The current-source private DE25 release
+`2a5004bc7779d4db04557ef501adb367f693a7268d65f2a91e00de255921c763`
+then mounted a disposable Beast NFSv4 export writable at `/net0`, published
+`NFSVERIFY` on Desktop and in Atlas, enumerated `0Café.txt`, and read its
+`unicode` bytes with the native shell's wildcard expansion. `cat` of a
+server-side mode-000 file returned exact `Permission denied`. Three RFB
+raw/full-size PNG captures and third-trial console are archived at
+`/home/barry/astra-evidence/verification11-20261117/`; PNG hashes are
+`651b45c130dcc8d4179e71830e6df37e3c7d3c483764f3051f1a4cc6567ce6b8`
+(mount), `3641da4a5935927be7b759c32559b7083292255c40e078564d671dad212949d1`
+(Unicode read), and `e29bbf30442cf469c87ffa8ddc16608b62cb1132b4d2da32aa193ceb45226c24`
+(denial). The guard expired while `df` ran; target capacity output is not
+qualified. Selected release and all three services recovered, Astra
+`NRestarts=0`, 8.5 GiB free; board trial and Beast export removed.
 
 Physical USB ASTRA68-8 is Done. On the selected DE25 development
 runtime, a guarded usb-storage unbind/rebind of the disposable SanDisk Cruzer
