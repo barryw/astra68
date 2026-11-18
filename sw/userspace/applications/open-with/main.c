@@ -20,7 +20,7 @@
 #include <string.h>
 
 #define WIDTH 560u
-#define HEIGHT 340u
+#define HEIGHT 400u
 #define PREFERENCE_KEY "preferred"
 static const AstraConfigField config_fields[] = {{PREFERENCE_KEY, 0u}};
 static const AstraConfigSchema config_schema = {1u, config_fields, 1u};

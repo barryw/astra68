@@ -1,10 +1,32 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-11-17
+Status: active continuation map, 2026-11-18
 
 Plane ASTRA68-65 is Done after selected DE25 V1–V8 execution coverage. Glulx
 execution remains separate ASTRA68-70. Seven of original eleven Verification
 tickets are now Done (#8, #27, #32, #36, #46, #47, #65).
+
+Four-ticket verification checkpoint, 2026-11-18: DE25 guarded private release
+`ea30d0f4be5bb3066356330ef02cc463b6116527a76b818ef20d944c10413539`
+passed four stage-8 trials and restored selected services after each. In the
+private Config Kit store, Open With saved AstraZ as preferred handler, then
+opened a second suffixless Zork I copy directly after reboot. Its Open button
+was clipped at 340 px; raising the app window to 400 px made the full button
+visible and the corrected chooser launched AstraZ on DE25. Native Fonts
+imported Source Sans 3 OTF from disposable DH0 to AFNT, listed and previewed
+the family, marked it system-eligible, applied it live, and saved the system
+font in private Config Kit. Removal of the active imported font was refused
+with "Choose another system font before removing this one." Evidence and
+verified `SHA256SUMS` are on Beast at
+`/home/barry/astra-evidence/verify4-20261118/`. Board trial state was removed;
+Astra, audio and RFB are active, Astra `NRestarts=0`, 8.5 GiB free.
+ASTRA68-38 remains Verification for the full physical import/fault matrix.
+ASTRA68-64 remains Verification for preferred-handler removal/reinstall,
+failed auto-launch recovery and optical read-only opening; no optical drive is
+attached. ASTRA68-28 still needs delayed-I/O, network-loss/restart,
+different-export, stale-handle and shutdown proof. ASTRA68-10 still needs
+canonical immutable-release activation and optical gate; normal service paths
+still use `/var/lib/astra/dev/current`.
 
 SDL gamepad verification checkpoint, 2026-11-18: current-source Beast Input,
 System, SDL2 and image-provider tests pass. A disposable current-source QEMU
