@@ -162,6 +162,8 @@ static void check_render(void)
 
 int main(void)
 {
+    assert(strcmp(import_error(ASTRA_ERROR_NO_SPACE),
+                  "Font storage is full; free space and retry") == 0);
     AstraScrollModelInfo info = ASTRA_SCROLL_MODEL_INFO_INIT;
     static AstraCollectionItem rows[] = {
         {1u, "Regular 11 px", 13u, {0u, 0u}},

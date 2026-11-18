@@ -887,6 +887,8 @@ static const char *import_error(AstraResult result)
         result == ASTRA_ERROR_BUSY ? "Another import is active; finish it before trying again" :
         result == ASTRA_ERROR_NO_RESOURCES || result == ASTRA_ERROR_OUT_OF_MEMORY ?
             "Not enough memory or installed-font capacity; remove unused fonts and retry" :
+        result == ASTRA_ERROR_NO_SPACE ?
+            "Font storage is full; free space and retry" :
         result == ASTRA_ERROR_CANCELLED ? "Import cancelled; installed fonts unchanged" :
         result == ASTRA_ERROR_PEER_DEAD ? "Fonts service stopped; reopen Fonts after it restarts" :
         "Could not read or save font; check source file and system storage";

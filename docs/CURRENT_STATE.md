@@ -2,6 +2,25 @@
 
 Status: active continuation map, 2026-11-18
 
+ASTRA68-38 font qualification checkpoint, 2026-11-18: private DE25 release
+`545d72b7299acd5d74058120105bd5ccd65b893aa016ecb2738f380fb1af5418`
+passed physical USB exFAT four-face STIX import, live Fonts catalog, a full
+system-volume failure with specific no-space UI, subsequent delete/retry,
+startup rollback of four uncommitted AFNT objects, and preservation of a
+committed AFNT with a lingering pending marker. A selected USB source was
+unmounted before Fonts opened its file; UI reported read failure, retained
+existing font, and offline ext4 plus Config Kit inventory matched the
+pre-unmount state. `e2fsck -fn` passed for each inspected disposable image.
+Beast archive: `/home/barry/astra-evidence/font38-20261118/`. Selected release
+`a46dffcb6efa575f16f1ef074f8389f27c6f46faf1b58ca0aa9d335d48e3c6d1`
+and production user data remained untouched. The trial guard now binds private
+settings to its image path, preventing a mismatched HostFS fixture from
+booting. Host service tests and ASan/UBSan, Fonts UI tests, and NDK
+`dist-check` passed after the final changes. Current-source QEMU import gate
+passed native AFNT, idempotence, system selection, uninstall, restart and
+damaged-inventory fallback. Disposable board roots were archived and removed;
+8.5 GiB is free, all three production services are active with zero restarts.
+
 Plane ASTRA68-65 is Done after selected DE25 V1–V8 execution coverage. Glulx
 execution remains separate ASTRA68-70. Seven of original eleven Verification
 tickets are now Done (#8, #27, #32, #36, #46, #47, #65).

@@ -11,10 +11,12 @@ static uint32_t fail_port;
 static uint32_t peer_dead;
 static uint32_t notification_status;
 static uint32_t fail_allocate, fail_semaphore, fail_thread, fail_commit;
-static uint32_t fail_write, temporary_exists, temporary_removed;
+static uint32_t fail_write, temporary_exists, temporary_removed, directory_cursor;
+static uint32_t pending_exists, pending_removed;
 static uint32_t objects, removed, published, output_size, output_cursor;
 static uint8_t *output;
 static char object_path[ASTRA_VFS_PATH_MAX];
+static char temporary_token[ASTRA_FONT_OBJECT_TOKEN_SIZE];
 static AstraFontServiceReply last_reply;
 static uint8_t input[] = {0, 1, 0, 0};
 
@@ -133,6 +135,40 @@ uint32_t astra_filesystem_open(AstraFilesystem *fs, const char *path,
     assert(flags == ASTRA_VFS_OPEN_READ);
     return ASTRA_VFS_ERR_NOT_FOUND;
 }
+uint32_t astra_filesystem_directory_open(AstraFilesystem *fs,
+    const char *path, AstraDirectory *directory)
+{
+    (void)fs; (void)directory;
+    assert(strcmp(path, "/FONTS/installed") == 0);
+    directory_cursor = 0u;
+    return ASTRA_VFS_OK;
+}
+uint32_t astra_filesystem_directory_read(AstraDirectory *directory,
+    AstraDirectoryEntry *entries, uint32_t capacity, uint32_t *count)
+{
+    (void)directory;
+    assert(capacity == 4u);
+    *count = 0u;
+    while (directory_cursor < 3u) {
+        uint32_t item = directory_cursor++;
+        if ((item == 0u && !temporary_exists) ||
+            (item == 1u && !pending_exists) ||
+            (item == 2u && !objects)) continue;
+        memset(entries, 0, sizeof(*entries));
+        entries[0].kind = ASTRA_VFS_KIND_FILE;
+        assert(snprintf(entries[0].name, sizeof(entries[0].name), "%s",
+                        item == 2u ? object_path + sizeof("/FONTS/installed/") - 1u :
+                                     temporary_token) > 0);
+        if (item != 2u)
+            assert(strcat(entries[0].name, item == 0u ? ".tmp" : ".pending") ==
+                   entries[0].name);
+        *count = 1u;
+        break;
+    }
+    return ASTRA_VFS_OK;
+}
+void astra_filesystem_directory_close(AstraDirectory *directory)
+{ (void)directory; }
 uint32_t astra_filesystem_file_info(const AstraFile *file, AstraFileInfo *info)
 { (void)file; (void)info; abort(); }
 uint32_t astra_filesystem_read(AstraFile *file, void *bytes, uint32_t size, uint32_t *moved)
@@ -143,9 +179,12 @@ uint32_t astra_filesystem_open_mode(AstraFilesystem *fs, const char *path,
     (void)fs; (void)file;
     assert(mode == 0600u && flags == (ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
            ASTRA_VFS_OPEN_EXCLUSIVE));
-    assert(strstr(path, ".tmp") != NULL);
-    output_cursor = 0u;
-    temporary_exists = 1u;
+    if (strstr(path, ".pending") != NULL) pending_exists = 1u;
+    else {
+        assert(strstr(path, ".tmp") != NULL);
+        output_cursor = 0u;
+        temporary_exists = 1u;
+    }
     return ASTRA_VFS_OK;
 }
 uint32_t astra_filesystem_write(AstraFile *file, uint64_t maximum,
@@ -182,6 +221,11 @@ uint32_t astra_filesystem_unlink(AstraFilesystem *fs, const char *path, uint32_t
         temporary_exists = 0u; ++temporary_removed;
         return ASTRA_VFS_OK;
     }
+    if (strstr(path, ".pending") != NULL) {
+        if (!pending_exists) return ASTRA_VFS_ERR_NOT_FOUND;
+        pending_exists = 0u; ++pending_removed;
+        return ASTRA_VFS_OK;
+    }
     assert(objects && strcmp(path, object_path) == 0);
     objects = 0u; ++removed;
     return ASTRA_VFS_OK;
@@ -190,7 +234,8 @@ uint32_t astra_config_set_string(AstraConfig *store, const char *key,
     uint32_t index, const char *text)
 {
     assert(store == &config && strcmp(key, "installed") == 0 && index == 0u &&
-           text[0] != '\0' && !worker_alive);
+           !worker_alive);
+    assert(text[0] != '\0' || !inventory_present);
     ++published;
     return fail_commit ? ASTRA_CONFIG_IO : ASTRA_CONFIG_OK;
 }
@@ -218,10 +263,10 @@ static void reset(void)
     assert(importing.state == 0u && allocations == 0u && mapped == 0u && gates == 0u && sessions == 0u);
     installed_count = inventory_count = 0u;
     inventory_text[0] = '\0'; generation = 1u;
-    inventory_ready = config_ready = font_device = 1u;
+    inventory_ready = inventory_present = config_ready = font_device = 1u;
     released_source = replies = semaphores = worker_closed = reply_closed = 0u;
     fail_allocate = fail_semaphore = fail_thread = fail_commit = fail_write = 0u;
-    temporary_exists = temporary_removed = 0u;
+    temporary_exists = temporary_removed = pending_exists = pending_removed = 0u;
     fail_port = notifications = notifications_closed = peer_dead = 0u;
     notification_status = ASTRA_SYSCALL_OK;
     objects = removed = published = output_size = output_cursor = 0u;
@@ -257,6 +302,7 @@ int main(void)
     fixture = malloc(fixture_size); output = malloc(fixture_size);
     assert(fixture && output && fread(fixture, 1u, fixture_size, file) == fixture_size);
     assert(fclose(file) == 0);
+    astra_font_object_token(fixture, fixture_size, temporary_token);
     AstraFontServiceRequest value = request();
     reset();
     assert(begin_import(10u, 53u, 40u, &value) == ASTRA_STATUS_OK &&
@@ -267,11 +313,12 @@ int main(void)
     assert(begin_import(10u, 53u, 40u, &value) == ASTRA_STATUS_BUSY);
     face_ready(ASTRA_STATUS_OK, 1u);
     assert(installed_count == 0u && inventory_count == 0u && generation == 1u &&
-           objects == 1u && published == 0u && replies == 1u);
+           objects == 1u && pending_exists && published == 0u && replies == 1u);
     ended();
     assert(last_reply.import_state == ASTRA_FONT_IMPORT_SUCCEEDED && last_reply.header.transaction_id == 7u &&
            last_reply.imported_id[0] != '\0' && installed_count == 1u &&
            inventory_count == 1u && generation == 2u && published == 1u);
+    assert(!pending_exists);
 
     reset(); value = request();
     assert(begin_import(10u, 53u, 40u, &value) == ASTRA_STATUS_OK);
@@ -292,7 +339,7 @@ int main(void)
     face_ready(ASTRA_STATUS_OK, 1u);
     assert(importing.cancel && importing.result == ASTRA_STATUS_LIMIT &&
            output_cursor == fixture_size / 2u && temporary_removed == 1u &&
-           !temporary_exists && !objects && !published);
+           !temporary_exists && !pending_exists && !objects && !published);
     ended();
     assert(last_reply.import_state == ASTRA_FONT_IMPORT_FAILED &&
            last_reply.import_status == ASTRA_STATUS_LIMIT &&
@@ -349,7 +396,7 @@ int main(void)
     assert(begin_import(10u, 53u, 40u, &value) == ASTRA_STATUS_OK);
     face_ready(ASTRA_STATUS_OK, 1u); ended();
     assert(last_reply.import_status == ASTRA_STATUS_IO && !installed_count &&
-           objects == 1u && !removed && !inventory_ready);
+           objects == 1u && pending_exists && !removed && !inventory_ready);
     assert(begin_import(10u, 53u, 40u, &value) == ASTRA_STATUS_IO &&
            objects == 1u && published == 1u && !allocations);
 
@@ -368,6 +415,36 @@ int main(void)
     reset(); value = request(); font_device = 0u;
     assert(begin_import(10u, 53u, 40u, &value) == ASTRA_STATUS_UNSUPPORTED &&
            !allocations && !mapped && !released_source);
+    reset(); temporary_exists = 1u;
+    assert(clean_incomplete_objects() == ASTRA_VFS_OK &&
+           !temporary_exists && temporary_removed == 1u);
+    reset(); objects = 1u;
+    assert(snprintf(object_path, sizeof(object_path),
+                    "/FONTS/installed/%s.afnt", temporary_token) > 0);
+    inventory_count = 1u;
+    strcpy(inventory_tokens[0], temporary_token);
+    pending_exists = 1u;
+    assert(clean_incomplete_objects() == ASTRA_VFS_OK && objects && !removed &&
+           !pending_exists && pending_removed == 1u);
+    inventory_count = 0u;
+    assert(clean_incomplete_objects() == ASTRA_VFS_OK && objects && !removed);
+    pending_exists = 1u;
+    assert(clean_incomplete_objects() == ASTRA_VFS_OK && !objects && removed == 1u &&
+           !pending_exists && pending_removed == 2u);
+    reset(); objects = pending_exists = 1u; inventory_ready = 0u;
+    assert(snprintf(object_path, sizeof(object_path),
+                    "/FONTS/installed/%s.afnt", temporary_token) > 0);
+    assert(clean_incomplete_objects() == ASTRA_VFS_OK && objects && pending_exists);
+    inventory_ready = 1u; inventory_present = 0u;
+    assert(clean_incomplete_objects() == ASTRA_VFS_OK && objects && pending_exists);
+    reset(); inventory_present = 0u;
+    assert(begin_import(10u, 53u, 40u, &value) == ASTRA_STATUS_OK);
+    assert(inventory_present && published == 1u);
+    face_ready(ASTRA_STATUS_OK, 1u);
+    assert(inventory_present && pending_exists && published == 1u);
+    ended();
+    assert(last_reply.import_state == ASTRA_FONT_IMPORT_SUCCEEDED &&
+           !pending_exists && published == 2u);
     free(output); free(fixture);
     puts("font import coordinator ownership, publication and rollback passed");
     return 0;

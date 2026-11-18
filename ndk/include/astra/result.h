@@ -32,6 +32,7 @@ static inline const char *astra_result_text(AstraResult result)
     case ASTRA_ERROR_OUT_OF_MEMORY: return "Not enough memory";
     case ASTRA_ERROR_NAME_TOO_LONG: return "Name or path is too long";
     case ASTRA_ERROR_EXISTS: return "Item already exists";
+    case ASTRA_ERROR_NO_SPACE: return "Storage is full";
     default: return "Unknown error";
     }
 }
@@ -80,8 +81,8 @@ static inline AstraResult astra_result_from_service(uint32_t status)
     case ASTRA_STATUS_NOT_FOUND: return ASTRA_ERROR_INVALID_HANDLE;
     case ASTRA_STATUS_ACCESS:
     case ASTRA_STATUS_READ_ONLY: return ASTRA_ERROR_PERMISSION;
-    case ASTRA_STATUS_LIMIT:
-    case ASTRA_STATUS_NO_SPACE: return ASTRA_ERROR_NO_RESOURCES;
+    case ASTRA_STATUS_LIMIT: return ASTRA_ERROR_NO_RESOURCES;
+    case ASTRA_STATUS_NO_SPACE: return ASTRA_ERROR_NO_SPACE;
     case ASTRA_STATUS_UNSUPPORTED: return ASTRA_ERROR_UNSUPPORTED;
     case ASTRA_STATUS_BUSY: return ASTRA_ERROR_BUSY;
     case ASTRA_STATUS_EXISTS: return ASTRA_ERROR_EXISTS;
@@ -107,6 +108,7 @@ static inline uint32_t astra_status_from_result(AstraResult result)
     case ASTRA_ERROR_PERMISSION: return ASTRA_STATUS_ACCESS;
     case ASTRA_ERROR_NO_RESOURCES:
     case ASTRA_ERROR_OUT_OF_MEMORY: return ASTRA_STATUS_LIMIT;
+    case ASTRA_ERROR_NO_SPACE: return ASTRA_STATUS_NO_SPACE;
     case ASTRA_ERROR_INVALID_HANDLE: return ASTRA_STATUS_BAD_HANDLE;
     case ASTRA_ERROR_BUFFER_TOO_SMALL: return ASTRA_STATUS_BUFFER_TOO_SMALL;
     case ASTRA_ERROR_NAME_TOO_LONG: return ASTRA_STATUS_NAME_TOO_LONG;

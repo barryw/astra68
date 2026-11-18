@@ -82,7 +82,9 @@ enum {
     /** A complete pathname or filename exceeds the native naming limit. */
     ASTRA_ERROR_NAME_TOO_LONG = -17,
     /** An object already occupies the requested destination. */
-    ASTRA_ERROR_EXISTS = -18
+    ASTRA_ERROR_EXISTS = -18,
+    /** Destination storage has no space for the operation. */
+    ASTRA_ERROR_NO_SPACE = -19
 };
 
 /** Absolute signed monotonic deadline in nanoseconds. @since 0.1.0 */

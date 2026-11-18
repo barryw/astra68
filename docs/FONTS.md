@@ -8,6 +8,28 @@ This document defines the native font direction for Astra 68 and the boundary
 between font files, the font/display services, and Astraea. The graphical OS
 must not draw bitmap glyphs with CPU pixel loops.
 
+Qualification checkpoint, 2026-11-18: private DE25 release
+`545d72b7299acd5d74058120105bd5ccd65b893aa016ecb2738f380fb1af5418`
+imported all four STIX Two Text faces from a physical exFAT USB volume. Fonts
+listed the family and the committed store contained exactly four AFNT objects,
+with no temporary or pending object. A disposable full-disk trial reported
+"Font storage is full; free space and retry" and published no font. Native
+delete freed space; retry succeeded. Fault-injected reboot with four pending
+objects and an empty committed inventory removed all uncommitted objects;
+reboot with a pending marker on a committed face kept that face and cleared
+the marker. A later trial unmounted the selected USB source before Open:
+Fonts reported read failure, retained the previously installed family, and
+left the four-object store and Config Kit settings byte-for-byte unchanged.
+All inspected ext4 snapshots passed `e2fsck -fn`. The private-trial guard now
+binds its host settings state to one image path, preventing a mismatched
+fixture from booting. Beast evidence:
+`/home/barry/astra-evidence/font38-20261118/`. Selected DE25 user data and
+release were not changed. Haiku read-only references for this transaction:
+`src/servers/app/font/GlobalFontManager.cpp` for single catalog ownership and
+`src/add-ons/kernel/file_systems/ext2/kernel_interface.cpp` for durable
+filesystem mutation ordering; Astra keeps one native Config Kit inventory and
+uses per-object pending markers for crash recovery.
+
 Qualification checkpoint, 2026-11-17: current-source Beast host worker,
 TTF/OTF and Amiga-to-AFNT conversion, host invocation, and related
 ASan/UBSan gates pass. The QEMU outline probe imports Source Sans OTF,

@@ -43,7 +43,7 @@ def stored_objects(image, work):
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if result.returncode != 0 or "while " in result.stdout:
         raise RuntimeError("cannot inspect font store: " + result.stdout)
-    return re.findall(r"[a-z2-7]{52}\.(?:afnt|tmp)", result.stdout)
+    return re.findall(r"[a-z2-7]{52}\.(?:afnt|tmp|pending)", result.stdout)
 
 
 def font_syslog(machine):

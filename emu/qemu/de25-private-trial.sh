@@ -31,6 +31,21 @@ dropin=/run/systemd/system/astra.service.d/99-astra-private-trial.conf
 [ ! -e "$dropin" ] || { echo "private trial already configured" >&2; exit 2; }
 selected=$(readlink -f /var/lib/astra/current)
 python3 "$release/bin/astra-release.py" verify --installed "$release" >/dev/null
+binding=$trial_root/trial-image
+if [ -L "$binding" ]; then
+    echo "trial image binding must not be a symlink" >&2
+    exit 2
+elif [ -f "$binding" ]; then
+    [ "$(cat "$binding")" = "$image" ] || {
+        echo "trial state belongs to a different image" >&2
+        exit 2
+    }
+elif [ -e "$trial_root/state" ]; then
+    echo "trial state has no image binding" >&2
+    exit 2
+else
+    printf '%s\n' "$image" >"$binding"
+fi
 chmod 0711 "$trial_root"
 runuser -u astra -- test -r "$release/bin/astra-input-hotplug.py" || {
     echo "candidate release is not readable by Astra helpers" >&2

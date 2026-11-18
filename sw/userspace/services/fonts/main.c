@@ -57,6 +57,7 @@ static char inventory_text[FONT_INVENTORY_MAX];
 static char inventory_tokens[FONT_FACE_MAX][ASTRA_FONT_OBJECT_TOKEN_SIZE];
 static uint32_t inventory_count;
 static uint32_t inventory_ready;
+static uint32_t inventory_present;
 static uint32_t config_ready;
 static uint32_t font_device;
 
@@ -185,6 +186,75 @@ static uint32_t scan(const char *root, const char *prefix, uint32_t flags)
     return status;
 }
 
+static uint32_t sync_object_directory(void);
+
+static uint32_t clean_incomplete_objects(void)
+{
+    uint32_t status;
+    uint32_t removed;
+    uint32_t changed = 0u;
+    do {
+        AstraDirectory directory = ASTRA_DIRECTORY_INIT;
+        removed = 0u;
+        status = astra_filesystem_directory_open(&files.filesystem,
+                                                "/FONTS/installed", &directory);
+        if (status != ASTRA_VFS_OK) return status;
+        while (status == ASTRA_VFS_OK && !removed) {
+            AstraDirectoryEntry entries[4];
+            uint32_t count = 0u;
+            status = astra_filesystem_directory_read(&directory, entries, 4u,
+                                                     &count);
+            if (status != ASTRA_VFS_OK || count == 0u) break;
+            for (uint32_t at = 0u; at < count; ++at) {
+                const char *name = entries[at].name;
+                const char *end = memchr(name, '\0', sizeof(entries[at].name));
+                char path[ASTRA_VFS_PATH_MAX];
+                if (entries[at].kind != ASTRA_VFS_KIND_FILE || end == NULL ||
+                    (size_t)(end - name) < ASTRA_FONT_OBJECT_TOKEN_LENGTH ||
+                    !astra_font_object_token_valid(name,
+                                                   ASTRA_FONT_OBJECT_TOKEN_LENGTH))
+                    continue;
+                size_t length = (size_t)(end - name);
+                uint32_t temporary = length == ASTRA_FONT_OBJECT_TOKEN_LENGTH + 4u &&
+                    memcmp(name + ASTRA_FONT_OBJECT_TOKEN_LENGTH, ".tmp", 5u) == 0;
+                uint32_t pending = inventory_ready && inventory_present &&
+                    length == ASTRA_FONT_OBJECT_TOKEN_LENGTH + 8u &&
+                    memcmp(name + ASTRA_FONT_OBJECT_TOKEN_LENGTH,
+                           ".pending", 9u) == 0;
+                uint32_t referenced = 0u;
+                if (pending)
+                    for (uint32_t token = 0u; token < inventory_count; ++token)
+                        if (memcmp(inventory_tokens[token], name,
+                                   ASTRA_FONT_OBJECT_TOKEN_LENGTH) == 0) {
+                            referenced = 1u;
+                            break;
+                        }
+                if (!temporary && !pending) continue;
+                if (pending && !referenced) {
+                    if (snprintf(path, sizeof(path),
+                                 "/FONTS/installed/%.*s.afnt",
+                                 (int)ASTRA_FONT_OBJECT_TOKEN_LENGTH, name) >=
+                        (int)sizeof(path)) {
+                        status = ASTRA_VFS_ERR_LIMIT;
+                        break;
+                    }
+                    status = astra_filesystem_unlink(&files.filesystem, path, 0u);
+                    if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_NOT_FOUND)
+                        break;
+                    if (status == ASTRA_VFS_OK) changed = 1u;
+                }
+                if (snprintf(path, sizeof(path), "/FONTS/installed/%s", name) >=
+                    (int)sizeof(path)) { status = ASTRA_VFS_ERR_LIMIT; break; }
+                status = astra_filesystem_unlink(&files.filesystem, path, 0u);
+                if (status == ASTRA_VFS_OK) removed = changed = 1u;
+                break;
+            }
+        }
+        astra_filesystem_directory_close(&directory);
+    } while (status == ASTRA_VFS_OK && removed);
+    return status == ASTRA_VFS_OK && changed ? sync_object_directory() : status;
+}
+
 static uint32_t load_inventory(void)
 {
     uint32_t length = 0u, count = 0u, values = 0u;
@@ -192,6 +262,7 @@ static uint32_t load_inventory(void)
     if (result != ASTRA_CONFIG_OK || values > 1u)
         return ASTRA_VFS_ERR_INVALID;
     if (values == 0u) {
+        inventory_present = 0u;
         inventory_ready = 1u;
         return ASTRA_VFS_OK;
     }
@@ -218,6 +289,7 @@ static uint32_t load_inventory(void)
         if (status != ASTRA_VFS_OK) return status;
     }
     inventory_count = count;
+    inventory_present = 1u;
     inventory_ready = 1u;
     return ASTRA_VFS_OK;
 }
@@ -246,10 +318,23 @@ static uint32_t remove_object(const char *token)
     return sync_object_directory();
 }
 
+static uint32_t remove_pending(const char *token)
+{
+    char path[ASTRA_VFS_PATH_MAX];
+    if (snprintf(path, sizeof(path),
+                 "/FONTS/installed/%s.pending", token) >=
+        (int)sizeof(path)) return ASTRA_VFS_ERR_LIMIT;
+    uint32_t status = astra_filesystem_unlink(&files.filesystem, path, 0u);
+    if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_NOT_FOUND)
+        return status;
+    return sync_object_directory();
+}
+
 static uint32_t store_object(const char *token, const void *bytes,
                              uint32_t length, uint32_t *created)
 {
     char path[ASTRA_VFS_PATH_MAX], temporary[ASTRA_VFS_PATH_MAX];
+    char pending[ASTRA_VFS_PATH_MAX];
     AstraFile file = ASTRA_FILE_INIT;
     void *existing = NULL;
     uint32_t existing_length = 0u, used = 0u;
@@ -262,7 +347,10 @@ static uint32_t store_object(const char *token, const void *bytes,
             (int)sizeof(path) ||
         snprintf(temporary, sizeof(temporary),
                  "/FONTS/installed/%s.tmp", token) >=
-            (int)sizeof(temporary))
+            (int)sizeof(temporary) ||
+        snprintf(pending, sizeof(pending),
+                 "/FONTS/installed/%s.pending", token) >=
+            (int)sizeof(pending))
         return ASTRA_VFS_ERR_LIMIT;
     status = read_afnt(path, &existing, &existing_length);
     if (status == ASTRA_VFS_OK) {
@@ -273,9 +361,25 @@ static uint32_t store_object(const char *token, const void *bytes,
                                            ASTRA_VFS_ERR_INVALID;
     }
     if (status != ASTRA_VFS_ERR_NOT_FOUND) return status;
-    status = astra_filesystem_unlink(&files.filesystem, temporary, 0u);
+    status = astra_filesystem_unlink(&files.filesystem, pending, 0u);
     if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_NOT_FOUND)
         return status;
+    status = astra_filesystem_open_mode(
+        &files.filesystem, pending,
+        ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+            ASTRA_VFS_OPEN_EXCLUSIVE, 0600u, &file);
+    if (status != ASTRA_VFS_OK) return status;
+    status = astra_filesystem_sync(&file);
+    uint32_t closed = astra_filesystem_close(&file);
+    if (status == ASTRA_VFS_OK) status = closed;
+    if (status == ASTRA_VFS_OK) status = sync_object_directory();
+    if (status != ASTRA_VFS_OK) {
+        (void)remove_pending(token);
+        return status;
+    }
+    status = astra_filesystem_unlink(&files.filesystem, temporary, 0u);
+    if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_NOT_FOUND)
+        goto failed;
     status = astra_filesystem_open_mode(
         &files.filesystem, temporary,
         ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
@@ -299,12 +403,20 @@ static uint32_t store_object(const char *token, const void *bytes,
     if (status == ASTRA_VFS_OK)
         status = astra_filesystem_rename(&files.filesystem, temporary, path);
     if (status != ASTRA_VFS_OK) {
-        (void)astra_filesystem_unlink(&files.filesystem, temporary, 0u);
+failed:;
+        uint32_t cleaned = astra_filesystem_unlink(&files.filesystem,
+                                                  temporary, 0u);
+        if (cleaned != ASTRA_VFS_OK && cleaned != ASTRA_VFS_ERR_NOT_FOUND)
+            (void)astra_log_failure("fonts temporary cleanup", cleaned);
+        cleaned = remove_pending(token);
+        if (cleaned != ASTRA_VFS_OK)
+            (void)astra_log_failure("fonts pending cleanup", cleaned);
         return status;
     }
     status = sync_object_directory();
     if (status != ASTRA_VFS_OK) {
-        (void)remove_object(token);
+        if (remove_object(token) == ASTRA_VFS_OK)
+            (void)remove_pending(token);
         return status;
     }
     *created = 1u;
@@ -318,6 +430,8 @@ typedef struct FontImportStage {
     uint32_t count;
 } FontImportStage;
 
+static uint32_t persist_inventory(const char *manifest);
+
 static uint32_t rollback_import(const FontImportStage *stage)
 {
     uint32_t status = ASTRA_VFS_OK;
@@ -325,6 +439,8 @@ static uint32_t rollback_import(const FontImportStage *stage)
         if (!stage->created[at]) continue;
         uint32_t removed = remove_object(stage->tokens[at]);
         if (removed != ASTRA_VFS_OK) status = removed;
+        else if (remove_pending(stage->tokens[at]) != ASTRA_VFS_OK)
+            status = ASTRA_VFS_ERR_IO;
     }
     return status;
 }
@@ -384,6 +500,7 @@ static uint32_t persist_inventory(const char *manifest)
         inventory_ready = 0u;
         return ASTRA_STATUS_IO;
     }
+    inventory_present = 1u;
     return ASTRA_STATUS_OK;
 }
 
@@ -399,6 +516,10 @@ static uint32_t commit_import(FontImportStage *stage)
     inventory_count += stage->count;
     installed_count += stage->count;
     if (++generation == 0u) generation = 1u;
+    for (uint32_t at = 0u; at < stage->count; ++at)
+        if (stage->created[at] &&
+            remove_pending(stage->tokens[at]) != ASTRA_VFS_OK)
+            (void)astra_log_failure("fonts pending commit cleanup", ASTRA_VFS_ERR_IO);
     return ASTRA_STATUS_OK;
 }
 
@@ -676,6 +797,10 @@ static uint32_t begin_import(uint32_t area, uint32_t notification, uint32_t repl
     if (astra_rt_port_create(4u, 4u * sizeof(AstraFontServiceRequest),
             &importing.receive, &control) != ASTRA_SYSCALL_OK)
         goto failed;
+    if (!inventory_present && persist_inventory(inventory_text) != ASTRA_STATUS_OK) {
+        status = ASTRA_STATUS_IO;
+        goto failed;
+    }
     importing.state = ASTRA_FONT_IMPORT_RUNNING;
     if (request->source_size >= 4u && memcmp(importing.source, "AFNT", 4u) == 0) {
         (void)astra_close(area);
@@ -992,6 +1117,11 @@ int astra_main(const AstraStartupInfo *startup)
                                     "/FONTS/installed");
     if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS)
         (void)astra_log_failure("fonts installed directory", status);
+    if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
+        uint32_t cleaned = clean_incomplete_objects();
+        if (cleaned != ASTRA_VFS_OK)
+            (void)astra_log_failure("fonts temporary recovery", cleaned);
+    }
     uint32_t config_status =
         status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS ?
         astra_config_open_system(startup, &config_schema,
@@ -1007,6 +1137,10 @@ int astra_main(const AstraStartupInfo *startup)
         if (status != ASTRA_VFS_OK) {
             (void)astra_log_failure("fonts installed inventory", status);
             installed_count = system_count;
+        } else {
+            uint32_t cleaned = clean_incomplete_objects();
+            if (cleaned != ASTRA_VFS_OK)
+                (void)astra_log_failure("fonts orphan recovery", cleaned);
         }
         uint32_t choice_status = astra_config_get_string(
             &config, "system_font", 0u, wanted, sizeof(wanted), &length);
