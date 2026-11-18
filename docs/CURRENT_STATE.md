@@ -2,6 +2,26 @@
 
 Status: active continuation map, 2026-11-18
 
+Checkpoint paragraphs below preserve their original verification status; the
+newest checkpoint records current disposition.
+
+ASTRA68-38 exact-source qualification, 2026-11-18: immutable release
+`c7091cf8142dfe787d236384a0f883e0a7a19b7b334a02c184dff342c3ff7ff5`
+matches committed font-service source. A 600-second private DE25 stage-8
+trial passed physical exFAT STIX TTF import, four-face AFNT publication,
+catalog/detail/preview, live system-font adoption across Desktop and Atlas,
+and active-font removal refusal. Offline image has four AFNT objects, no
+temporary/pending objects, saved private Config Kit choice, and clean ext4.
+Current-source QEMU passed native AFNT duplicate, selection, uninstall,
+restart and damaged-inventory rescue. Prior format, worker-crash, cancel,
+disk-full, interrupted-import and removable-source trials cover remaining
+ASTRA68-38 cases; receipts and `CERTIFICATION_SHA256SUMS` are on Beast at
+`/home/barry/astra-evidence/font38-20261118/`. Private trial state was
+removed. Board has 8.5 GiB free; selected release is still
+`a46dffcb6efa575f16f1ef074f8389f27c6f46faf1b58ca0aa9d335d48e3c6d1`;
+Astra, audio and remote desktop are active with zero restarts. Canonical
+selected-release activation remains ASTRA68-10.
+
 ASTRA68-38 font qualification checkpoint, 2026-11-18: private DE25 release
 `545d72b7299acd5d74058120105bd5ccd65b893aa016ecb2738f380fb1af5418`
 passed physical USB exFAT four-face STIX import, live Fonts catalog, a full

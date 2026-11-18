@@ -8,6 +8,25 @@ This document defines the native font direction for Astra 68 and the boundary
 between font files, the font/display services, and Astraea. The graphical OS
 must not draw bitmap glyphs with CPU pixel loops.
 
+Final ASTRA68-38 qualification, 2026-11-18: immutable release
+`c7091cf8142dfe787d236384a0f883e0a7a19b7b334a02c184dff342c3ff7ff5`
+contains the committed font-service source hash and passed a 600-second
+physical DE25 trial. Native Fonts imported STIX Two Text TTF from USB exFAT,
+published four AFNT faces, listed and previewed them, applied a face as the
+system font live across Desktop and Atlas, and refused removal while active
+with an actionable message. Offline inspection found exactly four AFNT objects,
+no `.tmp` or `.pending` objects, the selected user face in private Config Kit,
+and a clean ext4 check. Current-source QEMU passed AFNT idempotence, choice,
+uninstall, restart and damaged-inventory rescue. Earlier QEMU/host format and
+fault gates plus the physical full-disk, crash-recovery and removable-source
+trials below complete the acceptance matrix. The trial restored the selected
+release and services; its image and logs were verified, archived on Beast at
+`/home/barry/astra-evidence/font38-20261118/` with
+`CERTIFICATION_SHA256SUMS`, and removed from the board. The selected runtime
+is still the prior release; canonical activation is ASTRA68-10. The observed
+four-face GUI import completed between two captures 123 seconds apart;
+performance qualification can use that coarse baseline after correctness.
+
 Qualification checkpoint, 2026-11-18: private DE25 release
 `545d72b7299acd5d74058120105bd5ccd65b893aa016ecb2738f380fb1af5418`
 imported all four STIX Two Text faces from a physical exFAT USB volume. Fonts
