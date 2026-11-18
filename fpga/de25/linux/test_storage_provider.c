@@ -1343,6 +1343,25 @@ static void network_mount(AstraStorageProvider *provider, const char *server,
     assert(pread(file, observed, sizeof(observed), 0) == sizeof(observed) &&
         memcmp(observed, expected, sizeof(observed)) == 0);
     close(file);
+    if (format == ASTRA_VOLUME_NFS) {
+        const char *unicode_name = "0Café.txt";
+        file = openat(root, unicode_name, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
+        assert(file >= 0 && write(file, "unicode", 7u) == 7 && fsync(file) == 0);
+        char unicode_bytes[7];
+        assert(pread(file, unicode_bytes, sizeof(unicode_bytes), 0) ==
+            sizeof(unicode_bytes) && memcmp(unicode_bytes, "unicode", 7u) == 0);
+        close(file);
+        assert(unlinkat(root, unicode_name, 0) == 0);
+        file = openat(root, "provider-denied", O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
+        assert(file >= 0 && fchmod(file, 0000) == 0);
+        close(file);
+        assert(openat(root, "provider-denied", O_RDONLY | O_CLOEXEC) < 0 &&
+            errno == EACCES);
+        assert(unlinkat(root, "provider-denied", 0) == 0);
+        struct statvfs capacity;
+        assert(fstatvfs(root, &capacity) == 0 && capacity.f_blocks > 0 &&
+            capacity.f_frsize > 0);
+    }
     close(root);
     assert(unmount_wait(provider, mount, 1u) == 0);
     assert(astra_storage_provider_release(provider, mount) == 0);

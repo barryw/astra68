@@ -65,8 +65,8 @@ STIX system-role frame is
 `2786d6b6b9b54fe12b877e08615f9aaff4f8de105d9f84d41d267d5ef74daf49`.
 Board trial files were removed; three selected services active, Astra
 `NRestarts=0`, 8.5 GiB free. ASTRA68-38 remains Verification for physical
-restart/rescue, removable-source loss and complete fault-case receipts;
-user HDMI feedback is pending.
+restart/rescue, removable-source loss and complete fault-case receipts.
+Barry missed the candidate boot, so HDMI sight/sound was not confirmed.
 
 AstraZ verification checkpoint, 2026-11-17: NAS Infocom collection has no
 V1/V2/V7 story after file-header scan. Authored 1,024-byte V1/V2 and
@@ -120,6 +120,16 @@ network-source retirement. Evidence:
 DE25 Astra, audio and RFB remain active, Astra NRestarts=0, 8.5 GiB free.
 The exact in-flight `fsync` network cut and remaining ASTRA68-28 matrix are
 still open.
+The 2026-11-17 Beast NFSv4 provider gate now also asserts Unicode filename
+create/read/unlink, server-enforced `EACCES` for a mode-000 file and nonzero
+`statvfs` capacity against a disposable, all-squashed NFSv4 export. Existing
+read/write/`fsync`/unmount/source-retirement assertions still pass. Receipt
+and eight-byte server proof are archived under
+`/home/barry/astra-evidence/nfs-fix-20261117/` as
+`provider-matrix-receipt.txt` (SHA-256
+`b97b01ab981853ee26c9f91bab2b80666bb913c232f32c9c8bed308b091ab797`)
+and `provider-matrix-rw-proof`. Export was removed after test. DE25 checks and
+outage/restart/different-export/shutdown gates remain open.
 
 Physical USB ASTRA68-8 is Done. On the selected DE25 development
 runtime, a guarded usb-storage unbind/rebind of the disposable SanDisk Cruzer
