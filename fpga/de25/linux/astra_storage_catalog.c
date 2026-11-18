@@ -667,8 +667,8 @@ int astra_storage_mount_result(AstraStorageCatalog *catalog, uint64_t mount,
     return record->error;
 }
 
-int astra_storage_quiesce(AstraStorageCatalog *catalog, uint64_t mount,
-                          uint64_t generation)
+static int quiesce(AstraStorageCatalog *catalog, uint64_t mount,
+                   uint64_t generation, int shutdown)
 {
     AstraStorageRecord *record;
 
@@ -679,13 +679,26 @@ int astra_storage_quiesce(AstraStorageCatalog *catalog, uint64_t mount,
         return ESTALE;
     if (record->kind != ASTRA_VOLUME_MOUNT)
         return EINVAL;
-    if ((record->flags & (ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_TEMPORARY)) != 0u)
+    if (!shutdown &&
+        (record->flags & (ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_TEMPORARY)) != 0u)
         return EPERM;
     if (record->state != ASTRA_VOLUME_MOUNTED)
         return EBUSY;
     record->state = ASTRA_VOLUME_QUIESCING;
     record->error = 0;
     return changed(catalog);
+}
+
+int astra_storage_quiesce(AstraStorageCatalog *catalog, uint64_t mount,
+                          uint64_t generation)
+{
+    return quiesce(catalog, mount, generation, 0);
+}
+
+int astra_storage_quiesce_shutdown(AstraStorageCatalog *catalog, uint64_t mount,
+                                   uint64_t generation)
+{
+    return quiesce(catalog, mount, generation, 1);
 }
 
 int astra_storage_unmount_result(AstraStorageCatalog *catalog, uint64_t mount,

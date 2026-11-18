@@ -19,6 +19,28 @@ static uint64_t source(AstraStorageCatalog *catalog, uint32_t class_id,
     return result;
 }
 
+static void protected_shutdown_quiesce(void)
+{
+    AstraStorageCatalog catalog;
+    uint64_t disk, mount, ram;
+    assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
+    disk = source(&catalog, ASTRA_VOLUME_FIXED, ASTRA_VOLUME_EXT4, "system", "DH0");
+    assert(astra_storage_mount_begin(&catalog, disk, 1u, ASTRA_VOLUME_SYSTEM,
+        0u, 0u, UINT32_MAX, &mount) == 0);
+    assert(astra_storage_mount_result(&catalog, mount, 1u, 1u, 0) == 0);
+    assert(astra_storage_quiesce(&catalog, mount, 1u) == EPERM);
+    assert(astra_storage_quiesce_shutdown(&catalog, mount, 2u) == ESTALE);
+    assert(astra_storage_quiesce_shutdown(&catalog, mount, 1u) == 0);
+    assert(astra_storage_unmount_result(&catalog, mount, 1u, 0, 0, 0) == 0);
+    assert(astra_storage_ram_source(&catalog, 0u, &ram) == 0);
+    assert(astra_storage_mount_begin(&catalog, ram, 1u, ASTRA_VOLUME_TEMPORARY,
+        4096u, 16u, UINT32_MAX, &mount) == 0);
+    assert(astra_storage_mount_result(&catalog, mount, 1u, 2u, 0) == 0);
+    assert(astra_storage_quiesce(&catalog, mount, 1u) == EPERM);
+    assert(astra_storage_quiesce_shutdown(&catalog, mount, 1u) == 0);
+    astra_storage_catalog_destroy(&catalog);
+}
+
 static void lifecycle(void)
 {
     AstraStorageCatalog catalog;
@@ -768,6 +790,7 @@ static void partition_lifecycle(void)
 
 int main(void)
 {
+    protected_shutdown_quiesce();
     lifecycle();
     loss_and_stale_completion();
     policy_and_metadata();

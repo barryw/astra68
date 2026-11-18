@@ -27,10 +27,12 @@
 #include <unistd.h>
 
 static int reject_syncfs;
+static unsigned *syncfs_calls;
 int __real_syncfs(int fd);
 
 int __wrap_syncfs(int fd)
 {
+    __atomic_fetch_add(syncfs_calls, 1u, __ATOMIC_RELAXED);
     if (reject_syncfs) {
         errno = EIO;
         return -1;
@@ -1588,8 +1590,82 @@ static void external_changes(AstraStorageProvider *provider, int root, uint64_t 
     if (!native) provider->watch_fd = fid;
 }
 
+static void shutdown_flushes_protected_mount(uid_t uid, gid_t gid, const char *iso_path)
+{
+    AstraStorageProvider provider = ASTRA_STORAGE_PROVIDER_INIT;
+    AstraStorageDomain domain = {.directory = -1};
+    uint64_t source, mount, image_source, image_mount;
+    int root, file, result = EAGAIN;
+    assert(astra_storage_domain_open(&domain, uid, gid) == 0);
+    assert(astra_storage_provider_open(&provider, &domain, 1u << 20, 1u << 20,
+        1u, 5000u, 2u, 8u << 20, 64u) == 0);
+    assert(astra_storage_ram_source(&provider.catalog, 0u, &source) == 0);
+    assert(mount_wait(&provider, source, 1u, ASTRA_VOLUME_TEMPORARY,
+        8u << 20, 16u, &mount) == 0);
+    assert(astra_storage_provider_unmount(&provider, mount, 1u) == EPERM);
+    assert(astra_storage_provider_root(&provider, mount, 1u, &root) == 0);
+    file = openat(root, "shutdown-flush", O_CREAT | O_WRONLY | O_CLOEXEC, 0600);
+    assert(file >= 0 && write(file, "saved", 5u) == 5);
+    close(file);
+    int input = open(iso_path, O_RDONLY | O_CLOEXEC);
+    assert(input >= 0);
+    file = openat(root, "nested.iso", O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+    assert(file >= 0);
+    char bytes[16384];
+    ssize_t count;
+    while ((count = read(input, bytes, sizeof(bytes))) > 0)
+        assert(write(file, bytes, (size_t)count) == count);
+    assert(count == 0);
+    close(input);
+    close(file);
+    file = openat(root, "nested.iso", O_RDONLY | O_CLOEXEC);
+    struct stat image_info;
+    assert(file >= 0 && fstat(file, &image_info) == 0);
+    assert(astra_storage_provider_image(&provider, mount, 1u,
+        (uint64_t)image_info.st_ino, file, &image_source) == 0);
+    close(file);
+    poll_probes(&provider);
+    assert(mount_wait(&provider, image_source, 1u, ASTRA_VOLUME_READ_ONLY,
+        0u, 0u, &image_mount) == 0);
+    close(root);
+    for (unsigned at = 0u; at < 10000u &&
+         astra_storage_find(&provider.catalog, image_source) != NULL; ++at) {
+        assert(astra_storage_provider_shutdown(&provider) == EAGAIN);
+        usleep(1000);
+    }
+    assert(astra_storage_find(&provider.catalog, image_source) == NULL);
+    assert(astra_storage_find(&provider.catalog, image_mount) == NULL);
+    assert(astra_storage_find(&provider.catalog, mount)->state == ASTRA_VOLUME_MOUNTED);
+    reject_syncfs = 1;
+    assert(astra_storage_provider_shutdown(&provider) == EAGAIN);
+    wait_work(&provider);
+    assert(astra_storage_find(&provider.catalog, mount)->state == ASTRA_VOLUME_MOUNTED);
+    assert(astra_storage_provider_root(&provider, mount, 1u, &root) == 0);
+    close(root);
+    reject_syncfs = 0;
+    unsigned before = __atomic_load_n(syncfs_calls, __ATOMIC_RELAXED);
+    for (unsigned at = 0u; at < 10000u && result == EAGAIN; ++at) {
+        result = astra_storage_provider_shutdown(&provider);
+        if (result == EAGAIN) usleep(1000);
+    }
+    assert(result == 0);
+    assert(__atomic_load_n(syncfs_calls, __ATOMIC_RELAXED) > before);
+}
+
 int main(int argc, char **argv)
 {
+    syncfs_calls = mmap(NULL, sizeof(*syncfs_calls), PROT_READ | PROT_WRITE,
+        MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    assert(syncfs_calls != MAP_FAILED);
+    if (argc == 5 && strcmp(argv[1], "--shutdown-only") == 0) {
+        assert(geteuid() == 0);
+        shutdown_flushes_protected_mount(
+            (uid_t)strtoul(argv[2], NULL, 10),
+            (gid_t)strtoul(argv[3], NULL, 10), argv[4]);
+        assert(munmap(syncfs_calls, sizeof(*syncfs_calls)) == 0);
+        puts("storage provider: protected shutdown, nested image, sync failure/retry PASS");
+        return 0;
+    }
     AstraStorageProvider provider = ASTRA_STORAGE_PROVIDER_INIT;
     uint64_t bindings[18], image_binding;
     char path[] = "/var/tmp/astra-storage-provider-test.XXXXXX";
@@ -1745,6 +1821,8 @@ int main(int argc, char **argv)
     }
     assert(provider.resource_bytes == 0u && provider.catalog.bytes == 0u && provider.probes == 0u);
     assert(astra_storage_provider_close(&provider) == 0);
+    shutdown_flushes_protected_mount(uid, gid, argv[1]);
+    assert(munmap(syncfs_calls, sizeof(*syncfs_calls)) == 0);
     puts(argc == 10 ?
         "storage provider: USB FAT12/16 ISO/UDF NTFS read-only, FAT32/exFAT durable read/write, catalog/root/path and cleanup PASS" :
         "storage provider: USB FAT12/16 ISO/UDF NTFS read-only, FAT32 durable read/write, catalog/root/path and cleanup PASS");

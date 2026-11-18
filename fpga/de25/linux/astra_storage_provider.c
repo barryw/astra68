@@ -2080,8 +2080,8 @@ int astra_storage_provider_serve(AstraStorageProvider *provider, int control,
     return error;
 }
 
-int astra_storage_provider_unmount(AstraStorageProvider *provider, uint64_t mount,
-                                    uint64_t generation)
+static int unmount_volume(AstraStorageProvider *provider, uint64_t mount,
+                          uint64_t generation, int shutdown)
 {
     const AstraStorageRecord *record = astra_storage_find(&provider->catalog, mount);
     AstraStorageResource *entry = resource(provider, mount);
@@ -2111,7 +2111,9 @@ int astra_storage_provider_unmount(AstraStorageProvider *provider, uint64_t moun
         after = next;
     } while (next != 0u);
     if (record->state == ASTRA_VOLUME_MOUNTED) {
-        error = astra_storage_quiesce(&provider->catalog, mount, generation);
+        error = shutdown ?
+            astra_storage_quiesce_shutdown(&provider->catalog, mount, generation) :
+            astra_storage_quiesce(&provider->catalog, mount, generation);
         if (error != 0)
             return error;
     }
@@ -2137,6 +2139,12 @@ int astra_storage_provider_unmount(AstraStorageProvider *provider, uint64_t moun
     }
     ++provider->workers;
     return 0;
+}
+
+int astra_storage_provider_unmount(AstraStorageProvider *provider, uint64_t mount,
+                                    uint64_t generation)
+{
+    return unmount_volume(provider, mount, generation, 0);
 }
 
 int astra_storage_provider_backing(AstraStorageProvider *provider, uint64_t source,
@@ -2435,11 +2443,51 @@ int astra_storage_provider_shutdown(AstraStorageProvider *provider)
     AstraStorageRecord page[ASTRA_STORAGE_PROVIDER_PAGE];
     uint64_t sequence = 0u, after = 0u, next, current;
     size_t count;
-    int error;
+    int error, pending = 0;
     for (AstraStorageResource *entry = provider->resources; entry != NULL; entry = entry->next) {
         entry->path_socket = -1;
         if (entry->work.pid != 0 && entry->work.operation == ASTRA_STORAGE_WORK_PATH)
             astra_storage_work_cancel(&entry->work);
+    }
+    /* Peer is gone: cleanly unmount local volumes before source loss.
+     * Network mounts retain bounded loss teardown when servers are down. */
+    do {
+        error = astra_storage_snapshot(&provider->catalog, sequence, after, page,
+            ASTRA_STORAGE_PROVIDER_PAGE, &count, &next, &current);
+        if (error != 0) return error;
+        for (size_t at = 0u; at < count; ++at) {
+            const AstraStorageRecord *record = &page[at];
+            AstraStorageResource *entry = resource(provider, record->id);
+            if (record->kind == ASTRA_VOLUME_MOUNT &&
+                record->origin != ASTRA_VOLUME_ORIGIN_NETWORK) {
+                if (record->state == ASTRA_VOLUME_MOUNTED ||
+                    (record->state == ASTRA_VOLUME_FAILED && entry != NULL &&
+                     entry->mounted.attached)) {
+                    error = unmount_volume(provider, record->id,
+                        record->generation, 1);
+                    if (error != 0 && error != EAGAIN && error != EBUSY)
+                        return error;
+                    pending = 1;
+                } else if (record->state == ASTRA_VOLUME_MOUNTING ||
+                           record->state == ASTRA_VOLUME_QUIESCING)
+                    pending = 1;
+            } else if (record->kind == ASTRA_VOLUME_SOURCE &&
+                       record->origin == ASTRA_VOLUME_ORIGIN_IMAGE &&
+                       record->parent != 0u && record->state != ASTRA_VOLUME_LOST) {
+                error = astra_storage_provider_release_image(provider,
+                    record->id, record->generation);
+                if (error != 0 && error != EBUSY && error != EAGAIN)
+                    return error;
+                pending = 1;
+            }
+        }
+        after = next;
+        sequence = provider->catalog.sequence;
+    } while (next != 0u);
+    if (pending) {
+        if (astra_storage_provider_poll(provider) < 0) return EIO;
+        error = astra_storage_provider_reap(provider);
+        return error == 0 || error == EAGAIN ? EAGAIN : error;
     }
     /* Retire every root observation once; children advance through that loss. */
     do {

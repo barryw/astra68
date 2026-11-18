@@ -187,6 +187,21 @@ sectors and RFB observations are archived under
 disposable test media, not the production image. The cause of the interrupted
 trial's dirty flag remains a release investigation, not a closed durability
 claim.
+The shutdown path caused this: `astra_storage_provider_shutdown()` marked
+every source lost before unmounting, so the detach worker skipped `syncfs` for
+writable local mounts. The corrected provider first uses its existing normal
+unmount worker for local mounts, including protected system and temporary
+volumes, and retires nested image sources before their parent mounts. A failed
+`syncfs` retains the mount for retry instead of silently declaring it lost.
+Network mounts keep their existing bounded loss teardown during server outage;
+that behavior needs its own NFS/SMB shutdown qualification. Haiku read-only
+reference: `src/add-ons/kernel/file_systems/exfat/kernel_interface.cpp`
+calls `Volume::Unmount`, which flushes the writable block cache in
+`src/add-ons/kernel/file_systems/exfat/Volume.cpp` before closing the device.
+Beast catalog, provider FAT/ISO and exFAT gates pass. The same AArch64 provider
+test passed on DE25 with a protected writable RAM mount, nested ISO, injected
+`syncfs` failure and successful retry; normal Astra/audio/RFB stayed active.
+Actual DE25 exFAT media after an Astra service stop remains to be checked.
 
 Physical DE25 power-loss durability gate is complete.
 The Linux-owned storage cut matrix now passes on Beast: clean baseline, nine

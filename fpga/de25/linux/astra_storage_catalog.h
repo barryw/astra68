@@ -79,6 +79,8 @@ int astra_storage_mount_result(AstraStorageCatalog *catalog, uint64_t mount,
                                int error);
 int astra_storage_quiesce(AstraStorageCatalog *catalog, uint64_t mount,
                           uint64_t generation);
+int astra_storage_quiesce_shutdown(AstraStorageCatalog *catalog, uint64_t mount,
+                                   uint64_t generation);
 /* Eject fences a physical optical source after every mount actually retired.
  * Failed ioctl restores admission; success retires the whole inserted medium. */
 int astra_storage_eject_begin(AstraStorageCatalog *catalog, uint64_t source,
