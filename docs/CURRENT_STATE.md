@@ -40,6 +40,11 @@ the native import fails without changing the catalog or leaving AFNT objects.
 QEMU Fonts GUI also passes complete 32 KiB multilingual license Text View,
 valid unpreviewable AFNT details and removal, and the longest accepted
 127-character style name with selection, restoration and uninstall.
+The Fonts service host test now injects a partial AFNT write followed by
+`ASTRA_VFS_ERR_LIMIT`, exercising disk-full cleanup: the temporary object is
+removed, no catalog entry is published, and the import reports failure.
+Normal and ASan/UBSan service suites pass on Beast. The physical full-disk
+case remains open.
 
 AstraZ verification checkpoint, 2026-11-17: NAS Infocom collection has no
 V1/V2/V7 story after file-header scan. Authored 1,024-byte V1/V2 and

@@ -39,6 +39,10 @@ confirms the failed import leaves the native catalog and AFNT store unchanged.
 The same GUI gate passes 32 KiB multilingual license text, scroll/select/copy,
 an unpreviewable AFNT with usable details and removal, and a 127-character
 style name with live choice, restoration and uninstall.
+The service host gate injects disk exhaustion after half an AFNT write and
+checks temporary-object removal, failed import status and unchanged catalog;
+normal and ASan/UBSan suites pass. This does not replace the physical
+full-disk trial.
 
 ## 1. Locked architecture
 

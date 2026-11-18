@@ -11,6 +11,7 @@ static uint32_t fail_port;
 static uint32_t peer_dead;
 static uint32_t notification_status;
 static uint32_t fail_allocate, fail_semaphore, fail_thread, fail_commit;
+static uint32_t fail_write, temporary_exists, temporary_removed;
 static uint32_t objects, removed, published, output_size, output_cursor;
 static uint8_t *output;
 static char object_path[ASTRA_VFS_PATH_MAX];
@@ -144,6 +145,7 @@ uint32_t astra_filesystem_open_mode(AstraFilesystem *fs, const char *path,
            ASTRA_VFS_OPEN_EXCLUSIVE));
     assert(strstr(path, ".tmp") != NULL);
     output_cursor = 0u;
+    temporary_exists = 1u;
     return ASTRA_VFS_OK;
 }
 uint32_t astra_filesystem_write(AstraFile *file, uint64_t maximum,
@@ -151,6 +153,11 @@ uint32_t astra_filesystem_write(AstraFile *file, uint64_t maximum,
 {
     (void)file;
     assert(maximum == fixture_size && size <= fixture_size - output_cursor);
+    if (fail_write && output_cursor != 0u) {
+        *moved = 0u;
+        return ASTRA_VFS_ERR_LIMIT;
+    }
+    if (fail_write) size /= 2u;
     memcpy(output + output_cursor, bytes, size); output_cursor += size; *moved = size;
     return ASTRA_VFS_OK;
 }
@@ -161,14 +168,20 @@ uint32_t astra_filesystem_close(AstraFile *file)
 uint32_t astra_filesystem_rename(AstraFilesystem *fs, const char *from, const char *to)
 {
     (void)fs; (void)from;
-    assert(output_cursor == fixture_size && memcmp(output, fixture, fixture_size) == 0);
+    assert(temporary_exists && output_cursor == fixture_size &&
+           memcmp(output, fixture, fixture_size) == 0);
+    temporary_exists = 0u;
     strcpy(object_path, to); objects = 1u; output_size = output_cursor;
     return ASTRA_VFS_OK;
 }
 uint32_t astra_filesystem_unlink(AstraFilesystem *fs, const char *path, uint32_t flags)
 {
     (void)fs; assert(flags == 0u);
-    if (strstr(path, ".tmp") != NULL) return ASTRA_VFS_ERR_NOT_FOUND;
+    if (strstr(path, ".tmp") != NULL) {
+        if (!temporary_exists) return ASTRA_VFS_ERR_NOT_FOUND;
+        temporary_exists = 0u; ++temporary_removed;
+        return ASTRA_VFS_OK;
+    }
     assert(objects && strcmp(path, object_path) == 0);
     objects = 0u; ++removed;
     return ASTRA_VFS_OK;
@@ -207,7 +220,8 @@ static void reset(void)
     inventory_text[0] = '\0'; generation = 1u;
     inventory_ready = config_ready = font_device = 1u;
     released_source = replies = semaphores = worker_closed = reply_closed = 0u;
-    fail_allocate = fail_semaphore = fail_thread = fail_commit = 0u;
+    fail_allocate = fail_semaphore = fail_thread = fail_commit = fail_write = 0u;
+    temporary_exists = temporary_removed = 0u;
     fail_port = notifications = notifications_closed = peer_dead = 0u;
     notification_status = ASTRA_SYSCALL_OK;
     objects = removed = published = output_size = output_cursor = 0u;
@@ -272,6 +286,17 @@ int main(void)
     assert(begin_import(10u, 53u, 40u, &value) == ASTRA_STATUS_OK);
     ended();
     assert(last_reply.import_status == ASTRA_STATUS_IO && !published);
+
+    reset(); fail_write = 1u;
+    assert(begin_import(10u, 53u, 40u, &value) == ASTRA_STATUS_OK);
+    face_ready(ASTRA_STATUS_OK, 1u);
+    assert(importing.cancel && importing.result == ASTRA_STATUS_LIMIT &&
+           output_cursor == fixture_size / 2u && temporary_removed == 1u &&
+           !temporary_exists && !objects && !published);
+    ended();
+    assert(last_reply.import_state == ASTRA_FONT_IMPORT_FAILED &&
+           last_reply.import_status == ASTRA_STATUS_LIMIT &&
+           !installed_count && !inventory_count && !objects && !published);
 
     for (uint32_t staged = 0u; staged < 2u; ++staged) {
         reset();
