@@ -51,6 +51,13 @@ Current-source DE25 Fonts checkpoint, 2026-11-17: immutable release
 from `c4ef768a` passed two 600-second guarded private trials with stage 8,
 no panic and restoration of selected release
 `a46dffcb6efa575f16f1ef074f8389f27c6f46faf1b58ca0aa9d335d48e3c6d1`.
+The immutable `/var/lib/astra/current` selector remains there, but normal
+`astra.service`, audio, and RFB unit `ExecStart` paths use
+`/var/lib/astra/dev/current` (`37c0383b6c6c03ae5fedbc8722c92c328d47311300d5ce2615466cc3c76df28c`).
+Private-trial restore returned those normal development services; it did not
+activate the new immutable release or switch normal runtime to the immutable
+selector. ASTRA68-10 must reconcile actual service paths before claiming
+canonical production activation.
 Native Fonts GUI imported STIX Two Text variable TTF (four faces) and Source
 Sans 3 OTF from disposable DH0; both appeared in its family list. STIX marked
 its styles system-eligible; selecting one changed desktop/menu text live and
@@ -169,6 +176,17 @@ clean offline FAT32/exFAT image checks. Beast evidence
 `d1983651b847d7d15b67d7eb704da71b4a92a85a055b30e32cf01b1ef633e2fe`)
 retains binary, fixtures and output. No extra loop device or board stage
 remains. DVD and F310 physical gates await reconnection.
+During the third private trial's return to normal services, Linux warned that
+the disposable SanDisk exFAT partition `/dev/sda1` had not been cleanly
+unmounted. Native `unmount /usb0` succeeded, and offline exfatprogs 1.4.3
+found 5 directories and 2 files with no structural errors, but the exFAT
+dirty flag was still `0x0002`. Offline `fsck.exfat -p` cleared it to `0x0000`;
+native `mount 12` restored `/usb0` without a new warning. The first 24 boot
+sectors and RFB observations are archived under
+`/home/barry/astra-evidence/verification11-20261117/` on Beast. This was
+disposable test media, not the production image. The cause of the interrupted
+trial's dirty flag remains a release investigation, not a closed durability
+claim.
 
 Physical DE25 power-loss durability gate is complete.
 The Linux-owned storage cut matrix now passes on Beast: clean baseline, nine
