@@ -3,8 +3,23 @@
 Status: active continuation map, 2026-11-17
 
 Plane ASTRA68-65 is Done after selected DE25 V1–V8 execution coverage. Glulx
-execution remains separate ASTRA68-70. Six of original eleven Verification
-tickets are now Done (#8, #27, #32, #36, #47, #65).
+execution remains separate ASTRA68-70. Seven of original eleven Verification
+tickets are now Done (#8, #27, #32, #36, #46, #47, #65).
+
+SDL gamepad verification checkpoint, 2026-11-18: current-source Beast Input,
+System, SDL2 and image-provider tests pass. A disposable current-source QEMU
+image boots an SDL probe with joystick and controller subsystems enabled,
+asserts zero physical devices, attaches/detaches a virtual controller, presents
+a window and exits zero. The selected DE25 development runtime has matching
+gamepad/SDL source; SDLTestKeys logged all 512 scancode names with no dropped
+lines, and SDLTestMouse launched and closed without a service restart. RFB
+showed a blank mouse-test client after a drag, so its drawn pixels are not
+qualified from that capture. The 2026-10-26 physical F310 button, axis and
+hotplug evidence remains valid for unchanged gamepad and SDL joystick source;
+no repeat F310 hookup is needed for this checkpoint. Beast archive:
+`/home/barry/astra-evidence/gamepad-regression-20261118/`. ASTRA68-46 is Done
+for the selected development runtime and unchanged physical gamepad path.
+Immutable-release deployment and its input regression remain ASTRA68-10 gates.
 
 Font qualification checkpoint, 2026-11-17: Beast host worker, TTF/OTF and
 Amiga-to-AFNT conversion, host invocation, and ASan/UBSan worker/converter/

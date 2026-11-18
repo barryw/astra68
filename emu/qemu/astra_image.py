@@ -849,7 +849,7 @@ def install_test_app(image, bundle):
         startup = os.path.join(temporary, "startup-manifest")
         with open(startup, "w", encoding="ascii", newline="\n") as handle:
             handle.write(DISPLAY_STARTUP_MANIFEST +
-                         "application %s grants %s\n" %
+                         "trusted %s grants %s\n" %
                          (target, test_app_grants(bundle)))
         _debugfs(volume, "rm /startup/system", "old test startup manifest",
                  optional=True)

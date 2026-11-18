@@ -235,9 +235,9 @@ with open(os.path.join(astra_image.REPOSITORY,
                        "sw/userspace/kits/Runtime.kit/manifest"),
           encoding="ascii") as manifest:
     runtime_manifest = manifest.read()
-    assert "version 3.0.0\n" in runtime_manifest
-    assert "provides runtime.library 3 3.0.0\n" in runtime_manifest
-    assert "provides system.library 4 4.7.0\n" in runtime_manifest
+    assert "version 3.1.0\n" in runtime_manifest
+    assert "provides runtime.library 3 3.1.0\n" in runtime_manifest
+    assert "provides system.library 4 4.8.0\n" in runtime_manifest
     assert "version 1.6.0\n" not in runtime_manifest
     assert "provides runtime.library 1 1.6.0\n" not in runtime_manifest
 with open(os.path.join(astra_image.REPOSITORY,

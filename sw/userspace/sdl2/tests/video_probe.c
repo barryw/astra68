@@ -2,6 +2,7 @@
 #include <astra/runtime.h>
 
 #include <stdio.h>
+#include <string.h>
 
 /* Palette expansion into 32-bit pixels against the palette itself: every
  * index, widths with each remainder, and a sub-rectangle so both surfaces
@@ -61,7 +62,7 @@ static int blit_index8_matches(void)
     return ok;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     SDL_Window *window;
     SDL_Surface *surface;
@@ -76,6 +77,12 @@ int main(void)
         (void)astra_log("SDL_VIDEO_INIT_FAIL");
         printf("SDL_VIDEO_INIT_FAIL %s\n", SDL_GetError());
         return 1;
+    }
+    if (argc > 1 && strcmp(argv[1], "--expect-no-physical") == 0 &&
+        SDL_NumJoysticks() != 0) {
+        (void)astra_log("SDL_PHANTOM_GAMEPAD");
+        SDL_Quit();
+        return 7;
     }
     for (int index = 0; index < SDL_NumJoysticks(); ++index) {
         SDL_JoystickGUID guid = SDL_JoystickGetDeviceGUID(index);
