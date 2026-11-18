@@ -37,6 +37,9 @@ probe did not reach the intended import limit: its 11 MB source exceeded the
 probe's available read allocation, so that gate remains unqualified.
 An additional current-source QEMU gate makes the HPS converter exit 42;
 the native import fails without changing the catalog or leaving AFNT objects.
+QEMU Fonts GUI also passes complete 32 KiB multilingual license Text View,
+valid unpreviewable AFNT details and removal, and the longest accepted
+127-character style name with selection, restoration and uninstall.
 
 AstraZ verification checkpoint, 2026-11-17: NAS Infocom collection has no
 V1/V2/V7 story after file-header scan. Authored 1,024-byte V1/V2 and

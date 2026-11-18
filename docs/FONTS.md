@@ -36,6 +36,9 @@ source exhausted the probe's read allocation before import began, so that
 attempt does not count as a successful size-limit gate.
 A separate current-source QEMU probe forces the HPS worker to exit 42 and
 confirms the failed import leaves the native catalog and AFNT store unchanged.
+The same GUI gate passes 32 KiB multilingual license text, scroll/select/copy,
+an unpreviewable AFNT with usable details and removal, and a 127-character
+style name with live choice, restoration and uninstall.
 
 ## 1. Locked architecture
 
