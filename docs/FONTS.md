@@ -15,8 +15,8 @@ renders it through the named hardware path, selects it as system font and
 passes restart. This restart test requires a root observer with an explicit
 non-root QEMU UID/GID so its private Config Kit store persists across boots.
 The non-root helper creates a fresh private store each run; using it for this
-restart gate loses migrated HostFS settings. Physical DE25 and remaining fault
-matrix for ASTRA68-38 are still open.
+restart gate loses migrated HostFS settings. Full physical acceptance and
+remaining fault matrix for ASTRA68-38 are still open.
 
 The 2026-11-17 current-source QEMU continuation passes native AFNT persistence,
 four STIX variable styles, two-face TTC commit and second-face rollback,
@@ -29,7 +29,7 @@ name field for save panels; Astra applies the open-panel part through existing
 Interface Kit focus API. The QEMU test refreshes its offline image snapshot
 after import and selects the current built worker through
 `ASTRA_FONT_WORKER_PATH`; Beast's installed worker is older. The selected DE25
-and remaining fault cases still need qualification.
+release and remaining fault cases still need qualification.
 The QEMU native GUI cancellation path now passes progress, retirement,
 source-list focus, same-file retry and normal import. An oversized Iosevka
 source exhausted the probe's read allocation before import began, so that
@@ -43,6 +43,16 @@ The service host gate injects disk exhaustion after half an AFNT write and
 checks temporary-object removal, failed import status and unchanged catalog;
 normal and ASan/UBSan suites pass. This does not replace the physical
 full-disk trial.
+
+The 2026-11-17 current-source DE25 private release passed two 600-second
+guarded boots at stage 8 with no panic. Native Fonts GUI imported STIX Two Text
+variable TTF (four faces) and Source Sans 3 OTF from disposable DH0. Both
+appeared in its family list; STIX was marked system-eligible and changing to it
+updated desktop/menu text live. Private Config Kit stored its user font ID.
+Source Sans detail, preview and source-information view opened. Evidence is on
+Beast under `/home/barry/astra-evidence/verification11-20261117/`; exact
+release identity, hashes and cleanup are in `CURRENT_STATE.md`. This did not
+exercise physical restart/rescue, removable-source loss or full-disk failure.
 
 ## 1. Locked architecture
 

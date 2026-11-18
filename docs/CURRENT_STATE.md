@@ -28,7 +28,7 @@ notices, information Text View, live Desktop/Fonts adoption, built-in restore
 and removal. QEMU selected the current built `astra-font-worker/0.3` via
 `ASTRA_FONT_WORKER_PATH`; Beast's installed worker remains older 0.2 and was
 not replaced. The test now refreshes its offline ext4 snapshot after import.
-Physical DE25 and remaining ASTRA68-38 fault cases remain open.
+Full physical acceptance and remaining ASTRA68-38 fault cases remain open.
 The 2026-11-17 QEMU Fonts cancellation gate also passes visible progress,
 converter retirement, return to the source list, same-file retry, full import,
 live selection and uninstall. Fonts restores list focus after a cancelled or
@@ -45,6 +45,28 @@ The Fonts service host test now injects a partial AFNT write followed by
 removed, no catalog entry is published, and the import reports failure.
 Normal and ASan/UBSan service suites pass on Beast. The physical full-disk
 case remains open.
+
+Current-source DE25 Fonts checkpoint, 2026-11-17: immutable release
+`2a5004bc7779d4db04557ef501adb367f693a7268d65f2a91e00de255921c763`
+from `c4ef768a` passed two 600-second guarded private trials with stage 8,
+no panic and restoration of selected release
+`a46dffcb6efa575f16f1ef074f8389f27c6f46faf1b58ca0aa9d335d48e3c6d1`.
+Native Fonts GUI imported STIX Two Text variable TTF (four faces) and Source
+Sans 3 OTF from disposable DH0; both appeared in its family list. STIX marked
+its styles system-eligible; selecting one changed desktop/menu text live and
+saved its user ID in private Config Kit settings. Source Sans detail and source
+information views opened. Beast archive
+`/home/barry/astra-evidence/verification11-20261117/` has raw captures,
+scaled PNGs, console logs and `fonts-settings.conf`. Second console SHA-256 is
+`6700a4a70c76d7af959e3c3ad60ca27949caaea189acc4325ea2a02ad715229f`;
+Source Sans imported frame is
+`4c51a6cc9207157efa44be3c015c98bc2aa3e12fcb83c90ac7d4e8fe7e97a2e3`;
+STIX system-role frame is
+`2786d6b6b9b54fe12b877e08615f9aaff4f8de105d9f84d41d267d5ef74daf49`.
+Board trial files were removed; three selected services active, Astra
+`NRestarts=0`, 8.5 GiB free. ASTRA68-38 remains Verification for physical
+restart/rescue, removable-source loss and complete fault-case receipts;
+user HDMI feedback is pending.
 
 AstraZ verification checkpoint, 2026-11-17: NAS Infocom collection has no
 V1/V2/V7 story after file-header scan. Authored 1,024-byte V1/V2 and
