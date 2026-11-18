@@ -148,9 +148,20 @@ raw/full-size PNG captures and third-trial console are archived at
 `651b45c130dcc8d4179e71830e6df37e3c7d3c483764f3051f1a4cc6567ce6b8`
 (mount), `3641da4a5935927be7b759c32559b7083292255c40e078564d671dad212949d1`
 (Unicode read), and `e29bbf30442cf469c87ffa8ddc16608b62cb1132b4d2da32aa193ceb45226c24`
-(denial). The guard expired while `df` ran; target capacity output is not
-qualified. Selected release and all three services recovered, Astra
-`NRestarts=0`, 8.5 GiB free; board trial and Beast export removed.
+(denial). The guard expired while `df /net0` ran; that invocation accepts no
+path and printed usage. A later selected-runtime DE25 check mounted a
+disposable Beast NFSv4 export at `/net0`. Native `df -k` reported
+1,920,642,048 KiB total, 1,520,037,888 KiB used, and 302,966,784 KiB
+available; the provider's Linux NFS client reported the same total and
+matching live usage. The native frame and raw capture are archived on Beast
+under `/home/barry/astra-evidence/shutdown-clean-20261117/de25-trial/`
+(`astra-nfs-capacity-df2.png` SHA-256
+`d4f2148ffb72ba5ac7ebdea198f910b5e591608d83ddbfd53cd3dbb069ec2601`).
+Native unmount retired `/net0`; the temporary export and board captures were
+removed. This closes the DE25 capacity gate, while exact post-dispatch `fsync`
+loss, delayed I/O, restart, different export, stale handles, and network
+shutdown remain open. Selected release and all three services recovered,
+Astra `NRestarts=0`, 8.5 GiB free; board trial and Beast export removed.
 
 Physical USB ASTRA68-8 is Done. On the selected DE25 development
 runtime, a guarded usb-storage unbind/rebind of the disposable SanDisk Cruzer
