@@ -186,7 +186,8 @@ clean offline FAT32/exFAT image checks. Beast evidence
 `/home/barry/astra-evidence/usb-flush-20261117.tar.gz` (SHA-256
 `d1983651b847d7d15b67d7eb704da71b4a92a85a055b30e32cf01b1ef633e2fe`)
 retains binary, fixtures and output. No extra loop device or board stage
-remains. DVD and F310 physical gates await reconnection.
+remains. DVD physical gate awaits reconnection. Gamepad physical controls and
+hotplug passed on DE25 on 2026-10-26; its normal release regression remains.
 During the third private trial's return to normal services, Linux warned that
 the disposable SanDisk exFAT partition `/dev/sda1` had not been cleanly
 unmounted. Native `unmount /usb0` succeeded, and offline exfatprogs 1.4.3
