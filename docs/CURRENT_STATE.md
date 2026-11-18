@@ -184,9 +184,7 @@ dirty flag was still `0x0002`. Offline `fsck.exfat -p` cleared it to `0x0000`;
 native `mount 12` restored `/usb0` without a new warning. The first 24 boot
 sectors and RFB observations are archived under
 `/home/barry/astra-evidence/verification11-20261117/` on Beast. This was
-disposable test media, not the production image. The cause of the interrupted
-trial's dirty flag remains a release investigation, not a closed durability
-claim.
+disposable test media, not the production image.
 The shutdown path caused this: `astra_storage_provider_shutdown()` marked
 every source lost before unmounting, so the detach worker skipped `syncfs` for
 writable local mounts. The corrected provider first uses its existing normal
@@ -201,7 +199,19 @@ calls `Volume::Unmount`, which flushes the writable block cache in
 Beast catalog, provider FAT/ISO and exFAT gates pass. The same AArch64 provider
 test passed on DE25 with a protected writable RAM mount, nested ISO, injected
 `syncfs` failure and successful retry; normal Astra/audio/RFB stayed active.
-Actual DE25 exFAT media after an Astra service stop remains to be checked.
+The immutable private DE25 candidate
+`ea30d0f4be5bb3066356330ef02cc463b6116527a76b818ef20d944c10413539`
+then reached stage 8 with physical SanDisk `/dev/sda1` mounted read/write.
+A disposable 4 KiB write set the exFAT flag to `0x0002`. The guarded service
+stop cleared it to `0x0000`; normal services remounted the partition without
+an exFAT warning and read the exact test file (SHA-256
+`ad7facb2586fc6e966c004d7d1d16b024f5805ff7cb47c7a85dabd8b48892ca7`).
+The test file was deleted and native unmount again cleared the flag; native
+remount restored `/usb0` without warning. Trial console evidence is archived
+on Beast at `/home/barry/astra-evidence/shutdown-clean-20261117/de25-trial/`
+(console SHA-256 `f6eb0e14ea1c21b86ed87bf77363addd910af0ae6672b41e24402ec5adcdf66b`).
+This closes the local removable-media service-stop gate, not the separate
+network-loss shutdown or formal release activation gates.
 
 Physical DE25 power-loss durability gate is complete.
 The Linux-owned storage cut matrix now passes on Beast: clean baseline, nine
