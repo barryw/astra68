@@ -1,5 +1,51 @@
 # DE25-Nano Timing Closure
 
+## 2026-11-18: ASTRA68-10 warm-reset production selection
+
+- No RTL, constraint, synthesis, placement, or route changes. Retained SOF
+  SHA-256 `961bf357bcf7eed04bdf2e911b4024a7b571a00a7f807978b174d958418c74f4`
+  passed JTAG readback after selected-release normal reboot. Companion RBF is
+  `731e04858072271076e96d4018d9863120d3a0882017401f8836a12b3443ffa8`.
+  Existing complete-feature result remains 41,053/46,800 ALMs, setup
+  +0.062 ns, hold +0.000 ns, no failed cone.
+- Immutable selected software release
+  `55f03dee09e979635e3c3268ce9b580077cbca08c122c6d39a19f1cdb96c765d`,
+  source manifest SHA-256
+  `64299acbd5f1f7489fbb2ed437a141d4cded48541c8cef544c6aa71722f05939`,
+  kernel package `870db57b81da08e734fac6c95ca8ac11caf8cbae5e0dbbe7e0f3d006e5a0a85b`.
+  Linux boot argument `reboot=warm` selects supported HPS warm reset.
+  Two controlled warm resets, armed-kernel reset, and selected-release normal
+  reboot all reached Astra stage 8; final boot ID
+  `a0f25001-9fe5-4af8-b682-fce429d5355c`. Disposition: retain route and
+  warm-reset boot policy. Cold-reset failure remains unexplained. Physical
+  optical and HDMI/audio confirmation remain open. Beast evidence archive
+  `CERTIFICATION_SHA256SUMS` SHA-256
+  `d952da0229bcd27c47745614daa1db4809bf7d8aec981043cf7dfa89ca02d2d5`.
+
+## 2026-11-18: ASTRA68-10 selected software, HPS reboot failure
+
+- No RTL, constraints, synthesis, placement, or route changed. Exact retained
+  full-route SOF SHA-256
+  `961bf357bcf7eed04bdf2e911b4024a7b571a00a7f807978b174d958418c74f4`
+  matched JTAG readback before and after the trial. Companion RBF is
+  `731e04858072271076e96d4018d9863120d3a0882017401f8836a12b3443ffa8`.
+  Existing complete-feature Quartus Pro 26.1.1 Build 130 result remains
+  41,053/46,800 ALMs, worst setup +0.062 ns, hold +0.000 ns, no failed cone.
+- Immutable software release
+  `c7091cf8142dfe787d236384a0f883e0a7a19b7b334a02c184dff342c3ff7ff5`
+  selected with preserved state and reached guest stage 8. Normal host reboot
+  reached `reboot: Restarting system` on serial, but no new SPL output or
+  network appeared for over four minutes. RAM-only JTAG reload of the same
+  SOF returned checksum `0x07A0AFAC` with zero errors/warnings; it restarted
+  HPS into SPL, U-Boot, Linux and the same selected Astra release. No flash or
+  SD programming occurred. Recovery boot ID:
+  `475f4973-b483-4782-bfd0-e4149dc6a438`. Disposition: retain the routed
+  fabric; HPS warm/host reboot path is a failed hardware release gate, with
+  root cause unproven. Physical HDMI and optical media checks remain open.
+  Evidence: Beast `/home/barry/astra-evidence/astra10-20261118/`, verified
+  `CERTIFICATION_SHA256SUMS` SHA-256
+  `ebc7c7082dd0d3344a93f3727351183b8d822299a70a8769f03b3e0e294e853f`.
+
 ## 2026-11-16: durability power-cut boot investigation
 
 - Software checkpoint `0788619`, Beast Quartus Pro 26.1.1 Build 130. No RTL,

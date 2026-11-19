@@ -10,7 +10,7 @@ if test ${target} = "mmc0"; then
                                 if bridge enable; then
                                         if fatload mmc 0:1 ${kernel_addr_r} Image; then
                                                 if fatload mmc 0:1 ${fdt_addr_r} socfpga_agilex5_de25_nano.dtb; then
-                                                        setenv bootargs "console=ttyS0,115200 root=${mmcroot} rootflags=commit=5 rw rootwait astra.fabric=ready astra.watchdog_preload=${astra_watchdog_preload}";
+                                                        setenv bootargs "console=ttyS0,115200 root=${mmcroot} rootflags=commit=5 rw rootwait reboot=warm astra.fabric=ready astra.watchdog_preload=${astra_watchdog_preload}";
                                                         booti ${kernel_addr_r} - ${fdt_addr_r};
                                                 fi;
                                         fi;

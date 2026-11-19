@@ -45,6 +45,7 @@ with tempfile.TemporaryDirectory(prefix="astra-kernel-boot-gate-") as directory:
     assert (derived_package / "metadata/boot-policy.sha256").read_text().strip() == \
         hashlib.sha256((repository / "fpga/de25/boot.cmd").read_bytes()).hexdigest()
     original = (repository / "fpga/de25/boot.cmd").read_text()
+    assert "reboot=warm" in original, "DE25 must use the verified HPS warm reset path"
     actual = extracted.read_text()
     for filename in ("Image", "socfpga_agilex5_de25_nano.dtb"):
         actual = actual.replace("} astra-kernels/" + identity + "/" + filename + ";",

@@ -5,6 +5,77 @@ Status: active continuation map, 2026-11-18
 Checkpoint paragraphs below preserve their original verification status; the
 newest checkpoint records current disposition.
 
+ASTRA68-10 warm-reset qualification, 2026-11-18: DE25 now selects immutable
+release `55f03dee09e979635e3c3268ce9b580077cbca08c122c6d39a19f1cdb96c765d`
+with previous `c7091cf8142dfe787d236384a0f883e0a7a19b7b334a02c184dff342c3ff7ff5`.
+Exact source manifest SHA-256 is
+`64299acbd5f1f7489fbb2ed437a141d4cded48541c8cef544c6aa71722f05939`;
+kernel package identity is
+`870db57b81da08e734fac6c95ca8ac11caf8cbae5e0dbbe7e0f3d006e5a0a85b`,
+boot script SHA-256 is
+`a4c8ad1e4005e6716f2ea43122ffe7a9fa282678b5e615e0fbfcb1a8cc61c6df`,
+and retained full-route SOF SHA-256 is
+`961bf357bcf7eed04bdf2e911b4024a7b571a00a7f807978b174d958418c74f4`.
+The DE25 boot script selects Linux `reboot=warm`, the supported HPS reset
+path. Two controlled warm resets, the armed-kernel reset, and a plain
+`systemctl reboot` after activation all returned through SPL, U-Boot, Linux,
+and Astra guest stage 8. The final ordinary reboot has boot ID
+`a0f25001-9fe5-4af8-b682-fce429d5355c`; services show zero restarts and
+QEMU runs as UID 999. Both installed release manifests verify. JTAG readback
+still matches the retained fabric. Fresh authenticated 1920x1080 RFB captures
+show Desktop, Atlas DH0 (17 root items), and Atlas CLIEXFAT `/usb0` with
+`STIXTwoText.ttf` on the physical USB drive. Guest audio reports zero
+underruns and zero software gaps in quiet baseline. Board had 8.5 GiB free
+after release cleanup; pinned predecessor state was preserved. Beast evidence
+archive `/home/barry/astra-evidence/astra10-20261118/` verifies against
+`CERTIFICATION_SHA256SUMS` SHA-256
+`d952da0229bcd27c47745614daa1db4809bf7d8aec981043cf7dfa89ca02d2d5`.
+The previous cold-reset failure remains unexplained. Physical optical media
+is unavailable for linked ASTRA68-9, and user HDMI/audio confirmation has not
+arrived for this selected release. Keep ASTRA68-10 open unless Barry explicitly
+reconsiders linked gate scope; RFB and quiet counters do not certify HDMI or
+audible sound.
+
+ASTRA68-10 selected-release checkpoint, 2026-11-18: immutable software release
+`c7091cf8142dfe787d236384a0f883e0a7a19b7b334a02c184dff342c3ff7ff5`
+is now the DE25 `/var/lib/astra/current` target; `/var/lib/astra/previous`
+retains `a46dffcb6efa575f16f1ef074f8389f27c6f46faf1b58ca0aa9d335d48e3c6d1`.
+All three service units start from the canonical selector, the selected and
+previous release manifests verify, running kernel package is
+`0f9442d4807774c0eed1f40f66bd019630d1b8771f5b7de9194c5912e7bf3ca8`
+(`6.12.11-astra-storage3-gd7d192a9ddd9`), and the unselected development
+release was removed. Production image was copied and hashed only with Astra
+stopped; preserved-state backup SHA-256 is
+`5f764ebbbb75db18a4477f83a3bf5adcfecf1c4beb1c4297334e57637d28708e`.
+Selected runtime reached guest stage 8 with QEMU UID 999, zero service
+restarts, QMP and audio sockets ready. Authenticated 1920x1080 RFB captures
+show Desktop, Atlas DH0 and Apps, and Terminal volumes: DH0 ext4, RAM0,
+FAT32 CLIFAT and exFAT CLIEXFAT. A guest `/work` write read back before and
+after `astra.service` restart, then was removed. The exact retained production
+fabric SOF SHA-256 is
+`961bf357bcf7eed04bdf2e911b4024a7b571a00a7f807978b174d958418c74f4`;
+JTAG readback matched before and after recovery. Board has 8.1 GiB free after
+trial cleanup. Beast archive `/home/barry/astra-evidence/astra10-20261118/`
+verifies against `CERTIFICATION_SHA256SUMS` SHA-256
+`ebc7c7082dd0d3344a93f3727351183b8d822299a70a8769f03b3e0e294e853f`.
+
+ASTRA68-10 is **not certified or closed**. Normal host `systemctl reboot`
+completed Linux shutdown and emitted `reboot: Restarting system`, then no new
+SPL/U-Boot UART or network appeared for over four minutes. RAM-only reload of
+the exact SOF through JTAG restored U-Boot, Linux, selected release and guest
+stage 8; recovered boot ID is `475f4973-b483-4782-bfd0-e4149dc6a438`.
+No flash or SD programming occurred. This is a failed HPS reset/boot gate,
+not an observed Astra kernel panic. Linux reports reboot mode `cold`; its
+PSCI driver therefore calls `SYSTEM_RESET`, so changing `reboot=` without
+evidence is not a fix. Reset root cause and repeat boot qualification remain
+open. Physical optical gate ASTRA68-9 also remains open: user has no USB
+CD/DVD drive available. HDMI monitor/audio confirmation was requested but not
+received for this activation; authenticated RFB and quiet audio counters do
+not substitute for that observation. Haiku reset reference:
+`~/Git/haiku/src/system/kernel/shutdown.cpp` quiesces and syncs before its
+platform reset; Astra's Linux host shutdown completed that stage before the
+failure. Do not silently waive either physical gate.
+
 ASTRA68-38 exact-source qualification, 2026-11-18: immutable release
 `c7091cf8142dfe787d236384a0f883e0a7a19b7b334a02c184dff342c3ff7ff5`
 matches committed font-service source. A 600-second private DE25 stage-8
